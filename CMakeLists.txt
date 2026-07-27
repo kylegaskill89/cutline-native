@@ -9,6 +9,8 @@ if(NOT WIN32)
   message(FATAL_ERROR "cutline-native targets Windows only (Direct3D 12 compositor).")
 endif()
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -20,6 +22,10 @@ option(CUTLINE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 # opt-in so the core -- which needs none of it -- keeps configuring in seconds.
 # Enable with the `media` preset, which also selects the vcpkg feature.
 option(CUTLINE_WITH_MEDIA "Build the media layer (requires FFmpeg)" OFF)
+
+# The GPU layer needs only the Windows SDK, so it costs nothing to build. It is
+# still opt-in so a machine without a D3D12 adapter can work on the core.
+option(CUTLINE_WITH_GPU "Build the Direct3D 12 layer" OFF)
 
 add_library(cutline_options INTERFACE)
 add_library(cutline::options ALIAS cutline_options)
@@ -52,6 +58,15 @@ add_subdirectory(src/core)
 if(CUTLINE_WITH_MEDIA)
   add_subdirectory(src/media)
   add_subdirectory(tools/decode_bench)
+endif()
+
+if(CUTLINE_WITH_GPU)
+  add_subdirectory(src/gpu)
+  # The debug viewport needs both layers: it decodes with one and draws with
+  # the other, which is the whole point of it existing this early.
+  if(CUTLINE_WITH_MEDIA)
+    add_subdirectory(tools/preview_window)
+  endif()
 endif()
 
 if(CUTLINE_BUILD_TESTS)

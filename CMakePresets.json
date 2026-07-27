@@ -27,11 +27,10 @@
       "name": "media",
       "inherits": "base",
       "displayName": "MSVC x64 with the media layer",
-      "description": "Adds FFmpeg. The first configure builds it from source and takes a while.",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
+      "description": "Adds FFmpeg and Direct3D 12. The first configure builds FFmpeg from source and takes a while. The generator is left unset so CMake picks whichever Visual Studio is present.",
       "cacheVariables": {
         "CUTLINE_WITH_MEDIA": "ON",
+        "CUTLINE_WITH_GPU": "ON",
         "VCPKG_MANIFEST_FEATURES": "media"
       }
     },
