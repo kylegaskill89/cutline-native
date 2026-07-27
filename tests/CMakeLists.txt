@@ -18,3 +18,13 @@ target_link_libraries(cutline_core_tests PRIVATE
 
 include(GoogleTest)
 gtest_discover_tests(cutline_core_tests)
+
+if(CUTLINE_WITH_MEDIA)
+  add_executable(cutline_media_tests media/probe_test.cpp)
+  target_link_libraries(cutline_media_tests PRIVATE
+    cutline::media
+    GTest::gtest
+    GTest::gtest_main)
+  # These skip unless CUTLINE_TEST_MEDIA_DIR points at the reference footage.
+  gtest_discover_tests(cutline_media_tests)
+endif()

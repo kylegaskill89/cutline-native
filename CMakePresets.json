@@ -24,6 +24,18 @@
       "architecture": "x64"
     },
     {
+      "name": "media",
+      "inherits": "base",
+      "displayName": "MSVC x64 with the media layer",
+      "description": "Adds FFmpeg. The first configure builds it from source and takes a while.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "cacheVariables": {
+        "CUTLINE_WITH_MEDIA": "ON",
+        "VCPKG_MANIFEST_FEATURES": "media"
+      }
+    },
+    {
       "name": "ci",
       "inherits": "base",
       "displayName": "CI (warnings as errors)",
@@ -42,6 +54,11 @@
     {
       "name": "release",
       "configurePreset": "default",
+      "configuration": "Release"
+    },
+    {
+      "name": "media",
+      "configurePreset": "media",
       "configuration": "Release"
     },
     {

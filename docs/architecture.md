@@ -22,6 +22,32 @@ FFmpeg filter graph) was an irritation. This was the wall.
 The native version fixes it by decoding **sequentially** during export — the
 access pattern hardware decoders are built for — and compositing on the GPU.
 
+### Measured, 2026-07-27
+
+`tools/decode_bench` runs both access patterns over the same file. On an NVIDIA
+GPU via D3D11VA, 4K60 HEVC:
+
+| Access pattern | `Boiler.mp4` (8 s, 7.7 Mbps) | `Replay ….mkv` (10 min, 20.2 Mbps) |
+|---|---|---|
+| Sequential, hardware | **1.56 ms/frame** (640 fps) | **1.67 ms/frame** (601 fps) |
+| Sequential, software | 2.69 ms/frame (372 fps) | 2.74 ms/frame (365 fps) |
+| Per-frame seek, hardware | 27.6 ms/frame | 28.2 ms/frame |
+
+Sequential decode runs at **about 10× realtime** on both files, and the whole
+480-frame `Boiler.mp4` decodes in 0.75 s — against roughly 18 minutes for the
+same clip through the old exporter.
+
+Two conclusions, one of them a correction. Sequential access is worth **17×**
+over per-frame seeking, so designing export around it is right. But native
+per-frame seeking costs 28 ms, not 4500 ms — so the original 4.5 s/frame was
+overwhelmingly **browser overhead, not an inherent cost of seeking**. The
+`<video>` element was the problem more than the access pattern was. Both point
+the same way, and the rewrite stands, but the diagnosis in §1 was only partly
+right.
+
+Long-GOP MKV is also no worse than MP4 here, which the original report implied
+it would be.
+
 ## 2. Decisions
 
 | Area | Choice |

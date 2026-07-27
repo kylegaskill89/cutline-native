@@ -24,14 +24,17 @@ agree by construction rather than by careful maintenance.
 
 ## Status
 
-Phase 1 of 8 is essentially complete: the data model, editing operations,
-segment resolution, animation, effect stacks, versioned persistence, and
-undo/redo — all pure, with 210 tests. One refinement is outstanding
-(`move_clips_layered`, which reassigns audio lanes when a video clip changes
-compositing layer).
+**Phase 1 complete** — the whole pure core: data model, editing operations,
+segment resolution, animation, effect stacks, versioned persistence, undo/redo.
+213 tests.
 
-Nothing is runnable yet. Phase 2 is media I/O, and it opens with the benchmark
-that decides whether the premise of this rewrite holds.
+**Phase 2 underway** — probing and sequential hardware decode work, and the
+benchmark has settled the question this rewrite was built on. Decoding 4K60
+HEVC in order costs **1.6 ms/frame**, about 10× realtime; the 8-second clip that
+took roughly 18 minutes to export from the old app now decodes in **0.75 s**.
+See `docs/architecture.md` for the full numbers and one correction they forced.
+
+Still to come in phase 2: audio decode, waveform peaks, and thumbnails.
 
 ## Building
 
@@ -46,6 +49,19 @@ ctest --preset debug
 
 Heavier dependencies are opt-in vcpkg features so the core builds fast:
 `media` pulls in FFmpeg, `gpu` pulls in Skia.
+
+For the media layer, use the `media` preset instead — the first configure builds
+FFmpeg from source and takes about twenty minutes:
+
+```
+cmake --preset media
+cmake --build --preset media
+build/media/tools/decode_bench/Release/decode_bench <file> [frames]
+```
+
+Media tests need real footage, which is not in the repository. Point
+`CUTLINE_TEST_MEDIA_DIR` at a directory containing `Boiler.mp4` to run them;
+without it they skip rather than silently pass.
 
 ## Licence
 
