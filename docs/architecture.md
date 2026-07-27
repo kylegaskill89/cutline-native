@@ -34,7 +34,7 @@ access pattern hardware decoders are built for — and compositing on the GPU.
 | UI | Skia (Ganesh, D3D12 backend) on the same device |
 | Audio | Own DSP, shared by preview and export |
 | Export | Own compositor only — no describe-to-FFmpeg path |
-| Colour | HDR end to end; linear-light compositing |
+| Colour | Linear-light compositing at 16-bit float; HDR deferred past v1 |
 | Encoding | Hardware via libavcodec (NVENC / QSV / AMF), x264/x265 fallback |
 | Licence | GPL-3.0-or-later |
 
@@ -91,20 +91,35 @@ implementation. The approximate compressor and the gain-easing gap (where the
 old scheduler ramped linearly between breakpoints even for eased keyframes) both
 get fixed properly rather than documented.
 
-### HDR
+### Colour precision, and why HDR is deferred
 
-HDR sources are already part of the workflow, so this is a current requirement
-rather than headroom. It is a property of the pipeline, not a feature layered on
-top, which makes it much cheaper to build in now than to retrofit.
+Compositing happens in **16-bit float linear light** throughout. Decode converts
+to linear scene-referred values using the source's transfer function and
+primaries; output applies a display transform. This is worth doing regardless of
+HDR — linear-light blending is simply more correct than the old 8-bit sRGB
+canvas, and the extra precision shows up in gradients and in stacked effects,
+where 8-bit intermediates band visibly.
 
-Decode converts to linear scene-referred light using the source's transfer
-function and primaries. Compositing happens in linear light throughout — which
-is also simply more correct for blend modes and effect stacking than the old
-8-bit sRGB canvas. Output applies a display transform: tone-mapped SDR, or HDR10
-PQ with metadata.
+HDR itself is **deferred past v1**. It was originally scoped into v1 on the
+understanding that HDR footage was already part of the workflow. Probing the
+actual sources contradicted that: every video file on hand is HEVC **Main**
+profile, 8-bit `yuv420p`, BT.709 primaries, transfer, and matrix, with no
+mastering-display or content-light-level side data on any frame. That includes
+the capture originally identified as HDR. The likely explanation is an HDR
+display or Windows Auto HDR being active while the encoder recorded SDR.
 
-Probing therefore has to report colour primaries, transfer characteristics, and
-matrix per file, not just dimensions and frame rate.
+Building a PQ/HLG decode path, tone mapping, and HDR10 output with no real
+source to validate against would mean testing against synthetic patterns and
+hoping. So v1 handles SDR end to end.
+
+What keeps HDR cheap to add later is that the colour layer is parameterized by
+transfer function and primaries from the start rather than assuming BT.709, and
+the compositor is already linear and high-precision. Adding HDR then means new
+transfer curves, a tone-mapping operator, and display/metadata plumbing — not
+restructuring.
+
+Probing reports colour primaries, transfer characteristics, and matrix per file
+regardless, since that is what makes the distinction visible in the first place.
 
 ### GPL
 
@@ -166,8 +181,9 @@ it.
    segment resolution, serialisation. Pure and fully testable.
 2. **Media I/O** — probe, hardware decode, audio decode, waveforms, thumbnails.
    Includes the benchmark that validates the entire premise of the rewrite:
-   sequential decode throughput on a real 4K MKV. If that number disappoints,
-   better to know here than after building a compositor on top of it.
+   sequential decode throughput on real 4K footage (see *Reference media*
+   below). If that number disappoints, better to know here than after building a
+   compositor on top of it.
 3. **GPU foundation** — D3D12 device and resources, DXC shader pipeline, colour
    management, Skia sharing the device. Plus a throwaway debug viewport: a
    window, a hardcoded project, a scrubbable playhead. Not shipped UI — it
@@ -194,3 +210,17 @@ be judged by the agent writing the code.
   each reference frame needs signing off by eye once before it is frozen.
 - **Throughput benchmarks** for decode and export, so a performance regression
   is a test failure rather than a surprise.
+
+### Reference media
+
+Benchmarks and golden-image tests run against real captures rather than
+synthetic clips. These files are not in the repository — they are large, and
+they are the user's footage — so benchmarks locate them by path and skip
+cleanly when absent.
+
+| File | Shape | Why it matters |
+|---|---|---|
+| `Boiler.mp4` | HEVC Main, 8-bit, BT.709, 3840×2160 @ 60, 8.0 s, 7.7 Mbps, AAC stereo | The clip behind the 18-minute export. The headline benchmark. |
+| `Replay 07-23-2026 10PM-59-02.mkv` | HEVC Main, 8-bit, BT.709, 3840×2160 @ 60, 598.6 s, 20.2 Mbps, **4× AAC stereo** | Long-GOP MKV at length. The four audio streams exercise the audio-lane placement rule in spec §6, which the spec flags as a past bug. |
+
+Neither is HDR; see *Colour precision* above.
