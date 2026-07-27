@@ -1,0 +1,113 @@
+#pragma once
+
+/// Property edits: clip attributes, generated-media settings, tracks, and
+/// markers. Same contract as `edit.hpp` — take a project, return a new one.
+///
+/// The reference expressed several of these as partial-object merges, which is
+/// natural in JavaScript. Here the value setters take whole values instead:
+/// callers read the current value, change what they want, and set it back.
+/// `Transform` and `TextSpec` are value types, so this is the same edit with
+/// less machinery. Track header props keep a patch, since a caller genuinely
+/// wants to set one flag without disturbing the others.
+
+#include "cutline/core/model.hpp"
+
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+
+namespace cutline::core {
+
+// -------------------------------------------------------- clip properties --
+
+/// Disabled clips keep their place on the timeline but are not rendered.
+[[nodiscard]] Project set_clips_enabled(Project p, std::span<const std::string> clip_ids,
+                                        bool enabled);
+
+[[nodiscard]] Project set_clip_blend(Project p, std::string_view clip_id, BlendMode mode);
+
+/// Sets or clears the out-edge transition. A transition of zero duration clears
+/// it, since a zero-length transition is just a cut.
+[[nodiscard]] Project set_clip_transition(Project p, std::string_view clip_id,
+                                          std::optional<Transition> transition);
+
+/// Sets the clip's linear audio gain, clamped to the allowed range.
+[[nodiscard]] Project set_clip_gain(Project p, std::string_view clip_id, double gain);
+
+/// Sets a fade duration, clamped so the two fades together never exceed the
+/// clip's length.
+[[nodiscard]] Project set_clip_fade(Project p, std::string_view clip_id, ClipEdge edge,
+                                    double duration);
+
+/// Sets playback speed, and optionally reverse, across the linked group so
+/// video and its audio retime together. The source in and out are kept, so the
+/// timeline length changes. Fades are re-clamped to the new duration.
+[[nodiscard]] Project set_clip_speed(Project p, std::string_view clip_id, double speed,
+                                     std::optional<bool> reverse = std::nullopt);
+
+[[nodiscard]] Project set_clip_opacity(Project p, std::string_view clip_id, double opacity);
+
+[[nodiscard]] Project set_clip_transform(Project p, std::string_view clip_id, Transform transform);
+
+// ------------------------------------------------------- generated media --
+
+/// Replaces a text media's styling. No-op unless the media is a title.
+[[nodiscard]] Project set_text_spec(Project p, std::string_view media_id, TextSpec spec);
+
+/// Sets a colour matte's primary fill. No-op unless the media is a matte.
+[[nodiscard]] Project set_matte_color(Project p, std::string_view media_id, std::string color);
+
+/// Sets or clears a colour matte's linear gradient; clearing leaves a solid fill.
+[[nodiscard]] Project set_matte_gradient(Project p, std::string_view media_id,
+                                         std::optional<MatteGradient> gradient);
+
+// ------------------------------------------------------------------ tracks --
+
+/// Adds an empty video track at the top of the stack, which is the topmost
+/// compositing layer — new overlay footage goes above what is already there.
+[[nodiscard]] Project add_video_track(Project p);
+
+/// Adds an empty audio track at the bottom of the stack.
+[[nodiscard]] Project add_audio_track(Project p);
+
+/// Sets a track's display label; an empty or blank label clears it.
+[[nodiscard]] Project set_track_label(Project p, std::string_view track_id, std::string label);
+
+/// Header flags a caller may change independently of one another.
+struct TrackPropsPatch {
+  std::optional<bool> muted;
+  std::optional<bool> solo;
+  std::optional<bool> locked;
+  std::optional<bool> hidden;
+  std::optional<double> height;
+};
+
+[[nodiscard]] Project update_track(Project p, std::string_view track_id,
+                                   const TrackPropsPatch& patch);
+
+/// Removes a track and every clip on it.
+[[nodiscard]] Project remove_track(Project p, std::string_view track_id);
+
+// ----------------------------------------------------------------- markers --
+
+/// The marker nearest `time` within `tolerance`, if any.
+[[nodiscard]] const Marker* marker_near(const Project& p, double time, double tolerance) noexcept;
+
+[[nodiscard]] Project add_marker(Project p, double time, std::string label = {},
+                                 std::string color = {});
+
+[[nodiscard]] Project remove_marker(Project p, std::string_view marker_id);
+
+[[nodiscard]] Project clear_markers(Project p);
+
+/// The nearest marker strictly after / before `time`, for jump-to-marker.
+[[nodiscard]] const Marker* next_marker(const Project& p, double time) noexcept;
+[[nodiscard]] const Marker* previous_marker(const Project& p, double time) noexcept;
+
+// --------------------------------------------------------------- factories --
+
+/// A project with empty tracks and no media.
+[[nodiscard]] Project empty_project(int video_tracks = 1, int audio_tracks = 2);
+
+}  // namespace cutline::core

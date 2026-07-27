@@ -47,6 +47,9 @@ enum class TransitionKind { Dissolve, DipBlack, Push, Slide };
 
 enum class TextAlign { Left, Center, Right };
 
+/// Which end of a clip an edit addresses — the head or the tail.
+enum class ClipEdge { In, Out };
+
 /// Properties that can be animated with keyframes over a clip's duration.
 /// The enumerators double as indices into `Clip::keyframes`.
 enum class AnimProp { X, Y, ScaleX, ScaleY, Rotation, Opacity };

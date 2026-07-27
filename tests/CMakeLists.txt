@@ -2,8 +2,10 @@
 
 add_executable(cutline_core_tests
   core/animate_test.cpp
+  core/arrange_test.cpp
   core/edit_test.cpp
   core/keyframe_test.cpp
+  core/properties_test.cpp
   core/query_test.cpp
   core/segments_test.cpp
   core/time_test.cpp)

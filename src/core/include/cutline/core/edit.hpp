@@ -78,7 +78,20 @@ struct PlacementRange {
                                  double delta_time, int delta_track_index = 0,
                                  std::optional<TrackKind> restrict_kind = std::nullopt);
 
-enum class ClipEdge { In, Out };
+/// Splits anything spanning `at_time`, then opens a gap of `amount` seconds by
+/// shifting everything from there onward to the right. Insert editing.
+[[nodiscard]] Project ripple_insert(Project p, double at_time, double amount);
+
+/// Insert-edit: ripples the sequence open and places the media in the gap.
+[[nodiscard]] Project insert_media_at(Project p, std::string_view media_id, double at_time,
+                                      std::string_view video_track_id = {},
+                                      std::optional<PlacementRange> range = std::nullopt);
+
+/// Overwrite-edit: carves out whatever occupies the span, then places the media
+/// over it. Clips partly covered are trimmed; clips fully covered are dropped.
+[[nodiscard]] Project overwrite_media_at(Project p, std::string_view media_id, double at_time,
+                                         std::string_view video_track_id = {},
+                                         std::optional<PlacementRange> range = std::nullopt);
 
 /// Trims a clip's in or out edge to a new timeline time, moving the whole linked
 /// group together so video and its audio stay in sync.
@@ -88,6 +101,25 @@ enum class ClipEdge { In, Out };
 /// start of the timeline.
 [[nodiscard]] Project set_clip_edge(Project p, std::string_view clip_id, ClipEdge edge,
                                     double timeline_time);
+
+/// Rate stretch: dragging an edge changes the clip's *speed* rather than
+/// trimming its source. The source in and out stay fixed and the speed becomes
+/// `source_span / new_length`. Applied across the linked group.
+///
+/// Dragging the in-edge keeps the tail anchored, so the clip grows leftward.
+[[nodiscard]] Project rate_stretch_edge(Project p, std::string_view clip_id, ClipEdge edge,
+                                        double new_time);
+
+/// Slip: shifts which part of the source a clip shows by `delta_source` source
+/// seconds, without moving the clip or changing its length. Applied across the
+/// linked group and clamped to every member's media bounds. Still-like media
+/// have no source to slip and are left alone.
+[[nodiscard]] Project slip_clip(Project p, std::string_view clip_id, double delta_source);
+
+/// Slide: moves a clip in time, growing the abutting previous clip and
+/// shrinking the next so the surrounding clips keep their positions and the
+/// sequence length is unchanged. The slid clip's own source is untouched.
+[[nodiscard]] Project slide_clip(Project p, std::string_view clip_id, double delta_time);
 
 // ---------------------------------------------------------------- deleting --
 

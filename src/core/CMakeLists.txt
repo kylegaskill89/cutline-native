@@ -4,6 +4,7 @@
   src/effects.cpp
   src/id.cpp
   src/keyframe.cpp
+  src/properties.cpp
   src/query.cpp
   src/segments.cpp
   src/time.cpp)
