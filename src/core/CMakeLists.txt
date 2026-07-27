@@ -1,4 +1,6 @@
 ﻿add_library(cutline_core
+  src/edit.cpp
+  src/id.cpp
   src/keyframe.cpp
   src/query.cpp
   src/segments.cpp
