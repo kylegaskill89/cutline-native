@@ -1,31 +1,19 @@
 #include "cutline/media/probe.hpp"
 
+#include "av_common.hpp"
+
 #include <format>
-#include <memory>
 #include <string>
 
 extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
 #include <libavutil/pixdesc.h>
 }
 
 namespace cutline::media {
 namespace {
 
-/// Closes a format context on any exit path.
-struct FormatContextDeleter {
-  void operator()(AVFormatContext* ctx) const noexcept {
-    if (ctx != nullptr) avformat_close_input(&ctx);
-  }
-};
-using FormatContext = std::unique_ptr<AVFormatContext, FormatContextDeleter>;
-
-[[nodiscard]] std::string av_error_string(int code) {
-  char buffer[AV_ERROR_MAX_STRING_SIZE] = {};
-  av_strerror(code, buffer, sizeof(buffer));
-  return buffer;
-}
+using detail::av_error_string;
+using detail::FormatContext;
 
 [[nodiscard]] ColorPrimaries map_primaries(AVColorPrimaries primaries) noexcept {
   switch (primaries) {

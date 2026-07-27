@@ -46,3 +46,34 @@ jobs:
 
       - name: Test
         run: ctest --preset ci
+
+  media:
+    name: Build the media layer (Windows)
+    runs-on: windows-latest
+    # FFmpeg is a long build from source the first time. The vcpkg binary cache
+    # makes every run after that quick, so this stays a separate job rather than
+    # holding up feedback on the core.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/vcpkg/archives
+          key: vcpkg-media-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-media-${{ runner.os }}-
+
+      - name: Point CMake at the preinstalled vcpkg
+        run: echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+
+      - name: Configure
+        run: cmake --preset media -DCUTLINE_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build --preset media
+
+      # The reference footage is not in the repository, so the tests that need
+      # it skip here. What this job proves is that the media layer still
+      # compiles and links, and that the footage-independent logic holds.
+      - name: Test
+        run: ctest --test-dir build/media -C Release --output-on-failure

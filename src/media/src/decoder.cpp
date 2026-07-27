@@ -1,11 +1,11 @@
 #include "cutline/media/decoder.hpp"
 
+#include "av_common.hpp"
+
 #include <format>
 #include <utility>
 
 extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/pixdesc.h>
 }
@@ -13,11 +13,7 @@ extern "C" {
 namespace cutline::media {
 namespace {
 
-[[nodiscard]] std::string av_error_string(int code) {
-  char buffer[AV_ERROR_MAX_STRING_SIZE] = {};
-  av_strerror(code, buffer, sizeof(buffer));
-  return buffer;
-}
+using detail::av_error_string;
 
 [[nodiscard]] double rational_to_double(AVRational r) noexcept {
   return r.den == 0 ? 0.0 : static_cast<double>(r.num) / static_cast<double>(r.den);

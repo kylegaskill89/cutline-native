@@ -1,8 +1,10 @@
 find_package(FFMPEG REQUIRED)
 
 add_library(cutline_media
+  src/audio.cpp
   src/decoder.cpp
-  src/probe.cpp)
+  src/probe.cpp
+  src/thumbnail.cpp)
 add_library(cutline::media ALIAS cutline_media)
 
 # FFmpeg's headers do not compile warning-free at /W4, and they are not ours to

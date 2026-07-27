@@ -28,13 +28,17 @@ agree by construction rather than by careful maintenance.
 segment resolution, animation, effect stacks, versioned persistence, undo/redo.
 213 tests.
 
-**Phase 2 underway** — probing and sequential hardware decode work, and the
-benchmark has settled the question this rewrite was built on. Decoding 4K60
+**Phase 2 complete** — probing with colour metadata, sequential hardware decode,
+audio decode and resampling, waveform peaks, and thumbnails. 239 tests.
+
+The benchmark has settled the question this rewrite was built on. Decoding 4K60
 HEVC in order costs **1.6 ms/frame**, about 10× realtime; the 8-second clip that
 took roughly 18 minutes to export from the old app now decodes in **0.75 s**.
-See `docs/architecture.md` for the full numbers and one correction they forced.
+See `docs/architecture.md` for the full numbers and the one correction they
+forced.
 
-Still to come in phase 2: audio decode, waveform peaks, and thumbnails.
+Next is phase 3: the Direct3D 12 foundation, colour management, and a debug
+viewport to drive the compositor by hand.
 
 ## Building
 
