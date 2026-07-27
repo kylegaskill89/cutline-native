@@ -24,7 +24,14 @@ agree by construction rather than by careful maintenance.
 
 ## Status
 
-Early. Phase 1 of 8 — the pure core model. Nothing is runnable yet.
+Phase 1 of 8 is essentially complete: the data model, editing operations,
+segment resolution, animation, effect stacks, versioned persistence, and
+undo/redo — all pure, with 210 tests. One refinement is outstanding
+(`move_clips_layered`, which reassigns audio lanes when a video clip changes
+compositing layer).
+
+Nothing is runnable yet. Phase 2 is media I/O, and it opens with the benchmark
+that decides whether the premise of this rewrite holds.
 
 ## Building
 
