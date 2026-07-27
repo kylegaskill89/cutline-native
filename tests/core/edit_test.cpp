@@ -233,6 +233,71 @@ TEST(SplitAt, RightPiecesFormTheirOwnGroup) {
   EXPECT_EQ(group_members(p, right.id).size(), 3u);
 }
 
+// A cut is not an edge of the original clip, so the right piece's animation
+// must travel with its new origin. The reference left keyframes at their
+// original offsets, shifting the animation by the length of the left piece.
+TEST(SplitAt, RebasesKeyframesOntoTheNewOrigin) {
+  Project p = one_clip_project();
+  Clip& c = p.tracks[0].clips[0];
+  // x ramps 0 -> 1 across the clip's five seconds.
+  c.keyframes[anim_prop_index(AnimProp::X)] = {{.t = 0.0, .v = 0.0}, {.t = 4.0, .v = 1.0}};
+
+  p = split_at(std::move(p), 2.0, Ids{"c1"});
+  const Clip& right = p.tracks[0].clips[1];
+
+  const std::vector<Keyframe>& kfs = right.keyframes[anim_prop_index(AnimProp::X)];
+  ASSERT_EQ(kfs.size(), 2u);
+  EXPECT_DOUBLE_EQ(kfs[0].t, -2.0);
+  EXPECT_DOUBLE_EQ(kfs[1].t, 2.0);
+
+  // The same timeline moment still yields the same value across the cut.
+  EXPECT_DOUBLE_EQ(animated_value(right, AnimProp::X, 3.0 - right.start), 0.75);
+}
+
+TEST(SplitAt, RebasesGainAndEffectKeyframes) {
+  Project p = one_clip_project();
+  Clip& c = p.tracks[0].clips[0];
+  c.gain_keyframes = {{.t = 0.0, .v = 0.0}, {.t = 4.0, .v = 1.0}};
+  ClipEffect blur;
+  blur.type = "blur";
+  blur.keyframes["amount"] = {{.t = 1.0, .v = 10.0}};
+  c.effects = {blur};
+
+  p = split_at(std::move(p), 2.0, Ids{"c1"});
+  const Clip& right = p.tracks[0].clips[1];
+
+  EXPECT_DOUBLE_EQ(right.gain_keyframes[0].t, -2.0);
+  EXPECT_DOUBLE_EQ(right.effects[0].keyframes.at("amount")[0].t, -1.0);
+  // The left piece keeps its origin, so its keyframes do not move.
+  EXPECT_DOUBLE_EQ(p.tracks[0].clips[0].gain_keyframes[0].t, 0.0);
+}
+
+TEST(SplitAt, FadesStayOnTheEdgesThatOwnThem) {
+  Project p = one_clip_project();
+  Clip& c = p.tracks[0].clips[0];
+  c.fade_in = 1.0;
+  c.fade_out = 1.5;
+
+  p = split_at(std::move(p), 2.0, Ids{"c1"});
+
+  EXPECT_DOUBLE_EQ(p.tracks[0].clips[0].fade_in, 1.0);
+  EXPECT_DOUBLE_EQ(p.tracks[0].clips[0].fade_out, 0.0);  // no fade at the cut
+  EXPECT_DOUBLE_EQ(p.tracks[0].clips[1].fade_in, 0.0);
+  EXPECT_DOUBLE_EQ(p.tracks[0].clips[1].fade_out, 1.5);
+}
+
+TEST(SplitAt, TheOutTransitionFollowsTheOutEdge) {
+  Project p = one_clip_project();
+  p.tracks[0].clips[0].transition_out =
+      Transition{.kind = TransitionKind::Dissolve, .duration = 1.0};
+
+  p = split_at(std::move(p), 2.0, Ids{"c1"});
+
+  EXPECT_FALSE(p.tracks[0].clips[0].transition_out.has_value());
+  ASSERT_TRUE(p.tracks[0].clips[1].transition_out.has_value());
+  EXPECT_DOUBLE_EQ(p.tracks[0].clips[1].transition_out->duration, 1.0);
+}
+
 TEST(SplitAt, UnlinkedClipsProduceUnlinkedPieces) {
   Project p = one_clip_project();
   p = split_at(std::move(p), 2.0, Ids{"c1"});

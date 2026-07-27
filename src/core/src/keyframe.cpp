@@ -1,5 +1,7 @@
 #include "cutline/core/keyframe.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 
 namespace cutline::core {
@@ -33,6 +35,30 @@ double eval_keyframes(std::span<const Keyframe> kfs, double local_t) noexcept {
     }
   }
   return last.v;
+}
+
+void upsert_keyframe(std::vector<Keyframe>& kfs, double t, double v) {
+  const auto existing = std::ranges::find_if(
+      kfs, [&](const Keyframe& k) { return std::abs(k.t - t) < kKeyframeMatchEps; });
+  if (existing != kfs.end()) {
+    existing->t = t;
+    existing->v = v;  // the keyframe keeps its own interpolation
+    return;
+  }
+  kfs.push_back({.t = t, .v = v, .e = keyframe_list_interp(kfs)});
+  std::ranges::stable_sort(kfs, {}, &Keyframe::t);
+}
+
+void remove_keyframe_near(std::vector<Keyframe>& kfs, double t) {
+  std::erase_if(kfs, [&](const Keyframe& k) { return std::abs(k.t - t) < kKeyframeRemoveEps; });
+}
+
+Interp keyframe_list_interp(std::span<const Keyframe> kfs) noexcept {
+  return kfs.empty() ? Interp::Linear : kfs.front().e;
+}
+
+void set_keyframe_list_interp(std::vector<Keyframe>& kfs, Interp mode) noexcept {
+  for (Keyframe& k : kfs) k.e = mode;
 }
 
 }  // namespace cutline::core

@@ -1,6 +1,7 @@
 ﻿find_package(GTest CONFIG REQUIRED)
 
 add_executable(cutline_core_tests
+  core/animate_test.cpp
   core/edit_test.cpp
   core/keyframe_test.cpp
   core/query_test.cpp

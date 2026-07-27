@@ -1,5 +1,7 @@
 ﻿add_library(cutline_core
+  src/animate.cpp
   src/edit.cpp
+  src/effects.cpp
   src/id.cpp
   src/keyframe.cpp
   src/query.cpp

@@ -58,6 +58,13 @@ struct PlacementRange {
 /// The right-hand pieces share one fresh group, so the segment after the cut
 /// stays internally linked but is independent of the segment before it. Pieces
 /// of an already-unlinked clip stay unlinked.
+///
+/// A cut is not an edge of the original clip, so nothing that belongs to an
+/// edge may appear at it: the right piece's keyframes are rebased onto its new
+/// origin, the fade-in and fade-out stay on the halves that own them, and the
+/// out-transition follows the out-edge to the right piece. The reference
+/// implementation copied all three verbatim, which shifted the animation of any
+/// split clip and invented both a fade and a transition at every cut.
 [[nodiscard]] Project split_at(Project p, double time, std::span<const std::string> clip_ids);
 
 // --------------------------------------------------------------- arranging --

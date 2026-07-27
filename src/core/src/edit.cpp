@@ -47,6 +47,21 @@ void sort_all_tracks(Project& p) {
   return is_still_like(*it) ? kInfinity : it->duration;
 }
 
+/// Shifts keyframe times so they stay anchored to the same timeline moment
+/// after a clip's start moves.
+///
+/// Keyframe `t` is measured from the clip's start, so a clip whose origin moves
+/// must move its animation with it. Out-of-range keyframes are kept rather than
+/// dropped: evaluation clamps outside the keyframe range, so keeping them is
+/// what preserves the value at the new edge.
+///
+/// The reference implementation did not do this. Splitting an animated clip
+/// there left the right-hand piece's keyframes at their original offsets, so
+/// its animation jumped by the length of the left-hand piece.
+void rebase_keyframes(std::vector<Keyframe>& kfs, double shift) noexcept {
+  for (Keyframe& k : kfs) k.t -= shift;
+}
+
 /// Removes the clip with `clip_id` from `track` and returns it, or nullopt.
 [[nodiscard]] std::optional<Clip> extract_clip(Track& track, std::string_view clip_id) {
   const auto it = std::ranges::find(track.clips, clip_id, &Clip::id);
@@ -172,26 +187,32 @@ Project split_at(Project p, double time, std::span<const std::string> clip_ids) 
       const SourceRange left = clip_sub_source(c, c.start, time);
       const SourceRange right = clip_sub_source(c, time, clip_end(c));
 
-      // FIDELITY NOTE: the right piece inherits the clip wholesale, which
-      // carries three defects from the reference implementation:
-      //
-      //  * Keyframes are clip-local, and are *not* rebased. A keyframe at local
-      //    t=3 stays at t=3 on a piece whose origin moved, so splitting an
-      //    animated clip shifts its animation.
-      //  * `fade_in`/`fade_out` are duplicated onto both halves, inventing a
-      //    fade at the cut.
-      //  * `transition_out` is duplicated, so the left piece gains a transition
-      //    into the right piece it did not have.
-      //
-      // Ported as-is to keep this a faithful translation; fixing behaviour and
-      // porting at the same time makes divergence impossible to attribute.
-      // Tracked for a follow-up that changes all three deliberately.
+      // DIVERGENCE from the reference, which inherited the clip wholesale and
+      // so mangled three things at every cut. See `rebase_keyframes`.
       Clip right_clip = c;
       right_clip.id = new_id("clip");
       right_clip.source_in = right.source_in;
       right_clip.source_out = right.source_out;
       right_clip.start = time;
       if (c.group_id.has_value()) right_clip.group_id = right_group_id;
+
+      // Keyframe times are measured from the clip's start, and the right
+      // piece's start just moved to the cut, so its animation moves with it.
+      const double shift = time - c.start;
+      for (std::vector<Keyframe>& kfs : right_clip.keyframes) rebase_keyframes(kfs, shift);
+      rebase_keyframes(right_clip.gain_keyframes, shift);
+      for (ClipEffect& effect : right_clip.effects) {
+        for (auto& [key, kfs] : effect.keyframes) rebase_keyframes(kfs, shift);
+      }
+
+      // A fade belongs to the edge it was authored against. The cut is not an
+      // edge of the original clip, so no fade may appear there.
+      right_clip.fade_in = 0.0;
+      c.fade_out = 0.0;
+
+      // Likewise the out-transition belongs to the original out-edge, which is
+      // now the right piece's.
+      c.transition_out.reset();
 
       c.source_in = left.source_in;
       c.source_out = left.source_out;
