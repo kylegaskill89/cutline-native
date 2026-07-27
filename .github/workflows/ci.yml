@@ -24,6 +24,20 @@ jobs:
       - name: Point CMake at the preinstalled vcpkg
         run: echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
 
+      # The runner image changes its Visual Studio version over time, and the
+      # ci preset deliberately lets CMake auto-detect it. Log what was found so
+      # a toolchain shift is diagnosable from the run alone.
+      - name: Toolchain info
+        run: |
+          cmake --version
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            & $vswhere -latest -products * -format value -property displayName
+            & $vswhere -latest -products * -format value -property installationVersion
+          } else {
+            "vswhere not present on this image"
+          }
+
       - name: Configure
         run: cmake --preset ci
 

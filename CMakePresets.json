@@ -9,8 +9,6 @@
     {
       "name": "base",
       "hidden": true,
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
@@ -20,13 +18,16 @@
     {
       "name": "default",
       "inherits": "base",
-      "displayName": "MSVC x64",
-      "description": "Local development build."
+      "displayName": "MSVC x64 (Visual Studio 2022)",
+      "description": "Local development build.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64"
     },
     {
       "name": "ci",
       "inherits": "base",
       "displayName": "CI (warnings as errors)",
+      "description": "Generator is left unset so CMake picks whichever Visual Studio the runner image ships; pinning a version makes CI break when the image moves on.",
       "cacheVariables": {
         "CUTLINE_WARNINGS_AS_ERRORS": "ON"
       }
