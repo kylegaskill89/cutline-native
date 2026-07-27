@@ -383,6 +383,105 @@ Project set_clip_edge(Project p, std::string_view clip_id, ClipEdge edge, double
   return p;
 }
 
+namespace {
+
+/// Which video lane, counting only video tracks, holds this clip. -1 when it is
+/// not on one.
+[[nodiscard]] long long video_lane_of(const Project& p, std::string_view clip_id) noexcept {
+  long long lane = 0;
+  for (const Track& t : p.tracks) {
+    if (t.kind != TrackKind::Video) continue;
+    if (std::ranges::any_of(t.clips, [&](const Clip& c) { return c.id == clip_id; })) return lane;
+    ++lane;
+  }
+  return -1;
+}
+
+}  // namespace
+
+Project move_clips_layered(Project p, std::span<const std::string> clip_ids, double delta_time,
+                           int delta_track_index, TrackKind kind) {
+  const Project before = p;
+  p = move_clips(std::move(p), clip_ids, delta_time, delta_track_index, kind);
+  if (kind != TrackKind::Video || delta_track_index == 0) return p;
+
+  // Only a real change of compositing layer triggers the audio reflow.
+  const bool changed_layer = std::ranges::any_of(clip_ids, [&](const std::string& id) {
+    const Clip* c = find_clip(p, id);
+    return c != nullptr && c->kind == TrackKind::Video &&
+           video_lane_of(before, id) != video_lane_of(p, id);
+  });
+  if (!changed_layer) return p;
+
+  const std::unordered_set<std::string> ids = id_set(clip_ids);
+  std::vector<std::string> moved_audio;
+  std::optional<std::string> group_id;
+  for (const Track& t : p.tracks) {
+    if (t.kind != TrackKind::Audio) continue;
+    for (const Clip& c : t.clips) {
+      if (!ids.contains(c.id)) continue;
+      if (moved_audio.empty()) group_id = c.group_id;
+      moved_audio.push_back(c.id);
+    }
+  }
+  if (moved_audio.empty()) return p;
+
+  const std::unordered_set<std::string> moved_ids(moved_audio.begin(), moved_audio.end());
+
+  // A lane is available to this group when nothing on it belongs to anyone else.
+  const auto dedicated_to_group = [&](const Track& t) {
+    return std::ranges::all_of(t.clips, [&](const Clip& c) {
+      return moved_ids.contains(c.id) || (group_id.has_value() && c.group_id == group_id);
+    });
+  };
+
+  std::vector<std::size_t> audio_tracks = track_indices_of_kind(p, TrackKind::Audio);
+  std::unordered_set<std::string> claimed;
+
+  for (const std::string& clip_id : moved_audio) {
+    std::optional<std::size_t> current;
+    for (const std::size_t i : audio_tracks) {
+      if (std::ranges::any_of(p.tracks[i].clips,
+                              [&](const Clip& c) { return c.id == clip_id; })) {
+        current = i;
+        break;
+      }
+    }
+
+    std::optional<std::size_t> destination;
+    if (current.has_value() && !claimed.contains(p.tracks[*current].id) &&
+        dedicated_to_group(p.tracks[*current])) {
+      destination = current;  // already on a lane of its own
+    } else {
+      for (const std::size_t i : audio_tracks) {
+        if (!claimed.contains(p.tracks[i].id) && dedicated_to_group(p.tracks[i])) {
+          destination = i;
+          break;
+        }
+      }
+    }
+
+    if (!destination.has_value()) {
+      Track lane;
+      lane.id = new_id("track");
+      lane.kind = TrackKind::Audio;
+      p.tracks.push_back(std::move(lane));
+      destination = p.tracks.size() - 1;
+      audio_tracks.push_back(*destination);
+    }
+
+    if (current.has_value() && *current != *destination) {
+      if (std::optional<Clip> taken = extract_clip(p.tracks[*current], clip_id)) {
+        p.tracks[*destination].clips.push_back(*std::move(taken));
+      }
+    }
+    claimed.insert(p.tracks[*destination].id);
+  }
+
+  sort_all_tracks(p);
+  return p;
+}
+
 Project ripple_insert(Project p, double at_time, double amount) {
   std::vector<std::string> spanning;
   for (const Track& t : p.tracks) {

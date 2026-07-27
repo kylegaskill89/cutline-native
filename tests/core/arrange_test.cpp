@@ -50,6 +50,91 @@ Project three_clip_project() {
 
 const Track& video(const Project& p) { return p.tracks[0]; }
 
+// -------------------------------------------------------- layered moves --
+
+/// Two video lanes and two audio lanes, with a two-stream media placed on the
+/// lower video lane.
+Project layered_project() {
+  Project p;
+  Media m;
+  m.id = "m1";
+  m.duration = 10.0;
+  m.has_video = true;
+  m.audio_stream_count = 2;
+  p.media = {m};
+
+  Track v1;
+  v1.id = "v1";
+  v1.kind = TrackKind::Video;
+  Track v2;
+  v2.id = "v2";
+  v2.kind = TrackKind::Video;
+  Track a1;
+  a1.id = "a1";
+  a1.kind = TrackKind::Audio;
+  Track a2;
+  a2.id = "a2";
+  a2.kind = TrackKind::Audio;
+  p.tracks = {v1, v2, a1, a2};
+  return p;
+}
+
+std::size_t audio_lane_count(const Project& p) {
+  std::size_t n = 0;
+  for (const Track& t : p.tracks) {
+    if (t.kind == TrackKind::Audio) ++n;
+  }
+  return n;
+}
+
+// With the lanes already free of anyone else's audio, the reflow is content to
+// leave the clips where they are.
+TEST(LayeredMove, KeepsAudioOnLanesItAlreadyOwns) {
+  Project p = layered_project();
+  p = place_media(std::move(p), "m1", 0.0, "v2");
+  const std::string video_id = p.tracks[1].clips[0].id;
+  const Ids members{group_members(p, video_id)};
+
+  p = move_clips_layered(std::move(p), members, 0.0, -1);
+
+  EXPECT_EQ(p.tracks[0].clips.size(), 1u);  // moved up to v1
+  EXPECT_EQ(audio_lane_count(p), 2u);       // no new lanes needed
+}
+
+// A second layer's audio may not land on lanes the first layer occupies.
+TEST(LayeredMove, GivesTheSecondLayerItsOwnAudioLanes) {
+  Project p = layered_project();
+  p = place_media(std::move(p), "m1", 0.0, "v2");  // first placement fills a1 and a2
+  p = place_media(std::move(p), "m1", 20.0, "v2");
+
+  const std::string second_video = p.tracks[1].clips[1].id;
+  const Ids members{group_members(p, second_video)};
+
+  p = move_clips_layered(std::move(p), members, 0.0, -1);
+
+  EXPECT_EQ(audio_lane_count(p), 4u);  // two fresh lanes for the raised layer
+  for (const Track& t : p.tracks) {
+    if (t.kind != TrackKind::Audio) continue;
+    // No lane may end up mixing two different groups.
+    for (const Clip& c : t.clips) {
+      EXPECT_EQ(c.group_id, t.clips[0].group_id);
+    }
+  }
+}
+
+TEST(LayeredMove, DoesNothingExtraWithoutALayerChange) {
+  Project p = layered_project();
+  p = place_media(std::move(p), "m1", 0.0, "v2");
+  const std::string video_id = p.tracks[1].clips[0].id;
+  const Ids members{group_members(p, video_id)};
+
+  const Project before = p;
+  p = move_clips_layered(std::move(p), members, 5.0, 0);  // slide only
+
+  EXPECT_EQ(audio_lane_count(p), audio_lane_count(before));
+  EXPECT_DOUBLE_EQ(p.tracks[1].clips[0].start, 5.0);
+}
+
 // --------------------------------------------------------- ripple insert --
 
 TEST(RippleInsert, ShiftsEverythingFromTheInsertPoint) {

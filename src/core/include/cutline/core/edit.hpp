@@ -78,6 +78,18 @@ struct PlacementRange {
                                  double delta_time, int delta_track_index = 0,
                                  std::optional<TrackKind> restrict_kind = std::nullopt);
 
+/// Moves clips like `move_clips`, but when a video clip lands on a *different*
+/// video track — setting up an overlay layer — its linked audio is relocated
+/// onto lanes dedicated to that group.
+///
+/// A lane qualifies when everything already on it belongs to this group, so no
+/// other layer's audio lives there; fresh lanes are created at the bottom when
+/// none qualifies. Without this, stacking video layers silently piles their
+/// audio onto the same lanes.
+[[nodiscard]] Project move_clips_layered(Project p, std::span<const std::string> clip_ids,
+                                         double delta_time, int delta_track_index = 0,
+                                         TrackKind kind = TrackKind::Video);
+
 /// Splits anything spanning `at_time`, then opens a gap of `amount` seconds by
 /// shifting everything from there onward to the right. Insert editing.
 [[nodiscard]] Project ripple_insert(Project p, double at_time, double amount);
