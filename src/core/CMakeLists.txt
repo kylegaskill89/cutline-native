@@ -1,5 +1,7 @@
-add_library(cutline_core
+﻿add_library(cutline_core
   src/keyframe.cpp
+  src/query.cpp
+  src/segments.cpp
   src/time.cpp)
 add_library(cutline::core ALIAS cutline_core)
 
