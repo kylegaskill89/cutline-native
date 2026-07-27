@@ -1,0 +1,53 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "cutline-native",
+  "version": "0.0.1",
+  "description": "Native C++ non-linear video editor",
+  "homepage": "https://github.com/kylegaskill89/cutline-native",
+  "license": "GPL-3.0-or-later",
+  "dependencies": [
+    "gtest",
+    "nlohmann-json"
+  ],
+  "features": {
+    "media": {
+      "description": "libav* media backend for decode and encode (phase 2+). GPL build: x264/x265 software encoders alongside the hardware ones.",
+      "dependencies": [
+        {
+          "name": "ffmpeg",
+          "default-features": false,
+          "features": [
+            "avcodec",
+            "avformat",
+            "swresample",
+            "swscale",
+            "gpl",
+            "x264",
+            "x265",
+            "nvcodec",
+            "qsv",
+            "amf",
+            "zlib"
+          ]
+        }
+      ]
+    },
+    "gpu": {
+      "description": "Skia with the Direct3D 12 Ganesh backend, for the UI layer (phase 3+).",
+      "dependencies": [
+        {
+          "name": "skia",
+          "default-features": false,
+          "features": [
+            "direct3d",
+            "freetype",
+            "harfbuzz",
+            "icu",
+            "jpeg",
+            "png"
+          ]
+        }
+      ]
+    }
+  }
+}
