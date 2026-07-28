@@ -47,6 +47,17 @@
       }
     },
     {
+      "name": "skia",
+      "inherits": "base",
+      "displayName": "CI with Skia, but no media layer",
+      "description": "The painting backend and the window, without FFmpeg or Direct3D. Skia is the vcpkg 'gpu' feature and the only long build here, which is what makes this cheap enough to run nightly where the whole ui preset would not be.",
+      "cacheVariables": {
+        "CUTLINE_WITH_SKIA": "ON",
+        "CUTLINE_WARNINGS_AS_ERRORS": "ON",
+        "VCPKG_MANIFEST_FEATURES": "gpu"
+      }
+    },
+    {
       "name": "ci",
       "inherits": "base",
       "displayName": "CI (warnings as errors)",
@@ -78,6 +89,11 @@
       "configuration": "Release"
     },
     {
+      "name": "skia",
+      "configurePreset": "skia",
+      "configuration": "Release"
+    },
+    {
       "name": "ci",
       "configurePreset": "ci",
       "configuration": "Release"
@@ -88,6 +104,14 @@
       "name": "debug",
       "configurePreset": "default",
       "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "skia",
+      "configurePreset": "skia",
+      "configuration": "Release",
       "output": {
         "outputOnFailure": true
       }

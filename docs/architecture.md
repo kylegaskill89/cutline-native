@@ -471,6 +471,28 @@ be judged by the agent writing the code.
 - **Throughput benchmarks** for decode and export, so a performance regression
   is a test failure rather than a surprise.
 
+### What runs where
+
+Push and pull-request CI builds the `ci` preset — everything pure, which is most
+of the tree — and the `media` preset. Both stay fast enough to be worth waiting
+for.
+
+Skia is the exception. It is a long build from source, and paying for it on
+every commit would slow the feedback that actually catches things to a crawl. So
+a **nightly** workflow builds the `skia` preset: the painting backend, its pixel
+tests, and the window. It is also `workflow_dispatch`, for the times a day is
+not soon enough.
+
+`skia` deliberately excludes FFmpeg and Direct3D. The gap it exists to close is
+the painting layer, and those are already covered on every push, so the nightly
+pays for one long dependency rather than two.
+
+The last step of it is `theme_window --check`, which lays out and paints the
+whole interface in every theme with no window at all, and fails if any widget
+lands nowhere or if two themes come out identical. That catches what no unit
+test sees: a control demanding more room than exists, or a theme that stopped
+reaching the pixels.
+
 ### Reference media
 
 Benchmarks and golden-image tests run against real captures rather than
