@@ -263,6 +263,24 @@ across its own axis. A spacer is flexible in every direction, so a toolbar that
 took that on would grow to swallow the window instead of being as tall as its
 controls.
 
+### Input marks layout dirty; the frame loop resolves it
+
+An input handler cannot lay out. Sizing needs a theme and a text measurer, and
+neither is available where a `WM_MOUSEMOVE` arrives — a Skia painter, in
+particular, wraps a canvas that only exists for the current frame, so holding
+one across events would be a dangling pointer waiting to happen.
+
+So a handler that changes geometry calls `invalidate_layout`, and the frame loop
+calls `WidgetHost::update_layout` once before painting. Dragging a splitter
+divider across twenty mouse moves lays out once, not twenty times.
+
+The exception is `Widget::translate`, which moves a subtree without re-running
+layout. That is legitimate exactly when nothing changes *size* — scrolling, where
+the content keeps the layout it was given and simply sits somewhere else. A
+splitter drag looks similar and is not: the panes change width, so their
+contents have to be given their share of it again. Using `translate` there moves
+the panes and leaves their children behind, which is what the tests pin down.
+
 ### Colour precision, and why HDR is deferred
 
 Compositing happens in **16-bit float linear light** throughout. Decode converts

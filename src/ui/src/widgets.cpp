@@ -169,6 +169,252 @@ LayoutItem Box::sizing(Axis axis, const LayoutContext& context) const {
                     .max = kUnbounded};
 }
 
+// ---------------------------------------------------------------- splitter --
+
+Splitter::Splitter(Axis axis) : axis_(axis), split_(axis, {}) {}
+
+void Splitter::set_fractions(std::vector<double> fractions) {
+  if (fractions.empty()) return;
+  // The divider width and minimum are the theme's, and are filled in at the
+  // next layout; only the proportions are being set here.
+  split_ = SplitLayout(axis_, std::move(fractions));
+}
+
+std::span<const double> Splitter::fractions() const noexcept { return split_.fractions(); }
+
+std::vector<Widget*> Splitter::panes() const {
+  std::vector<Widget*> out;
+  for (const std::unique_ptr<Widget>& child : children()) {
+    if (child->visible()) out.push_back(child.get());
+  }
+  return out;
+}
+
+void Splitter::layout(const LayoutContext& context) {
+  const std::vector<Widget*> visible = panes();
+  if (visible.empty()) return;
+
+  // Rebuilt each time so the divider width and minimum follow the theme, but
+  // carrying the fractions over: whatever the user has dragged to survives a
+  // resize, and survives changing theme.
+  std::vector<double> carried(split_.fractions().begin(), split_.fractions().end());
+  if (carried.size() != visible.size()) carried.assign(visible.size(), 1.0);
+
+  const Metrics& metrics = context.metrics();
+  split_ = SplitLayout(axis_, std::move(carried), metrics.splitter_width, metrics.min_pane);
+
+  const std::vector<Rect> laid = split_.panes(bounds());
+  for (std::size_t i = 0; i < visible.size(); ++i) visible[i]->arrange(laid[i], context);
+}
+
+void Splitter::paint_overlay(Painter& painter, const Theme& theme) const {
+  // Over the panes rather than between them: a divider with a shadow or a
+  // bevel needs to sit on top of what it separates, not in a gap left for it.
+  for (std::size_t i = 0; i < split_.divider_count(); ++i) {
+    const State state = i == dragging_    ? State::Pressed
+                        : i == hovered_divider_ ? State::Hover
+                                                : State::Normal;
+    paint_surface(painter, split_.divider(bounds(), i), theme.style(Part::Splitter, state));
+  }
+}
+
+bool Splitter::on_mouse_down(const MouseEvent& event) {
+  if (event.button != MouseButton::Left) return false;
+  const std::size_t found = split_.divider_at(bounds(), event.x, event.y);
+  if (found == SplitLayout::kNoDivider) return false;
+
+  // Taking it means the host captures, which is what keeps the drag alive once
+  // the pointer runs ahead of the divider it is pulling.
+  dragging_ = found;
+  return true;
+}
+
+bool Splitter::on_mouse_move(const MouseEvent& event) {
+  if (dragging_ == SplitLayout::kNoDivider) {
+    hovered_divider_ = split_.divider_at(bounds(), event.x, event.y);
+    return false;
+  }
+
+  const double position = axis_ == Axis::Horizontal ? event.x : event.y;
+  if (!split_.drag(bounds(), dragging_, position)) return true;
+
+  // A drag changes how big the panes are, not just where they start, so their
+  // contents have to be given their share of the new size. That needs a theme
+  // and a text measurer, which no input handler has — hence marking it and
+  // letting the frame loop do it once, rather than per mouse move.
+  invalidate_layout();
+  return true;
+}
+
+bool Splitter::on_mouse_up(const MouseEvent& event) {
+  if (event.button != MouseButton::Left) return false;
+  if (dragging_ == SplitLayout::kNoDivider) return false;
+  dragging_ = SplitLayout::kNoDivider;
+  hovered_divider_ = split_.divider_at(bounds(), event.x, event.y);
+  return true;
+}
+
+// -------------------------------------------------------------- scroll view --
+
+ScrollView::ScrollView(Axis axis) : axis_(axis) {
+  // The content is meant to run past the edge; that is the entire point.
+  set_clips_children(true);
+}
+
+Widget& ScrollView::set_content(std::unique_ptr<Widget> content) {
+  clear_children();
+  view_.offset = 0.0;
+  return add(std::move(content));
+}
+
+Widget* ScrollView::content() const noexcept {
+  return children().empty() ? nullptr : children().front().get();
+}
+
+void ScrollView::layout(const LayoutContext& context) {
+  Widget* inner = content();
+  if (inner == nullptr) {
+    view_ = Viewport{};
+    has_bar_ = false;
+    return;
+  }
+
+  const Metrics& metrics = context.metrics();
+  bar_width_ = metrics.scrollbar_width;
+  // Three lines a notch, which is what every other application does.
+  step_ = metrics.font_size * metrics.line_height * 3.0;
+
+  const bool vertical = axis_ == Axis::Vertical;
+  const double visible = vertical ? bounds().height : bounds().width;
+  const double wanted = inner->sizing(axis_, context).basis;
+
+  view_.visible = visible;
+  view_.content = std::max(wanted, visible);
+  view_.clamp();
+
+  // The gutter is taken from the other axis, so reserving it cannot change how
+  // long the content is and one pass is enough.
+  has_bar_ = view_.scrollable();
+  const double gutter = has_bar_ ? bar_width_ : 0.0;
+
+  const Rect area = vertical
+                        ? Rect{bounds().x, bounds().y, std::max(0.0, bounds().width - gutter),
+                               bounds().height}
+                        : Rect{bounds().x, bounds().y, bounds().width,
+                               std::max(0.0, bounds().height - gutter)};
+
+  inner->arrange(vertical ? Rect{area.x, area.y - view_.offset, area.width, view_.content}
+                          : Rect{area.x - view_.offset, area.y, view_.content, area.height},
+                 context);
+}
+
+LayoutItem ScrollView::sizing(Axis axis, const LayoutContext& context) const {
+  // Along the scrolling axis it will take whatever it is given, because
+  // reporting the content's full length would defeat the point of scrolling.
+  if (axis == axis_) return LayoutItem::flexible();
+  const Widget* inner = content();
+  if (inner == nullptr) return LayoutItem::flexible();
+  return inner->sizing(axis, context);
+}
+
+void ScrollView::scroll_to(double offset) {
+  const double before = view_.offset;
+  view_.scroll_to(offset);
+  const double moved = before - view_.offset;
+  if (moved == 0.0) return;
+  if (Widget* inner = content(); inner != nullptr) {
+    axis_ == Axis::Vertical ? inner->translate(0.0, moved) : inner->translate(moved, 0.0);
+  }
+}
+
+void ScrollView::scroll_by(double delta) { scroll_to(view_.offset + delta); }
+
+Rect ScrollView::track() const {
+  if (!has_bar_) return {};
+  return axis_ == Axis::Vertical
+             ? Rect{bounds().right() - bar_width_, bounds().y, bar_width_, bounds().height}
+             : Rect{bounds().x, bounds().bottom() - bar_width_, bounds().width, bar_width_};
+}
+
+Rect ScrollView::thumb() const {
+  const Rect bar = track();
+  if (bar.empty()) return {};
+
+  const bool vertical = axis_ == Axis::Vertical;
+  const double length = vertical ? bar.height : bar.width;
+  const double size = view_.thumb_size(length);
+  const double at = view_.thumb_offset(length);
+
+  return vertical ? Rect{bar.x, bar.y + at, bar.width, size}
+                  : Rect{bar.x + at, bar.y, size, bar.height};
+}
+
+void ScrollView::paint_overlay(Painter& painter, const Theme& theme) const {
+  const Rect bar = track();
+  if (bar.empty()) return;
+
+  paint_surface(painter, bar, theme.style(Part::Scrollbar, State::Normal));
+  paint_surface(painter, thumb(),
+                theme.style(Part::ScrollThumb, dragging_ ? State::Pressed : State::Normal));
+}
+
+bool ScrollView::on_wheel(const WheelEvent& event) {
+  if (!view_.scrollable()) return false;
+  const double delta = axis_ == Axis::Vertical ? event.delta_y : event.delta_x;
+  if (delta == 0.0) return false;
+
+  const double before = view_.offset;
+  scroll_by(delta * step_);
+  // Unhandled at the ends, so the wheel keeps bubbling to whatever is outside
+  // rather than dying against a view that cannot move any further.
+  return view_.offset != before;
+}
+
+bool ScrollView::on_mouse_down(const MouseEvent& event) {
+  if (event.button != MouseButton::Left) return false;
+
+  const Rect grip = thumb();
+  if (!grip.empty() && grip.contains(event.x, event.y)) {
+    // Remembering where inside the thumb it was grabbed is what stops it
+    // snapping its top to the cursor on the first pixel of movement.
+    grab_ = (axis_ == Axis::Vertical ? event.y - grip.y : event.x - grip.x);
+    dragging_ = true;
+    return true;
+  }
+
+  const Rect bar = track();
+  if (bar.empty() || !bar.contains(event.x, event.y)) return false;
+  // Clicking the empty track pages towards the click.
+  const bool after = axis_ == Axis::Vertical ? event.y > grip.y : event.x > grip.x;
+  scroll_by(after ? view_.visible : -view_.visible);
+  return true;
+}
+
+bool ScrollView::on_mouse_move(const MouseEvent& event) {
+  if (!dragging_) return false;
+
+  const Rect bar = track();
+  const bool vertical = axis_ == Axis::Vertical;
+  const double length = vertical ? bar.height : bar.width;
+  const double at = (vertical ? event.y - bar.y : event.x - bar.x) - grab_;
+
+  const double before = view_.offset;
+  view_.drag_thumb(length, at);
+  const double moved = before - view_.offset;
+  if (moved != 0.0) {
+    if (Widget* inner = content(); inner != nullptr) {
+      vertical ? inner->translate(0.0, moved) : inner->translate(moved, 0.0);
+    }
+  }
+  return true;
+}
+
+bool ScrollView::on_mouse_up(const MouseEvent& event) {
+  if (event.button != MouseButton::Left || !dragging_) return false;
+  dragging_ = false;
+  return true;
+}
+
 // ------------------------------------------------------------------- panel --
 
 Panel::Panel(std::string title) : Box(Axis::Vertical), title_(std::move(title)) {

@@ -16,10 +16,14 @@
 #include "cutline/ui/layout.hpp"
 #include "cutline/ui/widget.hpp"
 
+#include <cstddef>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace cutline::ui {
 
@@ -138,6 +142,90 @@ class Box : public Widget {
   Align main_ = Align::Start;
   Align cross_ = Align::Stretch;
   bool fills_cross_ = false;
+};
+
+/// Panes with draggable dividers between them: the docked layout itself.
+///
+/// Each child is a pane, in order. Sizes are fractions, so resizing the window
+/// keeps the proportions the user dragged to, and the dividers take their width
+/// and their look from the theme like everything else.
+class Splitter : public Widget {
+ public:
+  explicit Splitter(Axis axis = Axis::Horizontal);
+
+  [[nodiscard]] Axis axis() const noexcept { return axis_; }
+
+  /// Proportions of the panes, normalised. If the count does not match the
+  /// visible children by the time it is laid out, an even split is used
+  /// instead — a mismatch means the caller is out of step with the tree, and
+  /// guessing which pane the spare fraction belonged to would be worse.
+  void set_fractions(std::vector<double> fractions);
+  [[nodiscard]] std::span<const double> fractions() const noexcept;
+
+  /// Which divider is being dragged, or `SplitLayout::kNoDivider`.
+  [[nodiscard]] std::size_t dragging() const noexcept { return dragging_; }
+
+  void layout(const LayoutContext& context) override;
+  void paint_overlay(Painter& painter, const Theme& theme) const override;
+
+  bool on_mouse_down(const MouseEvent& event) override;
+  bool on_mouse_move(const MouseEvent& event) override;
+  bool on_mouse_up(const MouseEvent& event) override;
+
+ private:
+  [[nodiscard]] std::vector<Widget*> panes() const;
+
+  Axis axis_;
+  SplitLayout split_;
+  std::size_t dragging_ = SplitLayout::kNoDivider;
+  /// Which divider the pointer is over, for the theme's hover state. Only
+  /// meaningful because dividers are painted by the splitter rather than being
+  /// widgets of their own.
+  std::size_t hovered_divider_ = SplitLayout::kNoDivider;
+};
+
+/// A window onto content taller or wider than itself.
+///
+/// The content is an ordinary widget laid out at its natural size and then
+/// moved: scrolling is `translate` and nothing more, so it costs no measuring
+/// and no second pass through layout.
+class ScrollView : public Widget {
+ public:
+  explicit ScrollView(Axis axis = Axis::Vertical);
+
+  /// Replaces whatever was being scrolled.
+  Widget& set_content(std::unique_ptr<Widget> content);
+  [[nodiscard]] Widget* content() const noexcept;
+
+  [[nodiscard]] const Viewport& viewport() const noexcept { return view_; }
+  /// Scrolls and moves the content to match. Clamped.
+  void scroll_to(double offset);
+  void scroll_by(double delta);
+
+  /// The scrollbar track and its thumb. Empty when there is nothing to scroll.
+  [[nodiscard]] Rect track() const;
+  [[nodiscard]] Rect thumb() const;
+
+  void layout(const LayoutContext& context) override;
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  void paint_overlay(Painter& painter, const Theme& theme) const override;
+
+  bool on_wheel(const WheelEvent& event) override;
+  bool on_mouse_down(const MouseEvent& event) override;
+  bool on_mouse_move(const MouseEvent& event) override;
+  bool on_mouse_up(const MouseEvent& event) override;
+
+ private:
+  Axis axis_;
+  Viewport view_;
+  /// Taken from the theme during layout, because input arrives without one.
+  double bar_width_ = 12.0;
+  double step_ = 40.0;
+  bool has_bar_ = false;
+
+  /// Where in the thumb it was grabbed, so it does not jump under the cursor.
+  double grab_ = 0.0;
+  bool dragging_ = false;
 };
 
 /// A docked region: a themed surface, an optional header with a title, and a

@@ -144,6 +144,7 @@ enum class Part {
   TitleBar,
   Panel,        ///< a docked region: timeline, inspector, browser
   PanelHeader,
+  Splitter,     ///< the draggable strip between two docked regions
   Button,
   ToolButton,   ///< an icon-only button in a toolbar
   Input,        ///< a text field or numeric entry
@@ -191,6 +192,10 @@ struct Metrics {
   double title_bar_height = 30.0;
   double panel_header_height = 26.0;
   double scrollbar_width = 12.0;
+  double splitter_width = 6.0;
+  /// The smallest a pane may be dragged to. Stops a docked region being lost
+  /// off the edge with no way to get it back.
+  double min_pane = 48.0;
 
   double font_size = 13.0;
   double small_font_size = 11.0;

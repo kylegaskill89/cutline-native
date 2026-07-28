@@ -99,6 +99,16 @@ void Widget::arrange(const Rect& bounds, const LayoutContext& context) {
   layout(context);
 }
 
+void Widget::translate(double dx, double dy) noexcept {
+  bounds_.x += dx;
+  bounds_.y += dy;
+  for (const std::unique_ptr<Widget>& child : children_) child->translate(dx, dy);
+}
+
+void Widget::invalidate_layout() noexcept {
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_layout();
+}
+
 void Widget::layout(const LayoutContext&) {}
 
 LayoutItem Widget::sizing(Axis, const LayoutContext&) const { return LayoutItem::flexible(); }
@@ -119,16 +129,23 @@ void Widget::paint(Painter& painter, const Theme& theme) const {
   if (paints_surface()) paint_surface(painter, bounds_, style);
   paint_content(painter, theme);
 
-  if (children_.empty()) return;
-  if (clips_children_) painter.push_clip(bounds_, style.corner_radius);
-  // In order, so a later child draws over an earlier one — the same order
-  // `at` searches in reverse, which is what keeps hit testing agreeing with
-  // what is actually on top.
-  for (const std::unique_ptr<Widget>& child : children_) child->paint(painter, theme);
-  if (clips_children_) painter.pop_clip();
+  if (!children_.empty()) {
+    if (clips_children_) painter.push_clip(bounds_, style.corner_radius);
+    // In order, so a later child draws over an earlier one — the same order
+    // `at` searches in reverse, which is what keeps hit testing agreeing with
+    // what is actually on top.
+    for (const std::unique_ptr<Widget>& child : children_) child->paint(painter, theme);
+    if (clips_children_) painter.pop_clip();
+  }
+
+  // Outside the clip on purpose: a scrollbar belongs to the view, not to the
+  // content it is scrolling, and would be cut off along with it.
+  paint_overlay(painter, theme);
 }
 
 void Widget::paint_content(Painter&, const Theme&) const {}
+
+void Widget::paint_overlay(Painter&, const Theme&) const {}
 
 bool Widget::on_mouse_down(const MouseEvent&) { return false; }
 bool Widget::on_mouse_up(const MouseEvent&) { return false; }
@@ -167,11 +184,19 @@ WidgetHost::WidgetHost(std::unique_ptr<Widget> root) : root_(std::move(root)) {
 }
 
 void WidgetHost::resize(const Rect& bounds, const LayoutContext& context) {
-  root_->arrange(bounds, context);
+  bounds_ = bounds;
+  root_->arrange(bounds_, context);
+  layout_dirty_ = false;
   // The pointer has not moved but what is under it may have. Without this, a
   // panel that opens under a resting cursor never lights up until it is
   // nudged.
   if (has_mouse_ && captured_ == nullptr) set_hovered(root_->at(mouse_x_, mouse_y_));
+}
+
+bool WidgetHost::update_layout(const LayoutContext& context) {
+  if (!layout_dirty_) return false;
+  resize(bounds_, context);
+  return true;
 }
 
 template <typename Fn>

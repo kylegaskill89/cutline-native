@@ -41,8 +41,8 @@ struct MouseEvent {
 struct WheelEvent {
   double x = 0.0;
   double y = 0.0;
-  /// Notches, one per detent. Positive is down and right, matching the
-  /// direction content moves rather than the direction the wheel turns.
+  /// Notches, one per detent. Positive scrolls towards the end of the content
+  /// — down, or right.
   double delta_x = 0.0;
   double delta_y = 0.0;
   Modifiers modifiers;

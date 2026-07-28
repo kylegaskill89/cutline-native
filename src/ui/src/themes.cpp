@@ -49,6 +49,7 @@ namespace {
   t.metrics.font_size = 12.0;
   t.metrics.small_font_size = 11.0;
   t.metrics.scrollbar_width = 17.0;  // XP scrollbars were chunky
+  t.metrics.splitter_width = 8.0;    // and its splitters were raised bars
   t.metrics.track_height = 60.0;     // bevelled clips need the room
   t.metrics.audio_track_height = 48.0;
   t.metrics.ruler_height = 22.0;
@@ -180,6 +181,12 @@ namespace {
                      .text = hex("#000000")});
   t.set(Part::Playhead, State::Normal,
         SurfaceStyle{.fill = Fill::solid(hex("#d02020")), .text = hex("#d02020")});
+
+  // Luna's splitters were raised bars in the face colour, not gaps.
+  t.set(Part::Splitter, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#ece9d8")),
+                     .bevel = raised("#ffffff", "#aca899"),
+                     .text = hex("#000000")});
 
   t.set(Part::Scrollbar, State::Normal, SurfaceStyle{.fill = Fill::solid(hex("#f1efe2"))});
   t.set(Part::ScrollThumb, State::Normal,
@@ -378,6 +385,12 @@ namespace {
                      .corner_radius = 3.0,
                      .text = hex("#0d1a26")});
 
+  t.set(Part::Splitter, State::Normal,
+        SurfaceStyle{.fill = Fill::glass(hex("#ffffff33"), 8.0),
+                     .border = hex("#ffffff55"),
+                     .border_width = 1.0,
+                     .text = hex("#0d1a26")});
+
   t.set(Part::Scrollbar, State::Normal,
         SurfaceStyle{.fill = Fill::glass(hex("#ffffff22"), 6.0)});
   t.set(Part::ScrollThumb, State::Normal,
@@ -413,6 +426,7 @@ namespace {
   t.metrics.panel_header_height = 30.0;
   t.metrics.font_size = 13.0;
   t.metrics.scrollbar_width = 10.0;
+  t.metrics.splitter_width = 4.0;  // flat chrome wants a hairline, not a bar
   t.metrics.track_height = 56.0;
   t.metrics.audio_track_height = 44.0;
 
@@ -522,6 +536,11 @@ namespace {
                      .border_width = 1.0,
                      .corner_radius = 4.0,
                      .text = hex("#e6ebf2")});
+
+  t.set(Part::Splitter, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#0f1216")), .text = hex("#e6ebf2")});
+  t.set(Part::Splitter, State::Hover,
+        SurfaceStyle{.fill = Fill::solid(hex("#2b6cb0")), .text = hex("#e6ebf2")});
 
   t.set(Part::Scrollbar, State::Normal, SurfaceStyle{.fill = Fill::solid(hex("#15181d"))});
   t.set(Part::ScrollThumb, State::Normal,
@@ -677,6 +696,12 @@ namespace {
                      .border_width = 1.0,
                      .text = amber,
                      .text_glow = 4.0});
+
+  t.set(Part::Splitter, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#0a0800")),
+                     .border = dim,
+                     .border_width = 1.0,
+                     .text = amber});
 
   t.set(Part::Scrollbar, State::Normal, SurfaceStyle{.fill = Fill::solid(hex("#0a0800"))});
   t.set(Part::ScrollThumb, State::Normal,

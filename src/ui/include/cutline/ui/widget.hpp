@@ -78,6 +78,23 @@ class Widget {
   /// Places this widget and lays its subtree out inside the new bounds.
   void arrange(const Rect& bounds, const LayoutContext& context);
 
+  /// Moves this widget and everything under it, keeping the subtree's internal
+  /// geometry intact.
+  ///
+  /// Only for changes that are genuinely a move: scrolling, where the content
+  /// keeps the layout it was given and simply sits somewhere else. Anything
+  /// that changes a *size* has to go through layout, because the children need
+  /// to be given their share of it again.
+  void translate(double dx, double dy) noexcept;
+
+  /// Asks for this tree to be laid out again before it is next painted.
+  ///
+  /// This is how an input handler changes geometry. It cannot lay out itself:
+  /// sizing needs a theme and a way to measure text, and the frame loop is the
+  /// only place those exist. Marking and deferring is also what stops a drag
+  /// from re-laying out the world on every mouse move it receives.
+  void invalidate_layout() noexcept;
+
   /// Positions the children. The override point for containers, which call
   /// `arrange` on each child; the default leaves them where they are.
   virtual void layout(const LayoutContext& context);
@@ -138,6 +155,10 @@ class Widget {
   /// Drawn after the surface and before the children. Labels, icons, the
   /// contents of a timeline track.
   virtual void paint_content(Painter& painter, const Theme& theme) const;
+
+  /// Drawn after the children, and outside the clip they were drawn in.
+  /// Scrollbars, focus rings — anything that sits on top of its own contents.
+  virtual void paint_overlay(Painter& painter, const Theme& theme) const;
 
   // ---------------------------------------------------------------- events --
 
@@ -212,6 +233,17 @@ class WidgetHost {
   /// a stationary pointer changes when things move beneath it.
   void resize(const Rect& bounds, const LayoutContext& context);
 
+  [[nodiscard]] const Rect& bounds() const noexcept { return bounds_; }
+
+  /// Whether something asked for layout since it last ran.
+  [[nodiscard]] bool needs_layout() const noexcept { return layout_dirty_; }
+  void request_layout() noexcept { layout_dirty_ = true; }
+
+  /// Lays the tree out again if anything asked for it, and reports whether it
+  /// did. Call this once per frame, before painting — it is the point at which
+  /// a theme and a text measurer are in hand.
+  bool update_layout(const LayoutContext& context);
+
   // -------------------------------------------------------------- dispatch --
 
   /// Each returns whether anything handled the event.
@@ -267,6 +299,8 @@ class WidgetHost {
   void collect_focusable(Widget& widget, std::vector<Widget*>& out) const;
 
   std::unique_ptr<Widget> root_;
+  Rect bounds_;
+  bool layout_dirty_ = false;
   Widget* hovered_ = nullptr;
   Widget* focused_ = nullptr;
   Widget* captured_ = nullptr;
