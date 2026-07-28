@@ -18,6 +18,7 @@
 #include "cutline/core/edit.hpp"
 #include "cutline/core/model.hpp"
 #include "cutline/core/time.hpp"
+#include "cutline/editor/commands.hpp"
 #include "cutline/editor/document.hpp"
 #include "cutline/editor/inspector.hpp"
 #include "cutline/editor/session.hpp"
@@ -55,6 +56,7 @@
 #include <memory>
 #include <optional>
 #include <print>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -378,6 +380,61 @@ bool save_project(App& app, bool ask_where) {
 void new_project(App& app) {
   app.session.reset(sample_project());
   refresh_all(app);
+}
+
+/// A key bound to an editing command.
+struct Binding {
+  Key key;
+  bool control = false;
+  bool shift = false;
+  cutline::editor::Command command;
+};
+
+/// Taken before the widget tree sees them. Nothing should be able to swallow
+/// undo, and a control-modified key is never something a control wants.
+constexpr std::array kApplicationKeys{
+    Binding{Key::Z, true, false, cutline::editor::Command::Undo},
+    Binding{Key::Z, true, true, cutline::editor::Command::Redo},
+    Binding{Key::Y, true, false, cutline::editor::Command::Redo},
+    Binding{Key::A, true, false, cutline::editor::Command::SelectAll},
+    Binding{Key::K, true, false, cutline::editor::Command::Split},
+};
+
+/// Offered only after the widget tree has declined them.
+///
+/// These are unmodified keys that a control may legitimately want — the arrows
+/// belong to a focused slider before they belong to the playhead, and taking
+/// them first would make the inspector unusable from the keyboard.
+constexpr std::array kTransportKeys{
+    Binding{Key::Left, false, false, cutline::editor::Command::PreviousFrame},
+    Binding{Key::Right, false, false, cutline::editor::Command::NextFrame},
+    Binding{Key::Home, false, false, cutline::editor::Command::GoToStart},
+    Binding{Key::End, false, false, cutline::editor::Command::GoToEnd},
+    Binding{Key::Comma, false, false, cutline::editor::Command::NudgeLeft},
+    Binding{Key::Period, false, false, cutline::editor::Command::NudgeRight},
+    Binding{Key::Delete, false, false, cutline::editor::Command::Delete},
+    Binding{Key::Delete, false, true, cutline::editor::Command::RippleDelete},
+    Binding{Key::Escape, false, false, cutline::editor::Command::SelectNone},
+};
+
+/// Runs whichever command the key is bound to, if any.
+bool run_binding(App& app, std::span<const Binding> bindings, Key key,
+                 const Modifiers& modifiers) {
+  for (const Binding& binding : bindings) {
+    if (binding.key != key) continue;
+    if (binding.control != modifiers.control || binding.shift != modifiers.shift) continue;
+
+    // The command decides whether it applies. Nothing here needs to know when
+    // a razor has anything to cut.
+    if (cutline::editor::run(app.session, binding.command)) {
+      refresh_timeline(app);
+      refresh_title(app);
+      app.inspector_stale = true;
+    }
+    app.dirty = true;
+    return true;
+  }
+  return false;
 }
 
 /// The window's own widget tree: a switcher along the top, a browser down the
@@ -785,16 +842,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       // Application shortcuts, taken before the widget tree sees them: undo is
       // not something any one control should be able to swallow.
       const Modifiers held = modifiers_now();
-      if (held.control && (wparam == 'Z' || wparam == 'Y')) {
-        const bool forward = wparam == 'Y' || held.shift;
-        if (forward ? app->session.redo() : app->session.undo()) {
-          refresh_timeline(*app);
-          refresh_title(*app);
-          app->inspector_stale = true;
-        }
-        app->dirty = true;
-        return 0;
-      }
       if (held.control && wparam == 'O') {
         open_project(*app);
         return 0;
@@ -808,12 +855,22 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         return 0;
       }
       const KeyEvent event{.key = key_from_win32(wparam),
-                           .modifiers = modifiers_now(),
+                           .modifiers = held,
                            .repeat = (lparam & (1 << 30)) != 0};
+
+      // Before the tree: nothing should be able to swallow undo.
+      if (run_binding(*app, kApplicationKeys, event.key, held)) return 0;
+
       if (event.key == Key::Tab) {
         app->host->focus_next(event.modifiers.shift);
-      } else {
-        app->host->key_down(event);
+        app->dirty = true;
+        return 0;
+      }
+
+      // After the tree, and only if it did not want the key. A focused slider
+      // owns the arrows before the playhead does.
+      if (!app->host->key_down(event)) {
+        run_binding(*app, kTransportKeys, event.key, held);
       }
       app->dirty = true;
       return 0;

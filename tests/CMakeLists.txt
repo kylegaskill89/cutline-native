@@ -15,6 +15,7 @@ add_executable(cutline_core_tests
   core/segments_test.cpp
   core/serialize_test.cpp
   core/time_test.cpp
+  editor/commands_test.cpp
   editor/document_test.cpp
   editor/inspector_test.cpp
   editor/session_test.cpp
