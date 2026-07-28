@@ -18,7 +18,9 @@
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cutline::ui {
@@ -66,6 +68,32 @@ struct BlockRef {
   friend bool operator==(const BlockRef&, const BlockRef&) = default;
 };
 
+/// What a drag is doing.
+enum class DragMode {
+  None,
+  /// Moving the playhead.
+  Scrub,
+  /// Sliding a whole clip along its track.
+  Move,
+  /// Pulling one edge of a clip, leaving the other where it is.
+  TrimStart,
+  TrimEnd,
+};
+
+/// The times a dragged edge should stick to: the start, the playhead, and the
+/// edges of every other clip.
+///
+/// `exclude` is the clip being dragged, which must not snap to itself — its own
+/// edges follow the pointer, so leaving them in pins the drag in place.
+[[nodiscard]] std::vector<double> snap_points(const TimelineModel& model, double playhead,
+                                              std::optional<BlockRef> exclude);
+
+/// The nearest point within `tolerance`, or nothing. Ties go to the earlier
+/// one, so a clip dropped exactly between two edges lands somewhere
+/// predictable rather than somewhere that depends on iteration order.
+[[nodiscard]] std::optional<double> nearest_snap(std::span<const double> points, double time,
+                                                 double tolerance);
+
 class TimelineView : public Widget {
  public:
   TimelineView();
@@ -91,6 +119,25 @@ class TimelineView : public Widget {
 
   [[nodiscard]] std::optional<BlockRef> selection() const;
   void select(std::optional<BlockRef> block);
+
+  /// Called once, on release, with the clip as it ended up. Not on every mouse
+  /// move: the model is already updated live so the drag can be seen, and an
+  /// edit that fired continuously would put a hundred entries in the undo
+  /// stack for one gesture.
+  void set_on_edit(std::function<void(BlockRef, TimelineBlock)> on_edit) {
+    on_edit_ = std::move(on_edit);
+  }
+
+  [[nodiscard]] bool snapping() const noexcept { return snapping_; }
+  void set_snapping(bool snapping) noexcept { snapping_ = snapping; }
+
+  [[nodiscard]] DragMode drag_mode() const noexcept { return mode_; }
+  [[nodiscard]] std::optional<BlockRef> dragging() const noexcept { return drag_; }
+
+  /// What a drag starting at this point would do. The outer edges of a clip
+  /// trim it and the middle moves it, which is how every editor behaves and
+  /// what makes a trim reachable without a modifier.
+  [[nodiscard]] DragMode zone_at(double x, double y) const;
 
   // -------------------------------------------------------------- geometry --
   //
@@ -134,7 +181,9 @@ class TimelineView : public Widget {
 
  private:
   [[nodiscard]] double track_height(std::size_t track) const noexcept;
+  [[nodiscard]] double trim_handle_width(std::size_t track, std::size_t block) const;
   void scrub_to(double x);
+  void drag_to(double x);
   void refresh_bounds();
 
   TimelineModel model_;
@@ -142,13 +191,24 @@ class TimelineView : public Widget {
   Viewport vertical_;
 
   double playhead_ = 0.0;
-  bool scrubbing_ = false;
+  bool snapping_ = true;
+
+  DragMode mode_ = DragMode::None;
+  std::optional<BlockRef> drag_;
+  /// The clip as it was when the drag began. Every position is computed from
+  /// this rather than from the last one, so rounding cannot accumulate over a
+  /// long drag and leave the clip a frame off where the pointer is.
+  TimelineBlock origin_;
+  double press_x_ = 0.0;
+  /// Whether the pointer has moved far enough for this to be a drag at all.
+  bool moved_ = false;
 
   /// Taken from the theme at layout, because input arrives without one.
   Metrics metrics_;
 
   std::function<void(double)> on_scrub_;
   std::function<void(std::optional<BlockRef>)> on_select_;
+  std::function<void(BlockRef, TimelineBlock)> on_edit_;
 };
 
 }  // namespace cutline::ui

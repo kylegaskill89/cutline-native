@@ -15,7 +15,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace cutline::ui {
@@ -356,6 +358,297 @@ TEST(Timeline, FittingPutsTheWholeProjectOnScreen) {
 
   const double width = fixture.view->time_area().width;
   EXPECT_NEAR(fixture.view->scale().to_x(12.0), width, 1e-6);
+}
+
+// --------------------------------------------------------------- snapping --
+
+TEST(Snapping, CollectsTheStartThePlayheadAndEveryClipEdge) {
+  const std::vector<double> points = snap_points(sample_model(), 7.5, std::nullopt);
+
+  for (const double want : {0.0, 7.5, 2.0, 6.0, 5.0, 12.0}) {
+    EXPECT_NE(std::ranges::find(points, want), points.end()) << "missing " << want;
+  }
+  EXPECT_TRUE(std::ranges::is_sorted(points));
+}
+
+TEST(Snapping, AClipNeverSnapsToItself) {
+  // Its own edges are the ones following the pointer. Leaving them in pins the
+  // drag exactly where it started, which looks like the timeline is frozen.
+  const std::vector<double> points = snap_points(sample_model(), 0.0, BlockRef{0, 0});
+  EXPECT_EQ(std::ranges::find(points, 2.0), points.end());
+  EXPECT_EQ(std::ranges::find(points, 6.0), points.end());
+}
+
+TEST(Snapping, PicksTheNearestWithinTolerance) {
+  const std::vector<double> points{0.0, 5.0, 12.0};
+  EXPECT_EQ(nearest_snap(points, 5.2, 0.5), 5.0);
+  EXPECT_EQ(nearest_snap(points, 4.6, 0.5), 5.0);
+  EXPECT_FALSE(nearest_snap(points, 8.0, 0.5).has_value());
+}
+
+TEST(Snapping, ATieGoesToTheEarlierPoint) {
+  // Otherwise a clip dropped exactly between two edges lands wherever
+  // iteration order happened to put it.
+  const std::vector<double> points{4.0, 6.0};
+  EXPECT_EQ(nearest_snap(points, 5.0, 2.0), 4.0);
+}
+
+TEST(Snapping, NoToleranceMeansNoSnapping) {
+  const std::vector<double> points{0.0, 5.0};
+  EXPECT_FALSE(nearest_snap(points, 5.0, 0.0).has_value());
+}
+
+// ---------------------------------------------------------------- drags --
+
+TEST(Timeline, TheEdgesOfAClipTrimAndTheMiddleMoves) {
+  const Fixture fixture;
+  // "wide", 0s to 5s, which is wholly on screen — a clip whose far edge is
+  // scrolled out cannot be hit tested there at all.
+  const Rect box = fixture.view->block_rect(1, 0);
+  ASSERT_LT(box.right(), fixture.view->time_area().right());
+  const double y = box.y + 5.0;
+
+  EXPECT_EQ(fixture.view->zone_at(box.x + 2.0, y), DragMode::TrimStart);
+  EXPECT_EQ(fixture.view->zone_at(box.right() - 2.0, y), DragMode::TrimEnd);
+  EXPECT_EQ(fixture.view->zone_at(box.x + box.width / 2.0, y), DragMode::Move);
+  EXPECT_EQ(fixture.view->zone_at(box.x + 2.0, 5.0), DragMode::None) << "that is the ruler";
+}
+
+TEST(Timeline, AShortClipIsStillMostlyMoveHandle) {
+  // A clip that was all trim handle could never be picked up and slid.
+  Fixture fixture;
+  fixture.view->set_scale(TimeScale{.pixels_per_second = 4.0});
+  const Rect box = fixture.view->block_rect(0, 0);
+  ASSERT_LT(box.width, 24.0);
+
+  EXPECT_EQ(fixture.view->zone_at(box.x + box.width / 2.0, box.y + 5.0), DragMode::Move);
+}
+
+TEST(Timeline, AClickDoesNotNudgeAClip) {
+  // Without a threshold, selecting a clip moves it by however much the hand
+  // wobbled between press and release.
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+  const TimelineBlock before = fixture.view->model().tracks[1].blocks[0];
+
+  fixture.host->mouse_down(press(box.x + 40.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 41.0, box.y + 10.0));
+  fixture.host->mouse_up(press(box.x + 41.0, box.y + 10.0));
+
+  // Position only: the click did select it, which is exactly what it was for.
+  const TimelineBlock& after = fixture.view->model().tracks[1].blocks[0];
+  EXPECT_DOUBLE_EQ(after.start, before.start);
+  EXPECT_DOUBLE_EQ(after.end, before.end);
+}
+
+TEST(Timeline, DraggingAClipSlidesItAndKeepsItsLength) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect box = fixture.view->block_rect(0, 0);  // 2s to 6s
+  const double length = 4.0;
+
+  fixture.host->mouse_down(press(box.x + 100.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 400.0, box.y + 10.0));  // +3s at 100 px/s
+
+  const TimelineBlock& block = fixture.view->model().tracks[0].blocks[0];
+  EXPECT_NEAR(block.start, 5.0, 1.0 / kFps);
+  EXPECT_NEAR(block.duration(), length, 1e-9) << "the clip changed length while moving";
+}
+
+TEST(Timeline, AClipCannotBeDraggedBeforeTheStart) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect box = fixture.view->block_rect(0, 0);
+
+  fixture.host->mouse_down(press(box.x + 100.0, box.y + 10.0));
+  fixture.host->mouse_move(press(-5000.0, box.y + 10.0));
+
+  EXPECT_DOUBLE_EQ(fixture.view->model().tracks[0].blocks[0].start, 0.0);
+  EXPECT_NEAR(fixture.view->model().tracks[0].blocks[0].duration(), 4.0, 1e-9);
+}
+
+TEST(Timeline, PositionsComeFromWhereTheDragStarted) {
+  // Computed from the press rather than from the last position, so rounding
+  // cannot accumulate over a long drag. Out and back must land exactly home.
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect box = fixture.view->block_rect(1, 0);
+  const TimelineBlock before = fixture.view->model().tracks[1].blocks[0];
+
+  fixture.host->mouse_down(press(box.x + 50.0, box.y + 10.0));
+  for (double x = 60.0; x < 900.0; x += 37.0) {
+    fixture.host->mouse_move(press(box.x + x, box.y + 10.0));
+  }
+  fixture.host->mouse_move(press(box.x + 50.0, box.y + 10.0));
+
+  const TimelineBlock& after = fixture.view->model().tracks[1].blocks[0];
+  EXPECT_DOUBLE_EQ(after.start, before.start) << "the drag drifted on the way out and back";
+  EXPECT_DOUBLE_EQ(after.end, before.end);
+}
+
+TEST(Timeline, TrimmingTheStartLeavesTheEndAlone) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect box = fixture.view->block_rect(0, 0);  // 2s to 6s
+  const double end = 6.0;
+
+  fixture.host->mouse_down(press(box.x + 1.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 101.0, box.y + 10.0));  // +1s
+
+  const TimelineBlock& block = fixture.view->model().tracks[0].blocks[0];
+  EXPECT_NEAR(block.start, 3.0, 1.0 / kFps);
+  EXPECT_DOUBLE_EQ(block.end, end);
+}
+
+TEST(Timeline, TrimmingTheEndLeavesTheStartAlone) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect box = fixture.view->block_rect(0, 0);
+
+  fixture.host->mouse_down(press(box.right() - 1.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.right() + 199.0, box.y + 10.0));  // +2s
+
+  const TimelineBlock& block = fixture.view->model().tracks[0].blocks[0];
+  EXPECT_DOUBLE_EQ(block.start, 2.0);
+  EXPECT_NEAR(block.end, 8.0, 1.0 / kFps);
+}
+
+TEST(Timeline, AClipCannotBeTrimmedOutOfExistence) {
+  // One frame is the floor. A clip trimmed to nothing vanishes, and there is
+  // then nothing left to drag back.
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect box = fixture.view->block_rect(0, 0);
+
+  fixture.host->mouse_down(press(box.x + 1.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.right() + 4000.0, box.y + 10.0));
+
+  const TimelineBlock& block = fixture.view->model().tracks[0].blocks[0];
+  EXPECT_GE(block.duration(), 1.0 / kFps - 1e-9);
+  EXPECT_LE(block.start, block.end);
+}
+
+TEST(Timeline, TrimmingTheEndBackwardsStopsAtTheStart) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect box = fixture.view->block_rect(0, 0);
+
+  fixture.host->mouse_down(press(box.right() - 1.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x - 4000.0, box.y + 10.0));
+
+  const TimelineBlock& block = fixture.view->model().tracks[0].blocks[0];
+  EXPECT_GE(block.duration(), 1.0 / kFps - 1e-9);
+}
+
+TEST(Timeline, ADraggedClipSticksToTheOneBeforeIt) {
+  // V1 has clips meeting at 5s. Dragging V2's clip near that edge should
+  // click onto it rather than landing a few frames off.
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(0, 0);  // 2s to 6s
+
+  // Aim for a start of about 5.03s, which is inside the snap distance of 5s.
+  fixture.host->mouse_down(press(box.x + 50.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 353.0, box.y + 10.0));
+
+  EXPECT_DOUBLE_EQ(fixture.view->model().tracks[0].blocks[0].start, 5.0);
+}
+
+TEST(Timeline, SnappingCanBeTurnedOff) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect box = fixture.view->block_rect(0, 0);
+
+  fixture.host->mouse_down(press(box.x + 50.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 353.0, box.y + 10.0));
+
+  EXPECT_NE(fixture.view->model().tracks[0].blocks[0].start, 5.0);
+}
+
+TEST(Timeline, ADraggedClipSticksToThePlayhead) {
+  Fixture fixture;
+  fixture.view->set_playhead(9.0);
+  const Rect box = fixture.view->block_rect(0, 0);
+
+  fixture.host->mouse_down(press(box.x + 50.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 754.0, box.y + 10.0));
+
+  EXPECT_DOUBLE_EQ(fixture.view->model().tracks[0].blocks[0].start, 9.0);
+}
+
+TEST(Timeline, AnEditIsReportedOnceWhenTheDragEnds) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  int edits = 0;
+  TimelineBlock last;
+  BlockRef which;
+  fixture.view->set_on_edit([&](BlockRef ref, TimelineBlock block) {
+    ++edits;
+    which = ref;
+    last = block;
+  });
+
+  const Rect box = fixture.view->block_rect(0, 0);
+  fixture.host->mouse_down(press(box.x + 50.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 150.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 250.0, box.y + 10.0));
+  EXPECT_EQ(edits, 0) << "an edit during the drag would fill the undo stack";
+
+  fixture.host->mouse_up(press(box.x + 250.0, box.y + 10.0));
+  EXPECT_EQ(edits, 1);
+  EXPECT_EQ(which, (BlockRef{0, 0}));
+  EXPECT_NEAR(last.start, 4.0, 1.0 / kFps);
+}
+
+TEST(Timeline, AClickReportsNoEdit) {
+  Fixture fixture;
+  int edits = 0;
+  fixture.view->set_on_edit([&](BlockRef, TimelineBlock) { ++edits; });
+
+  const Rect box = fixture.view->block_rect(0, 0);
+  fixture.host->mouse_down(press(box.x + 50.0, box.y + 10.0));
+  fixture.host->mouse_up(press(box.x + 50.0, box.y + 10.0));
+
+  EXPECT_EQ(edits, 0);
+}
+
+TEST(Timeline, ADragSurvivesThePointerLeavingTheWidget) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect box = fixture.view->block_rect(0, 0);
+
+  fixture.host->mouse_down(press(box.x + 50.0, box.y + 10.0));
+  ASSERT_EQ(fixture.host->captured(), fixture.view);
+
+  fixture.host->mouse_move(press(box.x + 350.0, -9000.0));
+  EXPECT_NEAR(fixture.view->model().tracks[0].blocks[0].start, 5.0, 1.0 / kFps);
+}
+
+TEST(Timeline, ReleasingEndsTheDrag) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(0, 0);
+
+  fixture.host->mouse_down(press(box.x + 50.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 350.0, box.y + 10.0));
+  fixture.host->mouse_up(press(box.x + 350.0, box.y + 10.0));
+
+  EXPECT_EQ(fixture.view->drag_mode(), DragMode::None);
+  EXPECT_FALSE(fixture.view->dragging().has_value());
+
+  const double settled = fixture.view->model().tracks[0].blocks[0].start;
+  fixture.host->mouse_move(press(box.x + 900.0, box.y + 10.0));
+  EXPECT_DOUBLE_EQ(fixture.view->model().tracks[0].blocks[0].start, settled);
+}
+
+TEST(Timeline, DraggedEdgesLandOnFrames) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect box = fixture.view->block_rect(0, 0);
+
+  fixture.host->mouse_down(press(box.x + 50.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 237.0, box.y + 10.0));
+
+  const double frames = fixture.view->model().tracks[0].blocks[0].start * kFps;
+  EXPECT_NEAR(frames, std::round(frames), 1e-6);
 }
 
 // --------------------------------------------------------------- painting --

@@ -20,11 +20,58 @@ constexpr double kZoomStep = 1.22;
 /// clicked — which is exactly when someone is hunting for it.
 constexpr double kMinBlockWidth = 2.0;
 
+/// How far the pointer has to travel before a press on a clip becomes a drag.
+/// Without it, selecting a clip nudges it by whatever the hand wobbled.
+constexpr double kDragThreshold = 3.0;
+
+/// How close, in pixels, a dragged edge has to come before it sticks.
+constexpr double kSnapDistance = 10.0;
+
+/// The grabbable strip at each end of a clip. Never more than a third of it,
+/// so a short clip can still be moved rather than being all handle.
+constexpr double kTrimHandle = 8.0;
+
 [[nodiscard]] Color fade(const Color& color, float amount) noexcept {
   return Color{color.r, color.g, color.b, color.a * amount};
 }
 
 }  // namespace
+
+std::vector<double> snap_points(const TimelineModel& model, double playhead,
+                                std::optional<BlockRef> exclude) {
+  std::vector<double> points{0.0, playhead};
+
+  for (std::size_t track = 0; track < model.tracks.size(); ++track) {
+    const std::vector<TimelineBlock>& blocks = model.tracks[track].blocks;
+    for (std::size_t i = 0; i < blocks.size(); ++i) {
+      // A clip must not snap to itself: its own edges are the ones following
+      // the pointer, so leaving them in would pin the drag where it started.
+      if (exclude.has_value() && exclude->track == track && exclude->block == i) continue;
+      points.push_back(blocks[i].start);
+      points.push_back(blocks[i].end);
+    }
+  }
+  std::ranges::sort(points);
+  return points;
+}
+
+std::optional<double> nearest_snap(std::span<const double> points, double time,
+                                   double tolerance) {
+  if (tolerance <= 0.0) return std::nullopt;
+
+  std::optional<double> best;
+  double closest = tolerance;
+  for (const double point : points) {
+    const double distance = std::abs(point - time);
+    // Strictly closer, so with the points in order a tie goes to the earlier
+    // one rather than to whichever happened to be visited last.
+    if (distance < closest) {
+      closest = distance;
+      best = point;
+    }
+  }
+  return best;
+}
 
 double TimelineModel::content_duration() const noexcept {
   double last = duration;
@@ -152,6 +199,23 @@ std::optional<BlockRef> TimelineView::block_at(double x, double y) const {
   return std::nullopt;
 }
 
+double TimelineView::trim_handle_width(std::size_t track, std::size_t block) const {
+  const Rect box = block_rect(track, block);
+  return std::min(kTrimHandle, box.width / 3.0);
+}
+
+DragMode TimelineView::zone_at(double x, double y) const {
+  const std::optional<BlockRef> hit = block_at(x, y);
+  if (!hit.has_value()) return DragMode::None;
+
+  const Rect box = block_rect(hit->track, hit->block);
+  const double handle = trim_handle_width(hit->track, hit->block);
+
+  if (x < box.x + handle) return DragMode::TrimStart;
+  if (x >= box.right() - handle) return DragMode::TrimEnd;
+  return DragMode::Move;
+}
+
 std::optional<BlockRef> TimelineView::selection() const {
   for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
     const std::vector<TimelineBlock>& blocks = model_.tracks[track].blocks;
@@ -275,37 +339,128 @@ void TimelineView::scrub_to(double x) {
   if (on_scrub_) on_scrub_(playhead_);
 }
 
+void TimelineView::drag_to(double x) {
+  if (!drag_.has_value()) return;
+  std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
+  if (drag_->block >= blocks.size()) return;
+
+  // Always from where the press was, never from the last position, so rounding
+  // cannot accumulate over a long drag and leave the clip a frame adrift.
+  const double moved = (x - press_x_) / scale_.pixels_per_second;
+  const double frame = core::frame_duration(model_.fps);
+  const double tolerance = snapping_ ? kSnapDistance / scale_.pixels_per_second : 0.0;
+  const std::vector<double> points = snap_points(model_, playhead_, drag_);
+
+  TimelineBlock next = origin_;
+
+  switch (mode_) {
+    case DragMode::Move: {
+      double start = std::max(0.0, origin_.start + moved);
+      // Both edges are offered to the snapper and the nearer pull wins, which
+      // is what makes a clip click into place against the one before it as
+      // readily as against the one after.
+      const double length = origin_.duration();
+      const auto to_start = nearest_snap(points, start, tolerance);
+      const auto to_end = nearest_snap(points, start + length, tolerance);
+
+      if (to_start && (!to_end || std::abs(*to_start - start) <=
+                                      std::abs(*to_end - (start + length)))) {
+        start = *to_start;
+      } else if (to_end) {
+        start = *to_end - length;
+      }
+      start = std::max(0.0, core::snap_to_frame(start, model_.fps));
+      next.start = start;
+      next.end = start + length;
+      break;
+    }
+
+    case DragMode::TrimStart: {
+      double start = origin_.start + moved;
+      if (const auto snapped = nearest_snap(points, start, tolerance)) start = *snapped;
+      // Never past the far edge: a clip has to keep at least one frame, or it
+      // vanishes and there is nothing left to drag back.
+      next.start = std::clamp(core::snap_to_frame(start, model_.fps), 0.0,
+                              origin_.end - frame);
+      break;
+    }
+
+    case DragMode::TrimEnd: {
+      double end = origin_.end + moved;
+      if (const auto snapped = nearest_snap(points, end, tolerance)) end = *snapped;
+      next.end = std::max(origin_.start + frame, core::snap_to_frame(end, model_.fps));
+      break;
+    }
+
+    case DragMode::None:
+    case DragMode::Scrub:
+      return;
+  }
+
+  blocks[drag_->block].start = next.start;
+  blocks[drag_->block].end = next.end;
+  refresh_bounds();
+}
+
 bool TimelineView::on_mouse_down(const MouseEvent& event) {
   if (event.button != MouseButton::Left) return false;
 
   // Anywhere on the ruler scrubs, not just on the playhead itself. Hunting for
   // a one-pixel line is not an interaction.
   if (ruler_area().contains(event.x, event.y)) {
-    scrubbing_ = true;
+    mode_ = DragMode::Scrub;
     scrub_to(event.x);
     return true;
   }
 
-  if (tracks_area().contains(event.x, event.y)) {
-    const std::optional<BlockRef> hit = block_at(event.x, event.y);
-    select(hit);
-    if (on_select_) on_select_(hit);
-    return true;
+  if (!tracks_area().contains(event.x, event.y)) return false;
+
+  const std::optional<BlockRef> hit = block_at(event.x, event.y);
+  select(hit);
+  if (on_select_) on_select_(hit);
+
+  if (hit.has_value()) {
+    mode_ = zone_at(event.x, event.y);
+    drag_ = hit;
+    origin_ = model_.tracks[hit->track].blocks[hit->block];
+    press_x_ = event.x;
+    moved_ = false;
   }
-  return false;
+  return true;
 }
 
 bool TimelineView::on_mouse_move(const MouseEvent& event) {
-  if (!scrubbing_) return false;
-  // Capture means this arrives even with the pointer far outside the ruler,
-  // which is where a scrub spends most of its time.
-  scrub_to(event.x);
+  // Capture means these arrive with the pointer far outside the widget, which
+  // is where a drag spends most of its time.
+  if (mode_ == DragMode::Scrub) {
+    scrub_to(event.x);
+    return true;
+  }
+  if (!drag_.has_value()) return false;
+
+  // A press that has not travelled yet is still a click. Without this,
+  // selecting a clip nudges it by however much the hand wobbled.
+  if (!moved_ && std::abs(event.x - press_x_) < kDragThreshold) return true;
+  moved_ = true;
+
+  drag_to(event.x);
   return true;
 }
 
 bool TimelineView::on_mouse_up(const MouseEvent& event) {
-  if (event.button != MouseButton::Left || !scrubbing_) return false;
-  scrubbing_ = false;
+  if (event.button != MouseButton::Left || mode_ == DragMode::None) return false;
+
+  // Reported once, at the end. The model has been updated all along so the
+  // drag can be seen; firing on every move would put a hundred entries in the
+  // undo stack for one gesture.
+  if (moved_ && drag_.has_value() && on_edit_) {
+    const std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
+    if (drag_->block < blocks.size()) on_edit_(*drag_, blocks[drag_->block]);
+  }
+
+  mode_ = DragMode::None;
+  drag_.reset();
+  moved_ = false;
   return true;
 }
 
