@@ -167,6 +167,36 @@ restructuring.
 Probing reports colour primaries, transfer characteristics, and matrix per file
 regardless, since that is what makes the distinction visible in the first place.
 
+### Themes change chrome, not just colours
+
+The UI must be themeable, with built-in themes that are **not recolours** —
+Windows XP / Frutiger Aero and Vista Aero glass were named specifically, and
+more are wanted. This is recorded here rather than left to phase 7 because it
+decides the shape of the widget layer, and retrofitting it is the expensive
+version.
+
+Concretely, a widget must never draw itself directly. Painting goes through a
+theme interface, and a theme owns:
+
+- **Chrome**, not a palette: bevels with inner and outer highlights, multi-stop
+  gradients, glass and translucency, corner radii, borders, drop shadows. A
+  theme that can only substitute colours cannot express XP's bevelled buttons or
+  Vista's blurred glass at all.
+- **Metrics as well as appearance** — padding, control sizes, title-bar height,
+  scrollbar width. Bevelled chrome needs different spacing from flat chrome, so
+  a theme that owns only paint would come out cramped or loose.
+- **Per-widget painters**, so a theme can override how one control is drawn
+  without the widget knowing which theme is active.
+
+Skia makes the drawing side straightforward: gradients, blurs, and layer effects
+are primitives, and the backdrop blur that glass needs is a filter rather than
+something to build. The work is in the layering discipline, not the rendering.
+
+The other consequence is that the widget layer is ours rather than a native
+control toolkit. Native controls cannot be themed this way, and the program
+monitor already needs to composite through our own pipeline, so there was no
+native-controls path to give up.
+
 ### GPL
 
 Wanting a real software encoder fallback settles the licence. x264 and x265 are
@@ -241,7 +271,7 @@ it.
 6. **Export** — decode → composite → encode → mux, with a headless CLI that
    renders a project file to MP4.
 7. **UI** — the Skia widget layer, then the editor's panels, timeline, monitor,
-   and scopes.
+   and scopes. Themeable from the start; see below.
 8. **Packaging** — installer, auto-updater, release CI.
 
 ## 7. Validation
