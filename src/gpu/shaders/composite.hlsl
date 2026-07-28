@@ -57,6 +57,21 @@ struct Params {
     float2 flip;      // +1 or -1 per axis
 
     float4 solid;     // linear RGBA, used when layout is LAYOUT_SOLID
+
+    // ---- effects ----
+    float brightness; // eq=brightness, a luma offset
+    float contrast;   // eq=contrast, about the midpoint
+    float saturation; // eq=saturation times hue=s
+    float hueRadians; // hue=h
+
+    float invert;     // negate: 0 or 1
+    float vignette;   // vignette=a, in radians
+    float chromaSimilarity;
+    float chromaBlend;
+
+    float4 crop;      // left, top, right, bottom as fractions
+
+    float4 chromaColor;  // rgb of the key colour; w is 1 when keying is on
 };
 
 ConstantBuffer<Params> params : register(b0);
@@ -128,6 +143,13 @@ float3 linearizeSrgb(float3 c) {
     return select(c <= 0.04045, c / 12.92, pow(abs(c + 0.055) / 1.055, 2.4));
 }
 
+// The forward direction, for the one case that needs it: a solid colour is
+// stored linear but effects are defined on coded values.
+float3 encodeSrgb(float3 c) {
+    c = saturate(c);
+    return select(c <= 0.0031308, c * 12.92, 1.055 * pow(c, 1.0 / 2.4) - 0.055);
+}
+
 // SMPTE ST 2084. Returns linear light normalised so 1.0 is 10000 nits.
 float3 linearizePq(float3 c) {
     const float m1 = 2610.0 / 16384.0;
@@ -197,11 +219,103 @@ float3 applyBlend(float3 base, float3 src, int mode) {
     return src;
 }
 
+// ----------------------------------------------------------------- effects --
+//
+// Effects run on *coded* R'G'B' -- after the YUV matrix, before the transfer
+// function -- because that is the space FFmpeg's filters are defined in, and
+// the spec names those fragments as the authoritative behaviour. Applying a
+// 200% contrast to linear light instead would be a large visible difference,
+// not a subtle one. Compositing is still linear; only the effect maths is not.
+
+// The BT.601 matrix FFmpeg's eq and hue filters work in, with chroma centred on
+// zero rather than 0.5.
+float3 rgbToYuv601(float3 rgb) {
+    return float3(
+         0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b,
+        -0.169 * rgb.r - 0.331 * rgb.g + 0.500 * rgb.b,
+         0.500 * rgb.r - 0.419 * rgb.g - 0.081 * rgb.b);
+}
+
+float3 yuv601ToRgb(float3 yuv) {
+    return float3(
+        yuv.x + 1.402 * yuv.z,
+        yuv.x - 0.344 * yuv.y - 0.714 * yuv.z,
+        yuv.x + 1.772 * yuv.y);
+}
+
+/// eq (brightness, contrast, saturation) and hue (rotation, saturation), which
+/// between them are every colour effect in the registry.
+float3 applyColorEffects(float3 coded) {
+    float3 yuv = rgbToYuv601(coded);
+
+    // vf_eq: v = (v - 0.5) * contrast + 0.5 + brightness, on luma.
+    yuv.x = (yuv.x - 0.5) * params.contrast + 0.5 + params.brightness;
+
+    // vf_hue rotates the chroma plane and scales it; eq's saturation scales it
+    // too, and the two are folded into one multiplier before they get here.
+    const float c = cos(params.hueRadians);
+    const float s = sin(params.hueRadians);
+    const float2 chroma = float2(yuv.y * c - yuv.z * s, yuv.y * s + yuv.z * c) * params.saturation;
+
+    float3 rgb = yuv601ToRgb(float3(yuv.x, chroma.x, chroma.y));
+
+    // negate, after everything else, exactly as a trailing filter would run.
+    rgb = lerp(rgb, 1.0 - rgb, params.invert);
+    return saturate(rgb);
+}
+
+/// The chroma keyer: BT.601 chroma distance from the key colour, feathered
+/// across `blend`. Deliberately the same approximation the reference used, and
+/// like it, not pixel-identical to ffmpeg's chromakey.
+float chromaKeyAlpha(float3 coded) {
+    if (params.chromaColor.w < 0.5) return 1.0;
+
+    const float3 keyYuv = rgbToYuv601(params.chromaColor.rgb);
+    const float3 pixelYuv = rgbToYuv601(coded);
+
+    const float distance = length(pixelYuv.yz - keyYuv.yz);
+    if (distance <= params.chromaSimilarity) return 0.0;
+    if (params.chromaBlend <= 0.0) return 1.0;
+    return saturate((distance - params.chromaSimilarity) / params.chromaBlend);
+}
+
+/// vf_vignette: cos of the angle scaled by the normalised distance from the
+/// centre, to the fourth power.
+float vignetteFactor(float2 uv) {
+    if (params.vignette <= 0.0) return 1.0;
+
+    // Normalised so the corner is 1, which is what makes the amount mean the
+    // same thing whatever the frame's aspect ratio.
+    const float2 offset = (uv - 0.5) * 2.0;
+    const float normalised = length(offset) / length(float2(1.0, 1.0));
+    const float c = cos(params.vignette * normalised);
+    return (c * c) * (c * c);
+}
+
+/// Crop cuts fractions off each edge and keeps the frame size, so what is cut
+/// becomes transparent rather than shrinking the picture.
+bool insideCrop(float2 uv) {
+    return uv.x >= params.crop.x && uv.x <= 1.0 - params.crop.z &&
+           uv.y >= params.crop.y && uv.y <= 1.0 - params.crop.w;
+}
+
 // ------------------------------------------------------------------ layers --
 
 /// The layer's own colour at this pixel, in linear light, before blending.
 float4 sourceColor(float2 uv) {
-    if (params.layout == LAYOUT_SOLID) return params.solid;
+    if (!insideCrop(uv)) return float4(0.0, 0.0, 0.0, 0.0);
+
+    if (params.layout == LAYOUT_SOLID) {
+        // The solid arrives linear, but effects are defined on coded values, so
+        // it makes the same round trip a video frame does -- including the
+        // keyer, because an effect belongs to the layer, not to the layer's
+        // source. A matte is a degenerate case, but exempting it would be a
+        // rule with no reason behind it.
+        const float3 coded = encodeSrgb(params.solid.rgb);
+        const float alpha = params.solid.a * chromaKeyAlpha(coded);
+        const float3 adjusted = applyColorEffects(coded);
+        return float4(linearizeSrgb(adjusted) * vignetteFactor(uv), alpha);
+    }
 
     float y = texture0.Sample(linearSampler, uv).r;
     float2 chroma;
@@ -221,10 +335,16 @@ float4 sourceColor(float2 uv) {
         chroma = chroma - 0.5;
     }
 
-    const float3 coded = yuvToRgb(float3(y, chroma.x, chroma.y), params.colorSpace);
     // Chroma reconstruction can push values slightly outside the legal range;
     // clamping before the transfer function keeps pow() away from negatives.
-    return float4(toLinear(saturate(coded), params.transfer), 1.0);
+    const float3 coded = saturate(yuvToRgb(float3(y, chroma.x, chroma.y), params.colorSpace));
+
+    // Keying reads the *unmodified* pixel, so a colour correction upstream in
+    // the stack cannot pull the key colour out from under the keyer.
+    const float alpha = chromaKeyAlpha(coded);
+    const float3 adjusted = applyColorEffects(coded);
+
+    return float4(toLinear(adjusted, params.transfer) * vignetteFactor(uv), alpha);
 }
 
 // Normal and Add, where fixed-function blending does the combining.

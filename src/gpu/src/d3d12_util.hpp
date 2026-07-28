@@ -64,8 +64,21 @@ struct alignas(16) ShaderParams {
   float flip[2]{1.0f, 1.0f};
 
   float solid[4]{};
+
+  float brightness = 0.0f;
+  float contrast = 1.0f;
+  float saturation = 1.0f;
+  float hue_radians = 0.0f;
+
+  float invert = 0.0f;
+  float vignette = 0.0f;
+  float chroma_similarity = 0.0f;
+  float chroma_blend = 0.0f;
+
+  float crop[4]{};         ///< left, top, right, bottom
+  float chroma_color[4]{};  ///< rgb, then 1 when keying is on
 };
-static_assert(sizeof(ShaderParams) == 20 * sizeof(float),
+static_assert(sizeof(ShaderParams) == 36 * sizeof(float),
               "root constants must match the shader's cbuffer exactly");
 
 inline constexpr UINT kShaderParamCount = sizeof(ShaderParams) / sizeof(float);

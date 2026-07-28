@@ -83,6 +83,10 @@ struct AppState {
   double rotation = 0.0;
   float opacity = 1.0f;
   std::size_t blend = 0;
+  bool flip_x = false;
+  bool flip_y = false;
+
+  cutline::gpu::LayerEffects effects;
 };
 
 /// Translates a decoded frame into the compositor's view of it. Only the
@@ -169,6 +173,9 @@ struct AppState {
                 static_cast<float>(state.rotation)};
   video.opacity = state.opacity;
   video.blend = kBlendModes[state.blend].first;
+  video.effects = state.effects;
+  video.flip_x = state.flip_x;
+  video.flip_y = state.flip_y;
   layers.push_back(video);
 
   return layers;
@@ -317,6 +324,57 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
           state->blend = (state->blend + 1) % kBlendModes.size();
           state->needs_redraw = true;
           break;
+
+        // Effects. Shift steps each one down rather than up, so a value can be
+        // walked back without resetting everything.
+        case 'C':
+          state->effects.contrast += fast ? -0.25f : 0.25f;
+          state->effects.contrast = std::max(0.0f, state->effects.contrast);
+          state->needs_redraw = true;
+          break;
+        case 'G':
+          state->effects.brightness += fast ? -0.1f : 0.1f;
+          state->needs_redraw = true;
+          break;
+        case 'S':
+          state->effects.saturation += fast ? -0.25f : 0.25f;
+          state->effects.saturation = std::max(0.0f, state->effects.saturation);
+          state->needs_redraw = true;
+          break;
+        case 'H':
+          state->effects.hue_degrees = std::fmod(
+              state->effects.hue_degrees + (fast ? -30.0f : 30.0f), 360.0f);
+          state->needs_redraw = true;
+          break;
+        case 'I':
+          state->effects.invert = !state->effects.invert;
+          state->needs_redraw = true;
+          break;
+        case 'V':
+          // A quarter turn is the maximum the amount maps to.
+          state->effects.vignette = state->effects.vignette > 0.0f ? 0.0f : 1.2f;
+          state->needs_redraw = true;
+          break;
+        case 'X':
+          state->effects.crop_left = state->effects.crop_left > 0.0f ? 0.0f : 0.15f;
+          state->effects.crop_right = state->effects.crop_left;
+          state->effects.crop_top = state->effects.crop_left;
+          state->effects.crop_bottom = state->effects.crop_left;
+          state->needs_redraw = true;
+          break;
+        case 'K':
+          state->effects.chroma_key = !state->effects.chroma_key;
+          state->needs_redraw = true;
+          break;
+        case 'F':
+          if (fast) {
+            state->flip_y = !state->flip_y;
+          } else {
+            state->flip_x = !state->flip_x;
+          }
+          state->needs_redraw = true;
+          break;
+
         case '0':
           state->x = 0.5;
           state->y = 0.5;
@@ -324,6 +382,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
           state->rotation = 0.0;
           state->opacity = 1.0f;
           state->blend = 0;
+          state->flip_x = false;
+          state->flip_y = false;
+          state->effects = {};
           state->needs_redraw = true;
           break;
         case VK_ESCAPE:
@@ -435,8 +496,9 @@ int main(int argc, char** argv) {
   std::println("canvas: {}x{}", state.canvas_w, state.canvas_h);
   std::println("");
   std::println("space play/pause   left/right step   shift+arrow jump   home start");
-  std::println("ctrl+arrows move   +/- scale   r rotate   o opacity   b blend   0 reset");
-  std::println("esc quit");
+  std::println("ctrl+arrows move   +/- scale   r rotate   o opacity   b blend   f flip");
+  std::println("g brightness   c contrast   s saturation   h hue   i invert");
+  std::println("v vignette   x crop   k chroma key   shift reverses   0 reset   esc quit");
 
   ShowWindow(window, SW_SHOW);
   advance(state);

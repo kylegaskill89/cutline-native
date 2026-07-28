@@ -318,6 +318,285 @@ TEST_F(CompositorTest, ResizeChangesTheReadbackShape) {
   EXPECT_EQ(image->pixels.size(), 32u * 16u * 4u);
 }
 
+// ----------------------------------------------------------------- effects --
+//
+// Effects run on coded values, not linear ones, because that is where FFmpeg's
+// filters are defined. These tests state the coded-space answer explicitly, so
+// moving the maths into linear light would fail them rather than pass quietly.
+
+/// A mid-grey fill, which is where most of the colour maths is easiest to
+/// reason about: coded 0.5 is neither clipped nor near a curve's knee.
+[[nodiscard]] Layer grey_fill(LayerEffects effects) {
+  Layer layer;
+  layer.color = Color::from_srgb(0.5f, 0.5f, 0.5f);
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.effects = effects;
+  return layer;
+}
+
+TEST_F(CompositorTest, NeutralEffectsLeaveTheLayerAlone) {
+  const Layer plain = grey_fill({});
+  const Rgba centre = pixel_at(render({&plain, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_NEAR(centre.r, 128, 1);
+  EXPECT_NEAR(centre.g, 128, 1);
+  EXPECT_NEAR(centre.b, 128, 1);
+}
+
+TEST_F(CompositorTest, BrightnessOffsetsCodedLumaNotLinearLight) {
+  // eq=brightness adds to luma in coded space: 0.5 + 0.25 = 0.75 coded, which
+  // is 191 out of 255. In linear light the same offset would land near 226.
+  LayerEffects effects;
+  effects.brightness = 0.25f;
+
+  const Layer layer = grey_fill(effects);
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_NEAR(centre.r, 191, 2);
+}
+
+TEST_F(CompositorTest, ContrastPivotsAboutTheCodedMidpoint) {
+  // Mid grey is the pivot, so any contrast leaves it where it is.
+  LayerEffects effects;
+  effects.contrast = 2.0f;
+
+  const Layer layer = grey_fill(effects);
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_NEAR(centre.r, 128, 2);
+}
+
+TEST_F(CompositorTest, ContrastPushesOffMidpointValuesApart) {
+  LayerEffects effects;
+  effects.contrast = 2.0f;
+
+  Layer layer;
+  layer.color = Color::from_srgb(0.75f, 0.75f, 0.75f);
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.effects = effects;
+
+  // (0.75 - 0.5) * 2 + 0.5 = 1.0 coded.
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_GE(centre.r, 253);
+}
+
+TEST_F(CompositorTest, ZeroSaturationLeavesGreyRatherThanBlack) {
+  LayerEffects effects;
+  effects.saturation = 0.0f;
+
+  Layer layer;
+  layer.color = Color::from_srgb(0.9f, 0.2f, 0.2f);
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.effects = effects;
+
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_NEAR(centre.r, centre.g, 2) << "desaturated pixels should be neutral";
+  EXPECT_NEAR(centre.g, centre.b, 2);
+  EXPECT_GT(centre.r, 0) << "desaturation should preserve luma, not crush it";
+}
+
+TEST_F(CompositorTest, SaturationBoostPushesAColourFurtherFromGrey) {
+  Layer plain;
+  plain.color = Color::from_srgb(0.6f, 0.45f, 0.45f);
+  plain.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  LayerEffects effects;
+  effects.saturation = 2.0f;
+  Layer boosted = plain;
+  boosted.effects = effects;
+
+  const Rgba before = pixel_at(render({&plain, 1}), kWidth / 2, kHeight / 2);
+  const Rgba after = pixel_at(render({&boosted, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_GT(after.r - after.g, before.r - before.g);
+}
+
+TEST_F(CompositorTest, InvertFlipsCodedValues) {
+  // Coded 0.5 inverts to coded 0.5, so a mid grey is its own inverse. Doing
+  // this in linear light instead would move it noticeably.
+  LayerEffects effects;
+  effects.invert = true;
+
+  const Layer layer = grey_fill(effects);
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_NEAR(centre.r, 128, 2);
+}
+
+TEST_F(CompositorTest, InvertTurnsWhiteToBlack) {
+  LayerEffects effects;
+  effects.invert = true;
+
+  Layer layer;
+  layer.color = Color::from_srgb(1.0f, 1.0f, 1.0f);
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.effects = effects;
+
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_LE(centre.r, 2);
+}
+
+TEST_F(CompositorTest, HueRotationMovesColourWithoutKillingIt) {
+  Layer layer;
+  layer.color = Color::from_srgb(0.9f, 0.1f, 0.1f);
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  LayerEffects effects;
+  effects.hue_degrees = 120.0f;
+  layer.effects = effects;
+
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_LT(centre.r, 200) << "red should no longer dominate after a 120 degree rotation";
+  EXPECT_GT(centre.r + centre.g + centre.b, 30) << "rotation should not crush the pixel";
+}
+
+TEST_F(CompositorTest, AFullTurnOfHueIsTheIdentity) {
+  Layer plain;
+  plain.color = Color::from_srgb(0.8f, 0.3f, 0.5f);
+  plain.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  Layer turned = plain;
+  LayerEffects effects;
+  effects.hue_degrees = 360.0f;
+  turned.effects = effects;
+
+  const Rgba before = pixel_at(render({&plain, 1}), kWidth / 2, kHeight / 2);
+  const Rgba after = pixel_at(render({&turned, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_NEAR(after.r, before.r, 2);
+  EXPECT_NEAR(after.g, before.g, 2);
+  EXPECT_NEAR(after.b, before.b, 2);
+}
+
+// -------------------------------------------------------------------- crop --
+
+TEST_F(CompositorTest, CropCutsEdgesToTransparentAndKeepsTheSize) {
+  LayerEffects effects;
+  effects.crop_left = 0.25f;
+  effects.crop_right = 0.25f;
+
+  const Layer layer = grey_fill(effects);
+  const Image image = render({&layer, 1});
+
+  EXPECT_EQ(pixel_at(image, 2, kHeight / 2).a, 0) << "the left edge should be cut";
+  EXPECT_EQ(pixel_at(image, kWidth - 3, kHeight / 2).a, 0) << "the right edge should be cut";
+  EXPECT_EQ(pixel_at(image, kWidth / 2, kHeight / 2).a, 255) << "the middle should survive";
+  EXPECT_EQ(pixel_at(image, kWidth / 2, 2).a, 255) << "the uncropped axis is untouched";
+}
+
+TEST_F(CompositorTest, CropDoesNotMoveOrScaleWhatIsKept) {
+  // The kept region stays exactly where it was, which is what distinguishes a
+  // crop from a scale.
+  Layer plain = grey_fill({});
+  LayerEffects effects;
+  effects.crop_top = 0.25f;
+  Layer cropped = grey_fill(effects);
+
+  const Rgba uncropped = pixel_at(render({&plain, 1}), kWidth / 2, kHeight / 2);
+  const Rgba after = pixel_at(render({&cropped, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_EQ(after.r, uncropped.r);
+}
+
+TEST_F(CompositorTest, CroppedEdgesRevealTheLayerBeneath) {
+  Layer bottom;
+  bottom.color = {1.0f, 0.0f, 0.0f, 1.0f};
+  bottom.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  LayerEffects effects;
+  effects.crop_left = 0.5f;
+  Layer top;
+  top.color = {0.0f, 1.0f, 0.0f, 1.0f};
+  top.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  top.effects = effects;
+
+  const Layer layers[] = {bottom, top};
+  const Image image = render(layers);
+
+  EXPECT_EQ(pixel_at(image, 2, kHeight / 2).r, 255) << "cropped away, so red shows through";
+  EXPECT_EQ(pixel_at(image, kWidth - 3, kHeight / 2).g, 255) << "kept, so green covers";
+}
+
+// ---------------------------------------------------------------- vignette --
+
+TEST_F(CompositorTest, VignetteDarkensTheCornersAndSparesTheCentre) {
+  LayerEffects effects;
+  effects.vignette = 1.2f;  // radians, near the maximum
+
+  const Layer layer = grey_fill(effects);
+  const Image image = render({&layer, 1});
+
+  const Rgba centre = pixel_at(image, kWidth / 2, kHeight / 2);
+  const Rgba corner = pixel_at(image, 1, 1);
+  EXPECT_NEAR(centre.r, 128, 2) << "the centre should be untouched";
+  EXPECT_LT(corner.r, centre.r / 2) << "the corner should be strongly darkened";
+}
+
+TEST_F(CompositorTest, AZeroVignetteChangesNothing) {
+  const Layer plain = grey_fill({});
+  LayerEffects effects;
+  effects.vignette = 0.0f;
+  const Layer explicitly_off = grey_fill(effects);
+
+  const Rgba before = pixel_at(render({&plain, 1}), 1, 1);
+  const Rgba after = pixel_at(render({&explicitly_off, 1}), 1, 1);
+  EXPECT_EQ(after.r, before.r);
+}
+
+// -------------------------------------------------------------- chroma key --
+
+TEST_F(CompositorTest, ChromaKeyRemovesTheKeyColour) {
+  LayerEffects effects;
+  effects.chroma_key = true;
+  effects.chroma_similarity = 0.3f;
+  effects.chroma_blend = 0.1f;
+
+  Layer layer;
+  // Exactly the default key colour, so it must key out completely.
+  layer.color = Color::from_srgb(0.0f, 208.0f / 255.0f, 0.0f);
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.effects = effects;
+
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_EQ(centre.a, 0);
+}
+
+TEST_F(CompositorTest, ChromaKeyLeavesUnrelatedColoursAlone) {
+  LayerEffects effects;
+  effects.chroma_key = true;
+
+  Layer layer;
+  layer.color = Color::from_srgb(0.9f, 0.1f, 0.1f);  // red, far from the key
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.effects = effects;
+
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_EQ(centre.a, 255);
+}
+
+TEST_F(CompositorTest, ChromaKeyRevealsWhatIsBehindIt) {
+  Layer bottom;
+  bottom.color = {1.0f, 0.0f, 0.0f, 1.0f};
+  bottom.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  LayerEffects effects;
+  effects.chroma_key = true;
+  Layer green;
+  green.color = Color::from_srgb(0.0f, 208.0f / 255.0f, 0.0f);
+  green.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  green.effects = effects;
+
+  const Layer layers[] = {bottom, green};
+  const Rgba centre = pixel_at(render(layers), kWidth / 2, kHeight / 2);
+  EXPECT_EQ(centre.r, 255) << "the keyed layer should be gone, showing red";
+}
+
+TEST_F(CompositorTest, KeyingIsOffUnlessAskedFor) {
+  LayerEffects effects;
+  effects.chroma_key = false;
+
+  Layer layer;
+  layer.color = Color::from_srgb(0.0f, 208.0f / 255.0f, 0.0f);
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.effects = effects;
+
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_EQ(centre.a, 255) << "green should survive when keying is not enabled";
+}
+
 TEST_F(CompositorTest, ManyLayersGrowTheDescriptorHeapWithoutLosingAny) {
   // The heap grows in steps; composing past a step boundary must still draw
   // every layer, including the last one on top.

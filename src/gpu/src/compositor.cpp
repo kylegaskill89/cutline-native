@@ -566,6 +566,26 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     params.solid[2] = layer.color.b;
     params.solid[3] = layer.color.a;
 
+    const LayerEffects& effects = layer.effects;
+    params.brightness = effects.brightness;
+    params.contrast = effects.contrast;
+    params.saturation = effects.saturation;
+    params.hue_radians = static_cast<float>(effects.hue_degrees * std::numbers::pi / 180.0);
+    params.invert = effects.invert ? 1.0f : 0.0f;
+    params.vignette = effects.vignette;
+    params.crop[0] = effects.crop_left;
+    params.crop[1] = effects.crop_top;
+    params.crop[2] = effects.crop_right;
+    params.crop[3] = effects.crop_bottom;
+    params.chroma_similarity = effects.chroma_similarity;
+    params.chroma_blend = effects.chroma_blend;
+    params.chroma_color[0] = effects.chroma_color.r;
+    params.chroma_color[1] = effects.chroma_color.g;
+    params.chroma_color[2] = effects.chroma_color.b;
+    // The shader keys off this rather than a separate flag, which keeps the
+    // whole decision inside one float4.
+    params.chroma_color[3] = effects.chroma_key ? 1.0f : 0.0f;
+
     if (layer.frame != nullptr) {
       params.color_space = shader_space(layer.frame->space);
       params.transfer = shader_transfer(layer.frame->transfer);

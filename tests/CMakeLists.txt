@@ -11,6 +11,7 @@ add_executable(cutline_core_tests
   core/segments_test.cpp
   core/serialize_test.cpp
   core/time_test.cpp
+  render/effects_test.cpp
   render/plan_test.cpp)
 
 target_link_libraries(cutline_core_tests PRIVATE

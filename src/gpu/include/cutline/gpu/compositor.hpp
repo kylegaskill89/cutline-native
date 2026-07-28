@@ -67,6 +67,43 @@ struct Quad {
   float rotation_deg = 0.0f;
 };
 
+/// A layer's visual effects, already resolved to plain numbers.
+///
+/// These run on *coded* values -- after the YUV matrix, before the transfer
+/// function -- because that is the space FFmpeg's filters are defined in, and
+/// the spec names those fragments as each effect's authoritative behaviour.
+/// Applying a 200% contrast to linear light instead would be a large visible
+/// difference, not a subtle one. Compositing stays linear; only the effect
+/// maths is not.
+///
+/// Defaults are neutral, so a default-constructed instance draws the layer
+/// untouched.
+struct LayerEffects {
+  float brightness = 0.0f;   ///< luma offset, -1..1
+  float contrast = 1.0f;     ///< multiplier about the midpoint
+  float saturation = 1.0f;   ///< chroma multiplier
+  float hue_degrees = 0.0f;  ///< chroma rotation
+  bool invert = false;
+
+  /// Vignette angle in radians. Zero leaves the edges alone.
+  float vignette = 0.0f;
+
+  /// Fractions cut from each edge. The layer keeps its size; what is cut goes
+  /// transparent rather than the picture shrinking.
+  float crop_left = 0.0f;
+  float crop_top = 0.0f;
+  float crop_right = 0.0f;
+  float crop_bottom = 0.0f;
+
+  bool chroma_key = false;
+  float chroma_similarity = 0.3f;
+  float chroma_blend = 0.1f;
+  /// sRGB-coded, not linear. Defaults to #00d000, the registry green.
+  Color chroma_color{0.0f, 208.0f / 255.0f, 0.0f, 1.0f};
+
+  friend bool operator==(const LayerEffects&, const LayerEffects&) = default;
+};
+
 /// One thing to draw. A null `frame` draws `color` as a solid, which is what a
 /// colour matte is.
 struct Layer {
@@ -77,6 +114,7 @@ struct Layer {
   BlendMode blend = BlendMode::Normal;
   bool flip_x = false;
   bool flip_y = false;
+  LayerEffects effects;
 };
 
 /// A composited frame brought back to the CPU: 8-bit RGBA, sRGB-encoded, which

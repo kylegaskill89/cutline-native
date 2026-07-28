@@ -1,4 +1,6 @@
-add_library(cutline_render src/plan.cpp)
+add_library(cutline_render
+  src/effects.cpp
+  src/plan.cpp)
 add_library(cutline::render ALIAS cutline_render)
 
 target_include_directories(cutline_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
