@@ -669,6 +669,17 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     params.solid[2] = layer.color.b;
     params.solid[3] = layer.color.a;
 
+    if (layer.gradient) {
+      const float gradient_radians =
+          static_cast<float>(layer.gradient_angle_deg * std::numbers::pi / 180.0);
+      params.gradient[0] = layer.gradient_color.r;
+      params.gradient[1] = layer.gradient_color.g;
+      params.gradient[2] = layer.gradient_color.b;
+      params.gradient[3] = 1.0f;
+      params.gradient_dir[0] = std::cos(gradient_radians);
+      params.gradient_dir[1] = std::sin(gradient_radians);
+    }
+
     const LayerEffects& effects = layer.effects;
     params.brightness = effects.brightness;
     params.contrast = effects.contrast;

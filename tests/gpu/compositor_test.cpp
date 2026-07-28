@@ -597,6 +597,92 @@ TEST_F(CompositorTest, KeyingIsOffUnlessAskedFor) {
   EXPECT_EQ(centre.a, 255) << "green should survive when keying is not enabled";
 }
 
+// ---------------------------------------------------------------- gradients --
+
+/// A full-canvas matte running from `from` to `to` at `angle`.
+[[nodiscard]] Layer gradient_fill(Color from, Color to, float angle) {
+  Layer layer;
+  layer.color = from;
+  layer.gradient = true;
+  layer.gradient_color = to;
+  layer.gradient_angle_deg = angle;
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  return layer;
+}
+
+TEST_F(CompositorTest, AGradientRunsLeftToRightAtZeroDegrees) {
+  const Layer layer =
+      gradient_fill(Color::from_srgb(0.0f, 0.0f, 0.0f), Color::from_srgb(1.0f, 1.0f, 1.0f), 0.0f);
+  const Image image = render({&layer, 1});
+
+  const int left = pixel_at(image, 0, kHeight / 2).r;
+  const int middle = pixel_at(image, kWidth / 2, kHeight / 2).r;
+  const int right = pixel_at(image, kWidth - 1, kHeight / 2).r;
+
+  EXPECT_LT(left, 20);
+  EXPECT_GT(right, 235);
+  EXPECT_GT(middle, left);
+  EXPECT_LT(middle, right);
+}
+
+TEST_F(CompositorTest, AGradientIsFlatAlongTheAxisItDoesNotRunOn) {
+  const Layer layer =
+      gradient_fill(Color::from_srgb(0.0f, 0.0f, 0.0f), Color::from_srgb(1.0f, 1.0f, 1.0f), 0.0f);
+  const Image image = render({&layer, 1});
+
+  // Left to right means every column is a constant colour.
+  EXPECT_EQ(pixel_at(image, kWidth / 4, 1).r, pixel_at(image, kWidth / 4, kHeight - 2).r);
+}
+
+TEST_F(CompositorTest, NinetyDegreesRunsTopToBottom) {
+  const Layer layer =
+      gradient_fill(Color::from_srgb(0.0f, 0.0f, 0.0f), Color::from_srgb(1.0f, 1.0f, 1.0f), 90.0f);
+  const Image image = render({&layer, 1});
+
+  EXPECT_LT(pixel_at(image, kWidth / 2, 0).r, 20);
+  EXPECT_GT(pixel_at(image, kWidth / 2, kHeight - 1).r, 235);
+  EXPECT_EQ(pixel_at(image, 1, kHeight / 4).r, pixel_at(image, kWidth - 2, kHeight / 4).r);
+}
+
+TEST_F(CompositorTest, TheGradientSpansTheWholeQuadOnADiagonal) {
+  // The half-extent is the rect projected onto the gradient direction, so a
+  // diagonal still reaches both stops at opposite corners rather than
+  // saturating early or leaving flat bands.
+  const Layer layer =
+      gradient_fill(Color::from_srgb(0.0f, 0.0f, 0.0f), Color::from_srgb(1.0f, 1.0f, 1.0f), 45.0f);
+  const Image image = render({&layer, 1});
+
+  EXPECT_LT(pixel_at(image, 0, 0).r, 20) << "the near corner should reach the first stop";
+  EXPECT_GT(pixel_at(image, kWidth - 1, kHeight - 1).r, 235)
+      << "the far corner should reach the second";
+}
+
+TEST_F(CompositorTest, TheMidpointInterpolatesInCodedSpace) {
+  // Black to white through a canvas gradient is coded 0.5 at the middle, which
+  // reads as 128. Interpolating in linear light would put it near 188.
+  const Layer layer =
+      gradient_fill(Color::from_srgb(0.0f, 0.0f, 0.0f), Color::from_srgb(1.0f, 1.0f, 1.0f), 0.0f);
+  const Image image = render({&layer, 1});
+
+  EXPECT_NEAR(pixel_at(image, kWidth / 2, kHeight / 2).r, 128, 4);
+}
+
+TEST_F(CompositorTest, AMatteWithoutAGradientIsStillFlat) {
+  const Layer layer = fill(Color::from_srgb(0.25f, 0.5f, 0.75f));
+  const Image image = render({&layer, 1});
+  EXPECT_EQ(pixel_at(image, 0, 0), pixel_at(image, kWidth - 1, kHeight - 1));
+}
+
+TEST_F(CompositorTest, EffectsApplyOnTopOfAGradient) {
+  Layer layer =
+      gradient_fill(Color::from_srgb(0.0f, 0.0f, 0.0f), Color::from_srgb(1.0f, 1.0f, 1.0f), 0.0f);
+  layer.effects.invert = true;
+
+  const Image image = render({&layer, 1});
+  EXPECT_GT(pixel_at(image, 0, kHeight / 2).r, 235) << "the dark end should now be light";
+  EXPECT_LT(pixel_at(image, kWidth - 1, kHeight / 2).r, 20);
+}
+
 // -------------------------------------------------------------------- blur --
 
 TEST_F(CompositorTest, BlurSoftensAHardEdge) {

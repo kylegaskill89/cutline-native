@@ -64,10 +64,11 @@ endif()
 
 if(CUTLINE_WITH_GPU)
   add_subdirectory(src/gpu)
-  # The debug viewport needs both layers: it decodes with one and draws with
-  # the other, which is the whole point of it existing this early.
+  # The engine joins decoding to compositing, so it needs both halves present.
   if(CUTLINE_WITH_MEDIA)
+    add_subdirectory(src/engine)
     add_subdirectory(tools/preview_window)
+    add_subdirectory(tools/render_frame)
   endif()
 endif()
 

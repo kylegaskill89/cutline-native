@@ -114,6 +114,19 @@ struct LayerEffects {
 struct Layer {
   const FrameView* frame = nullptr;
   Color color;
+
+  /// A linear gradient across the quad, running from `color` to
+  /// `gradient_color` at `gradient_angle_deg` — 0 is left to right, 90 is top
+  /// to bottom. Only meaningful for a solid layer.
+  ///
+  /// The interpolation happens on *coded* values, not linear ones, for the same
+  /// reason the effects do: a gradient between two hex colours is specified the
+  /// way a canvas draws it, and interpolating in linear light would put the
+  /// midpoint somewhere the author did not choose.
+  bool gradient = false;
+  Color gradient_color;
+  float gradient_angle_deg = 0.0f;
+
   Quad quad;
   float opacity = 1.0f;
   BlendMode blend = BlendMode::Normal;

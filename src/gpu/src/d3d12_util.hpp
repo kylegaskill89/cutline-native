@@ -81,8 +81,12 @@ struct alignas(16) ShaderParams {
   float blur_step[2]{};      ///< one tap's UV offset, and the axis it runs along
   float blur_sigma = 0.0f;   ///< pixels; zero means no blur
   float blur_stride = 1.0f;  ///< pixels between taps
+
+  float gradient[4]{};      ///< linear rgb of the far stop; w is 1 when set
+  float gradient_dir[2]{};  ///< cos, sin of the gradient angle
+  float gradient_pad[2]{};
 };
-static_assert(sizeof(ShaderParams) == 40 * sizeof(float),
+static_assert(sizeof(ShaderParams) == 48 * sizeof(float),
               "root constants must match the shader's cbuffer exactly");
 
 inline constexpr UINT kShaderParamCount = sizeof(ShaderParams) / sizeof(float);

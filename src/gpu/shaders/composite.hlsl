@@ -79,6 +79,10 @@ struct Params {
     float2 blurStep;   // one tap's offset in UV, and the axis it runs along
     float blurSigma;   // in pixels; zero means no blur
     float blurStride;  // pixels between taps, widened when the radius is large
+
+    float4 gradient;     // linear rgb of the far stop; w is 1 when there is one
+    float2 gradientDir;  // cos, sin of the gradient angle
+    float2 gradientPad;
 };
 
 ConstantBuffer<Params> params : register(b0);
@@ -315,12 +319,32 @@ float4 sourceColor(float2 uv) {
     if (!insideCrop(uv)) return float4(0.0, 0.0, 0.0, 0.0);
 
     if (params.layout == LAYOUT_SOLID) {
+        // A linear gradient runs edge to edge through the quad's centre at the
+        // given angle. The half-extent is the rect projected onto the gradient
+        // direction, which is what keeps the ramp spanning the whole shape
+        // rather than being clipped or leaving flat bands at the corners.
+        float3 base = params.solid.rgb;
+        if (params.gradient.w > 0.5) {
+            const float2 offset = (uv - 0.5) * params.size;
+            // Not named `half`: that is a scalar type in HLSL.
+            const float extent = abs(params.size.x * 0.5 * params.gradientDir.x) +
+                                 abs(params.size.y * 0.5 * params.gradientDir.y);
+            const float along = dot(offset, params.gradientDir);
+            const float t = extent > 0.0 ? saturate((along + extent) / (2.0 * extent)) : 0.0;
+
+            // Coded, not linear: a gradient between two hex colours is specified
+            // the way a canvas draws it, so interpolating in linear light would
+            // move the midpoint away from what the author chose.
+            base = linearizeSrgb(lerp(encodeSrgb(params.solid.rgb),
+                                      encodeSrgb(params.gradient.rgb), t));
+        }
+
         // The solid arrives linear, but effects are defined on coded values, so
         // it makes the same round trip a video frame does -- including the
         // keyer, because an effect belongs to the layer, not to the layer's
         // source. A matte is a degenerate case, but exempting it would be a
         // rule with no reason behind it.
-        const float3 coded = encodeSrgb(params.solid.rgb);
+        const float3 coded = encodeSrgb(base);
         const float alpha = params.solid.a * chromaKeyAlpha(coded);
         const float3 adjusted = applyColorEffects(coded);
         return float4(linearizeSrgb(adjusted) * vignetteFactor(uv), alpha);

@@ -45,4 +45,17 @@ if(CUTLINE_WITH_GPU)
   # falls back to WARP so this runs on machines with no GPU.
   cutline_gpu_shaders(cutline_gpu_tests)
   gtest_discover_tests(cutline_gpu_tests)
+
+  if(CUTLINE_WITH_MEDIA)
+    # End to end: a project in, pixels out. Most of these use generated media
+    # only, so they run without footage; the ones that need it skip.
+    add_executable(cutline_engine_tests engine/frame_renderer_test.cpp)
+    target_link_libraries(cutline_engine_tests PRIVATE
+      cutline::core
+      cutline::engine
+      GTest::gtest
+      GTest::gtest_main)
+    cutline_gpu_shaders(cutline_engine_tests)
+    gtest_discover_tests(cutline_engine_tests)
+  endif()
 endif()
