@@ -42,12 +42,19 @@ and the on-screen presenter. Video is converted to linear light in a shader and
 drawn into a 16-bit float target, which an `_SRGB` render target view encodes
 for display.
 
-**Phase 4 underway** — the compositor draws a stack of layers with per-layer
-position, scale, rotation, opacity, all eight blend modes, and adjustment
-layers, and can read the result back to system memory. The same code path serves
-preview and export, which is the point: the old app composited with a canvas for
-preview and an FFmpeg filtergraph for export, and keeping those two agreeing was
-constant work. 372 tests.
+**Phase 4 underway** — a project now renders end to end. `render_frame` takes a
+project file and a time and writes a PNG, going through the whole chain: the
+model says what exists, the plan decides what draws, the media layer supplies
+frames, and the compositor combines them. The same path will serve export, which
+is the point — the old app composited with a canvas for preview and an FFmpeg
+filtergraph for export, and keeping those two agreeing was constant work.
+399 tests.
+
+The compositor handles per-layer position, scale, rotation, opacity, all eight
+blend modes, adjustment layers, and gradient mattes, and can read the result
+back to system memory. Decoding stays sequential wherever it can: a source's
+decoder is held open and only seeks when a request moves backwards or jumps far
+enough ahead that decoding through would be slower.
 
 All eleven registry effects run as shaders: brightness, contrast, saturation,
 hue, black and white, invert, flip, crop, vignette, Gaussian blur, and the
@@ -64,9 +71,9 @@ Two colour decisions worth knowing about, both in `docs/architecture.md`:
   defined and where the spec specifies them. Each operation happens in the space
   it was defined in.
 
-Still to come: generated media (titles and gradient mattes), Skia sharing the
-device, and keeping hardware-decoded frames on the GPU instead of uploading them
-from system memory.
+Still to come: titles, which need a text rasteriser and so wait on Skia; Skia
+sharing the device; and keeping hardware-decoded frames on the GPU instead of
+uploading them from system memory.
 
 ## Building
 
@@ -90,7 +97,12 @@ cmake --preset media
 cmake --build --preset media
 build/media/tools/decode_bench/Release/decode_bench <file> [frames]
 build/media/tools/preview_window/Release/preview_window <file>
+build/media/tools/render_frame/Release/render_frame <project.json> <seconds> <out.png>
 ```
+
+`render_frame` is the end-to-end check: it renders one frame of a project
+through the real pipeline and writes it out, so what the compositor produces can
+be looked at rather than only asserted about.
 
 `preview_window` is a throwaway viewport for driving the render pipeline by
 hand; it is not the editor's UI and will not become it. Space plays, the arrow
