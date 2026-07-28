@@ -14,10 +14,14 @@
 
 namespace cutline::media {
 
-/// Fully decoded audio, interleaved and normalised to [-1, 1].
+/// Decoded audio, interleaved and normalised to [-1, 1].
 struct AudioBuffer {
   int sample_rate = 48000;
   int channels = 2;
+  /// Source time of the first sample, in seconds. Non-zero when only a range
+  /// was decoded, so a buffer says where it came from rather than leaving the
+  /// caller to remember.
+  double start_time = 0.0;
   std::vector<float> samples;
 
   [[nodiscard]] std::size_t frame_count() const noexcept {
@@ -32,13 +36,24 @@ struct AudioBuffer {
 struct AudioDecodeOptions {
   int sample_rate = 48000;
   int channels = 2;
+
+  /// Source range to decode, in seconds. A non-positive `duration` takes
+  /// everything from `start` to the end of the stream.
+  ///
+  /// Asking for a range is not merely an optimisation at the scale this is used
+  /// at: the reference captures run ten minutes with four audio streams each,
+  /// where decoding a whole stream to place a twenty-second clip costs about
+  /// four seconds and 230 MB — per clip, per stream.
+  double start = 0.0;
+  double duration = 0.0;
 };
 
-/// Decodes one audio stream in full, resampled to the requested format.
+/// Decodes one audio stream, or a range of it, resampled to the requested
+/// format.
 ///
-/// This holds the whole stream in memory — ten minutes of 48 kHz stereo is
-/// roughly 230 MB — which is what real-time playback scheduling wants and what
-/// the reference did. Streaming decode is a later concern, for export.
+/// The result is held in memory rather than streamed, which is what real-time
+/// playback scheduling wants and what the reference did. Bounding the range is
+/// what keeps that affordable.
 [[nodiscard]] std::expected<AudioBuffer, std::string> decode_audio(
     std::string_view path, int audio_stream = 0, AudioDecodeOptions options = {});
 

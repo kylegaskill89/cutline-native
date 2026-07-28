@@ -16,9 +16,27 @@
 namespace cutline::engine {
 namespace {
 
-/// A decoded source, shared by every clip that draws from it. Keyed by file and
-/// stream ordinal, so two clips trimmed from the same take decode once.
-using SourceKey = std::pair<std::string, int>;
+/// A decoded source range. Keyed by file, stream ordinal and the range itself,
+/// so two clips with the same trim decode once and two clips with different
+/// trims do not each drag in the whole file.
+///
+/// Decoding whole streams was the obvious first implementation and does not
+/// survive contact with the reference footage: those captures run ten minutes
+/// with four audio streams each, where placing a twenty-second clip cost about
+/// four seconds and 230 MB.
+struct SourceKey {
+  std::string path;
+  int stream = 0;
+  double source_in = 0.0;
+  double source_out = 0.0;
+
+  friend auto operator<=>(const SourceKey&, const SourceKey&) = default;
+};
+
+/// A little either side of the trim, so interpolating at the very last sample
+/// has a neighbour to reach for and a seek landing slightly late does not clip
+/// the start.
+constexpr double kDecodeMargin = 0.05;
 
 /// One planned clip, with the samples and DSP it needs.
 struct Voice {
@@ -57,9 +75,13 @@ struct Voice {
   const auto rate = static_cast<double>(sample_rate);
   const auto frames = source.frame_count();
 
-  const auto begin = static_cast<std::size_t>(std::max(0.0, planned.source_in * rate));
-  const auto end = std::min(frames, static_cast<std::size_t>(
-                                        std::max(0.0, planned.source_out * rate)));
+  // Relative to the buffer's own start, since only the clip's range was
+  // decoded and it begins wherever the decoder was asked to begin.
+  const auto begin = static_cast<std::size_t>(
+      std::max(0.0, (planned.source_in - source.start_time) * rate));
+  const auto end = std::min(
+      frames,
+      static_cast<std::size_t>(std::max(0.0, (planned.source_out - source.start_time) * rate)));
   if (begin >= end) return out;
 
   std::vector<float> trimmed(
@@ -153,12 +175,18 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
                                             settings.channels);
 
     if (entry.media != nullptr && !entry.media->path.empty()) {
-      const SourceKey key{entry.media->path, entry.audio_stream};
+      // Only the clip's own trim, not the whole file.
+      const double from = std::max(0.0, entry.source_in - kDecodeMargin);
+      const double to = entry.source_out + kDecodeMargin;
+      const SourceKey key{entry.media->path, entry.audio_stream, from, to};
+
       auto found = impl->sources.find(key);
       if (found == impl->sources.end()) {
-        auto decoded = media::decode_audio(
-            entry.media->path, entry.audio_stream,
-            {.sample_rate = settings.sample_rate, .channels = settings.channels});
+        auto decoded = media::decode_audio(entry.media->path, entry.audio_stream,
+                                           {.sample_rate = settings.sample_rate,
+                                            .channels = settings.channels,
+                                            .start = from,
+                                            .duration = to - from});
         if (decoded) {
           found = impl->sources.emplace(key, std::move(*decoded)).first;
         } else {
@@ -250,7 +278,8 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
       const double position =
           voice.timeline_indexed
               ? (now - voice.planned.start) * rate
-              : render::audio_source_time_at(voice.planned, now) * rate;
+              : (render::audio_source_time_at(voice.planned, now) - voice.source->start_time) *
+                    rate;
 
       sample_into(*voice.source, position, channels,
                   std::span(impl_->voice_block).subspan(i * channels, channels));

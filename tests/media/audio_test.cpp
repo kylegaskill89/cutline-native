@@ -147,6 +147,73 @@ TEST_F(ReferenceAudio, RejectsAnAbsentStream) {
   EXPECT_FALSE(decode_audio(path_, 99).has_value());
 }
 
+// ------------------------------------------------------------------ ranges --
+//
+// Bounding the decode is not a nicety at the scale this runs at: the reference
+// captures are ten minutes long with four audio streams each, and decoding a
+// whole stream to place a twenty-second clip cost about four seconds and
+// 230 MB — per clip.
+
+TEST_F(ReferenceAudio, ARangeDecodesOnlyWhatWasAskedFor) {
+  const auto audio = decode_audio(path_, 0, {.start = 2.0, .duration = 3.0});
+  ASSERT_TRUE(audio.has_value()) << audio.error();
+
+  EXPECT_NEAR(audio->duration(), 3.0, 0.05);
+  EXPECT_DOUBLE_EQ(audio->start_time, 2.0);
+}
+
+TEST_F(ReferenceAudio, ARangeHoldsTheSameAudioAsTheWholeDecode) {
+  // A seek enters at the packet before the target, so the surplus has to be
+  // trimmed off. If that trim is wrong the range is offset in time — audible as
+  // sync drift, and invisible to a test that only checks the length.
+  const auto whole = decode_audio(path_);
+  const auto part = decode_audio(path_, 0, {.start = 2.0, .duration = 2.0});
+  ASSERT_TRUE(whole.has_value()) << whole.error();
+  ASSERT_TRUE(part.has_value()) << part.error();
+
+  const auto channels = static_cast<std::size_t>(whole->channels);
+  const auto offset = static_cast<std::size_t>(2.0 * whole->sample_rate) * channels;
+  ASSERT_GT(whole->samples.size(), offset + part->samples.size());
+
+  // Not sample-exact: the decoder is entered at a different point, so compare
+  // what the two sound like over the window rather than sample by sample.
+  const auto rms = [](const float* data, std::size_t count) {
+    double sum = 0.0;
+    for (std::size_t i = 0; i < count; ++i) sum += static_cast<double>(data[i]) * data[i];
+    return count == 0 ? 0.0 : std::sqrt(sum / static_cast<double>(count));
+  };
+
+  const double reference = rms(whole->samples.data() + offset, part->samples.size());
+  ASSERT_GT(reference, 1e-4) << "the reference window is silent, so this proves nothing";
+  EXPECT_NEAR(rms(part->samples.data(), part->samples.size()), reference, reference * 0.25);
+}
+
+TEST_F(ReferenceAudio, ARangeStartingAtZeroNeedsNoSeek) {
+  const auto audio = decode_audio(path_, 0, {.duration = 1.0});
+  ASSERT_TRUE(audio.has_value()) << audio.error();
+  EXPECT_NEAR(audio->duration(), 1.0, 0.05);
+  EXPECT_DOUBLE_EQ(audio->start_time, 0.0);
+}
+
+TEST_F(ReferenceAudio, ARangeRunningPastTheEndStopsAtTheEnd) {
+  const auto audio = decode_audio(path_, 0, {.start = 6.0, .duration = 60.0});
+  ASSERT_TRUE(audio.has_value()) << audio.error();
+  EXPECT_NEAR(audio->duration(), 2.0, 0.2);
+}
+
+TEST_F(ReferenceAudio, ARangeStartingPastTheEndIsEmptyRatherThanAnError) {
+  const auto audio = decode_audio(path_, 0, {.start = 500.0, .duration = 1.0});
+  ASSERT_TRUE(audio.has_value()) << audio.error();
+  EXPECT_LT(audio->duration(), 0.2);
+}
+
+TEST_F(ReferenceAudio, NoRangeStillDecodesEverything) {
+  const auto audio = decode_audio(path_);
+  ASSERT_TRUE(audio.has_value()) << audio.error();
+  EXPECT_NEAR(audio->duration(), 8.0, 0.2);
+  EXPECT_DOUBLE_EQ(audio->start_time, 0.0);
+}
+
 TEST_F(ReferenceAudio, WaveformSpansTheWholeClip) {
   const auto peaks = extract_waveform(path_, 0, 100);
   ASSERT_TRUE(peaks.has_value()) << peaks.error();

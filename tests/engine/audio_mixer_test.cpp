@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <numbers>
 #include <string>
@@ -408,6 +409,88 @@ TEST(AudioMixer, AMissingSourceIsRecordedRatherThanFatal) {
   ASSERT_NE(mixer, nullptr);
   ASSERT_EQ(mixer->missing_media().size(), 1u);
   EXPECT_EQ(mixer->missing_media()[0], "gone");
+  EXPECT_TRUE(mixer->silent());
+}
+
+// ------------------------------------------------- multi-stream footage --
+//
+// The reference capture carries four separate audio streams — desktop, mic and
+// two application sources — and the spec flags getting the wrong one as a past
+// bug. A clip stores the stream *ordinal*, since that is what survives a file
+// being remuxed, and the media layer maps it onto libav's absolute index; if
+// that mapping slips, a project silently plays the wrong audio.
+
+constexpr const char* kMultiStreamClip = "Replay 07-23-2026 10PM-59-02.mkv";
+
+[[nodiscard]] std::string multi_stream_path() {
+  const char* dir = std::getenv("CUTLINE_TEST_MEDIA_DIR");
+  if (dir == nullptr) return {};
+  const std::filesystem::path candidate = std::filesystem::path(dir) / kMultiStreamClip;
+  std::error_code ec;
+  return std::filesystem::exists(candidate, ec) ? candidate.string() : std::string{};
+}
+
+TEST(AudioMixerFootage, EachAudioStreamOrdinalSelectsDifferentAudio) {
+  const std::string path = multi_stream_path();
+  if (path.empty()) GTEST_SKIP() << "set CUTLINE_TEST_MEDIA_DIR to the reference footage";
+
+  const auto mix_of_stream = [&path](int ordinal) {
+    Media m;
+    m.id = "m";
+    m.path = path;
+    m.duration = 598.0;
+    m.has_video = true;
+    m.audio_stream_count = 4;
+
+    Project p;
+    p.media = {m};
+    p.tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 20.0, 30.0)})};
+    p.tracks[0].clips[0].audio_stream = ordinal;
+
+    auto mixer = AudioMixer::create(p, {.sample_rate = kRate, .channels = kChannels});
+    EXPECT_TRUE(mixer.has_value()) << (mixer ? "" : mixer.error());
+    if (!mixer) return std::vector<float>{};
+
+    std::vector<float> out(static_cast<std::size_t>(kRate) * 2 * kChannels);
+    EXPECT_TRUE((*mixer)->mix(2.0, out).has_value());
+    return out;
+  };
+
+  const auto first = mix_of_stream(0);
+  const auto second = mix_of_stream(1);
+  ASSERT_EQ(first.size(), second.size());
+  ASSERT_FALSE(first.empty());
+
+  // Not merely different by a sample or two: two genuinely different captures.
+  std::size_t differing = 0;
+  for (std::size_t i = 0; i < first.size(); ++i) {
+    if (std::abs(first[i] - second[i]) > 1e-4f) ++differing;
+  }
+  EXPECT_GT(differing, first.size() / 10)
+      << "streams 0 and 1 decoded to nearly the same audio, so the ordinal was "
+         "probably ignored";
+}
+
+TEST(AudioMixerFootage, AnOrdinalPastTheLastStreamIsReportedRatherThanGuessed) {
+  // Falling back to stream 0 would be worse than silence: the project would
+  // play confidently wrong audio.
+  const std::string path = multi_stream_path();
+  if (path.empty()) GTEST_SKIP() << "set CUTLINE_TEST_MEDIA_DIR to the reference footage";
+
+  Media m;
+  m.id = "m";
+  m.path = path;
+  m.duration = 598.0;
+  m.audio_stream_count = 4;
+
+  Project p;
+  p.media = {m};
+  p.tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 5.0)})};
+  p.tracks[0].clips[0].audio_stream = 9;
+
+  const auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  EXPECT_EQ(mixer->missing_media().size(), 1u);
   EXPECT_TRUE(mixer->silent());
 }
 

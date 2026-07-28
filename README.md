@@ -44,9 +44,13 @@ for display.
 
 **Phase 6 (export) works** — `export_project` renders a project to an MP4 with
 no window and no UI. The 8-second 4K clip that took roughly **18 minutes** in the
-TypeScript version now exports in **7.7 seconds**, slightly faster than realtime,
-via NVENC. Frame counts and durations are verified by round-trip tests rather
-than assumed.
+TypeScript version now exports in **4.0 seconds**, about twice realtime, via
+NVENC. Adding audio costs around 1% of that. Frame counts and durations are
+verified by round-trip tests rather than assumed.
+
+(An earlier 7.7 s figure appears in the history. It was measured on a machine
+that was busy compiling at the time; 4.0 s is what three consecutive runs give
+when nothing else is competing for the GPU.)
 
 Encoders are chosen at runtime — NVENC, QSV, AMF, then x264/x265 — so an export
 always completes, just slower on a machine without a supported GPU.

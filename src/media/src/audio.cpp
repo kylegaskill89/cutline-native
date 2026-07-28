@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <format>
+#include <limits>
 
 namespace cutline::media {
 namespace {
@@ -104,6 +106,29 @@ std::expected<AudioBuffer, std::string> decode_audio(std::string_view path, int 
   buffer.sample_rate = options.sample_rate;
   buffer.channels = options.channels;
 
+  const bool ranged = options.duration > 0.0 || options.start > 0.0;
+  const double wanted_start = std::max(0.0, options.start);
+  const double wanted_end =
+      options.duration > 0.0 ? wanted_start + options.duration
+                             : std::numeric_limits<double>::infinity();
+
+  if (ranged && wanted_start > 0.0) {
+    // Backwards, to the keyframe at or before the target: a compressed audio
+    // stream cannot be entered mid-packet, so the decode starts early and the
+    // surplus is trimmed off below.
+    const auto target =
+        static_cast<std::int64_t>(std::llround(wanted_start / av_q2d(stream->time_base)));
+    if (av_seek_frame(format.get(), index, target, AVSEEK_FLAG_BACKWARD) >= 0) {
+      avcodec_flush_buffers(decoder.get());
+    }
+  }
+
+  // Where the first decoded sample actually landed, which is at or before what
+  // was asked for.
+  double decoded_start = wanted_start;
+  bool have_start = false;
+  bool past_end = false;
+
   const auto pump = [&]() -> std::expected<void, std::string> {
     while (true) {
       const int rc = avcodec_receive_frame(decoder.get(), frame.get());
@@ -111,6 +136,16 @@ std::expected<AudioBuffer, std::string> decode_audio(std::string_view path, int 
       if (rc < 0) {
         return std::unexpected(std::format("audio decode failed: {}", av_error_string(rc)));
       }
+
+      if (frame->pts != AV_NOPTS_VALUE) {
+        const double at = static_cast<double>(frame->pts) * av_q2d(stream->time_base);
+        if (!have_start) {
+          decoded_start = at;
+          have_start = true;
+        }
+        if (at >= wanted_end) past_end = true;
+      }
+
       if (auto ok = drain_resampler(resampler.get(), frame.get(), options.channels,
                                     buffer.samples);
           !ok) {
@@ -119,7 +154,7 @@ std::expected<AudioBuffer, std::string> decode_audio(std::string_view path, int 
     }
   };
 
-  while (true) {
+  while (!past_end) {
     const int read = av_read_frame(format.get(), packet.get());
     if (read == AVERROR_EOF) break;
     if (read < 0) {
@@ -147,6 +182,25 @@ std::expected<AudioBuffer, std::string> decode_audio(std::string_view path, int 
   if (auto ok = drain_resampler(resampler.get(), nullptr, options.channels, buffer.samples);
       !ok) {
     return std::unexpected(ok.error());
+  }
+
+  if (ranged) {
+    const auto lanes = static_cast<std::size_t>(options.channels);
+    const auto rate = static_cast<double>(options.sample_rate);
+
+    // Drop what the seek overshot backwards into, so the first sample really is
+    // the one asked for.
+    if (const double lead = wanted_start - decoded_start; lead > 0.0) {
+      const auto extra = std::min(buffer.samples.size(),
+                                  static_cast<std::size_t>(lead * rate) * lanes);
+      buffer.samples.erase(buffer.samples.begin(),
+                           buffer.samples.begin() + static_cast<std::ptrdiff_t>(extra));
+    }
+    if (options.duration > 0.0) {
+      const auto keep = static_cast<std::size_t>(options.duration * rate) * lanes;
+      if (buffer.samples.size() > keep) buffer.samples.resize(keep);
+    }
+    buffer.start_time = wanted_start;
   }
 
   return buffer;
