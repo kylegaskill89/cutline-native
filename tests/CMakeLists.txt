@@ -58,7 +58,8 @@ if(CUTLINE_WITH_GPU)
     # only, so they run without footage; the ones that need it skip.
     add_executable(cutline_engine_tests
       engine/audio_mixer_test.cpp
-      engine/frame_renderer_test.cpp)
+      engine/frame_renderer_test.cpp
+      engine/player_test.cpp)
     target_link_libraries(cutline_engine_tests PRIVATE
       cutline::core
       cutline::engine

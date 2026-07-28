@@ -69,6 +69,7 @@ if(CUTLINE_WITH_GPU)
   # The engine joins decoding to compositing, so it needs both halves present.
   if(CUTLINE_WITH_MEDIA)
     add_subdirectory(src/engine)
+    add_subdirectory(tools/play_project)
     add_subdirectory(tools/preview_window)
     add_subdirectory(tools/render_frame)
     add_subdirectory(tools/export_project)

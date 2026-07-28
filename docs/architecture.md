@@ -143,6 +143,27 @@ was typed the same way twice, and still passes when the formula is wrong. One
 test ties the predicted response back to what actually comes out of `process`,
 so the rest cannot all agree with a response function no filter implements.
 
+### The audio clock is the master clock
+
+Which subsystem keeps time is a decision, not a detail. Audio is the one that
+cannot be nudged: dropping or repeating a video frame is invisible at 60 Hz,
+while a gap of the same length in audio is a click, and any clock that drifts
+against the sound card eventually produces one. So the device's own consumption
+drives the timeline and the preview asks where the playhead is rather than
+deciding.
+
+The device reports progress once per buffer period, which on some endpoints is
+30 ms or more. Taking that literally makes the playhead a staircase and pins the
+preview's frame rate to the audio callback rate, so the reported position is the
+last thing the card said plus the wall time since it said it — bounded, and
+re-anchored on every update. It is still audio-mastered; wall time only fills
+the gaps.
+
+Playback owns a render thread that does nothing but mix. Everything that touches
+a file — decoding, resampling, building filter chains — happens when the player
+is created, because WASAPI hands out a buffer every few milliseconds and missing
+that deadline is audible.
+
 ### Colour precision, and why HDR is deferred
 
 Compositing happens in **16-bit float linear light** throughout. Decode converts

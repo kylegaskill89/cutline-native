@@ -71,8 +71,21 @@ were actually rendered with.
 Retiming preserves pitch, by WSOLA rather than by resampling: a clip at 2× runs
 twice as fast without turning a voice into a chipmunk. Tracks sum without
 normalisation, as the reference's `amix` did, and a master limiter at 0.95
-catches what that produces. Still missing is real-time playback with the audio
-clock as master, which is a preview concern rather than an export one.
+catches what that produces.
+
+`play_project` plays a project in a window with sound, through WASAPI. The sound
+card keeps time and the picture follows it: audio is the one that cannot be
+nudged, since a dropped video frame is invisible at 60 Hz where a gap of the same
+length in audio is a click.
+
+It also reports whether the preview kept up, which turned up a real number worth
+knowing. On a 4K60 source it draws about **27 of every 60 frames**, and the split
+says why: **29 ms compositing, 0.3 ms presenting**. On a project with nothing to
+decode it runs at 64 fps with 0.3 ms compositing — so the compositor and the
+presenter are free, and every millisecond of that 29 is software decode of 4K
+HEVC. Export avoids it by never skipping frames; the preview skips, so it decodes
+several source frames per drawn one and the effect compounds. Zero-copy hardware
+decode is the fix, and it was already the next item on the list.
 
 **Phase 4 underway** — a project now renders end to end. `render_frame` takes a
 project file and a time and writes a PNG, going through the whole chain: the
