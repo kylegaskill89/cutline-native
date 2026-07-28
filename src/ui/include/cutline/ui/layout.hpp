@@ -28,6 +28,18 @@
 
 namespace cutline::ui {
 
+/// What a widget needs in order to say how big it wants to be.
+///
+/// The theme, because spacing is part of a look rather than a constant; and a
+/// way to measure text, because a button's width is its label's width and only
+/// the backend that rasterises the font knows that.
+struct LayoutContext {
+  const Theme& theme;
+  const TextMeasurer& text;
+
+  [[nodiscard]] const Metrics& metrics() const noexcept { return theme.metrics; }
+};
+
 /// Space inside the edges of a rectangle.
 struct Edges {
   double left = 0.0;

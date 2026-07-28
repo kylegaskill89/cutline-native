@@ -94,10 +94,14 @@ WidgetHost* Widget::host() const noexcept {
   return node->host_;
 }
 
-void Widget::arrange(const Rect& bounds) {
+void Widget::arrange(const Rect& bounds, const LayoutContext& context) {
   bounds_ = bounds;
-  layout();
+  layout(context);
 }
+
+void Widget::layout(const LayoutContext&) {}
+
+LayoutItem Widget::sizing(Axis, const LayoutContext&) const { return LayoutItem::flexible(); }
 
 State Widget::state() const noexcept {
   if (!enabled_) return State::Disabled;
@@ -162,8 +166,8 @@ WidgetHost::WidgetHost(std::unique_ptr<Widget> root) : root_(std::move(root)) {
   root_->host_ = this;
 }
 
-void WidgetHost::resize(const Rect& bounds) {
-  root_->arrange(bounds);
+void WidgetHost::resize(const Rect& bounds, const LayoutContext& context) {
+  root_->arrange(bounds, context);
   // The pointer has not moved but what is under it may have. Without this, a
   // panel that opens under a resting cursor never lights up until it is
   // nudged.

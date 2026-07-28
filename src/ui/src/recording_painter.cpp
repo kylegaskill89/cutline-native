@@ -94,6 +94,16 @@ int RecordingPainter::index_of(DrawCall::Kind kind) const noexcept {
   return static_cast<int>(std::distance(calls_.begin(), found));
 }
 
+double RecordingPainter::measure(std::string_view text, double size, bool bold) const {
+  // Roughly the average advance of a proportional UI font as a fraction of its
+  // size, with a little more for bold. This is not trying to be accurate; it
+  // only has to be stable, so a test asserting that a button is wider than its
+  // label gets the same answer every run.
+  constexpr double kAverageAdvance = 0.55;
+  constexpr double kBoldFactor = 1.05;
+  return static_cast<double>(text.size()) * size * kAverageAdvance * (bold ? kBoldFactor : 1.0);
+}
+
 bool RecordingPainter::clips_balanced() const noexcept {
   int depth = 0;
   for (const DrawCall& call : calls_) {

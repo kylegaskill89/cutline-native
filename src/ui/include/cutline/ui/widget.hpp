@@ -20,6 +20,7 @@
 /// tests directly and the platform layer only has to translate `WM_*`.
 
 #include "cutline/ui/event.hpp"
+#include "cutline/ui/layout.hpp"
 #include "cutline/ui/painter.hpp"
 #include "cutline/ui/theme.hpp"
 
@@ -75,11 +76,20 @@ class Widget {
   [[nodiscard]] const Rect& bounds() const noexcept { return bounds_; }
 
   /// Places this widget and lays its subtree out inside the new bounds.
-  void arrange(const Rect& bounds);
+  void arrange(const Rect& bounds, const LayoutContext& context);
 
   /// Positions the children. The override point for containers, which call
   /// `arrange` on each child; the default leaves them where they are.
-  virtual void layout() {}
+  virtual void layout(const LayoutContext& context);
+
+  /// How much room this widget wants along an axis.
+  ///
+  /// The default takes whatever it is given. A control with a natural size —
+  /// a button around its label, a header the height the theme says — overrides
+  /// it, and gets the theme's metrics rather than a constant, which is what
+  /// lets bevelled chrome be roomier than flat chrome without any widget
+  /// knowing which theme is in use.
+  [[nodiscard]] virtual LayoutItem sizing(Axis axis, const LayoutContext& context) const;
 
   // ----------------------------------------------------------------- state --
 
@@ -200,7 +210,7 @@ class WidgetHost {
 
   /// Resizes the tree. Also refreshes what is hovered, since the widget under
   /// a stationary pointer changes when things move beneath it.
-  void resize(const Rect& bounds);
+  void resize(const Rect& bounds, const LayoutContext& context);
 
   // -------------------------------------------------------------- dispatch --
 

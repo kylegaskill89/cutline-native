@@ -59,10 +59,23 @@ struct TextRun {
   friend bool operator==(const TextRun&, const TextRun&) = default;
 };
 
-/// The drawing primitives every backend must provide.
-class Painter {
+/// Measuring text, which layout needs and drawing owns.
+///
+/// Split out from `Painter` because a widget works out how wide it wants to be
+/// long before there is a canvas to draw on, and only the backend that
+/// rasterises the font can answer the question. Nothing else about painting is
+/// needed to size a button to its label.
+class TextMeasurer {
  public:
-  virtual ~Painter() = default;
+  virtual ~TextMeasurer() = default;
+
+  /// Width of a string at a size, in layout pixels. Empty text is zero.
+  [[nodiscard]] virtual double measure(std::string_view text, double size, bool bold) const = 0;
+};
+
+/// The drawing primitives every backend must provide.
+class Painter : public TextMeasurer {
+ public:
 
   /// Restricts drawing to a rounded rectangle until the matching `pop_clip`.
   virtual void push_clip(const Rect& bounds, double corner_radius) = 0;

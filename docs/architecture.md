@@ -240,6 +240,29 @@ up in the theme and hands the style to `paint_surface`. Hit testing searches
 children in reverse order, exactly mirroring the order they paint in, so what
 answers a click is always what is on top.
 
+### Controls take their size from the theme, not from constants
+
+A widget owns three things — the room it wants (`sizing`), where it puts its
+children (`layout`), and what it adds on top of its themed surface
+(`paint_content`) — and nothing else. None of them names a colour, a corner
+radius, or a number of pixels of padding. A control that hard-coded any of
+those would be the one thing a theme could not change, and there is no way to
+find those except by reading every widget.
+
+That is why `sizing` is handed a `LayoutContext` rather than working from
+constants. It carries the theme, so a button is `control_height` tall under
+whichever theme is loaded and a bevelled one gets the room its bevel needs; and
+it carries a `TextMeasurer`, because a button's width is its label's width and
+only the backend that rasterises the font knows that. Measuring is split out of
+`Painter` for exactly that reason — sizing happens long before there is a canvas
+to draw on. `RecordingPainter` answers with a stable estimate, which is what
+lets the sizing rules be tested with no font present at all.
+
+One rule needed stating explicitly: a box does **not** inherit flexibility
+across its own axis. A spacer is flexible in every direction, so a toolbar that
+took that on would grow to swallow the window instead of being as tall as its
+controls.
+
 ### Colour precision, and why HDR is deferred
 
 Compositing happens in **16-bit float linear light** throughout. Decode converts

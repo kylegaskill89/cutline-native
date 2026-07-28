@@ -1,4 +1,4 @@
-/// Input routing, driven without a window.
+﻿/// Input routing, driven without a window.
 ///
 /// Events are values, so every question about interaction is a function call
 /// here: which widget a click lands on, whether a drag keeps tracking after the
@@ -19,6 +19,16 @@
 
 namespace cutline::ui {
 namespace {
+
+/// Arranging needs a theme for its metrics and something to measure text with.
+/// There is no font here, so the recording painter's estimate stands in; none
+/// of these tests depend on a width being right, only on it being the same
+/// every run.
+[[nodiscard]] const LayoutContext& layout_context() {
+  static const RecordingPainter measurer;
+  static const LayoutContext context{default_theme(), measurer};
+  return context;
+}
 
 /// Records what it was sent, and can be told what to accept.
 class Probe : public Widget {
@@ -77,9 +87,9 @@ struct Fixture {
     left = &host->root().emplace<Probe>("left");
     right = &host->root().emplace<Probe>("right");
 
-    host->resize(Rect{0.0, 0.0, 200.0, 100.0});
-    left->arrange(Rect{0.0, 0.0, 100.0, 100.0});
-    right->arrange(Rect{100.0, 0.0, 100.0, 100.0});
+    host->resize(Rect{0.0, 0.0, 200.0, 100.0}, layout_context());
+    left->arrange(Rect{0.0, 0.0, 100.0, 100.0}, layout_context());
+    right->arrange(Rect{100.0, 0.0, 100.0, 100.0}, layout_context());
   }
 
   [[nodiscard]] Probe& root() const { return static_cast<Probe&>(host->root()); }
@@ -98,7 +108,7 @@ struct Fixture {
 TEST(WidgetTree, TheDeepestWidgetUnderAPointWins) {
   Fixture fixture;
   auto& inner = fixture.left->emplace<Probe>("inner");
-  inner.arrange(Rect{10.0, 10.0, 20.0, 20.0});
+  inner.arrange(Rect{10.0, 10.0, 20.0, 20.0}, layout_context());
 
   EXPECT_EQ(fixture.host->root().at(15.0, 15.0), &inner);
   EXPECT_EQ(fixture.host->root().at(60.0, 60.0), fixture.left);
@@ -110,8 +120,8 @@ TEST(WidgetTree, LaterSiblingsAreOnTop) {
   // Hit testing has to agree with paint order, or overlapping panels answer
   // clicks with whichever one happens to be drawn underneath.
   Fixture fixture;
-  fixture.left->arrange(Rect{0.0, 0.0, 200.0, 100.0});
-  fixture.right->arrange(Rect{0.0, 0.0, 200.0, 100.0});
+  fixture.left->arrange(Rect{0.0, 0.0, 200.0, 100.0}, layout_context());
+  fixture.right->arrange(Rect{0.0, 0.0, 200.0, 100.0}, layout_context());
 
   EXPECT_EQ(fixture.host->root().at(50.0, 50.0), fixture.right);
 }
@@ -128,7 +138,7 @@ TEST(WidgetTree, ChildrenAreOnlyFoundInsideTheirParent) {
   // visually appear.
   Fixture fixture;
   auto& escapee = fixture.left->emplace<Probe>("escapee");
-  escapee.arrange(Rect{150.0, 0.0, 40.0, 40.0});
+  escapee.arrange(Rect{150.0, 0.0, 40.0, 40.0}, layout_context());
 
   EXPECT_NE(fixture.host->root().at(160.0, 20.0), &escapee);
 }
@@ -181,9 +191,9 @@ TEST(Hover, ResizingRefreshesWhatIsUnderARestingCursor) {
   fixture.host->mouse_move(press(150.0, 50.0));
   ASSERT_EQ(fixture.host->hovered(), fixture.right);
 
-  fixture.left->arrange(Rect{0.0, 0.0, 200.0, 100.0});
-  fixture.right->arrange(Rect{0.0, 0.0, 0.0, 0.0});
-  fixture.host->resize(Rect{0.0, 0.0, 200.0, 100.0});
+  fixture.left->arrange(Rect{0.0, 0.0, 200.0, 100.0}, layout_context());
+  fixture.right->arrange(Rect{0.0, 0.0, 0.0, 0.0}, layout_context());
+  fixture.host->resize(Rect{0.0, 0.0, 200.0, 100.0}, layout_context());
 
   EXPECT_EQ(fixture.host->hovered(), fixture.left);
 }
@@ -346,7 +356,7 @@ TEST(Focus, AControlInsideAHiddenPanelIsUnreachable) {
   Fixture fixture;
   auto& inner = fixture.left->emplace<Probe>("inner");
   inner.set_focusable(true);
-  inner.arrange(Rect{0.0, 0.0, 20.0, 20.0});
+  inner.arrange(Rect{0.0, 0.0, 20.0, 20.0}, layout_context());
   fixture.left->set_visible(false);
 
   EXPECT_FALSE(fixture.host->set_focus(&inner));
@@ -443,7 +453,7 @@ TEST(Focus, PressingAChildFocusesItsNearestFocusableAncestor) {
   fixture.left->set_focusable(true);
   auto& inner = fixture.left->emplace<Probe>("inner");
   inner.takes_mouse = true;
-  inner.arrange(Rect{0.0, 0.0, 20.0, 20.0});
+  inner.arrange(Rect{0.0, 0.0, 20.0, 20.0}, layout_context());
 
   fixture.host->mouse_down(press(10.0, 10.0));
   EXPECT_EQ(fixture.host->focused(), fixture.left);
@@ -475,7 +485,7 @@ TEST(Lifetimes, ForgettingReachesDescendantsToo) {
   Fixture fixture;
   auto& inner = fixture.left->emplace<Probe>("inner");
   inner.takes_mouse = true;
-  inner.arrange(Rect{0.0, 0.0, 20.0, 20.0});
+  inner.arrange(Rect{0.0, 0.0, 20.0, 20.0}, layout_context());
 
   fixture.host->mouse_down(press(10.0, 10.0));
   ASSERT_EQ(fixture.host->captured(), &inner);
@@ -486,7 +496,7 @@ TEST(Lifetimes, ForgettingReachesDescendantsToo) {
 
 TEST(Lifetimes, ATreeWithNoRootStillWorks) {
   WidgetHost host(nullptr);
-  host.resize(Rect{0.0, 0.0, 100.0, 100.0});
+  host.resize(Rect{0.0, 0.0, 100.0, 100.0}, layout_context());
   EXPECT_FALSE(host.mouse_down(press(10.0, 10.0)));
 }
 
@@ -513,8 +523,8 @@ TEST(Appearance, StatePrefersTheMoreSpecificCondition) {
 TEST(Appearance, AWidgetDrawsItselfAndThenItsChildren) {
   WidgetHost host(std::make_unique<Surface>());
   auto& child = host.root().emplace<Surface>();
-  host.resize(Rect{0.0, 0.0, 100.0, 100.0});
-  child.arrange(Rect{10.0, 10.0, 40.0, 40.0});
+  host.resize(Rect{0.0, 0.0, 100.0, 100.0}, layout_context());
+  child.arrange(Rect{10.0, 10.0, 40.0, 40.0}, layout_context());
 
   RecordingPainter painter;
   host.paint(painter, default_theme());
@@ -528,8 +538,8 @@ TEST(Appearance, AWidgetDrawsItselfAndThenItsChildren) {
 TEST(Appearance, ClippingChildrenIsBalanced) {
   WidgetHost host(std::make_unique<Surface>());
   host.root().set_clips_children(true);
-  host.root().emplace<Surface>().arrange(Rect{0.0, 0.0, 10.0, 10.0});
-  host.resize(Rect{0.0, 0.0, 100.0, 100.0});
+  host.root().emplace<Surface>().arrange(Rect{0.0, 0.0, 10.0, 10.0}, layout_context());
+  host.resize(Rect{0.0, 0.0, 100.0, 100.0}, layout_context());
 
   RecordingPainter painter;
   host.paint(painter, default_theme());
@@ -541,8 +551,8 @@ TEST(Appearance, ClippingChildrenIsBalanced) {
 TEST(Appearance, AHiddenSubtreeIsNotPainted) {
   WidgetHost host(std::make_unique<Surface>());
   host.root().set_visible(false);
-  host.root().emplace<Surface>().arrange(Rect{0.0, 0.0, 10.0, 10.0});
-  host.resize(Rect{0.0, 0.0, 100.0, 100.0});
+  host.root().emplace<Surface>().arrange(Rect{0.0, 0.0, 10.0, 10.0}, layout_context());
+  host.resize(Rect{0.0, 0.0, 100.0, 100.0}, layout_context());
 
   RecordingPainter painter;
   host.paint(painter, default_theme());

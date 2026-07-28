@@ -58,6 +58,11 @@ class RecordingPainter final : public Painter {
   void backdrop_blur(const Rect& bounds, double corner_radius, double radius) override;
   void text(const TextRun& run) override;
 
+  /// A rough proportional-font estimate. There is no font here, and the only
+  /// things layout tests need from a measurement are that it is deterministic
+  /// and that it grows with both the string and the size.
+  [[nodiscard]] double measure(std::string_view text, double size, bool bold) const override;
+
   [[nodiscard]] const std::vector<DrawCall>& calls() const noexcept { return calls_; }
   void clear() noexcept { calls_.clear(); }
 

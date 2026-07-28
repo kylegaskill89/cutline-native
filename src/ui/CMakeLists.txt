@@ -4,7 +4,8 @@ add_library(cutline_ui
   src/recording_painter.cpp
   src/theme.cpp
   src/themes.cpp
-  src/widget.cpp)
+  src/widget.cpp
+  src/widgets.cpp)
 add_library(cutline::ui ALIAS cutline_ui)
 
 target_include_directories(cutline_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

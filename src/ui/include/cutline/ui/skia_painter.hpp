@@ -40,9 +40,7 @@ class SkiaPainter final : public Painter {
   void backdrop_blur(const Rect& bounds, double corner_radius, double radius) override;
   void text(const TextRun& run) override;
 
-  /// Width of a string at a size, for laying out before drawing. Layout needs
-  /// this and has no canvas, so it is exposed rather than kept private.
-  [[nodiscard]] double measure(std::string_view text, double size, bool bold) const;
+  [[nodiscard]] double measure(std::string_view text, double size, bool bold) const override;
 
  private:
   struct Impl;
