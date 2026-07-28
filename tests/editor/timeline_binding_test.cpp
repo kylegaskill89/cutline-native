@@ -1,0 +1,232 @@
+/// The join between a project and the timeline that draws it.
+///
+/// Both halves are already tested on their own. What is left is whether they
+/// agree: that a clip becomes a block in the right place, that a block dragged
+/// somewhere becomes the right edit, and that the numbering on the track
+/// headers is the one an editor expects.
+
+#include "cutline/editor/timeline_binding.hpp"
+
+#include "cutline/core/edit.hpp"
+#include "cutline/core/query.hpp"
+
+#include <gtest/gtest.h>
+
+#include <string>
+#include <vector>
+
+namespace cutline::editor {
+namespace {
+
+using core::Clip;
+using core::Media;
+using core::Project;
+using core::Track;
+using core::TrackKind;
+
+[[nodiscard]] Project sample_project() {
+  Project project;
+  project.fps = 30.0;
+  project.media = {
+      Media{.id = "m1", .name = "wide.mp4", .duration = 60.0, .has_video = true},
+      Media{.id = "m2", .name = "music.wav", .duration = 60.0, .audio_stream_count = 1},
+  };
+
+  Track upper{.id = "v2", .kind = TrackKind::Video};
+  upper.clips = {Clip{.id = "title", .media_id = "m1", .source_in = 0.0, .source_out = 3.0,
+                      .start = 4.0}};
+
+  Track lower{.id = "v1", .kind = TrackKind::Video};
+  lower.clips = {
+      Clip{.id = "c1", .media_id = "m1", .source_in = 0.0, .source_out = 5.0, .start = 0.0},
+      Clip{.id = "c2", .media_id = "m1", .source_in = 5.0, .source_out = 12.0, .start = 5.0},
+  };
+
+  Track audio{.id = "a1", .kind = TrackKind::Audio};
+  audio.clips = {Clip{.id = "a", .media_id = "m2", .kind = TrackKind::Audio, .source_in = 0.0,
+                      .source_out = 12.0, .start = 0.0}};
+
+  project.tracks = {std::move(upper), std::move(lower), std::move(audio)};
+  return project;
+}
+
+// ------------------------------------------------------------ the drawing --
+
+TEST(Binding, EveryTrackBecomesARow) {
+  const ui::TimelineModel model = timeline_model(sample_project());
+
+  ASSERT_EQ(model.tracks.size(), 3u);
+  EXPECT_EQ(model.tracks[0].id, "v2");
+  EXPECT_FALSE(model.tracks[0].audio);
+  EXPECT_TRUE(model.tracks[2].audio);
+  EXPECT_DOUBLE_EQ(model.fps, 30.0);
+}
+
+TEST(Binding, ClipsBecomeBlocksAtTheirOwnTimes) {
+  const ui::TimelineModel model = timeline_model(sample_project());
+  const ui::TimelineBlock& block = model.tracks[1].blocks[1];
+
+  EXPECT_EQ(block.id, "c2");
+  EXPECT_DOUBLE_EQ(block.start, 5.0);
+  EXPECT_DOUBLE_EQ(block.end, 12.0);
+  EXPECT_EQ(block.label, "wide.mp4");
+}
+
+TEST(Binding, ABlockCarriesItsClipIdBack) {
+  // Which is the whole reason the block has an id: it is how a drag finds its
+  // way to the project without the timeline knowing a project exists.
+  const ui::TimelineModel model = timeline_model(sample_project());
+  EXPECT_EQ(block_clip_id(model, ui::BlockRef{1, 0}), "c1");
+  EXPECT_FALSE(block_clip_id(model, ui::BlockRef{9, 0}).has_value());
+  EXPECT_FALSE(block_clip_id(model, ui::BlockRef{1, 9}).has_value());
+}
+
+TEST(Binding, TheSelectionIsMarkedOnTheBlocks) {
+  const std::vector<std::string> selection{"c2"};
+  const ui::TimelineModel model = timeline_model(sample_project(), selection);
+
+  EXPECT_FALSE(model.tracks[1].blocks[0].selected);
+  EXPECT_TRUE(model.tracks[1].blocks[1].selected);
+}
+
+TEST(Binding, TheDurationIsTheProjectsOwn) {
+  const Project project = sample_project();
+  const ui::TimelineModel model = timeline_model(project);
+  EXPECT_DOUBLE_EQ(model.duration, core::timeline_duration(project));
+}
+
+TEST(Binding, AClipWithNoMediaStillDraws) {
+  // A project referring to media that is gone must open and be visible, or
+  // there is no way to find the broken clip and fix it.
+  Project project = sample_project();
+  project.media.clear();
+
+  const ui::TimelineModel model = timeline_model(project);
+  EXPECT_FALSE(model.tracks[1].blocks[0].label.empty());
+}
+
+TEST(Binding, AnEmptyProjectMakesAnEmptyTimeline) {
+  const ui::TimelineModel model = timeline_model(Project{});
+  EXPECT_TRUE(model.tracks.empty());
+  EXPECT_DOUBLE_EQ(model.content_duration(), 0.0);
+}
+
+// ------------------------------------------------------------- the labels --
+
+TEST(Binding, VideoCountsUpFromTheBottomAndAudioDownFromTheTop) {
+  // V1 is the base layer and A1 is the first lane, so the two numberings meet
+  // in the middle. Numbering video from the top would put V1 on the overlay.
+  const Project project = sample_project();
+
+  EXPECT_EQ(default_track_label(project, 0), "V2");
+  EXPECT_EQ(default_track_label(project, 1), "V1");
+  EXPECT_EQ(default_track_label(project, 2), "A1");
+}
+
+TEST(Binding, AGivenLabelIsUsedAsIs) {
+  Project project = sample_project();
+  project.tracks[0].label = "Titles";
+  EXPECT_EQ(default_track_label(project, 0), "Titles");
+}
+
+TEST(Binding, AnIndexPastTheEndIsHarmless) {
+  EXPECT_TRUE(default_track_label(sample_project(), 99).empty());
+}
+
+// ----------------------------------------------------------- the mute flag --
+
+TEST(Binding, AHiddenVideoTrackReadsAsMuted) {
+  Project project = sample_project();
+  project.tracks[0].hidden = true;
+  EXPECT_TRUE(timeline_model(project).tracks[0].muted);
+}
+
+TEST(Binding, SoloingOneAudioTrackMutesTheOthers) {
+  // Which is why this is not simply `track.muted`: an audio track can be
+  // silenced by something happening on a different track entirely.
+  Project project = sample_project();
+  Track second{.id = "a2", .kind = TrackKind::Audio, .solo = true};
+  project.tracks.push_back(std::move(second));
+
+  const ui::TimelineModel model = timeline_model(project);
+  EXPECT_TRUE(model.tracks[2].muted) << "a1 should be silenced by a2's solo";
+  EXPECT_FALSE(model.tracks[3].muted);
+}
+
+// -------------------------------------------------------------- the edits --
+
+TEST(Binding, MovingABlockMovesTheClip) {
+  const Project before = sample_project();
+  const Project after = apply_timeline_edit(before, "title", ui::DragMode::Move, 9.0, 12.0);
+
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "title")->start, 9.0);
+  EXPECT_DOUBLE_EQ(core::clip_duration(*core::find_clip(after, "title")), 3.0);
+}
+
+TEST(Binding, MovingGoesThroughTheModelsOwnClamp) {
+  // Not by assignment: the model owns the rule that nothing starts before
+  // zero, and a second opinion about it here would eventually disagree.
+  const Project after =
+      apply_timeline_edit(sample_project(), "title", ui::DragMode::Move, -50.0, -47.0);
+  EXPECT_GE(core::find_clip(after, "title")->start, 0.0);
+}
+
+TEST(Binding, TrimmingTheStartMovesOnlyThatEdge) {
+  const Project after =
+      apply_timeline_edit(sample_project(), "c2", ui::DragMode::TrimStart, 7.0, 12.0);
+  const core::Clip* clip = core::find_clip(after, "c2");
+
+  EXPECT_DOUBLE_EQ(clip->start, 7.0);
+  EXPECT_DOUBLE_EQ(core::clip_end(*clip), 12.0);
+}
+
+TEST(Binding, TrimmingTheEndMovesOnlyThatEdge) {
+  const Project after =
+      apply_timeline_edit(sample_project(), "c2", ui::DragMode::TrimEnd, 5.0, 10.0);
+  const core::Clip* clip = core::find_clip(after, "c2");
+
+  EXPECT_DOUBLE_EQ(clip->start, 5.0);
+  EXPECT_DOUBLE_EQ(core::clip_end(*clip), 10.0);
+}
+
+TEST(Binding, AnUnknownClipChangesNothing) {
+  const Project before = sample_project();
+  EXPECT_EQ(apply_timeline_edit(before, "ghost", ui::DragMode::Move, 3.0, 5.0), before);
+}
+
+TEST(Binding, ScrubbingAndNothingAreNotEdits) {
+  const Project before = sample_project();
+  EXPECT_EQ(apply_timeline_edit(before, "c1", ui::DragMode::Scrub, 3.0, 5.0), before);
+  EXPECT_EQ(apply_timeline_edit(before, "c1", ui::DragMode::None, 3.0, 5.0), before);
+}
+
+TEST(Binding, AnEditThatCannotApplyReturnsTheProjectUnchanged) {
+  // Which is what lets the session skip the undo entry. Trimming an edge to
+  // where it already is has nothing to do.
+  const Project before = sample_project();
+  const core::Clip* clip = core::find_clip(before, "c2");
+  const Project after = apply_timeline_edit(before, "c2", ui::DragMode::TrimStart,
+                                            clip->start, core::clip_end(*clip));
+  EXPECT_EQ(after, before);
+}
+
+// ----------------------------------------------------------- round tripping --
+
+TEST(Binding, WhatIsDrawnAfterAnEditIsWhatWasAskedFor) {
+  // The loop closed: project to blocks, drag a block, edit back to the
+  // project, and the block that comes out is where the drag left it.
+  const Project before = sample_project();
+  const ui::TimelineModel drawn = timeline_model(before);
+  const std::optional<std::string> id = block_clip_id(drawn, ui::BlockRef{0, 0});
+  ASSERT_TRUE(id.has_value());
+
+  const Project after = apply_timeline_edit(before, *id, ui::DragMode::Move, 20.0, 23.0);
+  const ui::TimelineModel redrawn = timeline_model(after);
+
+  EXPECT_DOUBLE_EQ(redrawn.tracks[0].blocks[0].start, 20.0);
+  EXPECT_DOUBLE_EQ(redrawn.tracks[0].blocks[0].end, 23.0);
+  EXPECT_EQ(redrawn.tracks[0].blocks[0].id, *id);
+}
+
+}  // namespace
+}  // namespace cutline::editor

@@ -455,7 +455,7 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
   // undo stack for one gesture.
   if (moved_ && drag_.has_value() && on_edit_) {
     const std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
-    if (drag_->block < blocks.size()) on_edit_(*drag_, blocks[drag_->block]);
+    if (drag_->block < blocks.size()) on_edit_(*drag_, mode_, blocks[drag_->block]);
   }
 
   mode_ = DragMode::None;

@@ -15,7 +15,11 @@
 ///
 /// Not the editor. A harness for the parts of it that exist.
 
+#include "cutline/core/edit.hpp"
+#include "cutline/core/model.hpp"
 #include "cutline/core/time.hpp"
+#include "cutline/editor/session.hpp"
+#include "cutline/editor/timeline_binding.hpp"
 #include "cutline/ui/controls.hpp"
 #include "cutline/ui/skia_painter.hpp"
 #include "cutline/ui/theme.hpp"
@@ -69,9 +73,6 @@ using cutline::ui::Slider;
 using cutline::ui::Spacer;
 using cutline::ui::Splitter;
 using cutline::ui::Theme;
-using cutline::ui::TimelineBlock;
-using cutline::ui::TimelineModel;
-using cutline::ui::TimelineTrack;
 using cutline::ui::TimelineView;
 using cutline::ui::TimeScale;
 using cutline::ui::TitleBar;
@@ -80,6 +81,49 @@ using cutline::ui::WheelEvent;
 using cutline::ui::Widget;
 using cutline::ui::WidgetHost;
 using cutline::ui::built_in_themes;
+
+/// A project for the timeline to show. Built rather than loaded: the point is
+/// to exercise the real model and the real edit operations without needing any
+/// media on disk to decode.
+[[nodiscard]] cutline::core::Project sample_project() {
+  using namespace cutline::core;
+
+  Project project;
+  project.fps = 30.0;
+  project.media = {
+      Media{.id = "wide", .name = "wide.mp4", .duration = 120.0, .has_video = true},
+      Media{.id = "close", .name = "close.mp4", .duration = 120.0, .has_video = true},
+      Media{.id = "title", .name = "title.png", .duration = 10.0, .has_video = true,
+            .is_image = true},
+      Media{.id = "dialogue", .name = "dialogue.wav", .duration = 120.0,
+            .audio_stream_count = 1},
+      Media{.id = "score", .name = "score.wav", .duration = 120.0, .audio_stream_count = 1},
+  };
+
+  const auto clip = [](std::string id, std::string media, double start, double length,
+                       TrackKind kind = TrackKind::Video) {
+    return Clip{.id = std::move(id), .media_id = std::move(media), .kind = kind,
+                .source_in = 0.0, .source_out = length, .start = start};
+  };
+
+  Track upper{.id = "v2", .kind = TrackKind::Video};
+  upper.clips = {clip("t1", "title", 6.0, 5.5), clip("t2", "title", 24.0, 5.0)};
+
+  Track lower{.id = "v1", .kind = TrackKind::Video};
+  lower.clips = {clip("c1", "wide", 0.0, 6.2), clip("c2", "close", 6.2, 7.8),
+                 clip("c3", "wide", 14.0, 8.5), clip("c4", "close", 22.5, 15.5)};
+
+  Track dialogue{.id = "a1", .kind = TrackKind::Audio};
+  dialogue.clips = {clip("d1", "dialogue", 0.0, 22.5, TrackKind::Audio),
+                    clip("d2", "dialogue", 22.5, 15.5, TrackKind::Audio)};
+
+  Track music{.id = "a2", .kind = TrackKind::Audio, .muted = true};
+  music.clips = {clip("m1", "score", 2.0, 36.0, TrackKind::Audio)};
+
+  project.tracks = {std::move(upper), std::move(lower), std::move(dialogue),
+                    std::move(music)};
+  return project;
+}
 
 struct App {
   std::unique_ptr<WidgetHost> host;
@@ -92,6 +136,12 @@ struct App {
   TitleBar* title_bar = nullptr;
   CaptionButton* maximise = nullptr;
   HWND window = nullptr;
+
+  /// The document being edited. Everything the timeline shows is derived from
+  /// it, and everything a drag does goes back through it.
+  cutline::editor::Session session{sample_project()};
+  TimelineView* timeline = nullptr;
+  Label* readout = nullptr;
 
   std::size_t theme = 0;
   bool dirty = true;
@@ -111,34 +161,23 @@ struct App {
 
 void set_theme(App& app, std::size_t index);
 
+/// Rebuilds what the timeline draws from the session.
+///
+/// Everything goes through here rather than being patched in place, which is
+/// what keeps the view from drifting out of step with the document — an undo
+/// changes the project in ways no incremental update could follow.
+void refresh_timeline(App& app) {
+  if (app.timeline == nullptr) return;
+  app.timeline->set_model(
+      cutline::editor::timeline_model(app.session.project(), app.session.selection()));
+  app.timeline->set_playhead(app.session.playhead());
+  app.dirty = true;
+}
+
 /// The window's own widget tree: a switcher along the top, a browser down the
 /// left, a monitor and a timeline stacked on the right. Enough of the editor's
 /// shape to tell whether a theme holds together across it.
 ///
-/// Something for the timeline to show. Invented rather than loaded: the point
-/// is to see how a theme handles a wall of clips, not to decode anything.
-[[nodiscard]] TimelineModel sample_timeline() {
-  TimelineModel model;
-  model.fps = 30.0;
-
-  const auto run = [](double from, double to, std::string label) {
-    return TimelineBlock{.start = from, .end = to, .label = std::move(label)};
-  };
-
-  model.tracks = {
-      TimelineTrack{.name = "V2", .blocks = {run(6.0, 11.5, "title"), run(24.0, 29.0, "lower third")}},
-      TimelineTrack{.name = "V1",
-                    .blocks = {run(0.0, 6.2, "wide"), run(6.2, 14.0, "close"),
-                               run(14.0, 22.5, "cutaway"), run(22.5, 38.0, "walk out")}},
-      TimelineTrack{.name = "A1",
-                    .audio = true,
-                    .blocks = {run(0.0, 22.5, "dialogue"), run(22.5, 38.0, "room tone")}},
-      TimelineTrack{
-          .name = "A2", .audio = true, .muted = true, .blocks = {run(2.0, 38.0, "score")}},
-  };
-  return model;
-}
-
 /// `app` may be null, so the headless check can build the same tree with no
 /// window behind it.
 [[nodiscard]] std::unique_ptr<Widget> build_interface(App* app) {
@@ -204,20 +243,58 @@ void set_theme(App& app, std::size_t index);
 
   auto& timeline = right.emplace<Panel>("Timeline");
   auto& tools = timeline.emplace<Box>(Axis::Horizontal);
-  tools.emplace<Button>("Select");
-  tools.emplace<Button>("Razor");
-  tools.emplace<Button>("Slip");
+  tools.emplace<Button>("Undo", [app] {
+    if (app != nullptr && app->session.undo()) refresh_timeline(*app);
+  });
+  tools.emplace<Button>("Redo", [app] {
+    if (app != nullptr && app->session.redo()) refresh_timeline(*app);
+  });
   tools.emplace<Spacer>();
   auto& readout = tools.emplace<Label>("00:00:00:00");
   readout.set_align(cutline::ui::TextAlign::Right);
+  if (app != nullptr) app->readout = &readout;
 
   auto& tracks = timeline.emplace<TimelineView>();
-  tracks.set_model(sample_timeline());
   tracks.set_scale(TimeScale{.pixels_per_second = 60.0});
-  // Enough to see the readout follow a scrub, which is the point of having it.
-  tracks.set_on_scrub([&readout, fps = sample_timeline().fps](double at) {
-    readout.set_text(cutline::core::seconds_to_timecode(at, fps));
+  if (app != nullptr) app->timeline = &tracks;
+
+  tracks.set_on_scrub([app](double at) {
+    if (app == nullptr) return;
+    app->session.set_playhead(at);
+    if (app->readout != nullptr) {
+      app->readout->set_text(
+          cutline::core::seconds_to_timecode(app->session.playhead(), app->session.project().fps));
+    }
   });
+
+  tracks.set_on_select([app](std::optional<cutline::ui::BlockRef> ref) {
+    if (app == nullptr || app->timeline == nullptr) return;
+    if (!ref.has_value()) {
+      app->session.clear_selection();
+      return;
+    }
+    const auto id = cutline::editor::block_clip_id(app->timeline->model(), *ref);
+    if (id.has_value()) app->session.select_one(*id);
+  });
+
+  // The drag goes back through the model's own operations, so a move that a
+  // neighbour would not allow is refused there rather than being allowed here
+  // and looking different once the view is rebuilt.
+  tracks.set_on_edit([app](cutline::ui::BlockRef ref, cutline::ui::DragMode mode,
+                           cutline::ui::TimelineBlock block) {
+    if (app == nullptr || app->timeline == nullptr) return;
+    const auto id = cutline::editor::block_clip_id(app->timeline->model(), ref);
+    if (!id.has_value()) return;
+
+    app->session.apply(cutline::editor::apply_timeline_edit(app->session.project(), *id, mode,
+                                                            block.start, block.end));
+    // Rebuilt whether or not the edit applied: when it did not, the view is
+    // showing where the pointer went rather than where the clip is allowed to
+    // be, and it has to snap back.
+    refresh_timeline(*app);
+  });
+
+  if (app != nullptr) refresh_timeline(*app);
 
   // The inspector, which is what the value controls are for. Each row is a
   // label above the control, the way an effect's parameters are laid out.
@@ -489,6 +566,16 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     case WM_KEYDOWN: {
       if (wparam >= '1' && wparam <= '9') {
         set_theme(*app, static_cast<std::size_t>(wparam - '1'));
+        return 0;
+      }
+
+      // Application shortcuts, taken before the widget tree sees them: undo is
+      // not something any one control should be able to swallow.
+      const Modifiers held = modifiers_now();
+      if (held.control && (wparam == 'Z' || wparam == 'Y')) {
+        const bool forward = wparam == 'Y' || held.shift;
+        if (forward ? app->session.redo() : app->session.undo()) refresh_timeline(*app);
+        app->dirty = true;
         return 0;
       }
       const KeyEvent event{.key = key_from_win32(wparam),

@@ -27,6 +27,12 @@ namespace cutline::ui {
 
 /// One clip, as far as drawing is concerned.
 struct TimelineBlock {
+  /// Opaque to the timeline, which never looks inside it. Whoever built the
+  /// model decides what it means — for the editor it is a clip id, which is
+  /// how a drag finds its way back to the project without the timeline
+  /// knowing a project exists.
+  std::string id;
+
   double start = 0.0;
   double end = 0.0;
   std::string label;
@@ -38,6 +44,8 @@ struct TimelineBlock {
 };
 
 struct TimelineTrack {
+  /// Opaque, like a block's.
+  std::string id;
   std::string name;
   /// Audio tracks are shorter, because the theme says so.
   bool audio = false;
@@ -120,11 +128,15 @@ class TimelineView : public Widget {
   [[nodiscard]] std::optional<BlockRef> selection() const;
   void select(std::optional<BlockRef> block);
 
-  /// Called once, on release, with the clip as it ended up. Not on every mouse
-  /// move: the model is already updated live so the drag can be seen, and an
-  /// edit that fired continuously would put a hundred entries in the undo
-  /// stack for one gesture.
-  void set_on_edit(std::function<void(BlockRef, TimelineBlock)> on_edit) {
+  /// Called once, on release, with what the drag was doing and the clip as it
+  /// ended up. Not on every mouse move: the model is already updated live so
+  /// the drag can be seen, and an edit that fired continuously would put a
+  /// hundred entries in the undo stack for one gesture.
+  ///
+  /// The mode is passed rather than inferred from what changed, because moving
+  /// a clip and trimming both its edges by the same amount are different edits
+  /// that leave the same numbers behind.
+  void set_on_edit(std::function<void(BlockRef, DragMode, TimelineBlock)> on_edit) {
     on_edit_ = std::move(on_edit);
   }
 
@@ -208,7 +220,7 @@ class TimelineView : public Widget {
 
   std::function<void(double)> on_scrub_;
   std::function<void(std::optional<BlockRef>)> on_select_;
-  std::function<void(BlockRef, TimelineBlock)> on_edit_;
+  std::function<void(BlockRef, DragMode, TimelineBlock)> on_edit_;
 };
 
 }  // namespace cutline::ui

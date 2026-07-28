@@ -15,6 +15,8 @@ add_executable(cutline_core_tests
   core/segments_test.cpp
   core/serialize_test.cpp
   core/time_test.cpp
+  editor/session_test.cpp
+  editor/timeline_binding_test.cpp
   render/effects_test.cpp
   render/mix_test.cpp
   render/plan_test.cpp
@@ -31,6 +33,7 @@ add_executable(cutline_core_tests
 target_link_libraries(cutline_core_tests PRIVATE
   cutline::audio
   cutline::core
+  cutline::editor
   cutline::render
   cutline::ui
   GTest::gtest

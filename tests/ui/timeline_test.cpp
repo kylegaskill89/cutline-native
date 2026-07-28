@@ -581,9 +581,11 @@ TEST(Timeline, AnEditIsReportedOnceWhenTheDragEnds) {
   int edits = 0;
   TimelineBlock last;
   BlockRef which;
-  fixture.view->set_on_edit([&](BlockRef ref, TimelineBlock block) {
+  DragMode how = DragMode::None;
+  fixture.view->set_on_edit([&](BlockRef ref, DragMode mode, TimelineBlock block) {
     ++edits;
     which = ref;
+    how = mode;
     last = block;
   });
 
@@ -597,12 +599,15 @@ TEST(Timeline, AnEditIsReportedOnceWhenTheDragEnds) {
   EXPECT_EQ(edits, 1);
   EXPECT_EQ(which, (BlockRef{0, 0}));
   EXPECT_NEAR(last.start, 4.0, 1.0 / kFps);
+  // The mode is reported rather than inferred: moving a clip and trimming
+  // both its edges by the same amount leave the same numbers behind.
+  EXPECT_EQ(how, DragMode::Move);
 }
 
 TEST(Timeline, AClickReportsNoEdit) {
   Fixture fixture;
   int edits = 0;
-  fixture.view->set_on_edit([&](BlockRef, TimelineBlock) { ++edits; });
+  fixture.view->set_on_edit([&](BlockRef, DragMode, TimelineBlock) { ++edits; });
 
   const Rect box = fixture.view->block_rect(0, 0);
   fixture.host->mouse_down(press(box.x + 50.0, box.y + 10.0));

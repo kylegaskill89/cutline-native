@@ -1,6 +1,8 @@
 add_executable(theme_window main.cpp)
 
 target_link_libraries(theme_window PRIVATE
+  cutline::core
+  cutline::editor
   cutline::options
   cutline::ui
   cutline::ui_skia

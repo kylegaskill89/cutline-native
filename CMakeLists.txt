@@ -65,6 +65,9 @@ add_subdirectory(src/render)
 add_subdirectory(src/audio)
 # And the theme model: data and lookup, with Skia needed only to paint it.
 add_subdirectory(src/ui)
+# The join between the two: the only thing that knows both a project and a
+# widget. Pure like they are.
+add_subdirectory(src/editor)
 
 if(CUTLINE_WITH_SKIA)
   # A window to look at the interface in. Needs no media and no GPU: chrome is

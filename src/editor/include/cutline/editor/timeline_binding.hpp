@@ -1,0 +1,50 @@
+#pragma once
+
+/// Turning a project into something the timeline can draw, and turning what
+/// the timeline reports back into an edit.
+///
+/// Both halves already exist and neither knows about the other: `cutline::ui`
+/// draws plain structs and `cutline::core` performs operations on a project.
+/// This is the whole of the join, kept in one file so there is exactly one
+/// place where a clip becomes a rectangle.
+
+#include "cutline/core/model.hpp"
+#include "cutline/ui/timeline.hpp"
+
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+
+namespace cutline::editor {
+
+/// What the timeline should draw for this project.
+///
+/// Track order follows the project's, which is video first and topmost first —
+/// the same order the timeline stacks rows in, so V2 sits above V1 the way it
+/// does everywhere else.
+[[nodiscard]] ui::TimelineModel timeline_model(const core::Project& project,
+                                               std::span<const std::string> selection = {});
+
+/// The name a track shows when it has not been given one.
+///
+/// Numbered from the bottom for video and from the top for audio, which is
+/// what every editor does: V1 is the base layer and A1 is the first audio
+/// lane, and they meet in the middle.
+[[nodiscard]] std::string default_track_label(const core::Project& project,
+                                              std::size_t index);
+
+/// Applies a drag the timeline reported.
+///
+/// Returns the project unchanged when the edit cannot apply — clamped against
+/// a neighbour, or past the end of the source — which is what every core
+/// operation does and what lets the caller skip the undo entry.
+[[nodiscard]] core::Project apply_timeline_edit(core::Project project,
+                                                std::string_view clip_id, ui::DragMode mode,
+                                                double start, double end);
+
+/// The clip a block refers to, or nothing when the model has moved on.
+[[nodiscard]] std::optional<std::string> block_clip_id(const ui::TimelineModel& model,
+                                                       ui::BlockRef ref);
+
+}  // namespace cutline::editor
