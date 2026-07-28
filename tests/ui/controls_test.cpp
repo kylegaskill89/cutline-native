@@ -168,6 +168,74 @@ TEST(Slider, DraggingFollowsThePointerPastTheEdges) {
   EXPECT_DOUBLE_EQ(test.slider->value(), 0.0);
 }
 
+TEST(Slider, ADragRecordsOnceAtTheEnd) {
+  // The same lesson the timeline learned: an edit on every change would put a
+  // hundred entries in the undo stack for one drag.
+  Slid test;
+  int commits = 0;
+  double committed = -1.0;
+  test.slider->set_on_commit([&](double value) {
+    ++commits;
+    committed = value;
+  });
+
+  const Rect groove = test.slider->groove();
+  test.host->mouse_down(press(groove.x + 20.0, 12.0));
+  test.host->mouse_move(press(groove.x + 60.0, 12.0));
+  test.host->mouse_move(press(groove.x + 120.0, 12.0));
+  EXPECT_EQ(commits, 0) << "it recorded partway through the drag";
+  EXPECT_GT(test.changes, 1) << "but it should have been following along";
+
+  test.host->mouse_up(press(groove.x + 120.0, 12.0));
+  EXPECT_EQ(commits, 1);
+  EXPECT_DOUBLE_EQ(committed, test.slider->value());
+}
+
+TEST(Slider, ADragThatEndsWhereItStartedRecordsNothing) {
+  Slid test;
+  int commits = 0;
+  test.slider->set_on_commit([&](double) { ++commits; });
+
+  const Rect groove = test.slider->groove();
+  test.host->mouse_down(press(groove.x, 12.0));
+  test.host->mouse_move(press(groove.x + 80.0, 12.0));
+  test.host->mouse_move(press(groove.x, 12.0));
+  test.host->mouse_up(press(groove.x, 12.0));
+
+  EXPECT_EQ(commits, 0);
+}
+
+TEST(Slider, EachKeyPressIsItsOwnGesture) {
+  // So undoing a nudge undoes exactly that nudge, rather than the whole time
+  // the key was held.
+  Slid test;
+  int commits = 0;
+  test.slider->set_on_commit([&](double) { ++commits; });
+  test.host->set_focus(test.slider);
+
+  test.host->key_down(KeyEvent{.key = Key::Right});
+  test.host->key_down(KeyEvent{.key = Key::Right});
+  EXPECT_EQ(commits, 2);
+
+  // At the end of the range there is nowhere to go, so nothing is recorded.
+  test.host->key_down(KeyEvent{.key = Key::End});
+  const int settled = commits;
+  test.host->key_down(KeyEvent{.key = Key::Right});
+  EXPECT_EQ(commits, settled);
+}
+
+TEST(Slider, ADoubleClickResetRecordsToo) {
+  Slid test;
+  int commits = 0;
+  test.slider->set_on_commit([&](double) { ++commits; });
+  test.slider->set_default_value(25.0);
+  test.slider->set_value(90.0);
+
+  test.host->mouse_down(press(10.0, 12.0, 2));
+  EXPECT_EQ(commits, 1);
+  EXPECT_DOUBLE_EQ(test.slider->value(), 25.0);
+}
+
 TEST(Slider, ReleasingEndsTheDrag) {
   Slid test;
   const Rect groove = test.slider->groove();

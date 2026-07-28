@@ -69,8 +69,18 @@ class Slider : public Widget {
   /// getting back to it is otherwise a matter of dragging carefully.
   void set_default_value(std::optional<double> value) { default_ = value; }
 
+  /// Every change, including each pixel of a drag. For following along — a
+  /// preview that should update as the value moves.
   void set_on_change(std::function<void(double)> on_change) {
     on_change_ = std::move(on_change);
+  }
+
+  /// Once, when a gesture finishes: the button comes up, or a key lands. For
+  /// recording — an edit that fired on every change would put a hundred
+  /// entries in the undo stack for one drag, which is the same lesson the
+  /// timeline learned about dragging clips.
+  void set_on_commit(std::function<void(double)> on_commit) {
+    on_commit_ = std::move(on_commit);
   }
 
   [[nodiscard]] double fraction() const noexcept { return range_.to_fraction(value_); }
@@ -93,14 +103,20 @@ class Slider : public Widget {
   /// The value a pointer at `x` means, accounting for the thumb's own width.
   [[nodiscard]] double value_at(double x) const;
   void commit(double value);
+  /// Reports the end of a gesture, if it actually moved anything.
+  void finish();
 
   ValueRange range_;
   double value_ = 0.0;
   std::optional<double> default_;
   bool dragging_ = false;
   double thumb_size_ = 12.0;
+  /// What the value was when the gesture began, so a drag that ends where it
+  /// started reports nothing.
+  double gesture_start_ = 0.0;
 
   std::function<void(double)> on_change_;
+  std::function<void(double)> on_commit_;
 };
 
 /// A box that is either ticked or not, with a label beside it.

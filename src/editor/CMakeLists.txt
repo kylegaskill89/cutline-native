@@ -7,6 +7,7 @@
 #
 # Pure, and needs no Skia, no GPU and no FFmpeg.
 add_library(cutline_editor
+  src/inspector.cpp
   src/session.cpp
   src/timeline_binding.cpp)
 add_library(cutline::editor ALIAS cutline_editor)

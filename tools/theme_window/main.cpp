@@ -18,6 +18,7 @@
 #include "cutline/core/edit.hpp"
 #include "cutline/core/model.hpp"
 #include "cutline/core/time.hpp"
+#include "cutline/editor/inspector.hpp"
 #include "cutline/editor/session.hpp"
 #include "cutline/editor/timeline_binding.hpp"
 #include "cutline/ui/controls.hpp"
@@ -142,9 +143,19 @@ struct App {
   cutline::editor::Session session{sample_project()};
   TimelineView* timeline = nullptr;
   Label* readout = nullptr;
+  /// The column the parameter controls live in, inside the inspector's scroll
+  /// view. A `Box` rather than the panel, so clearing it does not take the
+  /// scrolling with it.
+  Box* inspector = nullptr;
 
   std::size_t theme = 0;
   bool dirty = true;
+  /// Set when the inspector needs rebuilding, and acted on at the next render.
+  ///
+  /// Deferred rather than done on the spot because the thing asking for it is
+  /// usually a slider *inside* the inspector, and rebuilding would destroy
+  /// that slider while its own callback was still running.
+  bool inspector_stale = true;
 
   /// Rebuilt whenever the window changes size. Skia's raster surface owns the
   /// pixels; the blit reads them straight out.
@@ -160,6 +171,56 @@ struct App {
 };
 
 void set_theme(App& app, std::size_t index);
+void refresh_timeline(App& app);
+
+/// Rebuilds the inspector for whatever is selected.
+///
+/// A loop over `clip_parameters` rather than a hand-built form, so a property
+/// added to the model turns up here without anyone remembering to come and add
+/// a control for it.
+void refresh_inspector(App& app) {
+  if (app.inspector == nullptr || app.host == nullptr) return;
+
+  // Rebuilt from nothing each time. `clear_children` tells the host to drop
+  // hover, focus and capture first, so a slider that was mid-drag when the
+  // selection changed is not freed underneath the drag.
+  app.inspector->clear_children();
+
+  const auto selection = app.session.selection();
+  if (selection.empty()) {
+    app.inspector->emplace<Label>("Nothing selected").set_small(true);
+    app.inspector->emplace<Spacer>();
+    app.host->request_layout();
+    app.dirty = true;
+    return;
+  }
+
+  const std::string clip_id{selection.front()};
+  for (const cutline::editor::ParamSpec& spec :
+       cutline::editor::clip_parameters(app.session.project(), clip_id)) {
+    app.inspector->emplace<Label>(spec.name).set_small(true);
+
+    auto& slider = app.inspector->emplace<Slider>(spec.range, spec.value);
+    slider.set_default_value(spec.fallback);
+
+    // On commit rather than on change: the control follows the pointer as it
+    // goes, and the project is written once, at the end of the gesture.
+    slider.set_on_commit([&app, clip_id, param = spec.param](double value) {
+      app.session.apply(cutline::editor::set_clip_parameter(app.session.project(), clip_id,
+                                                            param, value));
+      refresh_timeline(app);
+      // Marked, not rebuilt: this lambda belongs to the slider that a rebuild
+      // would destroy. It has to be rebuilt though — the model may have
+      // clamped the value, and a speed change alters the clip's length, which
+      // moves the bounds of both fade controls.
+      app.inspector_stale = true;
+    });
+  }
+  app.inspector->emplace<Spacer>();
+
+  app.host->request_layout();
+  app.dirty = true;
+}
 
 /// Rebuilds what the timeline draws from the session.
 ///
@@ -244,10 +305,14 @@ void refresh_timeline(App& app) {
   auto& timeline = right.emplace<Panel>("Timeline");
   auto& tools = timeline.emplace<Box>(Axis::Horizontal);
   tools.emplace<Button>("Undo", [app] {
-    if (app != nullptr && app->session.undo()) refresh_timeline(*app);
+    if (app == nullptr || !app->session.undo()) return;
+    refresh_timeline(*app);
+    app->inspector_stale = true;
   });
   tools.emplace<Button>("Redo", [app] {
-    if (app != nullptr && app->session.redo()) refresh_timeline(*app);
+    if (app == nullptr || !app->session.redo()) return;
+    refresh_timeline(*app);
+    app->inspector_stale = true;
   });
   tools.emplace<Spacer>();
   auto& readout = tools.emplace<Label>("00:00:00:00");
@@ -271,10 +336,12 @@ void refresh_timeline(App& app) {
     if (app == nullptr || app->timeline == nullptr) return;
     if (!ref.has_value()) {
       app->session.clear_selection();
+      app->inspector_stale = true;
       return;
     }
     const auto id = cutline::editor::block_clip_id(app->timeline->model(), *ref);
     if (id.has_value()) app->session.select_one(*id);
+    app->inspector_stale = true;
   });
 
   // The drag goes back through the model's own operations, so a move that a
@@ -296,25 +363,13 @@ void refresh_timeline(App& app) {
 
   if (app != nullptr) refresh_timeline(*app);
 
-  // The inspector, which is what the value controls are for. Each row is a
-  // label above the control, the way an effect's parameters are laid out.
-  auto& inspector = middle.emplace<Panel>("Effect Controls");
-  const auto parameter = [&inspector](std::string name, ValueRange range, double value,
-                                      double fallback) -> Slider& {
-    inspector.emplace<Label>(std::move(name)).set_small(true);
-    auto& slider = inspector.emplace<Slider>(range, value);
-    slider.set_default_value(fallback);
-    return slider;
-  };
-
-  parameter("Opacity", ValueRange{.minimum = 0.0, .maximum = 100.0}, 100.0, 100.0);
-  parameter("Scale", ValueRange{.minimum = 0.0, .maximum = 400.0}, 100.0, 100.0);
-  parameter("Rotation", ValueRange{.minimum = -180.0, .maximum = 180.0}, 0.0, 0.0);
-  parameter("Feather", ValueRange{.minimum = 0.0, .maximum = 100.0, .step = 5.0}, 20.0, 0.0);
-
-  inspector.emplace<Checkbox>("Reverse", false);
-  inspector.emplace<Checkbox>("Preserve pitch", true);
-  inspector.emplace<Spacer>();
+  // The inspector. Its contents are rebuilt from whatever is selected, so all
+  // that is built here is somewhere to put them — inside a scroll view,
+  // because a clip has more parameters than fit in a panel.
+  auto& inspector_panel = middle.emplace<Panel>("Effect Controls");
+  auto& inspector_scroll = inspector_panel.emplace<ScrollView>(Axis::Vertical);
+  auto& rows = inspector_scroll.set_content(std::make_unique<Box>(Axis::Vertical));
+  if (app != nullptr) app->inspector = static_cast<Box*>(&rows);
 
   shell->add(std::move(root));
   return shell;
@@ -383,6 +438,13 @@ void render(App& app, HWND window) {
 
   const Rect client{0.0, 0.0, static_cast<double>(app.width), static_cast<double>(app.height)};
   const LayoutContext context{theme, *painter};
+
+  // Rebuilt here for the same reason layout is: whatever asked for it was
+  // usually a control inside the panel being rebuilt.
+  if (app.inspector_stale) {
+    app.inspector_stale = false;
+    refresh_inspector(app);
+  }
 
   // The one place a theme and a text measurer are both in hand, which is
   // exactly why layout is deferred to here rather than done where the size
@@ -574,7 +636,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       const Modifiers held = modifiers_now();
       if (held.control && (wparam == 'Z' || wparam == 'Y')) {
         const bool forward = wparam == 'Y' || held.shift;
-        if (forward ? app->session.redo() : app->session.undo()) refresh_timeline(*app);
+        if (forward ? app->session.redo() : app->session.undo()) {
+          refresh_timeline(*app);
+          app->inspector_stale = true;
+        }
         app->dirty = true;
         return 0;
       }

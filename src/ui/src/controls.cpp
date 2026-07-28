@@ -122,13 +122,20 @@ void Slider::paint_content(Painter& painter, const Theme& theme) const {
   paint_surface(painter, knob, theme.style(Part::SliderThumb, state()));
 }
 
+void Slider::finish() {
+  if (value_ == gesture_start_) return;
+  if (on_commit_) on_commit_(value_);
+}
+
 bool Slider::on_mouse_down(const MouseEvent& event) {
   if (event.button != MouseButton::Left) return false;
+  gesture_start_ = value_;
 
   // A double-click returns to the parameter's default. Getting back to it is
   // otherwise a matter of dragging very carefully.
   if (event.click_count >= 2 && default_.has_value()) {
     commit(*default_);
+    finish();
     return true;
   }
 
@@ -148,6 +155,7 @@ bool Slider::on_mouse_move(const MouseEvent& event) {
 bool Slider::on_mouse_up(const MouseEvent& event) {
   if (event.button != MouseButton::Left || !dragging_) return false;
   dragging_ = false;
+  finish();
   return true;
 }
 
@@ -155,24 +163,32 @@ bool Slider::on_key_down(const KeyEvent& event) {
   if (event.modifiers.control || event.modifiers.alt) return false;
   const double amount = range_.nudge() * (event.modifiers.shift ? kCoarseNudge : 1.0);
 
+  // Each press is a gesture of its own, so holding an arrow key records one
+  // entry per step rather than one for the whole hold. That is what makes
+  // undoing a nudge undo exactly that nudge.
+  gesture_start_ = value_;
+
   switch (event.key) {
     case Key::Left:
     case Key::Down:
       commit(value_ - amount);
-      return true;
+      break;
     case Key::Right:
     case Key::Up:
       commit(value_ + amount);
-      return true;
+      break;
     case Key::Home:
       commit(range_.minimum);
-      return true;
+      break;
     case Key::End:
       commit(range_.maximum);
-      return true;
+      break;
     default:
       return false;
   }
+
+  finish();
+  return true;
 }
 
 // ---------------------------------------------------------------- checkbox --
