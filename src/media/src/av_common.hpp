@@ -7,12 +7,7 @@
 #include <memory>
 #include <string>
 
-extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
-#include <libswresample/swresample.h>
-#include <libswscale/swscale.h>
-}
+#include "cutline/media/av_headers.hpp"
 
 namespace cutline::media::detail {
 

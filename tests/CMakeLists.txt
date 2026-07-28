@@ -5,6 +5,7 @@ add_executable(cutline_core_tests
   core/arrange_test.cpp
   core/edit_test.cpp
   core/keyframe_test.cpp
+  core/layout_test.cpp
   core/properties_test.cpp
   core/query_test.cpp
   core/segments_test.cpp
@@ -29,4 +30,16 @@ if(CUTLINE_WITH_MEDIA)
     GTest::gtest_main)
   # These skip unless CUTLINE_TEST_MEDIA_DIR points at the reference footage.
   gtest_discover_tests(cutline_media_tests)
+endif()
+
+if(CUTLINE_WITH_GPU)
+  add_executable(cutline_gpu_tests gpu/compositor_test.cpp)
+  target_link_libraries(cutline_gpu_tests PRIVATE
+    cutline::gpu
+    GTest::gtest
+    GTest::gtest_main)
+  # The compositor loads its compiled shaders from beside the executable, and
+  # falls back to WARP so this runs on machines with no GPU.
+  cutline_gpu_shaders(cutline_gpu_tests)
+  gtest_discover_tests(cutline_gpu_tests)
 endif()

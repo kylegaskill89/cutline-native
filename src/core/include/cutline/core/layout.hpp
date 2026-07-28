@@ -1,0 +1,63 @@
+#pragma once
+
+/// Where a clip lands on the canvas, and how opaque it is when it gets there.
+///
+/// This is the geometry the compositor draws with, kept here rather than in the
+/// GPU layer because it is exact numeric behaviour carried over from the
+/// reference implementation, and because it is worth testing without a device.
+/// The shader receives a box and an alpha; it does not know what a keyframe or
+/// a transition is.
+
+#include "cutline/core/model.hpp"
+#include "cutline/core/segments.hpp"
+
+namespace cutline::core {
+
+struct Size {
+  double width = 0.0;
+  double height = 0.0;
+
+  friend bool operator==(const Size&, const Size&) = default;
+};
+
+/// A media's draw size at scale 1, in canvas pixels: aspect-fit to the canvas,
+/// so scale 1 means "fills the canvas as much as it can without distortion"
+/// rather than "native pixels". That is what keeps a project's transforms
+/// independent of the resolution it is exported at.
+///
+/// Text is measured, not derived, so callers that have laid a title out pass
+/// the result in `measured_text`; core cannot shape glyphs. A zero measurement
+/// falls back to the media's stored dimensions.
+[[nodiscard]] Size natural_size(const Media* media, double canvas_w, double canvas_h,
+                                Size measured_text = {}) noexcept;
+
+/// A resolved draw rectangle in canvas pixels, centred on `center_x, center_y`
+/// and rotated clockwise about that centre.
+struct LayerBox {
+  double center_x = 0.0;
+  double center_y = 0.0;
+  double width = 0.0;
+  double height = 0.0;
+  double rotation_deg = 0.0;
+
+  friend bool operator==(const LayerBox&, const LayerBox&) = default;
+};
+
+/// The box a clip draws into at timeline time `t`, with keyframed transform
+/// applied. Stored `x, y` are canvas fractions where (0.5, 0.5) is centred.
+[[nodiscard]] LayerBox layer_box(const Clip& clip, const Media* media, double canvas_w,
+                                 double canvas_h, double t, Size measured_text = {}) noexcept;
+
+/// As `layer_box`, but including the horizontal offset a push or slide
+/// transition contributes at `t`. Segments without a geometric transition give
+/// the same answer as `layer_box`.
+[[nodiscard]] LayerBox segment_box(const VideoSeg& seg, const Media* media, double canvas_w,
+                                   double canvas_h, double t, Size measured_text = {}) noexcept;
+
+/// A segment's alpha at timeline time `t`: keyframed opacity multiplied by the
+/// fade ramps. Manual fades and transition ramps are not additive — the longer
+/// of the two wins on each edge, so setting a fade on a clip that already has a
+/// dissolve does not double up.
+[[nodiscard]] double segment_alpha(const VideoSeg& seg, double t) noexcept;
+
+}  // namespace cutline::core

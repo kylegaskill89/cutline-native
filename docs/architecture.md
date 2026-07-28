@@ -126,6 +126,15 @@ HDR — linear-light blending is simply more correct than the old 8-bit sRGB
 canvas, and the extra precision shows up in gradients and in stacked effects,
 where 8-bit intermediates band visibly.
 
+Linear blending is a **deliberate behavioural divergence** from the reference,
+not just a precision upgrade. A 2D canvas blends gamma-encoded values, so the old
+app's 50% cross-dissolve passed through a midpoint that was visibly too dark;
+ours passes through the true one. Old and new projects will therefore not match
+pixel for pixel wherever a dissolve, a partial opacity, or a non-normal blend
+mode is involved. That was accepted when the float pipeline was chosen, and the
+compositor tests assert the linear answer explicitly so nobody later "fixes" it
+back.
+
 HDR itself is **deferred past v1**. It was originally scoped into v1 on the
 understanding that HDR footage was already part of the workflow. Probing the
 actual sources contradicted that: every video file on hand is HEVC **Main**
@@ -175,8 +184,8 @@ The parts of the old design that earned their keep:
 ```
 src/core/     pure model, time maths, keyframes, segments, serialisation
 src/media/    libav* decode, encode, probe, waveforms, thumbnails   (phase 2)
-src/gpu/      D3D12 device, resources, shaders, colour management   (phase 3)
-src/render/   the compositor                                        (phase 4)
+src/gpu/      D3D12 device, compositor, presenter, shaders          (phase 3-4)
+src/render/   turning a project at a time into a layer stack        (phase 4)
 src/audio/    DSP graph, real-time and offline                      (phase 5)
 src/export/   render-to-file orchestration                          (phase 6)
 src/ui/       Skia widget layer and the editor's panels             (phase 7)
@@ -230,10 +239,22 @@ Correctness is proven by automated tests, because pixel and audio output cannot
 be judged by the agent writing the code.
 
 - **Unit tests** for everything in `src/core` and the audio DSP.
-- **Golden-image tests** for the compositor: render known inputs, compare
-  against committed reference frames within a numeric tolerance. These prove
-  that nothing *changed*; they do not prove the reference was ever right, so
-  each reference frame needs signing off by eye once before it is frozen.
+- **Render-and-read-back tests** for the compositor, which replace the committed
+  reference frames originally planned here. They render known inputs and assert
+  on *properties* of the result — a matte fills the frame with the colour it was
+  given, half opacity lands on the linear midpoint, a 90° rotation turns a wide
+  bar into a tall one — rather than comparing against stored PNGs.
+
+  The change is deliberate. A committed reference frame proves only that nothing
+  changed, says nothing about whether the reference was ever right, and breaks
+  on any driver that rounds differently. A property assertion states the
+  intended behaviour in the test itself, so a failure names what is wrong
+  instead of reporting that some pixels differ. Stored frames remain the right
+  tool for effects whose output is genuinely hard to characterise, and can be
+  added alongside these when the effect shaders land.
+
+  They fall back to WARP, Microsoft's software rasteriser, so they run on CI
+  machines with no GPU.
 - **Throughput benchmarks** for decode and export, so a performance regression
   is a test failure rather than a surprise.
 

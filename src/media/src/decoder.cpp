@@ -5,11 +5,6 @@
 #include <format>
 #include <utility>
 
-extern "C" {
-#include <libavutil/hwcontext.h>
-#include <libavutil/pixdesc.h>
-}
-
 namespace cutline::media {
 namespace {
 

@@ -37,13 +37,26 @@ took roughly 18 minutes to export from the old app now decodes in **0.75 s**.
 See `docs/architecture.md` for the full numbers and the one correction they
 forced.
 
-**Phase 3 underway** — the Direct3D 12 device, swapchain, and shader pipeline
-work, and there is a debug viewport that opens a file and scrubs it. Video is
-converted to linear light in a shader and drawn into a 16-bit float target,
-which is then encoded for display by an `_SRGB` render target view.
+**Phase 3 complete, bar two items** — the Direct3D 12 device, the compositor,
+and the on-screen presenter. Video is converted to linear light in a shader and
+drawn into a 16-bit float target, which an `_SRGB` render target view encodes
+for display.
 
-Still to come in phase 3: Skia sharing the device, and keeping hardware-decoded
-frames on the GPU instead of uploading them from system memory.
+**Phase 4 underway** — the compositor draws a stack of layers with per-layer
+position, scale, rotation, opacity, and all eight blend modes, and can read the
+result back to system memory. The same code path serves preview and export,
+which is the point: the old app composited with a canvas for preview and an
+FFmpeg filtergraph for export, and keeping those two agreeing was constant work.
+281 tests.
+
+Blending happens in **linear light**, unlike the canvas the reference used. A
+50% dissolve now passes through the true midpoint rather than a too-dark one, so
+old and new projects will not match pixel for pixel across a dissolve — see
+`docs/architecture.md`.
+
+Still to come: effects as shaders, generated media and adjustment layers, Skia
+sharing the device, and keeping hardware-decoded frames on the GPU instead of
+uploading them from system memory.
 
 ## Building
 
@@ -71,7 +84,9 @@ build/media/tools/preview_window/Release/preview_window <file>
 
 `preview_window` is a throwaway viewport for driving the render pipeline by
 hand; it is not the editor's UI and will not become it. Space plays, the arrow
-keys step a frame, Shift jumps, Home returns to the start.
+keys step a frame, Shift jumps, Home returns to the start. Ctrl with the arrows
+moves the layer, `+`/`-` scale it, `r` rotates, `o` halves opacity, `b` cycles
+blend modes, and `0` resets.
 
 Media tests need real footage, which is not in the repository. Point
 `CUTLINE_TEST_MEDIA_DIR` at a directory containing `Boiler.mp4` to run them;

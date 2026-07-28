@@ -5,6 +5,7 @@
   src/history.cpp
   src/id.cpp
   src/keyframe.cpp
+  src/layout.cpp
   src/properties.cpp
   src/query.cpp
   src/segments.cpp

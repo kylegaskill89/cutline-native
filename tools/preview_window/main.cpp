@@ -2,53 +2,92 @@
 ///
 /// This is not the editor's UI and will not become it. It exists so the render
 /// pipeline is exercisable months before there is a real interface: open a
-/// file, scrub the playhead, and see the frame that comes out of the Direct3D 12
-/// path with its colour conversion applied.
+/// file, scrub the playhead, move the layer around, and see what comes out of
+/// the Direct3D 12 path with its colour conversion and transform applied.
 ///
-/// Left/Right step a frame, Shift accelerates, Space plays and pauses, Home
-/// returns to the start.
+/// The video is composited over a colour matte rather than straight onto the
+/// canvas, so every frame goes through the same multi-layer path an actual
+/// timeline will.
 
-#include "cutline/gpu/renderer.hpp"
+#include "cutline/core/layout.hpp"
+#include "cutline/gpu/compositor.hpp"
+#include "cutline/gpu/presenter.hpp"
+#include "cutline/media/av_headers.hpp"
 #include "cutline/media/decoder.hpp"
 #include "cutline/media/probe.hpp"
 
 #include <windows.h>
 
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <print>
 #include <string>
-
-extern "C" {
-#include <libavutil/frame.h>
-#include <libavutil/pixfmt.h>
-}
+#include <vector>
 
 namespace {
 
+using cutline::core::LayerBox;
+using cutline::gpu::BlendMode;
+using cutline::gpu::Color;
 using cutline::gpu::ColorSpace;
+using cutline::gpu::Compositor;
+using cutline::gpu::Device;
 using cutline::gpu::FrameView;
+using cutline::gpu::Layer;
 using cutline::gpu::PixelLayout;
-using cutline::gpu::Renderer;
+using cutline::gpu::Presenter;
+using cutline::gpu::Quad;
 using cutline::gpu::TransferFunction;
 using cutline::media::Acceleration;
 using cutline::media::VideoDecoder;
 
+/// The blend modes, in the order the number keys select them.
+constexpr std::array<std::pair<BlendMode, const char*>, 8> kBlendModes{{
+    {BlendMode::Normal, "normal"},
+    {BlendMode::Add, "add"},
+    {BlendMode::Screen, "screen"},
+    {BlendMode::Multiply, "multiply"},
+    {BlendMode::Overlay, "overlay"},
+    {BlendMode::Darken, "darken"},
+    {BlendMode::Lighten, "lighten"},
+    {BlendMode::Difference, "difference"},
+}};
+
 struct AppState {
-  std::unique_ptr<Renderer> renderer;
+  std::shared_ptr<Device> device;
+  std::unique_ptr<Compositor> compositor;
+  std::unique_ptr<Presenter> presenter;
   std::unique_ptr<VideoDecoder> decoder;
+
   std::string path;
+  int canvas_w = 1920;
+  int canvas_h = 1080;
+  int media_w = 0;
+  int media_h = 0;
+
   double fps = 30.0;
   double playhead = 0.0;
   bool playing = false;
   bool needs_redraw = true;
+
   FrameView view;
   bool have_view = false;
+
+  // The transform under the keyboard's control, in the model's units: position
+  // as a canvas fraction, scale as a multiplier, rotation in degrees.
+  double x = 0.5;
+  double y = 0.5;
+  double scale = 1.0;
+  double rotation = 0.0;
+  float opacity = 1.0f;
+  std::size_t blend = 0;
 };
 
-/// Translates a decoded frame into the renderer's view of it. Only the layouts
-/// the decoder actually produces for our sources are handled; anything else is
-/// reported rather than guessed at.
+/// Translates a decoded frame into the compositor's view of it. Only the
+/// layouts the decoder actually produces for our sources are handled; anything
+/// else is reported rather than guessed at.
 [[nodiscard]] bool describe(const AVFrame* frame, FrameView& out) {
   if (frame == nullptr) return false;
 
@@ -99,6 +138,42 @@ struct AppState {
   return true;
 }
 
+/// Builds the layer stack for the current state: a matte underneath, the video
+/// over it. The geometry comes from core, exactly as the real renderer will
+/// compute it.
+[[nodiscard]] std::vector<Layer> build_layers(const AppState& state) {
+  std::vector<Layer> layers;
+
+  // A dark matte, so a transformed or partly transparent video layer visibly
+  // has something behind it rather than sitting on an ambiguous black.
+  Layer matte;
+  matte.color = Color::from_srgb(0.10f, 0.11f, 0.16f);
+  matte.quad = {static_cast<float>(state.canvas_w) * 0.5f,
+                static_cast<float>(state.canvas_h) * 0.5f,
+                static_cast<float>(state.canvas_w), static_cast<float>(state.canvas_h), 0.0f};
+  layers.push_back(matte);
+
+  if (!state.have_view) return layers;
+
+  // The same aspect-fit core uses, so what is on screen is what a project at
+  // this canvas size would render.
+  const double fit = std::min(static_cast<double>(state.canvas_w) / state.media_w,
+                              static_cast<double>(state.canvas_h) / state.media_h);
+
+  Layer video;
+  video.frame = &state.view;
+  video.quad = {static_cast<float>(state.x * state.canvas_w),
+                static_cast<float>(state.y * state.canvas_h),
+                static_cast<float>(state.media_w * fit * state.scale),
+                static_cast<float>(state.media_h * fit * state.scale),
+                static_cast<float>(state.rotation)};
+  video.opacity = state.opacity;
+  video.blend = kBlendModes[state.blend].first;
+  layers.push_back(video);
+
+  return layers;
+}
+
 /// Seeks to the keyframe before `target` and decodes forward to it. Scrubbing
 /// is the one place random access is wanted; export never does this.
 void show(AppState& state, double target) {
@@ -131,9 +206,25 @@ void advance(AppState& state) {
 void update_title(HWND window, const AppState& state) {
   // Wide, not narrow: this is a UNICODE build, and SetWindowTextA reads a UTF-8
   // string as ANSI, which mangles anything outside ASCII.
-  const std::wstring title = std::format(L"Cutline preview — {:.3f}s{}", state.playhead,
-                                         state.playing ? L"  [playing]" : L"");
+  const std::wstring blend(kBlendModes[state.blend].second,
+                           kBlendModes[state.blend].second +
+                               std::strlen(kBlendModes[state.blend].second));
+  const std::wstring title =
+      std::format(L"Cutline preview — {:.3f}s   scale {:.2f}  rot {:.0f}°  a {:.2f}  {}{}",
+                  state.playhead, state.scale, state.rotation, state.opacity, blend,
+                  state.playing ? L"  [playing]" : L"");
   SetWindowTextW(window, title.c_str());
+}
+
+void redraw(AppState& state) {
+  const std::vector<Layer> layers = build_layers(state);
+  if (auto ok = state.compositor->compose(layers); !ok) {
+    std::println(stderr, "compose failed: {}", ok.error());
+    return;
+  }
+  if (auto ok = state.presenter->present(*state.compositor); !ok) {
+    std::println(stderr, "present failed: {}", ok.error());
+  }
 }
 
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -145,10 +236,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       return 0;
 
     case WM_SIZE:
-      if (state != nullptr && state->renderer != nullptr) {
-        const int width = LOWORD(lparam);
-        const int height = HIWORD(lparam);
-        if (auto ok = state->renderer->resize(width, height); !ok) {
+      if (state != nullptr && state->presenter != nullptr) {
+        // Only the window changed; the canvas keeps its size, so the frame is
+        // letterboxed rather than re-rendered at the window's aspect.
+        if (auto ok = state->presenter->resize(LOWORD(lparam), HIWORD(lparam)); !ok) {
           std::println(stderr, "resize failed: {}", ok.error());
         }
         state->needs_redraw = true;
@@ -158,7 +249,33 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     case WM_KEYDOWN: {
       if (state == nullptr) return 0;
       const bool fast = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+      const bool transform = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
       const double step = (fast ? 10.0 : 1.0) / (state->fps > 0.0 ? state->fps : 30.0);
+
+      if (transform) {
+        // Ctrl turns the arrows into a nudge, which is the quickest way to see
+        // whether the quad geometry is right.
+        constexpr double kNudge = 0.01;
+        switch (wparam) {
+          case VK_LEFT:
+            state->x -= kNudge;
+            break;
+          case VK_RIGHT:
+            state->x += kNudge;
+            break;
+          case VK_UP:
+            state->y -= kNudge;
+            break;
+          case VK_DOWN:
+            state->y += kNudge;
+            break;
+          default:
+            break;
+        }
+        state->needs_redraw = true;
+        update_title(window, *state);
+        return 0;
+      }
 
       switch (wparam) {
         case VK_RIGHT:
@@ -177,6 +294,37 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
           break;
         case VK_SPACE:
           state->playing = !state->playing;
+          break;
+        case VK_OEM_PLUS:
+        case VK_ADD:
+          state->scale *= 1.1;
+          state->needs_redraw = true;
+          break;
+        case VK_OEM_MINUS:
+        case VK_SUBTRACT:
+          state->scale /= 1.1;
+          state->needs_redraw = true;
+          break;
+        case 'R':
+          state->rotation = std::fmod(state->rotation + (fast ? -15.0 : 15.0), 360.0);
+          state->needs_redraw = true;
+          break;
+        case 'O':
+          state->opacity = state->opacity > 0.55f ? 0.5f : 1.0f;
+          state->needs_redraw = true;
+          break;
+        case 'B':
+          state->blend = (state->blend + 1) % kBlendModes.size();
+          state->needs_redraw = true;
+          break;
+        case '0':
+          state->x = 0.5;
+          state->y = 0.5;
+          state->scale = 1.0;
+          state->rotation = 0.0;
+          state->opacity = 1.0f;
+          state->blend = 0;
+          state->needs_redraw = true;
           break;
         case VK_ESCAPE:
           PostQuitMessage(0);
@@ -216,6 +364,11 @@ int main(int argc, char** argv) {
     return 1;
   }
   state.fps = video->fps > 0.0 ? video->fps : 30.0;
+  state.media_w = video->width;
+  state.media_h = video->height;
+  // The canvas takes the source's shape, which is what a new project does.
+  state.canvas_w = video->width;
+  state.canvas_h = video->height;
 
   std::println("{}  {}x{} @ {:.3f} fps", video->codec, video->width, video->height, video->fps);
   std::println("colour: {} / {}  {}-bit  {}", to_string(video->color.primaries),
@@ -223,7 +376,7 @@ int main(int argc, char** argv) {
                video->color.is_hdr() ? "HDR" : "SDR");
 
   // Software decode: these frames are uploaded from system memory. Keeping
-  // hardware frames on the GPU end to end is the next phase's work.
+  // hardware frames on the GPU end to end is still to come.
   auto decoder = VideoDecoder::open(state.path, {.preferred = Acceleration::Software});
   if (!decoder) {
     std::println(stderr, "cannot open decoder: {}", decoder.error());
@@ -257,15 +410,33 @@ int main(int argc, char** argv) {
   }
   SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&state));
 
-  auto renderer = Renderer::create(window, width, height);
-  if (!renderer) {
-    std::println(stderr, "cannot create the renderer: {}", renderer.error());
+  auto device = Device::create();
+  if (!device) {
+    std::println(stderr, "cannot create a device: {}", device.error());
     return 1;
   }
-  state.renderer = std::move(*renderer);
-  std::println("adapter: {}", state.renderer->adapter_name());
+  state.device = std::move(*device);
+
+  auto compositor = Compositor::create(state.device, state.canvas_w, state.canvas_h);
+  if (!compositor) {
+    std::println(stderr, "cannot create the compositor: {}", compositor.error());
+    return 1;
+  }
+  state.compositor = std::move(*compositor);
+
+  auto presenter = Presenter::create(state.device, window, width, height);
+  if (!presenter) {
+    std::println(stderr, "cannot create the presenter: {}", presenter.error());
+    return 1;
+  }
+  state.presenter = std::move(*presenter);
+
+  std::println("adapter: {}", state.device->adapter_name());
+  std::println("canvas: {}x{}", state.canvas_w, state.canvas_h);
   std::println("");
-  std::println("space play/pause   left/right step   shift+arrow jump   home start   esc quit");
+  std::println("space play/pause   left/right step   shift+arrow jump   home start");
+  std::println("ctrl+arrows move   +/- scale   r rotate   o opacity   b blend   0 reset");
+  std::println("esc quit");
 
   ShowWindow(window, SW_SHOW);
   advance(state);
@@ -290,10 +461,7 @@ int main(int argc, char** argv) {
     }
 
     if (state.needs_redraw) {
-      if (auto ok = state.renderer->render(state.have_view ? &state.view : nullptr); !ok) {
-        std::println(stderr, "render failed: {}", ok.error());
-        break;
-      }
+      redraw(state);
       state.needs_redraw = false;
     } else if (!state.playing) {
       // Idle rather than spin when there is nothing to draw.
@@ -301,6 +469,6 @@ int main(int argc, char** argv) {
     }
   }
 
-  state.renderer->wait_for_idle();
+  state.device->wait_for_idle();
   return 0;
 }
