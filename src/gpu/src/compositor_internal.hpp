@@ -32,6 +32,10 @@ struct Compositor::Impl {
   ComPtr<ID3D12PipelineState> pipeline_add;
   ComPtr<ID3D12PipelineState> pipeline_blend;
   ComPtr<ID3D12PipelineState> pipeline_adjustment;
+  /// The layer drawn with blending off, into a scratch target, which is how
+  /// a blurred layer is captured before it is filtered.
+  ComPtr<ID3D12PipelineState> pipeline_raw;
+  ComPtr<ID3D12PipelineState> pipeline_blur;
   ComPtr<ID3D12PipelineState> pipeline_present;
 
   ComPtr<ID3D12DescriptorHeap> rtv_heap;
@@ -42,6 +46,9 @@ struct Compositor::Impl {
 
   ComPtr<ID3D12Resource> scene;
   ComPtr<ID3D12Resource> backdrop;
+  /// Ping-pong targets for the separable blur. Allocated only when a layer
+  /// actually asks for one, because they are canvas-sized.
+  ComPtr<ID3D12Resource> scratch[2];
   ComPtr<ID3D12Resource> display;
   ComPtr<ID3D12Resource> readback;
   std::size_t readback_capacity = 0;
@@ -83,6 +90,12 @@ struct Compositor::Impl {
   /// The descriptor run reserved for the present pass, past every layer's.
   [[nodiscard]] UINT present_slot() const noexcept { return layer_capacity * kSlotsPerLayer; }
 
+  /// The run of descriptors that binds one blur scratch target as t0. Two more
+  /// runs sit past the present pass's, one per ping-pong buffer.
+  [[nodiscard]] UINT scratch_slot(int which) const noexcept {
+    return (layer_capacity + 1 + static_cast<UINT>(which)) * kSlotsPerLayer;
+  }
+
   /// Writes a descriptor that reads as transparent black, so a table slot the
   /// current layout does not use still has something valid behind it.
   void write_null_srv(D3D12_CPU_DESCRIPTOR_HANDLE where) {
@@ -97,6 +110,8 @@ struct Compositor::Impl {
   [[nodiscard]] std::expected<void, std::string> ensure_capacity(UINT layers);
   [[nodiscard]] std::expected<void, std::string> create_targets();
   [[nodiscard]] std::expected<void, std::string> upload_planes(std::span<const Layer> layers);
+  /// Creates the blur scratch targets on first use.
+  [[nodiscard]] std::expected<void, std::string> ensure_scratch();
 };
 
 }  // namespace cutline::gpu

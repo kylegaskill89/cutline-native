@@ -228,6 +228,28 @@ TEST(ResolveEffectParams, ChromaKeyReadsItsColour) {
 
 // -------------------------------------------------------------- stacking --
 
+TEST(ResolveEffectParams, BlurIsCarriedInPixels) {
+  EXPECT_FLOAT_EQ(
+      resolve_effect_params(with_effects({effect("blur", {{"amount", 12.5}})}), 0.0).blur_sigma,
+      12.5f);
+}
+
+TEST(ResolveEffectParams, BlurCountsAsNonNeutralBecauseItCostsExtraPasses) {
+  EXPECT_FALSE(
+      resolve_effect_params(with_effects({effect("blur", {{"amount", 4.0}})}), 0.0).is_neutral());
+}
+
+TEST(ResolveEffectParams, AZeroBlurStaysNeutral) {
+  EXPECT_TRUE(
+      resolve_effect_params(with_effects({effect("blur", {{"amount", 0.0}})}), 0.0).is_neutral());
+}
+
+TEST(ResolveEffectParams, ANegativeBlurIsClampedRatherThanInverted) {
+  EXPECT_FLOAT_EQ(
+      resolve_effect_params(with_effects({effect("blur", {{"amount", -5.0}})}), 0.0).blur_sigma,
+      0.0f);
+}
+
 TEST(ResolveEffectParams, StackedContrastsMultiply) {
   // Chaining two eq fragments applies both, so the stack must too.
   const EffectParams p = resolve_effect_params(

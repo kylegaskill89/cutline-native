@@ -47,11 +47,13 @@ position, scale, rotation, opacity, all eight blend modes, and adjustment
 layers, and can read the result back to system memory. The same code path serves
 preview and export, which is the point: the old app composited with a canvas for
 preview and an FFmpeg filtergraph for export, and keeping those two agreeing was
-constant work. 362 tests.
+constant work. 372 tests.
 
-Ten of the eleven registry effects run as shaders: brightness, contrast,
-saturation, hue, black and white, invert, flip, crop, vignette, and the chroma
-keyer. Gaussian blur is not implemented — a separable blur needs its own passes.
+All eleven registry effects run as shaders: brightness, contrast, saturation,
+hue, black and white, invert, flip, crop, vignette, Gaussian blur, and the
+chroma keyer. Blur is the one whose maths is approximate — the tap count is
+bounded and the step widens for large radii, so above roughly sigma 10 it
+samples a Gaussian rather than integrating one.
 
 Two colour decisions worth knowing about, both in `docs/architecture.md`:
 
@@ -62,9 +64,9 @@ Two colour decisions worth knowing about, both in `docs/architecture.md`:
   defined and where the spec specifies them. Each operation happens in the space
   it was defined in.
 
-Still to come: generated media, Gaussian blur, Skia sharing the device, and
-keeping hardware-decoded frames on the GPU instead of uploading them from system
-memory.
+Still to come: generated media (titles and gradient mattes), Skia sharing the
+device, and keeping hardware-decoded frames on the GPU instead of uploading them
+from system memory.
 
 ## Building
 
@@ -94,7 +96,10 @@ build/media/tools/preview_window/Release/preview_window <file>
 hand; it is not the editor's UI and will not become it. Space plays, the arrow
 keys step a frame, Shift jumps, Home returns to the start. Ctrl with the arrows
 moves the layer, `+`/`-` scale it, `r` rotates, `o` halves opacity, `b` cycles
-blend modes, and `0` resets.
+blend modes, and `f` flips. The effects are on letter keys — `g` brightness,
+`c` contrast, `s` saturation, `h` hue, `i` invert, `v` vignette, `x` crop,
+`u` blur, `k` chroma key — with Shift stepping the other way and `0` resetting
+everything.
 
 Media tests need real footage, which is not in the repository. Point
 `CUTLINE_TEST_MEDIA_DIR` at a directory containing `Boiler.mp4` to run them;

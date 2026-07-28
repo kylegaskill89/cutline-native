@@ -597,6 +597,106 @@ TEST_F(CompositorTest, KeyingIsOffUnlessAskedFor) {
   EXPECT_EQ(centre.a, 255) << "green should survive when keying is not enabled";
 }
 
+// -------------------------------------------------------------------- blur --
+
+TEST_F(CompositorTest, BlurSoftensAHardEdge) {
+  // A half-covering white quad has a vertical edge down the middle. Blurring
+  // must turn that step into a ramp.
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.25f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
+
+  const Image sharp = render({&layer, 1});
+  EXPECT_EQ(pixel_at(sharp, kWidth / 2 - 2, kHeight / 2).a, 255);
+  EXPECT_EQ(pixel_at(sharp, kWidth / 2 + 2, kHeight / 2).a, 0);
+
+  layer.effects.blur_sigma = 4.0f;
+  const Image soft = render({&layer, 1});
+
+  const int just_outside = pixel_at(soft, kWidth / 2 + 2, kHeight / 2).a;
+  EXPECT_GT(just_outside, 0) << "the edge should have bled past where it was";
+  EXPECT_LT(just_outside, 255);
+}
+
+TEST_F(CompositorTest, AZeroSigmaLeavesTheLayerUntouched) {
+  Layer sharp;
+  sharp.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  sharp.quad = {kWidth * 0.25f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
+
+  Layer explicitly_zero = sharp;
+  explicitly_zero.effects.blur_sigma = 0.0f;
+
+  const Image a = render({&sharp, 1});
+  const Image b = render({&explicitly_zero, 1});
+  EXPECT_EQ(pixel_at(b, kWidth / 2 + 2, kHeight / 2).a,
+            pixel_at(a, kWidth / 2 + 2, kHeight / 2).a);
+}
+
+TEST_F(CompositorTest, BlurPreservesAFlatFieldRatherThanDarkeningIt) {
+  // The kernel must be normalised: blurring a uniform colour has to leave it
+  // exactly where it was, and an unnormalised one shows up here first.
+  LayerEffects effects;
+  effects.blur_sigma = 6.0f;
+
+  const Layer plain = grey_fill({});
+  const Layer blurred = grey_fill(effects);
+
+  const Rgba before = pixel_at(render({&plain, 1}), kWidth / 2, kHeight / 2);
+  const Rgba after = pixel_at(render({&blurred, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_NEAR(after.r, before.r, 2);
+  EXPECT_NEAR(after.a, before.a, 2);
+}
+
+TEST_F(CompositorTest, BlurAppliesAfterTheColourEffects) {
+  // The stack is one pipeline: a blurred, inverted white layer must be a
+  // blurred black one, not an inverted blur of white.
+  LayerEffects effects;
+  effects.invert = true;
+  effects.blur_sigma = 3.0f;
+
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.effects = effects;
+
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_LE(centre.r, 4) << "the inversion should have happened before the blur";
+}
+
+TEST_F(CompositorTest, ABlurredLayerStillComposesOverWhatIsBeneath) {
+  const Layer red = fill({1.0f, 0.0f, 0.0f, 1.0f});
+
+  Layer green;
+  green.color = {0.0f, 1.0f, 0.0f, 1.0f};
+  green.quad = {kWidth * 0.25f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
+  green.effects.blur_sigma = 3.0f;
+
+  const Layer layers[] = {red, green};
+  const Image image = render(layers);
+
+  EXPECT_GE(pixel_at(image, 2, kHeight / 2).g, 200) << "well inside the blurred quad";
+  EXPECT_GE(pixel_at(image, kWidth - 3, kHeight / 2).r, 250) << "well outside it";
+}
+
+TEST_F(CompositorTest, BlurAndSharpLayersCanBeMixedInOneCompose) {
+  // The blur path swaps render targets mid-compose; the layers around it must
+  // still land on the scene.
+  Layer blurred;
+  blurred.color = {0.0f, 0.0f, 1.0f, 1.0f};
+  blurred.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  blurred.effects.blur_sigma = 5.0f;
+
+  Layer sharp;
+  sharp.color = {0.0f, 1.0f, 0.0f, 1.0f};
+  sharp.quad = {kWidth * 0.25f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
+
+  const Layer layers[] = {blurred, sharp};
+  const Image image = render(layers);
+
+  EXPECT_GE(pixel_at(image, kWidth / 4, kHeight / 2).g, 250) << "the sharp layer drew";
+  EXPECT_GE(pixel_at(image, kWidth * 3 / 4, kHeight / 2).b, 200) << "the blurred layer drew";
+}
+
 // -------------------------------------------------------- adjustment layers --
 
 /// An adjustment layer covering the whole canvas, which is what one placed with

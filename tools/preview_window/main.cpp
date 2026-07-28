@@ -366,6 +366,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
           state->effects.chroma_key = !state->effects.chroma_key;
           state->needs_redraw = true;
           break;
+        case 'U':
+          state->effects.blur_sigma += fast ? -4.0f : 4.0f;
+          state->effects.blur_sigma = std::max(0.0f, state->effects.blur_sigma);
+          state->needs_redraw = true;
+          break;
         case 'F':
           if (fast) {
             state->flip_y = !state->flip_y;
@@ -498,7 +503,8 @@ int main(int argc, char** argv) {
   std::println("space play/pause   left/right step   shift+arrow jump   home start");
   std::println("ctrl+arrows move   +/- scale   r rotate   o opacity   b blend   f flip");
   std::println("g brightness   c contrast   s saturation   h hue   i invert");
-  std::println("v vignette   x crop   k chroma key   shift reverses   0 reset   esc quit");
+  std::println("v vignette   x crop   k chroma key   u blur   shift reverses");
+  std::println("0 reset   esc quit");
 
   ShowWindow(window, SW_SHOW);
   advance(state);

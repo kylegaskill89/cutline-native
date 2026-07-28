@@ -95,6 +95,11 @@ struct LayerEffects {
   float crop_right = 0.0f;
   float crop_bottom = 0.0f;
 
+  /// Gaussian blur radius in pixels. A blurred layer costs two extra passes
+  /// and a pair of canvas-sized targets, so zero is a genuinely cheaper path
+  /// rather than just a neutral value.
+  float blur_sigma = 0.0f;
+
   bool chroma_key = false;
   float chroma_similarity = 0.3f;
   float chroma_blend = 0.1f;

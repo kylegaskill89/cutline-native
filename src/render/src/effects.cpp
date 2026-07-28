@@ -65,7 +65,8 @@ EffectColor parse_hex_color(std::string_view text, EffectColor fallback) noexcep
 bool EffectParams::is_neutral() const noexcept {
   return brightness == 0.0f && contrast == 1.0f && saturation == 1.0f && hue_degrees == 0.0f &&
          !invert && !flip_x && !flip_y && vignette == 0.0f && crop_left == 0.0f &&
-         crop_top == 0.0f && crop_right == 0.0f && crop_bottom == 0.0f && !chroma_key;
+         crop_top == 0.0f && crop_right == 0.0f && crop_bottom == 0.0f && !chroma_key &&
+         blur_sigma == 0.0f;
 }
 
 EffectParams resolve_effect_params(const core::Clip& clip, double local_t) {

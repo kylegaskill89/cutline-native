@@ -75,10 +75,14 @@ struct alignas(16) ShaderParams {
   float chroma_similarity = 0.0f;
   float chroma_blend = 0.0f;
 
-  float crop[4]{};         ///< left, top, right, bottom
+  float crop[4]{};          ///< left, top, right, bottom
   float chroma_color[4]{};  ///< rgb, then 1 when keying is on
+
+  float blur_step[2]{};      ///< one tap's UV offset, and the axis it runs along
+  float blur_sigma = 0.0f;   ///< pixels; zero means no blur
+  float blur_stride = 1.0f;  ///< pixels between taps
 };
-static_assert(sizeof(ShaderParams) == 36 * sizeof(float),
+static_assert(sizeof(ShaderParams) == 40 * sizeof(float),
               "root constants must match the shader's cbuffer exactly");
 
 inline constexpr UINT kShaderParamCount = sizeof(ShaderParams) / sizeof(float);

@@ -16,6 +16,9 @@
 #define LAYOUT_SOLID   -1
 #define LAYOUT_NV12     0
 #define LAYOUT_YUV420P  1
+// Already-composited linear RGBA: the blurred copy of a layer, drawn back onto
+// the scene. Effects have been applied already, so this path skips them.
+#define LAYOUT_TEXTURE  2
 
 // YUV-to-RGB matrices.
 #define SPACE_BT709  0
@@ -72,6 +75,10 @@ struct Params {
     float4 crop;      // left, top, right, bottom as fractions
 
     float4 chromaColor;  // rgb of the key colour; w is 1 when keying is on
+
+    float2 blurStep;   // one tap's offset in UV, and the axis it runs along
+    float blurSigma;   // in pixels; zero means no blur
+    float blurStride;  // pixels between taps, widened when the radius is large
 };
 
 ConstantBuffer<Params> params : register(b0);
@@ -303,6 +310,8 @@ bool insideCrop(float2 uv) {
 
 /// The layer's own colour at this pixel, in linear light, before blending.
 float4 sourceColor(float2 uv) {
+    if (params.layout == LAYOUT_TEXTURE) return texture0.Sample(linearSampler, uv);
+
     if (!insideCrop(uv)) return float4(0.0, 0.0, 0.0, 0.0);
 
     if (params.layout == LAYOUT_SOLID) {
@@ -389,6 +398,41 @@ float4 PSAdjustment(VSOutput input) : SV_Target {
     const float3 result = linearizeSrgb(adjusted) * vignetteFactor(input.uv);
 
     return float4(lerp(base.rgb, result, params.opacity), base.a);
+}
+
+// One axis of a separable Gaussian. A 2D blur is two of these at right angles,
+// which is what makes a large radius affordable: 2n samples rather than n^2.
+//
+// The tap count is bounded, and the step widens to cover the radius when sigma
+// is large. That is an approximation -- above roughly sigma 10 it is sampling a
+// Gaussian rather than integrating one -- and it is the reason blur is the one
+// registry effect whose maths is not exact. The alternative, hundreds of taps
+// per pixel at 4K, is not worth it for an effect used at small radii in
+// practice.
+#define BLUR_TAPS 24
+
+float4 PSBlur(VSOutput input) : SV_Target {
+    if (params.blurSigma <= 0.0) return texture0.Sample(linearSampler, input.uv);
+
+    float4 total = texture0.Sample(linearSampler, input.uv);
+    float weightSum = 1.0;
+
+    // Weights come from the true Gaussian at the sampled distance, so widening
+    // the step keeps the shape even as it coarsens the sampling.
+    const float denominator = 2.0 * params.blurSigma * params.blurSigma;
+
+    [unroll]
+    for (int i = 1; i <= BLUR_TAPS; ++i) {
+        const float distance = float(i) * params.blurStride;
+        const float weight = exp(-(distance * distance) / denominator);
+
+        const float2 offset = params.blurStep * float(i);
+        total += texture0.Sample(linearSampler, input.uv + offset) * weight;
+        total += texture0.Sample(linearSampler, input.uv - offset) * weight;
+        weightSum += 2.0 * weight;
+    }
+
+    return total / weightSum;
 }
 
 float4 PSPresent(VSOutput input) : SV_Target {
