@@ -16,6 +16,7 @@
 /// Not the editor. A harness for the parts of it that exist.
 
 #include "cutline/core/time.hpp"
+#include "cutline/ui/controls.hpp"
 #include "cutline/ui/skia_painter.hpp"
 #include "cutline/ui/theme.hpp"
 #include "cutline/ui/timeline.hpp"
@@ -52,6 +53,7 @@ using cutline::ui::Axis;
 using cutline::ui::Box;
 using cutline::ui::Button;
 using cutline::ui::CaptionButton;
+using cutline::ui::Checkbox;
 using cutline::ui::Key;
 using cutline::ui::KeyEvent;
 using cutline::ui::Label;
@@ -63,6 +65,7 @@ using cutline::ui::Panel;
 using cutline::ui::Rect;
 using cutline::ui::ScrollView;
 using cutline::ui::SkiaPainter;
+using cutline::ui::Slider;
 using cutline::ui::Spacer;
 using cutline::ui::Splitter;
 using cutline::ui::Theme;
@@ -72,6 +75,7 @@ using cutline::ui::TimelineTrack;
 using cutline::ui::TimelineView;
 using cutline::ui::TimeScale;
 using cutline::ui::TitleBar;
+using cutline::ui::ValueRange;
 using cutline::ui::WheelEvent;
 using cutline::ui::Widget;
 using cutline::ui::WidgetHost;
@@ -184,7 +188,10 @@ void set_theme(App& app, std::size_t index);
   }
   list.set_content(std::move(clips));
 
-  auto& right = root->emplace<Splitter>(Axis::Vertical);
+  auto& middle = root->emplace<Splitter>(Axis::Horizontal);
+  middle.set_fractions({0.72, 0.28});
+
+  auto& right = middle.emplace<Splitter>(Axis::Vertical);
   right.set_fractions({0.55, 0.45});
 
   auto& monitor = right.emplace<Panel>("Program Monitor");
@@ -211,6 +218,26 @@ void set_theme(App& app, std::size_t index);
   tracks.set_on_scrub([&readout, fps = sample_timeline().fps](double at) {
     readout.set_text(cutline::core::seconds_to_timecode(at, fps));
   });
+
+  // The inspector, which is what the value controls are for. Each row is a
+  // label above the control, the way an effect's parameters are laid out.
+  auto& inspector = middle.emplace<Panel>("Effect Controls");
+  const auto parameter = [&inspector](std::string name, ValueRange range, double value,
+                                      double fallback) -> Slider& {
+    inspector.emplace<Label>(std::move(name)).set_small(true);
+    auto& slider = inspector.emplace<Slider>(range, value);
+    slider.set_default_value(fallback);
+    return slider;
+  };
+
+  parameter("Opacity", ValueRange{.minimum = 0.0, .maximum = 100.0}, 100.0, 100.0);
+  parameter("Scale", ValueRange{.minimum = 0.0, .maximum = 400.0}, 100.0, 100.0);
+  parameter("Rotation", ValueRange{.minimum = -180.0, .maximum = 180.0}, 0.0, 0.0);
+  parameter("Feather", ValueRange{.minimum = 0.0, .maximum = 100.0, .step = 5.0}, 20.0, 0.0);
+
+  inspector.emplace<Checkbox>("Reverse", false);
+  inspector.emplace<Checkbox>("Preserve pitch", true);
+  inspector.emplace<Spacer>();
 
   shell->add(std::move(root));
   return shell;

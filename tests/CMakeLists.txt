@@ -19,6 +19,7 @@ add_executable(cutline_core_tests
   render/mix_test.cpp
   render/plan_test.cpp
   ui/containers_test.cpp
+  ui/controls_test.cpp
   ui/layout_test.cpp
   ui/painter_test.cpp
   ui/theme_test.cpp
