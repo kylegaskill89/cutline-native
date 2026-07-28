@@ -117,6 +117,32 @@ implementation. The approximate compressor and the gain-easing gap (where the
 old scheduler ramped linearly between breakpoints even for eased keyframes) both
 get fixed properly rather than documented.
 
+The split was worse than "kept in step with effort". Web Audio and FFmpeg agree
+on the *shape* of these filters and disagree on their defaults: a plain
+high-pass at Q 1 against Q 0.707, a compressor at 3 ms attack against 20 ms and
+a 30 dB knee against 9 dB. A clip tuned by ear in the preview did not sound the
+same in the file. Where the two disagreed the native implementation follows
+FFmpeg, because that is what exports were actually rendered with — the preview
+was the one that had been lying.
+
+Two behaviours are deliberately kept rather than tidied:
+
+- **Gain and fades apply before the effect stack**, which is the order the old
+  filter chain used. It has an audible consequence — a compressor after a fade
+  partly undoes it, pulling the quiet end back up — so a project mixed against
+  it would change if the order were "fixed".
+- **Tracks sum without normalisation** (`amix … normalize=0`): four tracks at
+  unity really are four times as loud, and adding one never quietens what is
+  already there. A master limiter at 0.95 catches what that produces, which is
+  the reason there is a limiter at all.
+
+Filters are tested by frequency response rather than by their coefficients.
+Asserting that a high-pass is 3 dB down at its corner and falls 12 dB per octave
+says what the filter *is*; comparing a coefficient against 0.9987 only says it
+was typed the same way twice, and still passes when the formula is wrong. One
+test ties the predicted response back to what actually comes out of `process`,
+so the rest cannot all agree with a response function no filter implements.
+
 ### Colour precision, and why HDR is deferred
 
 Compositing happens in **16-bit float linear light** throughout. Decode converts

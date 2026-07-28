@@ -54,13 +54,28 @@ struct VideoEncodeSettings {
   int quality = 20;
 };
 
-/// Encodes frames and muxes them into a container. Video only for now; audio
-/// is the next phase and will join here rather than in a separate writer, so
-/// that interleaving stays this class's problem.
+/// Audio output. Disabled by default, so a caller that has nothing to write
+/// gets a video-only file rather than a silent track.
+struct AudioEncodeSettings {
+  bool enabled = false;
+  int sample_rate = 48000;
+  int channels = 2;
+  /// Bits per second. AAC at 192 kbps stereo is transparent enough that the
+  /// encoder is not what anyone will hear.
+  std::int64_t bitrate = 192000;
+};
+
+/// Encodes frames and muxes them into a container.
+///
+/// Audio and video share one writer rather than being written separately,
+/// because interleaving is a property of the file: a player reads it in storage
+/// order, and a container whose streams are written in two passes makes it seek
+/// badly. Keeping both here means the interleaving is one class's problem.
 class MediaWriter {
  public:
   [[nodiscard]] static std::expected<std::unique_ptr<MediaWriter>, std::string> create(
-      const std::string& path, const VideoEncodeSettings& settings);
+      const std::string& path, const VideoEncodeSettings& settings,
+      const AudioEncodeSettings& audio = {});
 
   MediaWriter(const MediaWriter&) = delete;
   MediaWriter& operator=(const MediaWriter&) = delete;
@@ -70,6 +85,24 @@ class MediaWriter {
   /// bytes, and frames are expected in presentation order.
   [[nodiscard]] std::expected<void, std::string> write_frame(
       std::span<const std::uint8_t> rgba);
+
+  /// Appends audio. `interleaved` is float samples in [-1, 1], a whole number
+  /// of frames of `channels` each.
+  ///
+  /// Block size is free: samples are buffered until the encoder's own frame
+  /// size is reached, because AAC encodes fixed 1024-sample blocks and a caller
+  /// should not have to know that. Writing audio to a writer created without it
+  /// is an error rather than a silent no-op.
+  [[nodiscard]] std::expected<void, std::string> write_audio(std::span<const float> interleaved);
+
+  /// Whether an audio stream was created.
+  [[nodiscard]] bool has_audio() const noexcept;
+
+  /// The audio encoder in use, or empty when there is no audio stream.
+  [[nodiscard]] const std::string& audio_encoder_name() const noexcept;
+
+  /// How many audio frames — samples per channel — have been accepted.
+  [[nodiscard]] std::int64_t audio_frame_count() const noexcept;
 
   /// Flushes the encoder and finalises the container. Calling this is what
   /// makes the file playable; a writer destroyed without it leaves a truncated

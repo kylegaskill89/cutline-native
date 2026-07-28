@@ -3,6 +3,7 @@
 add_executable(cutline_core_tests
   audio/biquad_test.cpp
   audio/chain_test.cpp
+  audio/limiter_test.cpp
   core/animate_test.cpp
   core/arrange_test.cpp
   core/edit_test.cpp
@@ -54,7 +55,9 @@ if(CUTLINE_WITH_GPU)
   if(CUTLINE_WITH_MEDIA)
     # End to end: a project in, pixels out. Most of these use generated media
     # only, so they run without footage; the ones that need it skip.
-    add_executable(cutline_engine_tests engine/frame_renderer_test.cpp)
+    add_executable(cutline_engine_tests
+      engine/audio_mixer_test.cpp
+      engine/frame_renderer_test.cpp)
     target_link_libraries(cutline_engine_tests PRIVATE
       cutline::core
       cutline::engine

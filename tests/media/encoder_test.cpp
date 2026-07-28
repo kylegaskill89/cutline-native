@@ -6,11 +6,14 @@
 
 #include "cutline/media/encoder.hpp"
 
+#include "cutline/media/audio.hpp"
 #include "cutline/media/decoder.hpp"
 #include "cutline/media/probe.hpp"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -210,6 +213,152 @@ TEST(Encoder, OddDimensionsAreAcceptedByRoundingDown) {
   ASSERT_NE(info->primary_video(), nullptr);
   EXPECT_EQ(info->primary_video()->width % 2, 0);
   EXPECT_EQ(info->primary_video()->height % 2, 0);
+}
+
+// ------------------------------------------------------------------- audio --
+
+constexpr int kSampleRate = 48000;
+constexpr int kAudioChannels = 2;
+
+[[nodiscard]] AudioEncodeSettings audio_settings() {
+  AudioEncodeSettings s;
+  s.enabled = true;
+  s.sample_rate = kSampleRate;
+  s.channels = kAudioChannels;
+  return s;
+}
+
+/// Interleaved stereo tone, so a decoded file can be told apart from silence.
+[[nodiscard]] std::vector<float> tone(std::size_t frames) {
+  std::vector<float> samples(frames * kAudioChannels);
+  for (std::size_t i = 0; i < frames; ++i) {
+    const auto value = static_cast<float>(
+        0.5 * std::sin(2.0 * 3.14159265358979 * 440.0 * static_cast<double>(i) / kSampleRate));
+    samples[i * kAudioChannels] = value;
+    samples[i * kAudioChannels + 1] = value;
+  }
+  return samples;
+}
+
+TEST(Encoder, AWriterWithoutAudioProducesNoAudioStream) {
+  // A project with nothing audible should give a video-only file rather than a
+  // silent track nobody asked for.
+  const TempFile file(".mp4");
+  ASSERT_EQ(round_trip(file.string(), 10, settings()), 10);
+
+  const auto info = probe(file.string());
+  ASSERT_TRUE(info.has_value()) << info.error();
+  EXPECT_TRUE(info->audio.empty());
+}
+
+TEST(Encoder, AudioAppearsAsAStreamWithTheRequestedFormat) {
+  const TempFile file(".mp4");
+  auto writer = MediaWriter::create(file.string(), settings(30), audio_settings());
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+  ASSERT_TRUE((*writer)->has_audio());
+
+  for (int i = 0; i < 30; ++i) {
+    ASSERT_TRUE((*writer)->write_frame(numbered_frame(i)).has_value());
+    ASSERT_TRUE((*writer)->write_audio(tone(kSampleRate / 30)).has_value());
+  }
+  ASSERT_TRUE((*writer)->finish().has_value());
+
+  const auto info = probe(file.string());
+  ASSERT_TRUE(info.has_value()) << info.error();
+  ASSERT_EQ(info->audio.size(), 1u);
+  EXPECT_EQ(info->audio[0].sample_rate, kSampleRate);
+  EXPECT_EQ(info->audio[0].channels, kAudioChannels);
+  EXPECT_EQ(info->audio[0].codec, "aac");
+}
+
+TEST(Encoder, EveryAudioSampleWrittenIsAccountedFor) {
+  // The counterpart of the video frame count. Audio arrives in blocks that do
+  // not line up with the encoder's own 1024-sample frames, so the buffering is
+  // exactly where samples would go missing.
+  const TempFile file(".mp4");
+  auto writer = MediaWriter::create(file.string(), settings(), audio_settings());
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+
+  std::int64_t written = 0;
+  for (const std::size_t block : {1u, 100u, 1023u, 1024u, 1025u, 4096u, 7u}) {
+    ASSERT_TRUE((*writer)->write_audio(tone(block)).has_value());
+    written += static_cast<std::int64_t>(block);
+  }
+  ASSERT_TRUE((*writer)->write_frame(numbered_frame(0)).has_value());
+  ASSERT_TRUE((*writer)->finish().has_value());
+
+  // Every sample handed over reached the encoder, including the short final
+  // block that does not fill one of its frames.
+  EXPECT_EQ((*writer)->audio_frame_count(), written);
+}
+
+TEST(Encoder, AudioAndVideoEndUpTheSameLength) {
+  // Drift between the two is the failure that matters here: a file whose audio
+  // runs short goes quiet before the picture ends.
+  const TempFile file(".mp4");
+  auto writer = MediaWriter::create(file.string(), settings(30), audio_settings());
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+
+  constexpr int kFrames = 60;  // two seconds at 30fps
+  for (int i = 0; i < kFrames; ++i) {
+    ASSERT_TRUE((*writer)->write_frame(numbered_frame(i)).has_value());
+    ASSERT_TRUE((*writer)->write_audio(tone(kSampleRate / 30)).has_value());
+  }
+  ASSERT_TRUE((*writer)->finish().has_value());
+
+  EXPECT_EQ(count_frames(file.string()), kFrames);
+  EXPECT_EQ((*writer)->audio_frame_count(), kSampleRate * 2);
+
+  const auto info = probe(file.string());
+  ASSERT_TRUE(info.has_value()) << info.error();
+  EXPECT_NEAR(info->duration, 2.0, 0.05);
+}
+
+TEST(Encoder, TheAudioThatComesBackIsNotSilence) {
+  // Counting samples proves nothing about whether any signal survived.
+  const TempFile file(".mp4");
+  auto writer = MediaWriter::create(file.string(), settings(), audio_settings());
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+  ASSERT_TRUE((*writer)->write_frame(numbered_frame(0)).has_value());
+  ASSERT_TRUE((*writer)->write_audio(tone(kSampleRate)).has_value());
+  ASSERT_TRUE((*writer)->finish().has_value());
+
+  const auto decoded = decode_audio(file.string(), 0,
+                                    {.sample_rate = kSampleRate, .channels = kAudioChannels});
+  ASSERT_TRUE(decoded.has_value()) << decoded.error();
+  EXPECT_NEAR(decoded->duration(), 1.0, 0.1);
+
+  float peak = 0.0f;
+  for (const float sample : decoded->samples) peak = std::max(peak, std::abs(sample));
+  EXPECT_GT(peak, 0.3f);
+}
+
+TEST(Encoder, WritingAudioToAVideoOnlyWriterIsRefused) {
+  // Silently ignoring it would lose a whole export's sound with no sign.
+  const TempFile file(".mp4");
+  auto writer = MediaWriter::create(file.string(), settings());
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+  EXPECT_FALSE((*writer)->has_audio());
+  EXPECT_FALSE((*writer)->write_audio(tone(128)).has_value());
+}
+
+TEST(Encoder, APartialAudioFrameIsRefused) {
+  const TempFile file(".mp4");
+  auto writer = MediaWriter::create(file.string(), settings(), audio_settings());
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+
+  const std::vector<float> odd(2 * kAudioChannels + 1, 0.0f);
+  EXPECT_FALSE((*writer)->write_audio(odd).has_value());
+}
+
+TEST(Encoder, AudioIsRefusedAfterFinish) {
+  const TempFile file(".mp4");
+  auto writer = MediaWriter::create(file.string(), settings(), audio_settings());
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+  ASSERT_TRUE((*writer)->write_frame(numbered_frame(0)).has_value());
+  ASSERT_TRUE((*writer)->write_audio(tone(1024)).has_value());
+  ASSERT_TRUE((*writer)->finish().has_value());
+  EXPECT_FALSE((*writer)->write_audio(tone(128)).has_value());
 }
 
 // ------------------------------------------------------------------ errors --

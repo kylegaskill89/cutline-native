@@ -40,6 +40,13 @@ struct ExportSettings {
   /// timeline, which is what exporting normally means.
   double start = 0.0;
   double duration = 0.0;
+
+  /// Include audio. A project with no audible clips produces a video-only file
+  /// regardless, rather than a silent track nobody asked for.
+  bool audio = true;
+  int audio_sample_rate = 48000;
+  int audio_channels = 2;
+  std::int64_t audio_bitrate = 192000;
 };
 
 struct ExportProgress {
@@ -53,6 +60,10 @@ struct ExportResult {
   double duration_seconds = 0.0;  ///< of the output, not of the export
   double elapsed_seconds = 0.0;
   std::string encoder;
+  /// Empty when the file has no audio stream.
+  std::string audio_encoder;
+  /// Audio frames — samples per channel — written.
+  std::int64_t audio_frames = 0;
   /// Media ids that could not be read, deduplicated. An export completes
   /// despite these, with holes where they would have been.
   std::vector<std::string> missing_media;
