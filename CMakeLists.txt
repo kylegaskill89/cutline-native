@@ -54,6 +54,8 @@ if(MSVC)
 endif()
 
 add_subdirectory(src/core)
+# Pure like the core, and built alongside it: a frame plan needs no GPU.
+add_subdirectory(src/render)
 
 if(CUTLINE_WITH_MEDIA)
   add_subdirectory(src/media)

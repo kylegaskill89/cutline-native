@@ -10,10 +10,12 @@ add_executable(cutline_core_tests
   core/query_test.cpp
   core/segments_test.cpp
   core/serialize_test.cpp
-  core/time_test.cpp)
+  core/time_test.cpp
+  render/plan_test.cpp)
 
 target_link_libraries(cutline_core_tests PRIVATE
   cutline::core
+  cutline::render
   GTest::gtest
   GTest::gtest_main)
 
