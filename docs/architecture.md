@@ -252,16 +252,24 @@ The parts of the old design that earned their keep:
 src/core/     pure model, time maths, keyframes, segments, serialisation
 src/media/    libav* decode, encode, probe, waveforms, thumbnails   (phase 2)
 src/gpu/      D3D12 device, compositor, presenter, shaders          (phase 3-4)
-src/render/   turning a project at a time into a layer stack        (phase 4)
-src/audio/    DSP graph, real-time and offline                      (phase 5)
-src/export/   render-to-file orchestration                          (phase 6)
+src/render/   what draws and what plays, as pure plans            (phase 4-5)
+src/audio/    filters, dynamics, time stretching                    (phase 5)
+src/engine/   frame renderer, audio mixer, exporter               (phase 4-6)
 src/ui/       Skia widget layer and the editor's panels             (phase 7)
 tests/        unit tests, mirroring the src tree
 docs/         this file and the spec
 ```
 
 `src/core` depends on nothing. Each layer above depends only on the layers below
-it.
+it. `src/render` and `src/audio` are pure — no libav, no GPU — which is what
+lets draw order, gain envelopes and a filter's frequency response all be
+asserted without a device or a media file. `src/engine` is the one layer that
+depends on everything, which is the point of it: it is where the model, the
+plans, the decoder, the DSP and the compositor meet.
+
+The original plan named a `src/export/`; what was actually built folded export
+into `src/engine` beside the frame renderer, because an exporter that does not
+share the preview's renderer is exactly the split this rewrite exists to remove.
 
 ## 5. Conventions
 

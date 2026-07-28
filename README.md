@@ -51,13 +51,32 @@ than assumed.
 Encoders are chosen at runtime — NVENC, QSV, AMF, then x264/x265 — so an export
 always completes, just slower on a machine without a supported GPU.
 
+**Phase 5 (audio) underway** — exports have sound, and it runs the same route as
+picture: the pure layer decides what plays and how loud, the mixer joins that to
+decoded samples, and both streams go into one writer so interleaving stays one
+class's problem. Gain, volume automation, fades, mute, solo, per-clip effects
+and retiming all reach the file.
+
+The eight audio effects are our own DSP rather than two implementations kept in
+step. The reference ran Web Audio in the preview and FFmpeg's filters on export,
+and their defaults differ enough — a 3 ms compressor attack against 20 ms, a
+30 dB knee against 9 dB — that a clip tuned by ear did not sound the same in the
+file. Where they disagreed this follows FFmpeg, because that is what exports
+were actually rendered with.
+
+Retiming preserves pitch, by WSOLA rather than by resampling: a clip at 2× runs
+twice as fast without turning a voice into a chipmunk. Tracks sum without
+normalisation, as the reference's `amix` did, and a master limiter at 0.95
+catches what that produces. Still missing is real-time playback with the audio
+clock as master, which is a preview concern rather than an export one.
+
 **Phase 4 underway** — a project now renders end to end. `render_frame` takes a
 project file and a time and writes a PNG, going through the whole chain: the
 model says what exists, the plan decides what draws, the media layer supplies
 frames, and the compositor combines them. The same path will serve export, which
 is the point — the old app composited with a canvas for preview and an FFmpeg
 filtergraph for export, and keeping those two agreeing was constant work.
-414 tests.
+539 tests.
 
 The compositor handles per-layer position, scale, rotation, opacity, all eight
 blend modes, adjustment layers, and gradient mattes, and can read the result
