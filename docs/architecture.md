@@ -210,6 +210,36 @@ hiding that turns a layout bug into a missing control. And split sizes are held
 as fractions rather than pixels, so maximising a window keeps the proportions
 the user chose instead of handing the whole gain to one pane.
 
+### Input is data, so routing is testable
+
+Events are values. Nothing in `event.hpp` knows about Win32; the platform layer
+only has to translate `WM_*`. That means hover, capture, focus and bubbling are
+all driven from tests with no message loop, which is the only practical way to
+check the behaviours that matter and are otherwise invisible.
+
+`WidgetHost` owns the interaction state no single widget can know. Three
+decisions in it are load-bearing:
+
+**A handled press captures the pointer until release.** Every drag in the
+application depends on it — a slider that stops tracking when the cursor leaves
+the thumb, a timeline that stops scrubbing at the edge of a track. Hover is
+frozen for the duration, so a drag does not hand its highlight to whatever it
+passes over, and capture deliberately survives the pointer leaving the window:
+dragging a clip out past the edge and back is one gesture.
+
+**A disabled widget swallows rather than passing on.** Clicking a greyed-out
+button should do nothing, not fall through to the panel behind it. Bubbling
+stops there.
+
+**A press moves focus only onto something that can take it.** Clearing focus
+when clicking an unfocusable toolbar button would strand the keyboard, and the
+transport shortcuts would stop working until you clicked back into the timeline.
+
+Widgets still do not draw themselves: `Widget::paint` looks its part and state
+up in the theme and hands the style to `paint_surface`. Hit testing searches
+children in reverse order, exactly mirroring the order they paint in, so what
+answers a click is always what is on top.
+
 ### Colour precision, and why HDR is deferred
 
 Compositing happens in **16-bit float linear light** throughout. Decode converts

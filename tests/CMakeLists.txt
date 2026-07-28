@@ -20,7 +20,8 @@ add_executable(cutline_core_tests
   render/plan_test.cpp
   ui/layout_test.cpp
   ui/painter_test.cpp
-  ui/theme_test.cpp)
+  ui/theme_test.cpp
+  ui/widget_test.cpp)
 
 target_link_libraries(cutline_core_tests PRIVATE
   cutline::audio
