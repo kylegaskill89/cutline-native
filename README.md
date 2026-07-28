@@ -42,13 +42,22 @@ and the on-screen presenter. Video is converted to linear light in a shader and
 drawn into a 16-bit float target, which an `_SRGB` render target view encodes
 for display.
 
+**Phase 6 (export) works** — `export_project` renders a project to an MP4 with
+no window and no UI. The 8-second 4K clip that took roughly **18 minutes** in the
+TypeScript version now exports in **7.7 seconds**, slightly faster than realtime,
+via NVENC. Frame counts and durations are verified by round-trip tests rather
+than assumed.
+
+Encoders are chosen at runtime — NVENC, QSV, AMF, then x264/x265 — so an export
+always completes, just slower on a machine without a supported GPU.
+
 **Phase 4 underway** — a project now renders end to end. `render_frame` takes a
 project file and a time and writes a PNG, going through the whole chain: the
 model says what exists, the plan decides what draws, the media layer supplies
 frames, and the compositor combines them. The same path will serve export, which
 is the point — the old app composited with a canvas for preview and an FFmpeg
 filtergraph for export, and keeping those two agreeing was constant work.
-399 tests.
+414 tests.
 
 The compositor handles per-layer position, scale, rotation, opacity, all eight
 blend modes, adjustment layers, and gradient mattes, and can read the result
@@ -98,6 +107,7 @@ cmake --build --preset media
 build/media/tools/decode_bench/Release/decode_bench <file> [frames]
 build/media/tools/preview_window/Release/preview_window <file>
 build/media/tools/render_frame/Release/render_frame <project.json> <seconds> <out.png>
+build/media/tools/export_project/Release/export_project <project.json> <out.mp4>
 ```
 
 `render_frame` is the end-to-end check: it renders one frame of a project

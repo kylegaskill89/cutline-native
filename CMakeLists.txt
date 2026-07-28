@@ -69,6 +69,7 @@ if(CUTLINE_WITH_GPU)
     add_subdirectory(src/engine)
     add_subdirectory(tools/preview_window)
     add_subdirectory(tools/render_frame)
+    add_subdirectory(tools/export_project)
   endif()
 endif()
 

@@ -3,6 +3,7 @@ find_package(FFMPEG REQUIRED)
 add_library(cutline_media
   src/audio.cpp
   src/decoder.cpp
+  src/encoder.cpp
   src/probe.cpp
   src/thumbnail.cpp)
 add_library(cutline::media ALIAS cutline_media)

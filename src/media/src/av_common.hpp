@@ -26,6 +26,21 @@ struct FormatContextDeleter {
   }
 };
 
+/// Output contexts are freed, not closed: `avformat_close_input` tears down a
+/// demuxer and would misread a muxer's fields. Closing the I/O here too means an
+/// abandoned export leaves an obviously truncated file rather than a leaked
+/// handle.
+struct OutputFormatContextDeleter {
+  void operator()(AVFormatContext* ctx) const noexcept {
+    if (ctx == nullptr) return;
+    if (ctx->oformat != nullptr && (ctx->oformat->flags & AVFMT_NOFILE) == 0 &&
+        ctx->pb != nullptr) {
+      avio_closep(&ctx->pb);
+    }
+    avformat_free_context(ctx);
+  }
+};
+
 struct CodecContextDeleter {
   void operator()(AVCodecContext* ctx) const noexcept {
     if (ctx != nullptr) avcodec_free_context(&ctx);
@@ -55,6 +70,7 @@ struct SwsDeleter {
 };
 
 using FormatContext = std::unique_ptr<AVFormatContext, FormatContextDeleter>;
+using OutputFormatContext = std::unique_ptr<AVFormatContext, OutputFormatContextDeleter>;
 using CodecContext = std::unique_ptr<AVCodecContext, CodecContextDeleter>;
 using Frame = std::unique_ptr<AVFrame, FrameDeleter>;
 using Packet = std::unique_ptr<AVPacket, PacketDeleter>;

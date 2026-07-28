@@ -131,12 +131,32 @@ constexpr double kFrameEpsilon = 1e-4;
   return true;
 }
 
+struct FrameDeleter {
+  void operator()(AVFrame* frame) const noexcept {
+    if (frame != nullptr) av_frame_free(&frame);
+  }
+};
+
 /// One open source file, and where its decoder currently sits.
 struct Source {
   std::unique_ptr<VideoDecoder> decoder;
   double position = -1.0;  ///< timestamp of the frame currently decoded
-  bool exhausted = false;  ///< ran off the end; holds the last frame
+  bool exhausted = false;  ///< ran off the end
   bool usable = true;      ///< opened, and producing a layout we can draw
+
+  /// A reference to the last frame decoded. The decoder drops its own at end of
+  /// stream, so without this a clip trimmed even slightly past its source would
+  /// go black for its final frames instead of holding.
+  std::unique_ptr<AVFrame, FrameDeleter> held;
+
+  void hold(const AVFrame* frame) {
+    if (frame == nullptr) return;
+    if (!held) held.reset(av_frame_alloc());
+    if (!held) return;
+    av_frame_unref(held.get());
+    // Reference, not copy: this is a refcount bump, not a pixel copy.
+    av_frame_ref(held.get(), frame);
+  }
 };
 
 }  // namespace
@@ -184,11 +204,16 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // Already there. Scrubbing within one frame's worth of time asks for the same
   // picture repeatedly, and re-decoding it would be pure waste.
   if (source.position >= 0.0 && std::abs(source.position - time) <= kFrameEpsilon) {
-    return source.decoder->frame();
+    const AVFrame* current = source.decoder->frame();
+    return current != nullptr ? current : source.held.get();
   }
 
   const bool backwards = source.position < 0.0 || time < source.position;
-  const bool far_ahead = time > source.position + kDecodeForwardWindow;
+  // An exhausted source has nothing further to find, so seeking ahead in one
+  // would re-seek and re-decode to end of stream for every remaining frame.
+  // That is not a small cost: it turned a clip trimmed two seconds past its
+  // source into half a second per frame.
+  const bool far_ahead = !source.exhausted && time > source.position + kDecodeForwardWindow;
 
   if (backwards || far_ahead) {
     if (!source.decoder->seek(time)) {
@@ -217,9 +242,12 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
       break;
     }
     source.position = source.decoder->timestamp();
+    source.hold(source.decoder->frame());
   }
 
-  return source.decoder->frame();
+  // Past the end, the decoder has released its frame, so the held one stands in.
+  const AVFrame* current = source.decoder->frame();
+  return current != nullptr ? current : source.held.get();
 }
 
 FrameRenderer::FrameRenderer(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
