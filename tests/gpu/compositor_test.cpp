@@ -597,6 +597,117 @@ TEST_F(CompositorTest, KeyingIsOffUnlessAskedFor) {
   EXPECT_EQ(centre.a, 255) << "green should survive when keying is not enabled";
 }
 
+// -------------------------------------------------------- adjustment layers --
+
+/// An adjustment layer covering the whole canvas, which is what one placed with
+/// a default transform amounts to.
+[[nodiscard]] Layer adjustment(LayerEffects effects, float strength = 1.0f) {
+  Layer layer;
+  layer.adjustment = true;
+  layer.effects = effects;
+  layer.opacity = strength;
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  return layer;
+}
+
+TEST_F(CompositorTest, AnAdjustmentLayerAffectsWhatIsBeneathIt) {
+  LayerEffects effects;
+  effects.invert = true;
+
+  const Layer white = fill({1.0f, 1.0f, 1.0f, 1.0f});
+  const Layer layers[] = {white, adjustment(effects)};
+
+  const Rgba centre = pixel_at(render(layers), kWidth / 2, kHeight / 2);
+  EXPECT_LE(centre.r, 2) << "the white beneath should have been inverted to black";
+}
+
+TEST_F(CompositorTest, AnAdjustmentLayerDrawsNothingOfItsOwn) {
+  // On an empty canvas it must leave transparent black rather than painting a
+  // rectangle, because it has no content.
+  const Layer only = adjustment({});
+  const Rgba centre = pixel_at(render({&only, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_EQ(centre.a, 0);
+}
+
+TEST_F(CompositorTest, AdjustmentOpacityIsStrengthNotTransparency) {
+  // Half strength should land halfway between the original and the fully
+  // adjusted result, not make the layer half see-through.
+  LayerEffects effects;
+  effects.invert = true;
+
+  const Layer white = fill({1.0f, 1.0f, 1.0f, 1.0f});
+  const Layer layers[] = {white, adjustment(effects, 0.5f)};
+
+  const Rgba centre = pixel_at(render(layers), kWidth / 2, kHeight / 2);
+  EXPECT_GT(centre.r, 100) << "half an inversion should be mid grey, not black";
+  EXPECT_LT(centre.r, 210);
+  EXPECT_EQ(centre.a, 255) << "coverage beneath should be preserved";
+}
+
+TEST_F(CompositorTest, ANeutralAdjustmentChangesNothing) {
+  const Layer grey = fill(Color::from_srgb(0.5f, 0.5f, 0.5f));
+  const Layer with_adjustment[] = {grey, adjustment({})};
+
+  const Rgba plain = pixel_at(render({&grey, 1}), kWidth / 2, kHeight / 2);
+  const Rgba adjusted = pixel_at(render(with_adjustment), kWidth / 2, kHeight / 2);
+  EXPECT_NEAR(adjusted.r, plain.r, 1);
+  EXPECT_NEAR(adjusted.g, plain.g, 1);
+}
+
+TEST_F(CompositorTest, AnAdjustmentReachesOnlyItsOwnQuad) {
+  LayerEffects effects;
+  effects.invert = true;
+
+  Layer partial = adjustment(effects);
+  // The left half only.
+  partial.quad = {kWidth * 0.25f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
+
+  const Layer white = fill({1.0f, 1.0f, 1.0f, 1.0f});
+  const Layer layers[] = {white, partial};
+  const Image image = render(layers);
+
+  EXPECT_LE(pixel_at(image, kWidth / 4, kHeight / 2).r, 2) << "inside: inverted";
+  EXPECT_GE(pixel_at(image, kWidth * 3 / 4, kHeight / 2).r, 253) << "outside: untouched";
+}
+
+TEST_F(CompositorTest, AnAdjustmentStacksOnEverythingBelowNotJustTheLastLayer) {
+  // Two layers underneath, the upper one covering half. Both halves must come
+  // out adjusted.
+  LayerEffects effects;
+  effects.invert = true;
+
+  const Layer red = fill({1.0f, 0.0f, 0.0f, 1.0f});
+
+  Layer green;
+  green.color = {0.0f, 1.0f, 0.0f, 1.0f};
+  green.quad = {kWidth * 0.25f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
+
+  const Layer layers[] = {red, green, adjustment(effects)};
+  const Image image = render(layers);
+
+  // Inverted green is magenta; inverted red is cyan.
+  const Rgba left = pixel_at(image, kWidth / 4, kHeight / 2);
+  EXPECT_GE(left.r, 253);
+  EXPECT_LE(left.g, 2);
+
+  const Rgba right = pixel_at(image, kWidth * 3 / 4, kHeight / 2);
+  EXPECT_LE(right.r, 2);
+  EXPECT_GE(right.g, 253);
+}
+
+TEST_F(CompositorTest, LayersAboveAnAdjustmentAreNotAffectedByIt) {
+  LayerEffects effects;
+  effects.invert = true;
+
+  const Layer white = fill({1.0f, 1.0f, 1.0f, 1.0f});
+  const Layer above = fill({0.0f, 1.0f, 0.0f, 1.0f});
+  const Layer layers[] = {white, adjustment(effects), above};
+
+  const Rgba centre = pixel_at(render(layers), kWidth / 2, kHeight / 2);
+  EXPECT_GE(centre.g, 253) << "the layer drawn after the adjustment should be untouched";
+  EXPECT_LE(centre.r, 2);
+}
+
 TEST_F(CompositorTest, ManyLayersGrowTheDescriptorHeapWithoutLosingAny) {
   // The heap grows in steps; composing past a step boundary must still draw
   // every layer, including the last one on top.

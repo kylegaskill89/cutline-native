@@ -31,6 +31,7 @@ struct Compositor::Impl {
   ComPtr<ID3D12PipelineState> pipeline_normal;
   ComPtr<ID3D12PipelineState> pipeline_add;
   ComPtr<ID3D12PipelineState> pipeline_blend;
+  ComPtr<ID3D12PipelineState> pipeline_adjustment;
   ComPtr<ID3D12PipelineState> pipeline_present;
 
   ComPtr<ID3D12DescriptorHeap> rtv_heap;

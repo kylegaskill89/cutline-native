@@ -43,20 +43,28 @@ drawn into a 16-bit float target, which an `_SRGB` render target view encodes
 for display.
 
 **Phase 4 underway** — the compositor draws a stack of layers with per-layer
-position, scale, rotation, opacity, and all eight blend modes, and can read the
-result back to system memory. The same code path serves preview and export,
-which is the point: the old app composited with a canvas for preview and an
-FFmpeg filtergraph for export, and keeping those two agreeing was constant work.
-281 tests.
+position, scale, rotation, opacity, all eight blend modes, and adjustment
+layers, and can read the result back to system memory. The same code path serves
+preview and export, which is the point: the old app composited with a canvas for
+preview and an FFmpeg filtergraph for export, and keeping those two agreeing was
+constant work. 362 tests.
 
-Blending happens in **linear light**, unlike the canvas the reference used. A
-50% dissolve now passes through the true midpoint rather than a too-dark one, so
-old and new projects will not match pixel for pixel across a dissolve — see
-`docs/architecture.md`.
+Ten of the eleven registry effects run as shaders: brightness, contrast,
+saturation, hue, black and white, invert, flip, crop, vignette, and the chroma
+keyer. Gaussian blur is not implemented — a separable blur needs its own passes.
 
-Still to come: effects as shaders, generated media and adjustment layers, Skia
-sharing the device, and keeping hardware-decoded frames on the GPU instead of
-uploading them from system memory.
+Two colour decisions worth knowing about, both in `docs/architecture.md`:
+
+- **Blending is linear.** A 50% dissolve passes through the true midpoint rather
+  than the too-dark one a gamma-encoded canvas produces, so old and new projects
+  will not match pixel for pixel across a dissolve.
+- **Effects are not.** They run on coded values, where FFmpeg's filters are
+  defined and where the spec specifies them. Each operation happens in the space
+  it was defined in.
+
+Still to come: generated media, Gaussian blur, Skia sharing the device, and
+keeping hardware-decoded frames on the GPU instead of uploading them from system
+memory.
 
 ## Building
 

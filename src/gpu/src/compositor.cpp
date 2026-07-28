@@ -395,6 +395,8 @@ std::expected<std::unique_ptr<Compositor>, std::string> Compositor::create(
   if (!layer_ps) return std::unexpected(layer_ps.error());
   const auto blend_ps = read_file(shaders / "composite_blend_ps.cso");
   if (!blend_ps) return std::unexpected(blend_ps.error());
+  const auto adjustment_ps = read_file(shaders / "composite_adjustment_ps.cso");
+  if (!adjustment_ps) return std::unexpected(adjustment_ps.error());
   const auto present_ps = read_file(shaders / "composite_present_ps.cso");
   if (!present_ps) return std::unexpected(present_ps.error());
 
@@ -451,6 +453,13 @@ std::expected<std::unique_ptr<Compositor>, std::string> Compositor::create(
   // must stay out of the way.
   if (auto ok = make_pipeline(*layer_vs, *blend_ps, kSceneFormat, D3D12_BLEND_ONE,
                               D3D12_BLEND_ZERO, false, impl->pipeline_blend);
+      !ok) {
+    return std::unexpected(ok.error());
+  }
+  // Like the shader-side blend modes, an adjustment produces the final value
+  // itself, so the blend unit stays out of the way.
+  if (auto ok = make_pipeline(*layer_vs, *adjustment_ps, kSceneFormat, D3D12_BLEND_ONE,
+                              D3D12_BLEND_ZERO, false, impl->pipeline_adjustment);
       !ok) {
     return std::unexpected(ok.error());
   }
@@ -521,7 +530,7 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     if (layer.opacity <= 0.0f) continue;
     if (layer.quad.width == 0.0f || layer.quad.height == 0.0f) continue;
 
-    const bool backdrop_needed = needs_backdrop(layer.blend);
+    const bool backdrop_needed = layer.adjustment || needs_backdrop(layer.blend);
     if (backdrop_needed) {
       // Snapshot what is underneath. The copy is why these modes cost more
       // than Normal, and why only the ones that genuinely need it pay.
@@ -592,9 +601,11 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
       params.full_range = layer.frame->full_range ? 1 : 0;
     }
 
-    ID3D12PipelineState* pipeline = backdrop_needed ? d.pipeline_blend.Get()
-                                    : layer.blend == BlendMode::Add ? d.pipeline_add.Get()
-                                                                    : d.pipeline_normal.Get();
+    ID3D12PipelineState* pipeline =
+        layer.adjustment                 ? d.pipeline_adjustment.Get()
+        : backdrop_needed                ? d.pipeline_blend.Get()
+        : layer.blend == BlendMode::Add  ? d.pipeline_add.Get()
+                                         : d.pipeline_normal.Get();
     commands->SetPipelineState(pipeline);
     commands->SetGraphicsRootDescriptorTable(0,
                                              d.srv_gpu(static_cast<UINT>(i) * kSlotsPerLayer));

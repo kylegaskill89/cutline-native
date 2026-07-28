@@ -115,6 +115,12 @@ struct Layer {
   bool flip_x = false;
   bool flip_y = false;
   LayerEffects effects;
+
+  /// An adjustment layer draws nothing of its own: it puts everything already
+  /// composited beneath it through `effects`, within its own quad. `opacity`
+  /// becomes the strength of that adjustment rather than a transparency, and
+  /// `frame`, `color`, and `blend` are ignored.
+  bool adjustment = false;
 };
 
 /// A composited frame brought back to the CPU: 8-bit RGBA, sRGB-encoded, which

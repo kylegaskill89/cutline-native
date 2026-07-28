@@ -135,6 +135,17 @@ mode is involved. That was accepted when the float pipeline was chosen, and the
 compositor tests assert the linear answer explicitly so nobody later "fixes" it
 back.
 
+**Effects are the exception, deliberately.** They run on *coded* values — after
+the YUV matrix, before the transfer function — because that is the space
+FFmpeg's filters are defined in, and §13 names those fragments as each effect's
+authoritative behaviour. This is not a rounding-level distinction: applying a
+200% contrast to linear light is a large visible difference, not a subtle one.
+So blending is linear because it is a physical operation, and effect maths is
+not because it is a specified one. Each happens in the space it was defined in.
+The compositor tests state the coded-space answers explicitly — a mid grey is
+its own inverse, contrast pivots about it — so moving the maths would fail them
+rather than pass quietly.
+
 HDR itself is **deferred past v1**. It was originally scoped into v1 on the
 understanding that HDR footage was already part of the workflow. Probing the
 actual sources contradicted that: every video file on hand is HEVC **Main**

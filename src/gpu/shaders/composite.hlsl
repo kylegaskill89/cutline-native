@@ -368,6 +368,29 @@ float4 PSLayerBlend(VSOutput input) : SV_Target {
     return float4(lerp(base.rgb, blended, alpha), max(base.a, alpha));
 }
 
+// An adjustment layer: everything already composited beneath it, put through
+// this layer's effect stack. It draws nothing of its own, which is why it reads
+// the backdrop instead of a source, and why opacity means strength here rather
+// than transparency.
+//
+// The backdrop is linear and may exceed 1.0; encoding to coded values clamps it.
+// That is correct for the SDR pipeline this ships with and is one of the places
+// that will need revisiting when HDR lands.
+float4 PSAdjustment(VSOutput input) : SV_Target {
+    const float2 screen = input.position.xy / params.canvas;
+    const float4 base = backdrop.Sample(linearSampler, screen);
+
+    // Cropping an adjustment layer limits where it reaches, so what falls
+    // outside must come through untouched rather than transparent.
+    if (!insideCrop(input.uv)) return base;
+
+    const float3 coded = encodeSrgb(base.rgb);
+    const float3 adjusted = applyColorEffects(coded);
+    const float3 result = linearizeSrgb(adjusted) * vignetteFactor(input.uv);
+
+    return float4(lerp(base.rgb, result, params.opacity), base.a);
+}
+
 float4 PSPresent(VSOutput input) : SV_Target {
     // The render target is _SRGB, so the hardware encodes on write.
     return texture0.Sample(linearSampler, input.uv);
