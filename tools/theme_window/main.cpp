@@ -40,6 +40,7 @@
 #include <print>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -67,6 +68,12 @@ using cutline::ui::built_in_themes;
 
 struct App {
   std::unique_ptr<WidgetHost> host;
+  /// The switcher's buttons, so the selected one can be moved without
+  /// rebuilding the tree. Rebuilding would destroy the button whose click is
+  /// still on the stack.
+  std::vector<Button*> theme_buttons;
+  HWND window = nullptr;
+
   std::size_t theme = 0;
   bool dirty = true;
 
@@ -83,10 +90,31 @@ struct App {
   [[nodiscard]] const Theme& current() const { return built_in_themes()[theme]; }
 };
 
-/// The window's own widget tree: a browser down the left, a monitor and a
-/// timeline stacked on the right. Enough of the editor's shape to tell whether
-/// a theme holds together across it.
-[[nodiscard]] std::unique_ptr<Widget> build_interface() {
+void set_theme(App& app, std::size_t index);
+
+/// The window's own widget tree: a switcher along the top, a browser down the
+/// left, a monitor and a timeline stacked on the right. Enough of the editor's
+/// shape to tell whether a theme holds together across it.
+///
+/// `app` may be null, so the headless check can build the same tree with no
+/// window behind it.
+[[nodiscard]] std::unique_ptr<Widget> build_interface(App* app) {
+  auto shell = std::make_unique<Box>(Axis::Vertical);
+
+  // The switcher lives in the window rather than on a keyboard shortcut. A
+  // harness whose only control is an undocumented keystroke is one nobody can
+  // use, including whoever wrote it.
+  auto& bar = shell->emplace<Box>(Axis::Horizontal);
+  bar.emplace<Label>("Theme");
+  for (std::size_t i = 0; i < built_in_themes().size(); ++i) {
+    auto& choice = bar.emplace<Button>(built_in_themes()[i].name, [app, i] {
+      if (app != nullptr) set_theme(*app, i);
+    });
+    choice.set_selected(app != nullptr && i == app->theme);
+    if (app != nullptr) app->theme_buttons.push_back(&choice);
+  }
+  bar.emplace<Spacer>();
+
   auto root = std::make_unique<Splitter>(Axis::Horizontal);
   root->set_fractions({0.28, 0.72});
 
@@ -128,7 +156,8 @@ struct App {
   }
   tracks.set_content(std::move(rows));
 
-  return root;
+  shell->add(std::move(root));
+  return shell;
 }
 
 /// Win32 virtual keys to the ones the interface knows about. Only the keys
@@ -230,13 +259,20 @@ void render(App& app, HWND window) {
   ReleaseDC(window, dc);
 }
 
-void set_theme(App& app, HWND window, std::size_t index) {
+void set_theme(App& app, std::size_t index) {
   if (index >= built_in_themes().size() || index == app.theme) return;
   app.theme = index;
+
+  for (std::size_t i = 0; i < app.theme_buttons.size(); ++i) {
+    app.theme_buttons[i]->set_selected(i == index);
+  }
+
   // Metrics change with the theme, so everything has to be measured again.
   app.host->request_layout();
   app.dirty = true;
-  SetWindowTextA(window, ("Cutline - " + app.current().name).c_str());
+  if (app.window != nullptr) {
+    SetWindowTextA(app.window, ("Cutline - " + app.current().name).c_str());
+  }
 }
 
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -307,7 +343,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
 
     case WM_KEYDOWN: {
       if (wparam >= '1' && wparam <= '9') {
-        set_theme(*app, window, static_cast<std::size_t>(wparam - '1'));
+        set_theme(*app, static_cast<std::size_t>(wparam - '1'));
         return 0;
       }
       const KeyEvent event{.key = key_from_win32(wparam),
@@ -347,6 +383,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
   constexpr int kHeight = 800;
 
   int failures = 0;
+  std::vector<std::string> fingerprints;
+
   for (const Theme& theme : built_in_themes()) {
     const sk_sp<SkSurface> surface =
         SkSurfaces::Raster(SkImageInfo::MakeN32Premul(kWidth, kHeight));
@@ -356,7 +394,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       continue;
     }
 
-    WidgetHost host(build_interface());
+    WidgetHost host(build_interface(nullptr));
     const std::unique_ptr<SkiaPainter> painter = SkiaPainter::create(surface->getCanvas());
     const LayoutContext context{theme, *painter};
     const Rect client{0.0, 0.0, kWidth, kHeight};
@@ -380,9 +418,33 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     };
     walk(host.root());
 
+    // And the theme has to reach the pixels. Sampling a scatter of points
+    // rather than one keeps a theme that happens to share a background colour
+    // from looking like a theme that never got applied.
+    std::string fingerprint;
+    SkPixmap pixels;
+    if (surface->peekPixels(&pixels)) {
+      for (int y = 20; y < kHeight; y += 97) {
+        for (int x = 20; x < kWidth; x += 89) {
+          fingerprint += std::format("{:08x}", pixels.getColor(x, y));
+        }
+      }
+    }
+    fingerprints.push_back(fingerprint);
+
     std::println("{:<10} {:>3} widgets, {} empty, {} outside the window", theme.id, counted,
                  empty, escaped);
     if (empty > 0 || escaped > 0) ++failures;
+  }
+
+  for (std::size_t i = 0; i < fingerprints.size(); ++i) {
+    for (std::size_t j = i + 1; j < fingerprints.size(); ++j) {
+      if (fingerprints[i] == fingerprints[j]) {
+        std::println("{} and {} painted identically — the theme is not reaching the pixels",
+                     built_in_themes()[i].id, built_in_themes()[j].id);
+        ++failures;
+      }
+    }
   }
   return failures == 0 ? 0 : 1;
 }
@@ -393,7 +455,7 @@ int main(int argc, char** argv) {
   if (argc > 1 && std::string_view(argv[1]) == "--check") return self_check();
 
   App app;
-  app.host = std::make_unique<WidgetHost>(build_interface());
+  app.host = std::make_unique<WidgetHost>(build_interface(&app));
 
   const HINSTANCE instance = GetModuleHandleW(nullptr);
   WNDCLASSEXW window_class{};
@@ -414,15 +476,11 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  app.window = window;
   SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&app));
   SetWindowTextA(window, ("Cutline - " + app.current().name).c_str());
   ShowWindow(window, SW_SHOW);
-
-  std::println("Themes:");
-  for (std::size_t i = 0; i < built_in_themes().size(); ++i) {
-    std::println("  {}  {}", i + 1, built_in_themes()[i].name);
-  }
-  std::println("Tab moves the focus, the wheel scrolls, the dividers drag.");
+  SetForegroundWindow(window);
 
   MSG message{};
   while (GetMessageW(&message, nullptr, 0, 0) > 0) {
