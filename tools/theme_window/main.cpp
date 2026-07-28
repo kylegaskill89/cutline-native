@@ -1,0 +1,437 @@
+/// A window to actually look at the interface in.
+///
+/// Everything under `src/ui` is tested without a window on purpose, and that
+/// catches a great deal — but not whether the result is something a person
+/// would want to use. This puts the real widget tree on screen, in each of the
+/// built-in themes, so the claim that they differ in *chrome* rather than in
+/// colour can be checked by looking at it.
+///
+/// The chrome is drawn by Skia into a raster surface and blitted with GDI. That
+/// is deliberate and not a placeholder to feel bad about: interface drawing is
+/// a few hundred rounded rectangles a frame, it only happens when something
+/// changes, and going through the GPU for it would mean sharing a device and a
+/// swapchain with the compositor for no measurable gain. Video frames have
+/// their own path already.
+///
+/// Not the editor. A harness for the parts of it that exist.
+
+#include "cutline/ui/skia_painter.hpp"
+#include "cutline/ui/theme.hpp"
+#include "cutline/ui/widget.hpp"
+#include "cutline/ui/widgets.hpp"
+
+#include <windows.h>
+// After windows.h, which is what defines the message parameters these unpack.
+#include <windowsx.h>
+
+#if defined(_MSC_VER)
+#pragma warning(push, 0)
+#endif
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkImageInfo.h"
+#include "include/core/SkSurface.h"
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
+#include <cstddef>
+#include <memory>
+#include <print>
+#include <string>
+#include <string_view>
+
+namespace {
+
+using cutline::ui::Axis;
+using cutline::ui::Box;
+using cutline::ui::Button;
+using cutline::ui::Key;
+using cutline::ui::KeyEvent;
+using cutline::ui::Label;
+using cutline::ui::LayoutContext;
+using cutline::ui::Modifiers;
+using cutline::ui::MouseButton;
+using cutline::ui::MouseEvent;
+using cutline::ui::Panel;
+using cutline::ui::Rect;
+using cutline::ui::ScrollView;
+using cutline::ui::SkiaPainter;
+using cutline::ui::Spacer;
+using cutline::ui::Splitter;
+using cutline::ui::Theme;
+using cutline::ui::WheelEvent;
+using cutline::ui::Widget;
+using cutline::ui::WidgetHost;
+using cutline::ui::built_in_themes;
+
+struct App {
+  std::unique_ptr<WidgetHost> host;
+  std::size_t theme = 0;
+  bool dirty = true;
+
+  /// Rebuilt whenever the window changes size. Skia's raster surface owns the
+  /// pixels; the blit reads them straight out.
+  sk_sp<SkSurface> surface;
+  int width = 0;
+  int height = 0;
+  /// Set by `WM_SIZE`, cleared by the next render. Laying out on the message
+  /// itself would need a painter to measure with, and there is no canvas at
+  /// that point — the same reason input defers layout.
+  bool resized = true;
+
+  [[nodiscard]] const Theme& current() const { return built_in_themes()[theme]; }
+};
+
+/// The window's own widget tree: a browser down the left, a monitor and a
+/// timeline stacked on the right. Enough of the editor's shape to tell whether
+/// a theme holds together across it.
+[[nodiscard]] std::unique_ptr<Widget> build_interface() {
+  auto root = std::make_unique<Splitter>(Axis::Horizontal);
+  root->set_fractions({0.28, 0.72});
+
+  auto& browser = root->emplace<Panel>("Project");
+  auto& list = browser.emplace<ScrollView>(Axis::Vertical);
+  auto clips = std::make_unique<Box>(Axis::Vertical);
+  for (int i = 1; i <= 24; ++i) {
+    clips->emplace<Button>("Clip " + std::to_string(i));
+  }
+  list.set_content(std::move(clips));
+
+  auto& right = root->emplace<Splitter>(Axis::Vertical);
+  right.set_fractions({0.55, 0.45});
+
+  auto& monitor = right.emplace<Panel>("Program Monitor");
+  auto& transport = monitor.emplace<Box>(Axis::Horizontal);
+  transport.emplace<Button>("Mark In");
+  transport.emplace<Button>("Mark Out");
+  transport.emplace<Spacer>();
+  transport.emplace<Button>("Play");
+  transport.emplace<Button>("Export");
+
+  auto& timeline = right.emplace<Panel>("Timeline");
+  auto& tools = timeline.emplace<Box>(Axis::Horizontal);
+  tools.emplace<Button>("Select");
+  tools.emplace<Button>("Razor");
+  tools.emplace<Button>("Slip");
+  tools.emplace<Spacer>();
+  auto& readout = tools.emplace<Label>("00:00:04:11");
+  readout.set_align(cutline::ui::TextAlign::Right);
+
+  auto& tracks = timeline.emplace<ScrollView>(Axis::Vertical);
+  auto rows = std::make_unique<Box>(Axis::Vertical);
+  for (int i = 1; i <= 8; ++i) {
+    auto& row = rows->emplace<Box>(Axis::Horizontal);
+    row.emplace<Label>(i <= 4 ? "V" + std::to_string(5 - i) : "A" + std::to_string(i - 4));
+    row.emplace<Button>("Clip on track " + std::to_string(i));
+    row.emplace<Spacer>();
+  }
+  tracks.set_content(std::move(rows));
+
+  return root;
+}
+
+/// Win32 virtual keys to the ones the interface knows about. Only the keys
+/// that are actually bound; the rest arrive as `Key::None` and go nowhere.
+[[nodiscard]] Key key_from_win32(WPARAM vk) {
+  if (vk >= 'A' && vk <= 'Z') return static_cast<Key>(vk);
+  if (vk >= '0' && vk <= '9') return static_cast<Key>(vk);
+  switch (vk) {
+    case VK_SPACE: return Key::Space;
+    case VK_ESCAPE: return Key::Escape;
+    case VK_TAB: return Key::Tab;
+    case VK_RETURN: return Key::Enter;
+    case VK_BACK: return Key::Backspace;
+    case VK_DELETE: return Key::Delete;
+    case VK_LEFT: return Key::Left;
+    case VK_RIGHT: return Key::Right;
+    case VK_UP: return Key::Up;
+    case VK_DOWN: return Key::Down;
+    case VK_HOME: return Key::Home;
+    case VK_END: return Key::End;
+    case VK_PRIOR: return Key::PageUp;
+    case VK_NEXT: return Key::PageDown;
+    default: return Key::None;
+  }
+}
+
+[[nodiscard]] Modifiers modifiers_now() {
+  return Modifiers{
+      .shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0,
+      .control = (GetKeyState(VK_CONTROL) & 0x8000) != 0,
+      .alt = (GetKeyState(VK_MENU) & 0x8000) != 0,
+  };
+}
+
+[[nodiscard]] MouseEvent mouse_from(LPARAM lparam, MouseButton button, int clicks = 1) {
+  return MouseEvent{
+      .x = static_cast<double>(GET_X_LPARAM(lparam)),
+      .y = static_cast<double>(GET_Y_LPARAM(lparam)),
+      .button = button,
+      .modifiers = modifiers_now(),
+      .click_count = clicks,
+  };
+}
+
+void resize_surface(App& app, int width, int height) {
+  if (width <= 0 || height <= 0) return;
+  if (app.surface != nullptr && width == app.width && height == app.height) return;
+
+  app.width = width;
+  app.height = height;
+  app.surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
+}
+
+/// Draws the tree and puts the pixels on the window.
+void render(App& app, HWND window) {
+  if (app.surface == nullptr) return;
+
+  SkCanvas* canvas = app.surface->getCanvas();
+  const Theme& theme = app.current();
+
+  const std::unique_ptr<SkiaPainter> painter = SkiaPainter::create(canvas);
+  if (painter == nullptr) return;
+
+  const Rect client{0.0, 0.0, static_cast<double>(app.width), static_cast<double>(app.height)};
+  const LayoutContext context{theme, *painter};
+
+  // The one place a theme and a text measurer are both in hand, which is
+  // exactly why layout is deferred to here rather than done where the size
+  // changed or the drag happened.
+  if (app.resized) {
+    app.host->resize(client, context);
+    app.resized = false;
+  } else {
+    app.host->update_layout(context);
+  }
+
+  // Through the painter rather than a canvas clear, so a themed background
+  // that is a gradient stays one.
+  canvas->clear(SK_ColorBLACK);
+  paint_surface(*painter, client, theme.style(cutline::ui::Part::Window));
+  app.host->paint(*painter, theme);
+
+  SkPixmap pixels;
+  if (!app.surface->peekPixels(&pixels)) return;
+
+  BITMAPINFO info{};
+  info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  info.bmiHeader.biWidth = app.width;
+  // Negative, because Skia's rows run top to bottom and a DIB's run the other
+  // way by default. Without this the whole interface comes out upside down.
+  info.bmiHeader.biHeight = -app.height;
+  info.bmiHeader.biPlanes = 1;
+  info.bmiHeader.biBitCount = 32;
+  info.bmiHeader.biCompression = BI_RGB;
+
+  const HDC dc = GetDC(window);
+  StretchDIBits(dc, 0, 0, app.width, app.height, 0, 0, app.width, app.height, pixels.addr(),
+                &info, DIB_RGB_COLORS, SRCCOPY);
+  ReleaseDC(window, dc);
+}
+
+void set_theme(App& app, HWND window, std::size_t index) {
+  if (index >= built_in_themes().size() || index == app.theme) return;
+  app.theme = index;
+  // Metrics change with the theme, so everything has to be measured again.
+  app.host->request_layout();
+  app.dirty = true;
+  SetWindowTextA(window, ("Cutline - " + app.current().name).c_str());
+}
+
+LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+  auto* app = reinterpret_cast<App*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+  if (app == nullptr || app->host == nullptr) {
+    return DefWindowProcW(window, message, wparam, lparam);
+  }
+
+  switch (message) {
+    case WM_SIZE:
+      resize_surface(*app, LOWORD(lparam), HIWORD(lparam));
+      app->resized = true;
+      app->dirty = true;
+      return 0;
+
+    case WM_PAINT: {
+      PAINTSTRUCT paint;
+      BeginPaint(window, &paint);
+      render(*app, window);
+      EndPaint(window, &paint);
+      app->dirty = false;
+      return 0;
+    }
+
+    case WM_MOUSEMOVE: {
+      // Asked for once per entry, so WM_MOUSELEAVE arrives and hover clears
+      // when the pointer goes somewhere else entirely.
+      TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT), TME_LEAVE, window, 0};
+      TrackMouseEvent(&track);
+      app->host->mouse_move(mouse_from(lparam, MouseButton::Left));
+      app->dirty = true;
+      return 0;
+    }
+    case WM_MOUSELEAVE:
+      app->host->mouse_exit();
+      app->dirty = true;
+      return 0;
+
+    case WM_LBUTTONDOWN:
+      SetCapture(window);
+      app->host->mouse_down(mouse_from(lparam, MouseButton::Left));
+      app->dirty = true;
+      return 0;
+    case WM_LBUTTONDBLCLK:
+      app->host->mouse_down(mouse_from(lparam, MouseButton::Left, 2));
+      app->dirty = true;
+      return 0;
+    case WM_LBUTTONUP:
+      ReleaseCapture();
+      app->host->mouse_up(mouse_from(lparam, MouseButton::Left));
+      app->dirty = true;
+      return 0;
+
+    case WM_MOUSEWHEEL: {
+      // Wheel messages carry screen coordinates, unlike every other mouse
+      // message, so they have to be brought back into the client area.
+      POINT at{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      ScreenToClient(window, &at);
+      const double notches =
+          -static_cast<double>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
+      app->host->wheel(WheelEvent{.x = static_cast<double>(at.x),
+                                  .y = static_cast<double>(at.y),
+                                  .delta_y = notches,
+                                  .modifiers = modifiers_now()});
+      app->dirty = true;
+      return 0;
+    }
+
+    case WM_KEYDOWN: {
+      if (wparam >= '1' && wparam <= '9') {
+        set_theme(*app, window, static_cast<std::size_t>(wparam - '1'));
+        return 0;
+      }
+      const KeyEvent event{.key = key_from_win32(wparam),
+                           .modifiers = modifiers_now(),
+                           .repeat = (lparam & (1 << 30)) != 0};
+      if (event.key == Key::Tab) {
+        app->host->focus_next(event.modifiers.shift);
+      } else {
+        app->host->key_down(event);
+      }
+      app->dirty = true;
+      return 0;
+    }
+
+    case WM_ERASEBKGND:
+      return 1;  // every pixel is painted, so erasing only causes a flash
+
+    case WM_DESTROY:
+      PostQuitMessage(0);
+      return 0;
+
+    default:
+      break;
+  }
+  return DefWindowProcW(window, message, wparam, lparam);
+}
+
+/// Renders one frame of every theme with no window, and reports what came out.
+///
+/// The unit tests cover each control on its own; this covers the whole tree
+/// laid out together, which is where a widget that demands more room than
+/// exists or a container that hands out nothing would show up. Being able to
+/// run it without a display also means a crash in the paint path is a command
+/// away rather than something to notice by launching.
+[[nodiscard]] int self_check() {
+  constexpr int kWidth = 1280;
+  constexpr int kHeight = 800;
+
+  int failures = 0;
+  for (const Theme& theme : built_in_themes()) {
+    const sk_sp<SkSurface> surface =
+        SkSurfaces::Raster(SkImageInfo::MakeN32Premul(kWidth, kHeight));
+    if (surface == nullptr) {
+      std::println("{}: no raster surface", theme.id);
+      ++failures;
+      continue;
+    }
+
+    WidgetHost host(build_interface());
+    const std::unique_ptr<SkiaPainter> painter = SkiaPainter::create(surface->getCanvas());
+    const LayoutContext context{theme, *painter};
+    const Rect client{0.0, 0.0, kWidth, kHeight};
+
+    host.resize(client, context);
+    surface->getCanvas()->clear(SK_ColorBLACK);
+    paint_surface(*painter, client, theme.style(cutline::ui::Part::Window));
+    host.paint(*painter, theme);
+
+    // Every widget has to have ended up somewhere real and inside the window.
+    // A degenerate rectangle here is a layout that gave a panel nothing, which
+    // on screen reads as a missing feature rather than as a bug.
+    int empty = 0;
+    int escaped = 0;
+    int counted = 0;
+    const auto walk = [&](this const auto& self, const Widget& widget) -> void {
+      ++counted;
+      if (widget.bounds().empty()) ++empty;
+      if (widget.bounds().x < -0.5 || widget.bounds().right() > kWidth + 0.5) ++escaped;
+      for (const auto& child : widget.children()) self(*child);
+    };
+    walk(host.root());
+
+    std::println("{:<10} {:>3} widgets, {} empty, {} outside the window", theme.id, counted,
+                 empty, escaped);
+    if (empty > 0 || escaped > 0) ++failures;
+  }
+  return failures == 0 ? 0 : 1;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  if (argc > 1 && std::string_view(argv[1]) == "--check") return self_check();
+
+  App app;
+  app.host = std::make_unique<WidgetHost>(build_interface());
+
+  const HINSTANCE instance = GetModuleHandleW(nullptr);
+  WNDCLASSEXW window_class{};
+  window_class.cbSize = sizeof(WNDCLASSEXW);
+  window_class.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
+  window_class.lpfnWndProc = window_proc;
+  window_class.hInstance = instance;
+  window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+  window_class.lpszClassName = L"CutlineThemeWindow";
+  RegisterClassExW(&window_class);
+
+  const HWND window =
+      CreateWindowExW(0, window_class.lpszClassName, L"Cutline", WS_OVERLAPPEDWINDOW,
+                      CW_USEDEFAULT, CW_USEDEFAULT, 1280, 800, nullptr, nullptr, instance,
+                      nullptr);
+  if (window == nullptr) {
+    std::println("could not create a window");
+    return 1;
+  }
+
+  SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&app));
+  SetWindowTextA(window, ("Cutline - " + app.current().name).c_str());
+  ShowWindow(window, SW_SHOW);
+
+  std::println("Themes:");
+  for (std::size_t i = 0; i < built_in_themes().size(); ++i) {
+    std::println("  {}  {}", i + 1, built_in_themes()[i].name);
+  }
+  std::println("Tab moves the focus, the wheel scrolls, the dividers drag.");
+
+  MSG message{};
+  while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+    TranslateMessage(&message);
+    DispatchMessageW(&message);
+    // Redrawn only when something actually changed. An interface that repaints
+    // at sixty hertz while sitting still is heat for nothing, and the frames
+    // that matter belong to the video.
+    if (app.dirty) InvalidateRect(window, nullptr, FALSE);
+  }
+  return 0;
+}

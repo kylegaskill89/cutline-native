@@ -66,6 +66,12 @@ add_subdirectory(src/audio)
 # And the theme model: data and lookup, with Skia needed only to paint it.
 add_subdirectory(src/ui)
 
+if(CUTLINE_WITH_SKIA)
+  # A window to look at the interface in. Needs no media and no GPU: chrome is
+  # drawn on the CPU and blitted, and the video has its own path.
+  add_subdirectory(tools/theme_window)
+endif()
+
 if(CUTLINE_WITH_MEDIA)
   add_subdirectory(src/media)
   add_subdirectory(tools/decode_bench)
