@@ -21,7 +21,9 @@
 #include "cutline/ui/widgets.hpp"
 
 #include <windows.h>
-// After windows.h, which is what defines the message parameters these unpack.
+// Both of these need windows.h first: one for the message parameters it
+// defines, the other for the types in its own signatures.
+#include <dwmapi.h>
 #include <windowsx.h>
 
 #if defined(_MSC_VER)
@@ -47,6 +49,7 @@ namespace {
 using cutline::ui::Axis;
 using cutline::ui::Box;
 using cutline::ui::Button;
+using cutline::ui::CaptionButton;
 using cutline::ui::Key;
 using cutline::ui::KeyEvent;
 using cutline::ui::Label;
@@ -61,6 +64,7 @@ using cutline::ui::SkiaPainter;
 using cutline::ui::Spacer;
 using cutline::ui::Splitter;
 using cutline::ui::Theme;
+using cutline::ui::TitleBar;
 using cutline::ui::WheelEvent;
 using cutline::ui::Widget;
 using cutline::ui::WidgetHost;
@@ -72,6 +76,10 @@ struct App {
   /// rebuilding the tree. Rebuilding would destroy the button whose click is
   /// still on the stack.
   std::vector<Button*> theme_buttons;
+  /// Asked which parts of the caption are draggable, so the buttons in it stay
+  /// clickable while the rest of it moves the window.
+  TitleBar* title_bar = nullptr;
+  CaptionButton* maximise = nullptr;
   HWND window = nullptr;
 
   std::size_t theme = 0;
@@ -100,11 +108,30 @@ void set_theme(App& app, std::size_t index);
 /// window behind it.
 [[nodiscard]] std::unique_ptr<Widget> build_interface(App* app) {
   auto shell = std::make_unique<Box>(Axis::Vertical);
+  shell->set_spacing(0.0);
+
+  // The window's own caption. The system one cannot be themed, so it is turned
+  // off in `WM_NCCALCSIZE` and this is drawn in its place.
+  auto& caption = shell->emplace<TitleBar>("Cutline");
+  if (app != nullptr) app->title_bar = &caption;
+
+  caption.emplace<CaptionButton>(CaptionButton::Kind::Minimise, [app] {
+    if (app != nullptr && app->window != nullptr) ShowWindow(app->window, SW_MINIMIZE);
+  });
+  auto& maximise = caption.emplace<CaptionButton>(CaptionButton::Kind::Maximise, [app] {
+    if (app == nullptr || app->window == nullptr) return;
+    ShowWindow(app->window, IsZoomed(app->window) ? SW_RESTORE : SW_MAXIMIZE);
+  });
+  caption.emplace<CaptionButton>(CaptionButton::Kind::Close, [app] {
+    if (app != nullptr && app->window != nullptr) PostMessageW(app->window, WM_CLOSE, 0, 0);
+  });
+  if (app != nullptr) app->maximise = &maximise;
 
   // The switcher lives in the window rather than on a keyboard shortcut. A
   // harness whose only control is an undocumented keystroke is one nobody can
   // use, including whoever wrote it.
   auto& bar = shell->emplace<Box>(Axis::Horizontal);
+  bar.set_padding(cutline::ui::Edges::all(4.0));
   bar.emplace<Label>("Theme");
   for (std::size_t i = 0; i < built_in_themes().size(); ++i) {
     auto& choice = bar.emplace<Button>(built_in_themes()[i].name, [app, i] {
@@ -282,10 +309,72 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
   }
 
   switch (message) {
+    case WM_NCCALCSIZE: {
+      // The whole point: with no non-client area, there is no system caption
+      // and no system border, and the interface owns every pixel.
+      if (wparam == FALSE) break;
+      auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(lparam);
+
+      if (IsZoomed(window)) {
+        // A maximised window's rectangle deliberately overhangs the monitor by
+        // the frame thickness. Without putting that back, the top of the
+        // interface — the caption itself — sits off the screen.
+        const int frame = GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+        params->rgrc[0].left += frame;
+        params->rgrc[0].right -= frame;
+        params->rgrc[0].top += frame;
+        params->rgrc[0].bottom -= frame;
+      }
+      return 0;
+    }
+
+    case WM_NCHITTEST: {
+      POINT at{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      ScreenToClient(window, &at);
+
+      RECT client{};
+      GetClientRect(window, &client);
+
+      // The resize edges have to be answered by hand now that there is no
+      // system frame to do it. A maximised window has none.
+      if (!IsZoomed(window)) {
+        const LONG grab = GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+        const bool left = at.x < grab;
+        const bool right = at.x >= client.right - grab;
+        const bool top = at.y < grab;
+        const bool bottom = at.y >= client.bottom - grab;
+
+        if (top && left) return HTTOPLEFT;
+        if (top && right) return HTTOPRIGHT;
+        if (bottom && left) return HTBOTTOMLEFT;
+        if (bottom && right) return HTBOTTOMRIGHT;
+        if (left) return HTLEFT;
+        if (right) return HTRIGHT;
+        if (top) return HTTOP;
+        if (bottom) return HTBOTTOM;
+      }
+
+      // The widget tree decides what drags the window: the caption itself
+      // does, and anything sitting on it — a button — does not. Asking the
+      // tree rather than comparing against a height is what keeps the two from
+      // drifting apart.
+      if (app->title_bar != nullptr &&
+          app->host->root().at(static_cast<double>(at.x), static_cast<double>(at.y)) ==
+              app->title_bar) {
+        return HTCAPTION;
+      }
+      return HTCLIENT;
+    }
+
     case WM_SIZE:
       resize_surface(*app, LOWORD(lparam), HIWORD(lparam));
       app->resized = true;
       app->dirty = true;
+      // Maximising swaps which glyph the middle caption button shows.
+      if (app->maximise != nullptr) {
+        app->maximise->set_kind(IsZoomed(window) ? CaptionButton::Kind::Restore
+                                                 : CaptionButton::Kind::Maximise);
+      }
       return 0;
 
     case WM_PAINT: {
@@ -479,6 +568,18 @@ int main(int argc, char** argv) {
   app.window = window;
   SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&app));
   SetWindowTextA(window, ("Cutline - " + app.current().name).c_str());
+
+  // One pixel of frame handed back to the compositor, which is enough to keep
+  // the drop shadow and the rounded corners the system draws around a window.
+  // Without it a borderless window looks like a rectangle pasted on the screen.
+  const MARGINS shadow{0, 0, 1, 0};
+  DwmExtendFrameIntoClientArea(window, &shadow);
+
+  // Forces the frame to be recalculated now that WM_NCCALCSIZE will answer
+  // differently, rather than at whatever moment the window is first moved.
+  SetWindowPos(window, nullptr, 0, 0, 0, 0,
+               SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+
   ShowWindow(window, SW_SHOW);
   SetForegroundWindow(window);
 

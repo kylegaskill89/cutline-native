@@ -91,6 +91,14 @@ class Painter : public TextMeasurer {
   /// side gets which colour is what makes a control look pressed.
   virtual void bevel(const Rect& bounds, const Bevel& bevel) = 0;
 
+  /// A straight line between two points.
+  ///
+  /// The one shape here that is not a rectangle, and it earns its place: a
+  /// close button's cross cannot be drawn without it, and neither can a
+  /// waveform, an audio meter, or a keyframe curve.
+  virtual void line(double x1, double y1, double x2, double y2, const Color& color,
+                    double width) = 0;
+
   virtual void shadow(const Rect& bounds, double corner_radius, const Shadow& shadow) = 0;
 
   /// Blurs whatever has already been drawn beneath `bounds`. The one primitive

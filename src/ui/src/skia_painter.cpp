@@ -177,6 +177,23 @@ void SkiaPainter::stroke(const Rect& bounds, double corner_radius, const Color& 
   impl_->canvas->drawRRect(rounded(inner, std::max(0.0, corner_radius - width / 2.0)), paint);
 }
 
+void SkiaPainter::line(double x1, double y1, double x2, double y2, const Color& color,
+                       double width) {
+  if (width <= 0.0 || color.a <= 0.0f) return;
+
+  SkPaint paint;
+  paint.setAntiAlias(true);
+  paint.setStyle(SkPaint::kStroke_Style);
+  paint.setStrokeWidth(static_cast<SkScalar>(width));
+  // Rounded ends, so the two strokes of a close button's cross meet cleanly
+  // instead of leaving a notch where they cross.
+  paint.setStrokeCap(SkPaint::kRound_Cap);
+  paint.setColor4f(to_sk(color));
+
+  impl_->canvas->drawLine(static_cast<SkScalar>(x1), static_cast<SkScalar>(y1),
+                          static_cast<SkScalar>(x2), static_cast<SkScalar>(y2), paint);
+}
+
 void SkiaPainter::bevel(const Rect& bounds, const Bevel& value) {
   if (bounds.empty() || value.width <= 0.0) return;
 

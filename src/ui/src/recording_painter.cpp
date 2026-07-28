@@ -14,6 +14,8 @@ std::string_view to_string(DrawCall::Kind kind) noexcept {
       return "fill";
     case DrawCall::Kind::Stroke:
       return "stroke";
+    case DrawCall::Kind::Line:
+      return "line";
     case DrawCall::Kind::Bevel:
       return "bevel";
     case DrawCall::Kind::Shadow:
@@ -46,6 +48,17 @@ void RecordingPainter::stroke(const Rect& bounds, double corner_radius, const Co
   calls_.push_back({.kind = DrawCall::Kind::Stroke,
                     .bounds = bounds,
                     .corner_radius = corner_radius,
+                    .color = color,
+                    .width = width});
+}
+
+void RecordingPainter::line(double x1, double y1, double x2, double y2, const Color& color,
+                            double width) {
+  // Stored as a displacement rather than as a normalised rectangle, so a line
+  // that runs up or to the left keeps its direction and an assertion can say
+  // which way it went.
+  calls_.push_back({.kind = DrawCall::Kind::Line,
+                    .bounds = Rect{x1, y1, x2 - x1, y2 - y1},
                     .color = color,
                     .width = width});
 }

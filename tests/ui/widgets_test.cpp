@@ -14,6 +14,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace cutline::ui {
 namespace {
@@ -362,6 +363,110 @@ TEST(Panel, KnowsHowMuchRoomItWants) {
   const double wanted = panel.sizing(Axis::Vertical, context).basis;
   EXPECT_DOUBLE_EQ(wanted, metrics.control_height + metrics.panel_header_height +
                                2.0 * metrics.panel_padding);
+}
+
+// --------------------------------------------------------------- caption --
+
+TEST(TitleBar, IsAsTallAsTheThemesCaption) {
+  const LayoutContext context = flat_context();
+  const TitleBar bar("Cutline");
+  EXPECT_DOUBLE_EQ(bar.sizing(Axis::Vertical, context).basis,
+                   context.metrics().title_bar_height);
+}
+
+TEST(TitleBar, PutsItsButtonsAtTheTrailingEdge) {
+  const LayoutContext context = flat_context();
+  TitleBar bar("Cutline");
+  auto& close = bar.emplace<CaptionButton>(CaptionButton::Kind::Close);
+  bar.arrange(Rect{0.0, 0.0, 600.0, 30.0}, context);
+
+  EXPECT_DOUBLE_EQ(close.bounds().right(), 600.0);
+  EXPECT_DOUBLE_EQ(close.bounds().height, 30.0);
+}
+
+TEST(TitleBar, DrawsItsSurfaceAndItsTitle) {
+  TitleBar bar("Cutline");
+  bar.arrange(Rect{0.0, 0.0, 600.0, 30.0}, flat_context());
+
+  RecordingPainter painter;
+  bar.paint(painter, default_theme());
+
+  const DrawCall* fill = painter.first(DrawCall::Kind::Fill);
+  ASSERT_NE(fill, nullptr);
+  EXPECT_EQ(fill->fill, default_theme().style(Part::TitleBar).fill);
+
+  const DrawCall* text = painter.first(DrawCall::Kind::Text);
+  ASSERT_NE(text, nullptr);
+  EXPECT_EQ(text->run->text, "Cutline");
+}
+
+TEST(CaptionButton, DrawsItsGlyphFromPrimitivesRatherThanAFont) {
+  // A caption font is not something that can be relied on to exist, and a
+  // close button rendering as a missing-glyph box would be worse than one
+  // drawn by hand.
+  CaptionButton close(CaptionButton::Kind::Close);
+  close.arrange(Rect{0.0, 0.0, 48.0, 30.0}, flat_context());
+
+  RecordingPainter painter;
+  close.paint(painter, default_theme());
+
+  EXPECT_EQ(painter.count(DrawCall::Kind::Line), 2u) << "a cross is two strokes";
+  EXPECT_EQ(painter.count(DrawCall::Kind::Text), 0u) << "it should not need a font";
+}
+
+TEST(CaptionButton, EachKindLooksDifferent) {
+  const auto shape_of = [](CaptionButton::Kind kind) {
+    CaptionButton button(kind);
+    button.arrange(Rect{0.0, 0.0, 48.0, 30.0}, flat_context());
+    RecordingPainter painter;
+    button.paint(painter, default_theme());
+    return std::pair{painter.count(DrawCall::Kind::Line),
+                     painter.count(DrawCall::Kind::Stroke)};
+  };
+
+  EXPECT_NE(shape_of(CaptionButton::Kind::Minimise), shape_of(CaptionButton::Kind::Close));
+  EXPECT_NE(shape_of(CaptionButton::Kind::Maximise), shape_of(CaptionButton::Kind::Restore));
+  EXPECT_NE(shape_of(CaptionButton::Kind::Minimise), shape_of(CaptionButton::Kind::Maximise));
+}
+
+TEST(CaptionButton, IsNotInTheTabOrder) {
+  // Closing the window because focus happened to be resting on the close
+  // button when Space was pressed would be unforgivable.
+  const CaptionButton close(CaptionButton::Kind::Close);
+  EXPECT_FALSE(close.focusable());
+}
+
+TEST(CaptionButton, IsWiderThanItIsTall) {
+  const LayoutContext context = flat_context();
+  const CaptionButton close(CaptionButton::Kind::Close);
+  EXPECT_GT(close.sizing(Axis::Horizontal, context).basis,
+            close.sizing(Axis::Vertical, context).basis);
+}
+
+TEST(CaptionButton, StillClicks) {
+  int closed = 0;
+  WidgetHost host(std::make_unique<TitleBar>("Cutline"));
+  auto& close =
+      host.root().emplace<CaptionButton>(CaptionButton::Kind::Close, [&closed] { ++closed; });
+  host.resize(Rect{0.0, 0.0, 600.0, 30.0}, flat_context());
+
+  const MouseEvent on_close = press(close.bounds().x + 4.0, 15.0);
+  host.mouse_down(on_close);
+  host.mouse_up(on_close);
+  EXPECT_EQ(closed, 1);
+}
+
+TEST(CaptionButton, TheBarItselfIsWhatAnswersADragOfTheWindow) {
+  // The platform layer asks the tree which parts move the window. Anything
+  // sitting on the caption must answer as itself, or the buttons stop working
+  // the moment the caption becomes draggable.
+  WidgetHost host(std::make_unique<TitleBar>("Cutline"));
+  auto& bar = static_cast<TitleBar&>(host.root());
+  auto& close = bar.emplace<CaptionButton>(CaptionButton::Kind::Close);
+  host.resize(Rect{0.0, 0.0, 600.0, 30.0}, flat_context());
+
+  EXPECT_EQ(host.root().at(20.0, 15.0), &bar) << "the empty caption should drag the window";
+  EXPECT_EQ(host.root().at(close.bounds().x + 4.0, 15.0), &close);
 }
 
 // --------------------------------------------------------- put together --

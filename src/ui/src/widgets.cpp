@@ -1,6 +1,7 @@
 #include "cutline/ui/widgets.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace cutline::ui {
@@ -167,6 +168,82 @@ LayoutItem Box::sizing(Axis axis, const LayoutContext& context) const {
                     .shrink = 1.0,
                     .min = minimum + surround,
                     .max = kUnbounded};
+}
+
+// --------------------------------------------------------------- title bar --
+
+TitleBar::TitleBar(std::string title) : Box(Axis::Horizontal), title_(std::move(title)) {
+  // The caption buttons sit at the trailing edge; the title is drawn at the
+  // leading one, so nothing has to be laid out around it.
+  set_main(Align::End);
+  set_spacing(0.0);
+}
+
+LayoutItem TitleBar::sizing(Axis axis, const LayoutContext& context) const {
+  if (axis == Axis::Vertical) return LayoutItem::fixed(context.metrics().title_bar_height);
+  return LayoutItem::flexible();
+}
+
+void TitleBar::paint_content(Painter& painter, const Theme& theme) const {
+  if (title_.empty()) return;
+
+  const SurfaceStyle& style = theme.style(Part::TitleBar, state());
+  const Rect area = inset(bounds(), Edges::symmetric(theme.metrics.padding_x, 0.0));
+  painter.text(text_run(area, title_, style, theme.metrics.font_size, TextAlign::Left, true));
+}
+
+// ---------------------------------------------------------- caption button --
+
+CaptionButton::CaptionButton(Kind kind, std::function<void()> on_click)
+    : Button({}, std::move(on_click)), kind_(kind) {
+  set_part(Part::ToolButton);
+  // Not in the tab order. Closing a window by accident because the focus
+  // happened to be resting on the close button would be unforgivable.
+  set_focusable(false);
+}
+
+LayoutItem CaptionButton::sizing(Axis axis, const LayoutContext& context) const {
+  const double height = context.metrics().title_bar_height;
+  if (axis == Axis::Vertical) return LayoutItem::fixed(height);
+  // Wider than tall, the way every caption button on the platform is.
+  return LayoutItem::fixed(std::round(height * 1.6));
+}
+
+void CaptionButton::paint_content(Painter& painter, const Theme& theme) const {
+  const SurfaceStyle& style = theme.style(part(), state());
+  const Color& ink = style.text;
+
+  // A square in the middle, the same size whichever glyph is drawn in it, so
+  // the three buttons look like a set rather than three separate decisions.
+  constexpr double kGlyph = 10.0;
+  const double cx = bounds().x + bounds().width / 2.0;
+  const double cy = bounds().y + bounds().height / 2.0;
+  const double half = kGlyph / 2.0;
+  const double weight = 1.0;
+
+  switch (kind_) {
+    case Kind::Minimise:
+      painter.line(cx - half, cy, cx + half, cy, ink, weight);
+      break;
+
+    case Kind::Maximise:
+      painter.stroke(Rect{cx - half, cy - half, kGlyph, kGlyph}, 0.0, ink, weight);
+      break;
+
+    case Kind::Restore: {
+      // Two overlapping squares, the front one offset down and left.
+      constexpr double kOffset = 2.5;
+      const double small = kGlyph - kOffset;
+      painter.stroke(Rect{cx - half + kOffset, cy - half, small, small}, 0.0, ink, weight);
+      painter.stroke(Rect{cx - half, cy - half + kOffset, small, small}, 0.0, ink, weight);
+      break;
+    }
+
+    case Kind::Close:
+      painter.line(cx - half, cy - half, cx + half, cy + half, ink, weight);
+      painter.line(cx + half, cy - half, cx - half, cy + half, ink, weight);
+      break;
+  }
 }
 
 // ---------------------------------------------------------------- splitter --

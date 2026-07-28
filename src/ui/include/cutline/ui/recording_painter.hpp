@@ -26,6 +26,7 @@ struct DrawCall {
     PopClip,
     Fill,
     Stroke,
+    Line,
     Bevel,
     Shadow,
     BackdropBlur,
@@ -33,12 +34,15 @@ struct DrawCall {
   };
 
   Kind kind = Kind::Fill;
+  /// For `Line`, the two endpoints as a rectangle: `x`/`y` is the first and
+  /// `width`/`height` away from it is the second, so a line that runs up or to
+  /// the left is stored with negative extents rather than being reordered.
   Rect bounds;
   double corner_radius = 0.0;
 
   Fill fill;                   ///< Fill
-  Color color;                 ///< Stroke
-  double width = 0.0;          ///< Stroke, and the blur radius for BackdropBlur
+  Color color;                 ///< Stroke, Line
+  double width = 0.0;          ///< Stroke, Line, and the blur radius for BackdropBlur
   std::optional<Bevel> bevel;  ///< Bevel
   std::optional<Shadow> shadow;///< Shadow
   std::optional<TextRun> run;  ///< Text
@@ -53,6 +57,8 @@ class RecordingPainter final : public Painter {
   void fill(const Rect& bounds, double corner_radius, const Fill& fill) override;
   void stroke(const Rect& bounds, double corner_radius, const Color& color,
               double width) override;
+  void line(double x1, double y1, double x2, double y2, const Color& color,
+            double width) override;
   void bevel(const Rect& bounds, const Bevel& bevel) override;
   void shadow(const Rect& bounds, double corner_radius, const Shadow& shadow) override;
   void backdrop_blur(const Rect& bounds, double corner_radius, double radius) override;

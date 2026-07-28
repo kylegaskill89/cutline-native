@@ -35,6 +35,8 @@ class SkiaPainter final : public Painter {
   void fill(const Rect& bounds, double corner_radius, const Fill& fill) override;
   void stroke(const Rect& bounds, double corner_radius, const Color& color,
               double width) override;
+  void line(double x1, double y1, double x2, double y2, const Color& color,
+            double width) override;
   void bevel(const Rect& bounds, const Bevel& bevel) override;
   void shadow(const Rect& bounds, double corner_radius, const Shadow& shadow) override;
   void backdrop_blur(const Rect& bounds, double corner_radius, double radius) override;

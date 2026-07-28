@@ -3,7 +3,11 @@ add_executable(theme_window main.cpp)
 target_link_libraries(theme_window PRIVATE
   cutline::options
   cutline::ui
-  cutline::ui_skia)
+  cutline::ui_skia
+  # The system caption is turned off and drawn by the interface instead. This
+  # is only for handing one pixel of frame back, so the window keeps the drop
+  # shadow and rounded corners the compositor draws around it.
+  dwmapi)
 
 # Skia is private to cutline::ui_skia, so it does not leak into the widget
 # layer. This tool needs it directly for one thing only: making the raster

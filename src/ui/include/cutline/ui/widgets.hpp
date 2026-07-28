@@ -144,6 +144,55 @@ class Box : public Widget {
   bool fills_cross_ = false;
 };
 
+/// The window's own caption, drawn rather than left to the system.
+///
+/// Windows' title bar is the one part of a window an application does not own,
+/// and it cannot be themed. An editor whose themes are meant to change chrome
+/// has to draw its own, or the top thirty pixels stay grey while everything
+/// beneath them turns into Luna.
+///
+/// The children are the caption buttons and sit at the trailing edge; the
+/// title is drawn at the leading edge. The platform layer asks the widget tree
+/// which parts of this are draggable, so the buttons stay clickable while the
+/// rest moves the window.
+class TitleBar : public Box {
+ public:
+  explicit TitleBar(std::string title = {});
+
+  [[nodiscard]] const std::string& title() const noexcept { return title_; }
+  void set_title(std::string title) { title_ = std::move(title); }
+
+  [[nodiscard]] Part part() const noexcept override { return Part::TitleBar; }
+  [[nodiscard]] bool paints_surface() const noexcept override { return true; }
+
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  void paint_content(Painter& painter, const Theme& theme) const override;
+
+ private:
+  std::string title_;
+};
+
+/// One of the three buttons at the end of a title bar.
+///
+/// The glyphs are drawn from primitives rather than set in a font. A caption
+/// font is not something that can be relied on to exist, and a close button
+/// that renders as a missing-glyph box is worse than one drawn by hand.
+class CaptionButton : public Button {
+ public:
+  enum class Kind { Minimise, Maximise, Restore, Close };
+
+  explicit CaptionButton(Kind kind, std::function<void()> on_click = {});
+
+  [[nodiscard]] Kind kind() const noexcept { return kind_; }
+  void set_kind(Kind kind) noexcept { kind_ = kind; }
+
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  void paint_content(Painter& painter, const Theme& theme) const override;
+
+ private:
+  Kind kind_;
+};
+
 /// Panes with draggable dividers between them: the docked layout itself.
 ///
 /// Each child is a pane, in order. Sizes are fractions, so resizing the window
