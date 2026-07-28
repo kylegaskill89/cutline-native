@@ -164,6 +164,29 @@ a file — decoding, resampling, building filter chains — happens when the pla
 is created, because WASAPI hands out a buffer every few milliseconds and missing
 that deadline is audible.
 
+### Painting is a small set of primitives, behind an interface
+
+Widgets do not draw. They ask the theme for the style of their part and state
+and hand it to `paint_surface`, which knows the one thing worth centralising:
+the order the pieces go down in. Outer shadow, then fill, then inner shadow
+clipped to the shape, then bevel, then border. An inner shadow drawn before the
+fill is painted over; a border drawn before the bevel is half covered by it.
+Both survive a glance at a screenshot, which is why the order lives in one
+function with tests on it.
+
+`Painter` is an interface for one reason: `RecordingPainter` captures the calls
+as data. "Does a pressed XP button invert its bevel" and "does an Aero panel
+blur what is behind it" become ordinary assertions, with no GPU and no
+screenshots to eyeball. `SkiaPainter` then makes the same calls for real, and is
+checked separately against a CPU raster surface — that a vertical gradient runs
+top to bottom, that a stroke lands inside its bounds rather than growing the
+control by a pixel, that a raised bevel is lit from above and an inset one is
+not.
+
+The split matters beyond testing. If a theme ever needs something the primitives
+cannot express, that is the model being wrong, and it surfaces at the painter
+rather than three layers into the timeline.
+
 ### Colour precision, and why HDR is deferred
 
 Compositing happens in **16-bit float linear light** throughout. Decode converts

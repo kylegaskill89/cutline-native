@@ -18,6 +18,7 @@ add_executable(cutline_core_tests
   render/effects_test.cpp
   render/mix_test.cpp
   render/plan_test.cpp
+  ui/painter_test.cpp
   ui/theme_test.cpp)
 
 target_link_libraries(cutline_core_tests PRIVATE
@@ -30,6 +31,24 @@ target_link_libraries(cutline_core_tests PRIVATE
 
 include(GoogleTest)
 gtest_discover_tests(cutline_core_tests)
+
+if(CUTLINE_WITH_SKIA)
+  # Rendered to a CPU raster surface and read back, so these need no GPU and no
+  # window. `RecordingPainter` proves the right calls are made in the right
+  # order; these prove they land as the right pixels.
+  # Skia is private to cutline::ui_skia so it does not leak upward; this test is
+  # the one place that legitimately needs it, to make a surface to draw into.
+  find_package(unofficial-skia CONFIG REQUIRED)
+
+  add_executable(cutline_ui_skia_tests ui/skia_painter_test.cpp)
+  target_link_libraries(cutline_ui_skia_tests PRIVATE
+    cutline::ui
+    cutline::ui_skia
+    unofficial::skia::skia
+    GTest::gtest
+    GTest::gtest_main)
+  gtest_discover_tests(cutline_ui_skia_tests)
+endif()
 
 if(CUTLINE_WITH_MEDIA)
   add_executable(cutline_media_tests
