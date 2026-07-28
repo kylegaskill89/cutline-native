@@ -17,12 +17,14 @@ add_executable(cutline_core_tests
   core/time_test.cpp
   render/effects_test.cpp
   render/mix_test.cpp
-  render/plan_test.cpp)
+  render/plan_test.cpp
+  ui/theme_test.cpp)
 
 target_link_libraries(cutline_core_tests PRIVATE
   cutline::audio
   cutline::core
   cutline::render
+  cutline::ui
   GTest::gtest
   GTest::gtest_main)
 

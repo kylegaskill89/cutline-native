@@ -27,6 +27,11 @@ option(CUTLINE_WITH_MEDIA "Build the media layer (requires FFmpeg)" OFF)
 # still opt-in so a machine without a D3D12 adapter can work on the core.
 option(CUTLINE_WITH_GPU "Build the Direct3D 12 layer" OFF)
 
+# Skia is a long build, like FFmpeg. The UI's theme, metrics and layout are pure
+# and need none of it -- only the painting does -- so the two are separable and
+# most UI work does not pay this cost.
+option(CUTLINE_WITH_SKIA "Build the Skia painting backend" OFF)
+
 add_library(cutline_options INTERFACE)
 add_library(cutline::options ALIAS cutline_options)
 
@@ -58,6 +63,8 @@ add_subdirectory(src/core)
 add_subdirectory(src/render)
 # Likewise the audio DSP -- arithmetic over sample buffers, no FFmpeg needed.
 add_subdirectory(src/audio)
+# And the theme model: data and lookup, with Skia needed only to paint it.
+add_subdirectory(src/ui)
 
 if(CUTLINE_WITH_MEDIA)
   add_subdirectory(src/media)

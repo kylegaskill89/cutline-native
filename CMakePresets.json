@@ -35,6 +35,18 @@
       }
     },
     {
+      "name": "ui",
+      "inherits": "base",
+      "displayName": "MSVC x64 with the media layer and Skia",
+      "description": "Everything, including the Skia widget backend. The first configure builds both FFmpeg and Skia from source and takes a long time; the UI's own theme and layout code needs neither and builds under the default preset.",
+      "cacheVariables": {
+        "CUTLINE_WITH_MEDIA": "ON",
+        "CUTLINE_WITH_GPU": "ON",
+        "CUTLINE_WITH_SKIA": "ON",
+        "VCPKG_MANIFEST_FEATURES": "media;gpu"
+      }
+    },
+    {
       "name": "ci",
       "inherits": "base",
       "displayName": "CI (warnings as errors)",
@@ -58,6 +70,11 @@
     {
       "name": "media",
       "configurePreset": "media",
+      "configuration": "Release"
+    },
+    {
+      "name": "ui",
+      "configurePreset": "ui",
       "configuration": "Release"
     },
     {
