@@ -1,6 +1,8 @@
 ﻿find_package(GTest CONFIG REQUIRED)
 
 add_executable(cutline_core_tests
+  audio/biquad_test.cpp
+  audio/chain_test.cpp
   core/animate_test.cpp
   core/arrange_test.cpp
   core/edit_test.cpp
@@ -12,9 +14,11 @@ add_executable(cutline_core_tests
   core/serialize_test.cpp
   core/time_test.cpp
   render/effects_test.cpp
+  render/mix_test.cpp
   render/plan_test.cpp)
 
 target_link_libraries(cutline_core_tests PRIVATE
+  cutline::audio
   cutline::core
   cutline::render
   GTest::gtest

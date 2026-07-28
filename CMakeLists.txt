@@ -56,6 +56,8 @@ endif()
 add_subdirectory(src/core)
 # Pure like the core, and built alongside it: a frame plan needs no GPU.
 add_subdirectory(src/render)
+# Likewise the audio DSP -- arithmetic over sample buffers, no FFmpeg needed.
+add_subdirectory(src/audio)
 
 if(CUTLINE_WITH_MEDIA)
   add_subdirectory(src/media)

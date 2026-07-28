@@ -1,5 +1,6 @@
 add_library(cutline_render
   src/effects.cpp
+  src/mix.cpp
   src/plan.cpp)
 add_library(cutline::render ALIAS cutline_render)
 
