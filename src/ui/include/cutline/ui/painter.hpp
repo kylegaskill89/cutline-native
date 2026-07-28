@@ -17,6 +17,7 @@
 
 #include "cutline/ui/theme.hpp"
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -41,6 +42,28 @@ struct Rect {
   [[nodiscard]] Rect inset(double amount) const noexcept;
 
   friend bool operator==(const Rect&, const Rect&) = default;
+};
+
+/// A borrowed view of 8-bit RGBA pixels, top row first.
+///
+/// Borrowed on purpose: a decoded frame is megabytes, and the interface has no
+/// business copying one to draw it. Whoever hands this over keeps the pixels
+/// alive until the draw returns, which is the whole of the contract.
+struct ImageView {
+  const std::uint8_t* pixels = nullptr;
+  int width = 0;
+  int height = 0;
+  /// Bytes per row. Zero means tightly packed, which is `width * 4`.
+  int stride = 0;
+
+  [[nodiscard]] bool empty() const noexcept {
+    return pixels == nullptr || width <= 0 || height <= 0;
+  }
+  [[nodiscard]] int row_bytes() const noexcept { return stride > 0 ? stride : width * 4; }
+  /// Width over height, or zero when there is no image.
+  [[nodiscard]] double aspect() const noexcept;
+
+  friend bool operator==(const ImageView&, const ImageView&) = default;
 };
 
 enum class TextAlign { Left, Center, Right };
@@ -100,6 +123,11 @@ class Painter : public TextMeasurer {
                     double width) = 0;
 
   virtual void shadow(const Rect& bounds, double corner_radius, const Shadow& shadow) = 0;
+
+  /// Draws pixels stretched to fill `bounds`. Letterboxing is the caller's
+  /// business — `fit_aspect` works out the rectangle, this fills whatever it is
+  /// given, so a deliberately squeezed frame stays possible.
+  virtual void image(const Rect& bounds, const ImageView& pixels) = 0;
 
   /// Blurs whatever has already been drawn beneath `bounds`. The one primitive
   /// that reads the surface rather than writing to it, and the reason Vista's

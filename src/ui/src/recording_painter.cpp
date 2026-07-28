@@ -16,6 +16,8 @@ std::string_view to_string(DrawCall::Kind kind) noexcept {
       return "stroke";
     case DrawCall::Kind::Line:
       return "line";
+    case DrawCall::Kind::Image:
+      return "image";
     case DrawCall::Kind::Bevel:
       return "bevel";
     case DrawCall::Kind::Shadow:
@@ -50,6 +52,12 @@ void RecordingPainter::stroke(const Rect& bounds, double corner_radius, const Co
                     .corner_radius = corner_radius,
                     .color = color,
                     .width = width});
+}
+
+void RecordingPainter::image(const Rect& bounds, const ImageView& pixels) {
+  // The view is recorded, not the pixels. Copying a frame here would be
+  // megabytes per call and would say nothing a test wants to know.
+  calls_.push_back({.kind = DrawCall::Kind::Image, .bounds = bounds, .image = pixels});
 }
 
 void RecordingPainter::line(double x1, double y1, double x2, double y2, const Color& color,

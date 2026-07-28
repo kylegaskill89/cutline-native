@@ -1,6 +1,7 @@
 add_library(cutline_ui
   src/controls.cpp
   src/layout.cpp
+  src/monitor.cpp
   src/painter.cpp
   src/recording_painter.cpp
   src/theme.cpp

@@ -22,6 +22,7 @@
 #include "cutline/editor/session.hpp"
 #include "cutline/editor/timeline_binding.hpp"
 #include "cutline/ui/controls.hpp"
+#include "cutline/ui/monitor.hpp"
 #include "cutline/ui/skia_painter.hpp"
 #include "cutline/ui/theme.hpp"
 #include "cutline/ui/timeline.hpp"
@@ -64,6 +65,7 @@ using cutline::ui::KeyEvent;
 using cutline::ui::Label;
 using cutline::ui::LayoutContext;
 using cutline::ui::Modifiers;
+using cutline::ui::MonitorView;
 using cutline::ui::MouseButton;
 using cutline::ui::MouseEvent;
 using cutline::ui::Panel;
@@ -126,6 +128,46 @@ using cutline::ui::built_in_themes;
   return project;
 }
 
+/// A frame for the monitor to show, generated rather than decoded.
+///
+/// This preset has no media layer on purpose — the point of it is the chrome —
+/// so there is nothing here to decode. Colour bars still prove the whole path
+/// works: pixels through the painter, letterboxed into the panel, at the
+/// sequence's own shape. What replaces this is the compositor's output, and
+/// the monitor will not know the difference.
+struct TestPattern {
+  static constexpr int kWidth = 640;
+  static constexpr int kHeight = 360;
+
+  TestPattern() : bytes(static_cast<std::size_t>(kWidth) * kHeight * 4) {
+    constexpr std::array<std::array<std::uint8_t, 3>, 7> kBars{{
+        {192, 192, 192}, {192, 192, 0}, {0, 192, 192}, {0, 192, 0},
+        {192, 0, 192},   {192, 0, 0},   {0, 0, 192},
+    }};
+
+    for (int y = 0; y < kHeight; ++y) {
+      for (int x = 0; x < kWidth; ++x) {
+        const auto& bar = kBars[static_cast<std::size_t>(x * 7 / kWidth)];
+        // Darkened towards the bottom, so it is obvious which way up it is and
+        // that the rows are not being read in the wrong order.
+        const double shade = 1.0 - 0.55 * (static_cast<double>(y) / kHeight);
+        const std::size_t at = (static_cast<std::size_t>(y) * kWidth + x) * 4;
+        for (int channel = 0; channel < 3; ++channel) {
+          bytes[at + static_cast<std::size_t>(channel)] =
+              static_cast<std::uint8_t>(bar[static_cast<std::size_t>(channel)] * shade);
+        }
+        bytes[at + 3] = 255;
+      }
+    }
+  }
+
+  [[nodiscard]] cutline::ui::ImageView view() const {
+    return cutline::ui::ImageView{.pixels = bytes.data(), .width = kWidth, .height = kHeight};
+  }
+
+  std::vector<std::uint8_t> bytes;
+};
+
 struct App {
   std::unique_ptr<WidgetHost> host;
   /// The switcher's buttons, so the selected one can be moved without
@@ -147,6 +189,8 @@ struct App {
   /// view. A `Box` rather than the panel, so clearing it does not take the
   /// scrolling with it.
   Box* inspector = nullptr;
+  /// Owned here so the pixels outlive every paint that borrows them.
+  TestPattern pattern;
 
   std::size_t theme = 0;
   bool dirty = true;
@@ -295,6 +339,13 @@ void refresh_timeline(App& app) {
   right.set_fractions({0.55, 0.45});
 
   auto& monitor = right.emplace<Panel>("Program Monitor");
+  auto& picture = monitor.emplace<MonitorView>();
+  if (app != nullptr) {
+    picture.set_frame(app->pattern.view());
+    const cutline::core::Project& project = app->session.project();
+    picture.set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
+  }
+
   auto& transport = monitor.emplace<Box>(Axis::Horizontal);
   transport.emplace<Button>("Mark In");
   transport.emplace<Button>("Mark Out");

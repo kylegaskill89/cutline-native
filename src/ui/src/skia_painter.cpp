@@ -16,7 +16,11 @@
 #include "include/core/SkFontMetrics.h"
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkFontStyle.h"
+#include "include/core/SkImage.h"
 #include "include/core/SkImageFilter.h"
+#include "include/core/SkImageInfo.h"
+#include "include/core/SkPixmap.h"
+#include "include/core/SkSamplingOptions.h"
 #include "include/core/SkMaskFilter.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPoint.h"
@@ -175,6 +179,27 @@ void SkiaPainter::stroke(const Rect& bounds, double corner_radius, const Color& 
   // half the width keeps the border inside its own bounds.
   const Rect inner = bounds.inset(width / 2.0);
   impl_->canvas->drawRRect(rounded(inner, std::max(0.0, corner_radius - width / 2.0)), paint);
+}
+
+void SkiaPainter::image(const Rect& bounds, const ImageView& view) {
+  if (view.empty() || bounds.empty()) return;
+
+  const SkImageInfo info = SkImageInfo::Make(view.width, view.height, kRGBA_8888_SkColorType,
+                                             kUnpremul_SkAlphaType);
+  const SkPixmap pixmap(info, view.pixels, static_cast<std::size_t>(view.row_bytes()));
+
+  // Wraps the caller's pixels rather than copying them. A decoded frame is
+  // megabytes and the draw happens before this returns, so there is nothing to
+  // gain by taking a copy of it.
+  const sk_sp<SkImage> image = SkImages::RasterFromPixmap(pixmap, nullptr, nullptr);
+  if (image == nullptr) return;
+
+  SkPaint paint;
+  paint.setAntiAlias(true);
+  // Linear rather than nearest: a preview is nearly always being scaled down,
+  // and point sampling makes a moving picture crawl.
+  impl_->canvas->drawImageRect(image, to_sk(bounds),
+                               SkSamplingOptions(SkFilterMode::kLinear), &paint);
 }
 
 void SkiaPainter::line(double x1, double y1, double x2, double y2, const Color& color,

@@ -50,6 +50,22 @@ Rect inset(const Rect& bounds, const Edges& edges) noexcept {
               std::max(0.0, bounds.height - edges.vertical())};
 }
 
+Rect fit_aspect(const Rect& bounds, double aspect) noexcept {
+  if (bounds.empty() || aspect <= 0.0) return {};
+
+  // Try filling the width first; if that comes out too tall, the height is the
+  // binding constraint instead.
+  double width = bounds.width;
+  double height = width / aspect;
+  if (height > bounds.height) {
+    height = bounds.height;
+    width = height * aspect;
+  }
+
+  return Rect{bounds.x + (bounds.width - width) / 2.0, bounds.y + (bounds.height - height) / 2.0,
+              width, height};
+}
+
 Edges panel_padding(const Metrics& metrics) noexcept {
   return Edges::all(metrics.panel_padding);
 }

@@ -59,6 +59,13 @@ struct Edges {
 /// `bounds` shrunk by `edges`, never past zero size.
 [[nodiscard]] Rect inset(const Rect& bounds, const Edges& edges) noexcept;
 
+/// The largest rectangle of the given aspect that fits inside `bounds`,
+/// centred — letterboxing.
+///
+/// A monitor that stretched its picture to fill the panel would be lying about
+/// the framing, which is the one thing a monitor exists not to do.
+[[nodiscard]] Rect fit_aspect(const Rect& bounds, double aspect) noexcept;
+
 /// The padding a theme asks for around a panel's contents, and around the
 /// contents of a control. Metrics live on the theme because bevelled chrome
 /// needs more room than flat chrome; these just spell out which number goes

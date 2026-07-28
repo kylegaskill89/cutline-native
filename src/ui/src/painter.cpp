@@ -5,6 +5,11 @@
 
 namespace cutline::ui {
 
+double ImageView::aspect() const noexcept {
+  if (empty()) return 0.0;
+  return static_cast<double>(width) / static_cast<double>(height);
+}
+
 Rect Rect::inset(double amount) const noexcept {
   const double shrink = std::min(amount, std::min(width, height) / 2.0);
   return Rect{x + shrink, y + shrink, std::max(0.0, width - 2.0 * shrink),
