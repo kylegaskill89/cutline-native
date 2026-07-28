@@ -18,6 +18,7 @@
 #include "cutline/core/edit.hpp"
 #include "cutline/core/model.hpp"
 #include "cutline/core/time.hpp"
+#include "cutline/editor/document.hpp"
 #include "cutline/editor/inspector.hpp"
 #include "cutline/editor/session.hpp"
 #include "cutline/editor/timeline_binding.hpp"
@@ -32,6 +33,7 @@
 #include <windows.h>
 // Both of these need windows.h first: one for the message parameters it
 // defines, the other for the types in its own signatures.
+#include <commdlg.h>
 #include <dwmapi.h>
 #include <windowsx.h>
 
@@ -46,8 +48,12 @@
 #pragma warning(pop)
 #endif
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
+#include <filesystem>
 #include <memory>
+#include <optional>
 #include <print>
 #include <string>
 #include <string_view>
@@ -189,6 +195,7 @@ struct App {
   /// view. A `Box` rather than the panel, so clearing it does not take the
   /// scrolling with it.
   Box* inspector = nullptr;
+  MonitorView* monitor = nullptr;
   /// Owned here so the pixels outlive every paint that borrows them.
   TestPattern pattern;
 
@@ -279,6 +286,100 @@ void refresh_timeline(App& app) {
   app.dirty = true;
 }
 
+/// Puts the document's name where it can be seen — in the caption the theme
+/// draws, and in the window text the taskbar reads.
+void refresh_title(App& app) {
+  const std::string title = app.session.document_title() + " - Cutline";
+  if (app.title_bar != nullptr) app.title_bar->set_title(title);
+  if (app.window != nullptr) SetWindowTextA(app.window, title.c_str());
+  app.dirty = true;
+}
+
+/// Everything a view needs told after the document has been replaced.
+void refresh_all(App& app) {
+  refresh_timeline(app);
+  refresh_title(app);
+  app.inspector_stale = true;
+  if (app.monitor != nullptr) {
+    const cutline::core::Project& project = app.session.project();
+    app.monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
+  }
+  if (app.host != nullptr) app.host->request_layout();
+}
+
+/// The system's open or save dialog.
+[[nodiscard]] std::optional<std::filesystem::path> choose_file(HWND owner, bool saving) {
+  std::array<wchar_t, MAX_PATH> buffer{};
+
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = owner;
+  // Doubly terminated, and embedded nulls separate the pairs, which is why
+  // this is a raw literal rather than anything that counts its own length.
+  dialog.lpstrFilter = L"Cutline project\0*.cutline\0All files\0*.*\0";
+  dialog.lpstrFile = buffer.data();
+  dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+  dialog.lpstrDefExt = L"cutline";
+  dialog.Flags = saving ? (OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST)
+                        : (OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST);
+
+  const BOOL chosen = saving ? GetSaveFileNameW(&dialog) : GetOpenFileNameW(&dialog);
+  if (chosen == FALSE) return std::nullopt;
+  return std::filesystem::path(buffer.data());
+}
+
+void complain(HWND owner, const std::string& message) {
+  MessageBoxA(owner, message.c_str(), "Cutline", MB_OK | MB_ICONWARNING);
+}
+
+void open_project(App& app) {
+  const auto path = choose_file(app.window, false);
+  if (!path.has_value()) return;
+
+  const auto loaded = cutline::editor::read_project(*path);
+  if (!loaded.has_value()) {
+    complain(app.window, "Could not open that project.\n\n" + loaded.error());
+    return;
+  }
+
+  app.session.reset(loaded->project, *path);
+  refresh_all(app);
+
+  // Warnings are not failures: a project whose footage has moved still opens,
+  // and saying so is more use than refusing it.
+  if (!loaded->warnings.empty()) {
+    std::string message = "The project opened with warnings:\n";
+    for (const std::string& warning : loaded->warnings) message += "\n" + warning;
+    complain(app.window, message);
+  }
+}
+
+/// Returns whether it was written, so a cancelled dialog is not mistaken for
+/// a successful save.
+bool save_project(App& app, bool ask_where) {
+  std::filesystem::path path = app.session.path();
+  if (ask_where || path.empty()) {
+    const auto chosen = choose_file(app.window, true);
+    if (!chosen.has_value()) return false;
+    path = cutline::editor::with_project_extension(*chosen);
+  }
+
+  const auto written = cutline::editor::write_project(path, app.session.project());
+  if (!written.has_value()) {
+    complain(app.window, "Could not save the project.\n\n" + written.error());
+    return false;
+  }
+
+  app.session.mark_saved(path);
+  refresh_title(app);
+  return true;
+}
+
+void new_project(App& app) {
+  app.session.reset(sample_project());
+  refresh_all(app);
+}
+
 /// The window's own widget tree: a switcher along the top, a browser down the
 /// left, a monitor and a timeline stacked on the right. Enough of the editor's
 /// shape to tell whether a theme holds together across it.
@@ -341,9 +442,8 @@ void refresh_timeline(App& app) {
   auto& monitor = right.emplace<Panel>("Program Monitor");
   auto& picture = monitor.emplace<MonitorView>();
   if (app != nullptr) {
+    app->monitor = &picture;
     picture.set_frame(app->pattern.view());
-    const cutline::core::Project& project = app->session.project();
-    picture.set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
   }
 
   auto& transport = monitor.emplace<Box>(Axis::Horizontal);
@@ -689,9 +789,22 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         const bool forward = wparam == 'Y' || held.shift;
         if (forward ? app->session.redo() : app->session.undo()) {
           refresh_timeline(*app);
+          refresh_title(*app);
           app->inspector_stale = true;
         }
         app->dirty = true;
+        return 0;
+      }
+      if (held.control && wparam == 'O') {
+        open_project(*app);
+        return 0;
+      }
+      if (held.control && wparam == 'S') {
+        save_project(*app, held.shift);
+        return 0;
+      }
+      if (held.control && wparam == 'N') {
+        new_project(*app);
         return 0;
       }
       const KeyEvent event{.key = key_from_win32(wparam),
@@ -826,7 +939,7 @@ int main(int argc, char** argv) {
 
   app.window = window;
   SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&app));
-  SetWindowTextA(window, ("Cutline - " + app.current().name).c_str());
+  refresh_title(app);
 
   // One pixel of frame handed back to the compositor, which is enough to keep
   // the drop shadow and the rounded corners the system draws around a window.

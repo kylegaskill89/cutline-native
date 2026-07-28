@@ -9,7 +9,9 @@ target_link_libraries(theme_window PRIVATE
   # The system caption is turned off and drawn by the interface instead. This
   # is only for handing one pixel of frame back, so the window keeps the drop
   # shadow and rounded corners the compositor draws around it.
-  dwmapi)
+  dwmapi
+  # The open and save dialogs.
+  comdlg32)
 
 # Skia is private to cutline::ui_skia, so it does not leak into the widget
 # layer. This tool needs it directly for one thing only: making the raster

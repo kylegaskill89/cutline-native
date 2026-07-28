@@ -8,7 +8,20 @@
 
 namespace cutline::editor {
 
-Session::Session(core::Project project) : project_(std::move(project)) {}
+Session::Session(core::Project project) : project_(std::move(project)), saved_(project_) {}
+
+void Session::mark_saved(std::filesystem::path path) {
+  path_ = std::move(path);
+  saved_ = project_;
+  modified_ = false;
+}
+
+std::string Session::document_title() const {
+  const std::string name = path_.empty() ? std::string("Untitled") : path_.filename().string();
+  return modified_ ? name + " *" : name;
+}
+
+void Session::refresh_modified() { modified_ = project_ != saved_; }
 
 bool Session::apply(core::Project next) {
   // Every core operation returns the project unchanged when it cannot apply,
@@ -19,16 +32,18 @@ bool Session::apply(core::Project next) {
   history_.push(project_);
   project_ = std::move(next);
   prune_selection();
+  refresh_modified();
   ++revision_;
   return true;
 }
 
-void Session::reset(core::Project project) {
+void Session::reset(core::Project project, std::filesystem::path path) {
   project_ = std::move(project);
   // The history belongs to the document being closed, not to the new one.
   history_.clear();
   selection_.clear();
   playhead_ = 0.0;
+  mark_saved(std::move(path));
   ++revision_;
 }
 
@@ -38,6 +53,9 @@ bool Session::undo() {
   project_ = std::move(*previous);
   // A clip that was undone back out of existence must not stay selected.
   prune_selection();
+  // Undoing back to what is on disk means there is nothing to save again,
+  // which a latched flag could never work out.
+  refresh_modified();
   ++revision_;
   return true;
 }
@@ -47,6 +65,7 @@ bool Session::redo() {
   if (!next.has_value()) return false;
   project_ = std::move(*next);
   prune_selection();
+  refresh_modified();
   ++revision_;
   return true;
 }

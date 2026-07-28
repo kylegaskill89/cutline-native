@@ -13,6 +13,7 @@
 #include "cutline/core/model.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <string>
 #include <string_view>
@@ -38,7 +39,28 @@ class Session {
 
   /// Replaces the project without recording anything. Opening a file, not
   /// editing one, so the history belongs to the document being closed.
-  void reset(core::Project project);
+  ///
+  /// The result counts as saved, because it is exactly what is on disk.
+  void reset(core::Project project, std::filesystem::path path = {});
+
+  // ------------------------------------------------------------- document --
+
+  /// Where this project lives. Empty for one that has never been saved.
+  [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
+
+  /// Whether anything has changed since it was last saved or opened.
+  ///
+  /// Compared against a snapshot rather than latched, so undoing back to the
+  /// state on disk correctly reports nothing to save. The comparison happens
+  /// on edits, which already compare whole projects, so asking is free.
+  [[nodiscard]] bool modified() const noexcept { return modified_; }
+
+  /// Records that what is here now is what is on disk.
+  void mark_saved(std::filesystem::path path);
+
+  /// For the title bar: the file's name, or "Untitled", marked when there is
+  /// anything unsaved.
+  [[nodiscard]] std::string document_title() const;
 
   [[nodiscard]] bool can_undo() const noexcept { return history_.can_undo(); }
   [[nodiscard]] bool can_redo() const noexcept { return history_.can_redo(); }
@@ -73,8 +95,16 @@ class Session {
  private:
   /// Drops selected ids that are not in the project any more.
   void prune_selection();
+  /// Recomputes whether there is anything to save.
+  void refresh_modified();
 
   core::Project project_;
+  /// What was last read from or written to disk, so `modified` can be answered
+  /// by comparison rather than by a flag that undo cannot correct.
+  core::Project saved_;
+  std::filesystem::path path_;
+  bool modified_ = false;
+
   core::History history_;
   std::vector<std::string> selection_;
   double playhead_ = 0.0;
