@@ -22,6 +22,7 @@ add_executable(cutline_core_tests
   ui/layout_test.cpp
   ui/painter_test.cpp
   ui/theme_test.cpp
+  ui/timeline_test.cpp
   ui/timescale_test.cpp
   ui/widget_test.cpp
   ui/widgets_test.cpp)

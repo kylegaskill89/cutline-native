@@ -4,6 +4,7 @@ add_library(cutline_ui
   src/recording_painter.cpp
   src/theme.cpp
   src/themes.cpp
+  src/timeline.cpp
   src/timescale.cpp
   src/widget.cpp
   src/widgets.cpp)

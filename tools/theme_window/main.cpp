@@ -15,8 +15,10 @@
 ///
 /// Not the editor. A harness for the parts of it that exist.
 
+#include "cutline/core/time.hpp"
 #include "cutline/ui/skia_painter.hpp"
 #include "cutline/ui/theme.hpp"
+#include "cutline/ui/timeline.hpp"
 #include "cutline/ui/widget.hpp"
 #include "cutline/ui/widgets.hpp"
 
@@ -64,6 +66,11 @@ using cutline::ui::SkiaPainter;
 using cutline::ui::Spacer;
 using cutline::ui::Splitter;
 using cutline::ui::Theme;
+using cutline::ui::TimelineBlock;
+using cutline::ui::TimelineModel;
+using cutline::ui::TimelineTrack;
+using cutline::ui::TimelineView;
+using cutline::ui::TimeScale;
 using cutline::ui::TitleBar;
 using cutline::ui::WheelEvent;
 using cutline::ui::Widget;
@@ -104,6 +111,30 @@ void set_theme(App& app, std::size_t index);
 /// left, a monitor and a timeline stacked on the right. Enough of the editor's
 /// shape to tell whether a theme holds together across it.
 ///
+/// Something for the timeline to show. Invented rather than loaded: the point
+/// is to see how a theme handles a wall of clips, not to decode anything.
+[[nodiscard]] TimelineModel sample_timeline() {
+  TimelineModel model;
+  model.fps = 30.0;
+
+  const auto run = [](double from, double to, std::string label) {
+    return TimelineBlock{.start = from, .end = to, .label = std::move(label)};
+  };
+
+  model.tracks = {
+      TimelineTrack{.name = "V2", .blocks = {run(6.0, 11.5, "title"), run(24.0, 29.0, "lower third")}},
+      TimelineTrack{.name = "V1",
+                    .blocks = {run(0.0, 6.2, "wide"), run(6.2, 14.0, "close"),
+                               run(14.0, 22.5, "cutaway"), run(22.5, 38.0, "walk out")}},
+      TimelineTrack{.name = "A1",
+                    .audio = true,
+                    .blocks = {run(0.0, 22.5, "dialogue"), run(22.5, 38.0, "room tone")}},
+      TimelineTrack{
+          .name = "A2", .audio = true, .muted = true, .blocks = {run(2.0, 38.0, "score")}},
+  };
+  return model;
+}
+
 /// `app` may be null, so the headless check can build the same tree with no
 /// window behind it.
 [[nodiscard]] std::unique_ptr<Widget> build_interface(App* app) {
@@ -170,18 +201,16 @@ void set_theme(App& app, std::size_t index);
   tools.emplace<Button>("Razor");
   tools.emplace<Button>("Slip");
   tools.emplace<Spacer>();
-  auto& readout = tools.emplace<Label>("00:00:04:11");
+  auto& readout = tools.emplace<Label>("00:00:00:00");
   readout.set_align(cutline::ui::TextAlign::Right);
 
-  auto& tracks = timeline.emplace<ScrollView>(Axis::Vertical);
-  auto rows = std::make_unique<Box>(Axis::Vertical);
-  for (int i = 1; i <= 8; ++i) {
-    auto& row = rows->emplace<Box>(Axis::Horizontal);
-    row.emplace<Label>(i <= 4 ? "V" + std::to_string(5 - i) : "A" + std::to_string(i - 4));
-    row.emplace<Button>("Clip on track " + std::to_string(i));
-    row.emplace<Spacer>();
-  }
-  tracks.set_content(std::move(rows));
+  auto& tracks = timeline.emplace<TimelineView>();
+  tracks.set_model(sample_timeline());
+  tracks.set_scale(TimeScale{.pixels_per_second = 60.0});
+  // Enough to see the readout follow a scrub, which is the point of having it.
+  tracks.set_on_scrub([&readout, fps = sample_timeline().fps](double at) {
+    readout.set_text(cutline::core::seconds_to_timecode(at, fps));
+  });
 
   shell->add(std::move(root));
   return shell;

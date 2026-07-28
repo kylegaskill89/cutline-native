@@ -207,6 +207,8 @@ struct Metrics {
   double track_height = 56.0;
   double audio_track_height = 44.0;
   double ruler_height = 24.0;
+  /// Width of the column of track headers down the left of the timeline.
+  double track_header_width = 140.0;
 
   friend bool operator==(const Metrics&, const Metrics&) = default;
 };
