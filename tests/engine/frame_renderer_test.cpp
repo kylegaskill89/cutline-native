@@ -386,6 +386,62 @@ TEST_F(FootageTest, RendersActualPictureContent) {
   EXPECT_EQ(a.a, 255);
 }
 
+// --------------------------------------------------------- decode economy --
+//
+// A preview that seeks per frame and one that decodes through look identical
+// from outside and cost very differently: a seek is roughly seventeen times a
+// sequential decode, because it re-decodes from a keyframe.
+
+TEST_F(FootageTest, PlayingForwardsDecodesEachFrameOnce) {
+  const Project p = with_video();
+  constexpr double kFps = 60.0;
+  constexpr int kFrames = 90;
+
+  for (int i = 0; i < kFrames; ++i) {
+    ASSERT_TRUE(renderer_->render(p, i / kFps).has_value());
+  }
+
+  const auto stats = renderer_->decode_stats();
+  // One seek to position the source at the start, and none after it.
+  EXPECT_LE(stats.seeks, 1);
+  // About one source frame per output frame, with slack for the decoder
+  // settling onto the first.
+  EXPECT_LT(stats.frames_decoded, kFrames + 10);
+}
+
+TEST_F(FootageTest, AStepSmallerThanAFrameDoesNotSeek) {
+  // The decoder stops at the first frame reaching the request, so it sits up to
+  // one frame *ahead* of what was asked for. A later request closer than that
+  // overshoot used to read as a move backwards and cost a whole GOP: 17 seeks
+  // and 1827 decoded frames over six seconds of playback, against 384 once it
+  // was tolerated.
+  const Project p = with_video();
+
+  ASSERT_TRUE(renderer_->render(p, 1.0).has_value());
+  const auto after_first = renderer_->decode_stats();
+
+  // Steps of a third of a frame, which a playhead driven by an audio clock
+  // produces constantly.
+  for (int i = 1; i <= 30; ++i) {
+    ASSERT_TRUE(renderer_->render(p, 1.0 + i / 180.0).has_value());
+  }
+
+  const auto stats = renderer_->decode_stats();
+  EXPECT_EQ(stats.seeks, after_first.seeks) << "a sub-frame step forced a seek";
+  EXPECT_EQ(stats.backward_seeks, after_first.backward_seeks);
+}
+
+TEST_F(FootageTest, AGenuineJumpBackwardsStillSeeks) {
+  // The tolerance must not swallow a real backwards move, or scrubbing would
+  // show a stale frame.
+  const Project p = with_video();
+  ASSERT_TRUE(renderer_->render(p, 5.0).has_value());
+  const auto before = renderer_->decode_stats();
+
+  ASSERT_TRUE(renderer_->render(p, 1.0).has_value());
+  EXPECT_GT(renderer_->decode_stats().backward_seeks, before.backward_seeks);
+}
+
 TEST_F(FootageTest, DifferentTimesGiveDifferentFrames) {
   const Project p = with_video();
   const gpu::Image early = render(p, 0.5);

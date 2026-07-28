@@ -33,6 +33,9 @@ constexpr double kDecodeForwardWindow = 0.5;
 /// chasing floating-point noise in the timestamps.
 constexpr double kFrameEpsilon = 1e-4;
 
+/// Assumed source frame interval when a stream does not report a usable rate.
+constexpr double kAssumedFrameGap = 1.0 / 30.0;
+
 [[nodiscard]] BlendMode to_gpu_blend(core::BlendMode mode) noexcept {
   switch (mode) {
     case core::BlendMode::Add:
@@ -175,6 +178,8 @@ struct FrameRenderer::Impl {
   /// into decoder-owned memory, so both are kept alive across the call.
   std::vector<gpu::FrameView> views;
 
+  DecodeStats stats;
+
   /// Positions the source at `time` and returns its frame, or null.
   [[nodiscard]] const AVFrame* frame_at(const core::Media& media, double time);
 };
@@ -183,11 +188,15 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   auto found = sources.find(media.id);
   if (found == sources.end()) {
     Source source;
-    // Software decode, deliberately for now: hardware frames stay in GPU memory
-    // as D3D11 textures, and the compositor still uploads from plane pointers.
-    // Sharing them across to D3D12 without a round trip is the pending piece of
-    // work, and asking for hardware here before that exists would just produce
-    // frames nothing can draw.
+    // Software decode, deliberately: the compositor uploads from plane
+    // pointers, and a hardware frame has none to give. The decoder can now
+    // produce Direct3D 12 textures on the compositor's own device, but nothing
+    // yet samples them, and asking for frames nothing can draw would only fail
+    // later and less clearly.
+    //
+    // The gap is smaller than it sounds. Measured on 4K60 HEVC, software decode
+    // costs 2.13 ms a frame against 1.70 ms for d3d12va — 1.3x, not the order
+    // of magnitude the phrase "hardware decode" suggests.
     auto opened = VideoDecoder::open(media.path,
                                      {.preferred = media::Acceleration::Software});
     if (!opened) {
@@ -208,7 +217,18 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
     return current != nullptr ? current : source.held.get();
   }
 
-  const bool backwards = source.position < 0.0 || time < source.position;
+  // Decoding stops at the first frame whose timestamp reaches the request, so
+  // the decoder usually sits a little *ahead* of where it was asked for — up to
+  // one frame. A later request that is closer than that overshoot then looks
+  // like a move backwards, and seeking costs a whole GOP.
+  //
+  // Playing a 60fps source measured 17 of these in six seconds, and they were
+  // most of the decoding: 1827 source frames for 184 drawn. Tolerating a
+  // backwards move smaller than one frame shows a picture at most one frame
+  // early, which no one can see, instead of re-decoding from a keyframe.
+  const double fps = source.decoder->stream().fps;
+  const double frame_gap = fps > 0.0 ? 1.0 / fps : kAssumedFrameGap;
+  const bool backwards = source.position < 0.0 || time < source.position - frame_gap;
   // An exhausted source has nothing further to find, so seeking ahead in one
   // would re-seek and re-decode to end of stream for every remaining frame.
   // That is not a small cost: it turned a clip trimmed two seconds past its
@@ -216,6 +236,12 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   const bool far_ahead = !source.exhausted && time > source.position + kDecodeForwardWindow;
 
   if (backwards || far_ahead) {
+    ++stats.seeks;
+    if (backwards) {
+      ++stats.backward_seeks;
+    } else {
+      ++stats.forward_seeks;
+    }
     if (!source.decoder->seek(time)) {
       source.usable = false;
       return nullptr;
@@ -241,6 +267,7 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
       source.exhausted = true;
       break;
     }
+    ++stats.frames_decoded;
     source.position = source.decoder->timestamp();
     source.hold(source.decoder->frame());
   }
@@ -258,6 +285,8 @@ gpu::Compositor& FrameRenderer::compositor() noexcept { return *impl_->composito
 const std::vector<std::string>& FrameRenderer::missing_media() const noexcept {
   return impl_->missing;
 }
+
+FrameRenderer::DecodeStats FrameRenderer::decode_stats() const noexcept { return impl_->stats; }
 
 void FrameRenderer::release_sources() { impl_->sources.clear(); }
 

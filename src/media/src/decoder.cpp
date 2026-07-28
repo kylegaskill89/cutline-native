@@ -2,6 +2,17 @@
 
 #include "av_common.hpp"
 
+// Pulls in d3d12.h, so it gets the same warning treatment as the rest of libav.
+#if defined(_MSC_VER)
+#pragma warning(push, 0)
+#endif
+extern "C" {
+#include <libavutil/hwcontext_d3d12va.h>
+}
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
 #include <format>
 #include <utility>
 
@@ -43,10 +54,43 @@ AVPixelFormat pick_hardware_format(AVCodecContext* ctx, const AVPixelFormat* for
   }
 }
 
+/// Builds a D3D12VA device context around an existing `ID3D12Device`.
+///
+/// `av_hwdevice_ctx_create` would make its own device, and frames on a device
+/// the compositor does not own have to be shared or copied to be drawn.
+/// Allocating the context by hand and filling in the device is what keeps the
+/// decoder and the compositor on the same one.
+[[nodiscard]] AVBufferRef* d3d12_context_for(void* device) {
+  if (device == nullptr) return nullptr;
+
+  AVBufferRef* ref = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D12VA);
+  if (ref == nullptr) return nullptr;
+
+  auto* context = reinterpret_cast<AVHWDeviceContext*>(ref->data);
+  auto* d3d12 = static_cast<AVD3D12VADeviceContext*>(context->hwctx);
+  d3d12->device = static_cast<ID3D12Device*>(device);
+  // The context releases this on teardown whether or not it allocated it, so
+  // the reference has to be ours to give away.
+  d3d12->device->AddRef();
+
+  if (av_hwdevice_ctx_init(ref) < 0) {
+    av_buffer_unref(&ref);
+    return nullptr;
+  }
+  return ref;
+}
+
 }  // namespace
 
 std::string_view to_string(Acceleration acceleration) noexcept {
-  return acceleration == Acceleration::D3D11Va ? "d3d11va" : "software";
+  switch (acceleration) {
+    case Acceleration::D3D12Va:
+      return "d3d12va";
+    case Acceleration::D3D11Va:
+      return "d3d11va";
+    default:
+      return "software";
+  }
 }
 
 struct VideoDecoder::Impl {
@@ -112,16 +156,32 @@ std::expected<std::unique_ptr<VideoDecoder>, std::string> VideoDecoder::open(std
   // Hardware first, then software. Support varies by codec, driver, and file,
   // so falling back here is routine rather than exceptional — and it is checked
   // before opening, so the reported acceleration is the real one.
-  if (options.preferred == Acceleration::D3D11Va) {
-    const AVPixelFormat hw_format = hardware_pixel_format(codec, AV_HWDEVICE_TYPE_D3D11VA);
-    if (hw_format != AV_PIX_FMT_NONE &&
-        av_hwdevice_ctx_create(&impl->hw_device, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) >=
-            0) {
-      impl->codec->hw_device_ctx = av_buffer_ref(impl->hw_device);
-      impl->codec->opaque = reinterpret_cast<void*>(static_cast<intptr_t>(hw_format));
-      impl->codec->get_format = pick_hardware_format;
-      impl->acceleration = Acceleration::D3D11Va;
+  const auto try_hardware = [&](AVHWDeviceType type, Acceleration kind, void* device) {
+    if (impl->acceleration != Acceleration::Software) return;
+
+    const AVPixelFormat hw_format = hardware_pixel_format(codec, type);
+    if (hw_format == AV_PIX_FMT_NONE) return;
+
+    if (device != nullptr) {
+      impl->hw_device = d3d12_context_for(device);
+    } else if (av_hwdevice_ctx_create(&impl->hw_device, type, nullptr, nullptr, 0) < 0) {
+      impl->hw_device = nullptr;
     }
+    if (impl->hw_device == nullptr) return;
+
+    impl->codec->hw_device_ctx = av_buffer_ref(impl->hw_device);
+    impl->codec->opaque = reinterpret_cast<void*>(static_cast<intptr_t>(hw_format));
+    impl->codec->get_format = pick_hardware_format;
+    impl->acceleration = kind;
+  };
+
+  if (options.preferred == Acceleration::D3D12Va) {
+    try_hardware(AV_HWDEVICE_TYPE_D3D12VA, Acceleration::D3D12Va, options.d3d12_device);
+    // Falling back to D3D11 rather than straight to the CPU: it still decodes
+    // on the GPU, and a copy across devices beats a software decode.
+    try_hardware(AV_HWDEVICE_TYPE_D3D11VA, Acceleration::D3D11Va, nullptr);
+  } else if (options.preferred == Acceleration::D3D11Va) {
+    try_hardware(AV_HWDEVICE_TYPE_D3D11VA, Acceleration::D3D11Va, nullptr);
   }
   if (impl->acceleration == Acceleration::Software) {
     impl->codec->thread_count = options.threads;
@@ -226,6 +286,22 @@ std::expected<void, std::string> VideoDecoder::seek(double seconds) {
   d.draining = false;
   d.finished = false;
   return {};
+}
+
+std::optional<HardwareTexture> VideoDecoder::hardware_texture() const noexcept {
+  const AVFrame* frame = impl_->decoded;
+  if (frame == nullptr || frame->format != AV_PIX_FMT_D3D12) return std::nullopt;
+
+  // For D3D12VA, data[0] points at the frame descriptor rather than at pixels.
+  const auto* descriptor = reinterpret_cast<const AVD3D12VAFrame*>(frame->data[0]);
+  if (descriptor == nullptr || descriptor->texture == nullptr) return std::nullopt;
+
+  return HardwareTexture{
+      .resource = descriptor->texture,
+      .subresource = descriptor->subresource_index,
+      .fence = descriptor->sync_ctx.fence,
+      .fence_value = descriptor->sync_ctx.fence_value,
+  };
 }
 
 Acceleration VideoDecoder::acceleration() const noexcept { return impl_->acceleration; }

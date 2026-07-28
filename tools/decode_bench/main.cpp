@@ -139,8 +139,11 @@ int main(int argc, char** argv) {
   }
   std::println("");
 
-  const Result sequential = run_sequential(path, limit, Acceleration::D3D11Va);
-  report("sequential (gpu)", sequential);
+  const Result sequential = run_sequential(path, limit, Acceleration::D3D12Va);
+  report("sequential (d3d12)", sequential);
+
+  const Result sequential_11 = run_sequential(path, limit, Acceleration::D3D11Va);
+  report("sequential (d3d11)", sequential_11);
 
   const Result sequential_sw = run_sequential(path, limit, Acceleration::Software);
   report("sequential (cpu)", sequential_sw);
@@ -148,13 +151,17 @@ int main(int argc, char** argv) {
   // Seeking is slow enough that a full run would take far too long, so this
   // samples a smaller number of frames and reports the per-frame cost.
   const int seek_limit = limit < 30 ? limit : 30;
-  const Result seeking = run_per_frame_seek(path, seek_limit, video->fps, Acceleration::D3D11Va);
-  report("per-frame seek (gpu)", seeking);
+  const Result seeking = run_per_frame_seek(path, seek_limit, video->fps, Acceleration::D3D12Va);
+  report("per-frame seek", seeking);
 
   std::println("");
   if (sequential.ms_per_frame() > 0.0 && seeking.ms_per_frame() > 0.0) {
     std::println("per-frame seeking costs {:.1f}x more per frame than decoding in order",
                  seeking.ms_per_frame() / sequential.ms_per_frame());
+  }
+  if (sequential.ms_per_frame() > 0.0 && sequential_sw.ms_per_frame() > 0.0) {
+    std::println("hardware decode is {:.1f}x faster than software",
+                 sequential_sw.ms_per_frame() / sequential.ms_per_frame());
   }
   if (sequential.fps() > 0.0 && video->fps > 0.0) {
     std::println("sequential decode runs at {:.1f}x realtime", sequential.fps() / video->fps);

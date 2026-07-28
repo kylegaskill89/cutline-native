@@ -78,14 +78,29 @@ card keeps time and the picture follows it: audio is the one that cannot be
 nudged, since a dropped video frame is invisible at 60 Hz where a gap of the same
 length in audio is a click.
 
-It also reports whether the preview kept up, which turned up a real number worth
-knowing. On a 4K60 source it draws about **27 of every 60 frames**, and the split
-says why: **29 ms compositing, 0.3 ms presenting**. On a project with nothing to
-decode it runs at 64 fps with 0.3 ms compositing — so the compositor and the
-presenter are free, and every millisecond of that 29 is software decode of 4K
-HEVC. Export avoids it by never skipping frames; the preview skips, so it decodes
-several source frames per drawn one and the effect compounds. Zero-copy hardware
-decode is the fix, and it was already the next item on the list.
+It also reports whether the preview kept up, and that number drove the next
+round of work. It started at **27 of every 60 frames**; it now runs at **57 fps,
+95%** of a 4K60 project, decoding 386 source frames for 367 drawn and seeking
+once.
+
+Neither fix was hardware decode, which is what the 29 ms of "compositing" looked
+like it needed. The two that mattered:
+
+- **A sub-frame step was reading as a seek.** Decoding stops at the first frame
+  reaching the requested time, so the decoder sits up to one frame *ahead*. A
+  later request closer than that overshoot looked like a move backwards, and a
+  seek re-decodes from a keyframe — 17 seeks and 1827 decoded frames over six
+  seconds, against 384 once a backwards move smaller than one frame was
+  tolerated. Compositing went from 23 ms to 2 ms.
+- **`Sleep(1)` is 15.6 ms** at Windows' default scheduler tick, which is most of
+  a frame at 60 Hz. `timeBeginPeriod(1)` took the preview from 33 to 57 fps.
+
+The decoder can now produce Direct3D 12 textures on the compositor's own device
+(`d3d12va`, FFmpeg 8), which is the groundwork for sampling frames without a
+copy. It is not yet what draws them, and the measurement says there is less in it
+than the phrase suggests: on 4K60 HEVC, software decode costs **2.13 ms/frame
+against 1.70 ms** for d3d12va. Hardware decode is 1.3× here, not an order of
+magnitude.
 
 **Phase 4 underway** — a project now renders end to end. `render_frame` takes a
 project file and a time and writes a PNG, going through the whole chain: the

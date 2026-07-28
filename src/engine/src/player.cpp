@@ -149,6 +149,17 @@ struct Player::Impl {
   /// snaps back to what the card has really played.
   std::atomic<std::int64_t> anchor{0};
 
+  /// The furthest position already handed out, so playback never appears to
+  /// step backwards.
+  ///
+  /// Interpolating between anchors is not monotonic on its own: when a new
+  /// anchor lands, the extrapolation it replaces may have run past it, and the
+  /// next reading is lower. That is a few milliseconds of wobble, and it is
+  /// invisible right up until something downstream treats a backwards request
+  /// as a seek — which the frame renderer does, at roughly seventeen times the
+  /// cost of decoding the next frame.
+  mutable std::atomic<double> furthest{0.0};
+
   /// A seek waiting to be applied by the render thread. Applying it there
   /// rather than here is what keeps the mixer touched by one thread only.
   std::mutex control;
@@ -437,7 +448,15 @@ double Player::position() const noexcept {
       std::chrono::steady_clock::duration{stamp}};
   const double since = std::chrono::duration<double>(std::chrono::steady_clock::now() - at)
                            .count();
-  return anchored + std::clamp(since, 0.0, kMaxExtrapolation);
+  const double interpolated = anchored + std::clamp(since, 0.0, kMaxExtrapolation);
+
+  double seen = impl_->furthest.load(std::memory_order_acquire);
+  while (interpolated > seen) {
+    if (impl_->furthest.compare_exchange_weak(seen, interpolated, std::memory_order_acq_rel)) {
+      return interpolated;
+    }
+  }
+  return std::max(seen, interpolated);
 }
 
 void Player::seek(double seconds) {
@@ -451,6 +470,8 @@ void Player::seek(double seconds) {
   // Cleared, or the position would be extrapolated forward from an anchor
   // belonging to where playback used to be.
   impl_->anchor.store(0, std::memory_order_release);
+  // A seek is the one time the playhead is allowed to move backwards.
+  impl_->furthest.store(impl_->seek_target, std::memory_order_release);
 }
 
 double Player::duration() const noexcept { return impl_->timeline; }

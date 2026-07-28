@@ -23,6 +23,7 @@
 #include "cutline/gpu/compositor.hpp"
 #include "cutline/gpu/device.hpp"
 
+#include <cstdint>
 #include <expected>
 #include <memory>
 #include <string>
@@ -56,6 +57,26 @@ class FrameRenderer {
   /// Media ids that could not be opened during the last `render`, in the order
   /// they were met. Empty when everything resolved.
   [[nodiscard]] const std::vector<std::string>& missing_media() const noexcept;
+
+  /// How much decoding has happened since the renderer was made.
+  ///
+  /// A seek costs roughly seventeen times what decoding the next frame does, so
+  /// the ratio between these two is the difference between a preview that plays
+  /// and one that crawls. It is not visible from outside otherwise — a slow
+  /// preview looks the same whether it is compositing slowly or seeking on
+  /// every frame, and those want opposite fixes.
+  struct DecodeStats {
+    std::int64_t frames_decoded = 0;
+    std::int64_t seeks = 0;
+    /// Split by reason, because they mean opposite things. Backwards seeks
+    /// during forward playback mean the playhead is going backwards and
+    /// something upstream is wrong; forward ones mean the request jumped
+    /// further than decoding through would cover, which is the threshold's
+    /// judgement and may simply be miscalibrated.
+    std::int64_t backward_seeks = 0;
+    std::int64_t forward_seeks = 0;
+  };
+  [[nodiscard]] DecodeStats decode_stats() const noexcept;
 
   /// Drops every open decoder. Worth doing when the timeline changes enough
   /// that the cached sources are no longer the ones being asked for.

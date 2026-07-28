@@ -50,6 +50,15 @@ class Device {
   /// Blocks until the GPU has finished everything submitted so far.
   void wait_for_idle();
 
+  /// The underlying `ID3D12Device*`, untyped so d3d12.h does not leak out of
+  /// this library.
+  ///
+  /// This exists for the decoder. Hardware video decode allocates its frames on
+  /// a device, and frames on a device the compositor does not own must be
+  /// shared or copied before anything can draw them — so the decoder is handed
+  /// this one and there is nothing to share.
+  [[nodiscard]] void* native_device() const noexcept;
+
   /// The Direct3D objects. Defined in an internal header: callers outside this
   /// library have no use for them, and keeping the type opaque is what stops
   /// d3d12.h leaking into the rest of the program.

@@ -141,6 +141,7 @@ Device::~Device() {
 
 const std::string& Device::adapter_name() const noexcept { return impl_->adapter; }
 bool Device::is_software() const noexcept { return impl_->software; }
+void* Device::native_device() const noexcept { return impl_->device.Get(); }
 void Device::wait_for_idle() { impl_->wait_for_idle(); }
 
 std::expected<std::shared_ptr<Device>, std::string> Device::create(DeviceOptions options) {

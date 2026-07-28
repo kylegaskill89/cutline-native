@@ -95,6 +95,63 @@ TEST_F(ReferenceMedia, DecodesFramesInOrder) {
   EXPECT_EQ(frames, 120);
 }
 
+// ----------------------------------------------------------- hardware decode --
+
+TEST_F(ReferenceMedia, SoftwareDecodingOffersNoHardwareTexture) {
+  auto decoder = VideoDecoder::open(path_, {.preferred = Acceleration::Software});
+  ASSERT_TRUE(decoder.has_value()) << decoder.error();
+  ASSERT_TRUE((*decoder)->next_frame().value_or(false));
+
+  EXPECT_EQ((*decoder)->acceleration(), Acceleration::Software);
+  EXPECT_FALSE((*decoder)->hardware_texture().has_value());
+}
+
+TEST_F(ReferenceMedia, HardwareDecodingKeepsFramesOnTheGpu) {
+  // Skips rather than fails where d3d12va is unavailable: support varies by
+  // driver and by codec, and falling back is the designed behaviour.
+  auto decoder = VideoDecoder::open(path_, {.preferred = Acceleration::D3D12Va});
+  ASSERT_TRUE(decoder.has_value()) << decoder.error();
+  if ((*decoder)->acceleration() != Acceleration::D3D12Va) {
+    GTEST_SKIP() << "d3d12va decoding is not available here, got "
+                 << to_string((*decoder)->acceleration());
+  }
+
+  ASSERT_TRUE((*decoder)->next_frame().value_or(false));
+
+  const auto texture = (*decoder)->hardware_texture();
+  ASSERT_TRUE(texture.has_value()) << "a hardware frame carried no texture";
+  EXPECT_NE(texture->resource, nullptr);
+  // The fence is what says when the frame is finished. Sampling without waiting
+  // on it reads a half-decoded picture, intermittently.
+  EXPECT_NE(texture->fence, nullptr);
+  EXPECT_GE(texture->subresource, 0);
+}
+
+TEST_F(ReferenceMedia, HardwareDecodingProducesTheSameTimestamps) {
+  // Whichever path the pixels take, the timeline must not shift.
+  auto hardware = VideoDecoder::open(path_, {.preferred = Acceleration::D3D12Va});
+  auto software = VideoDecoder::open(path_, {.preferred = Acceleration::Software});
+  ASSERT_TRUE(hardware.has_value()) << hardware.error();
+  ASSERT_TRUE(software.has_value()) << software.error();
+  if ((*hardware)->acceleration() != Acceleration::D3D12Va) {
+    GTEST_SKIP() << "d3d12va decoding is not available here";
+  }
+
+  for (int i = 0; i < 30; ++i) {
+    ASSERT_TRUE((*hardware)->next_frame().value_or(false)) << "hardware frame " << i;
+    ASSERT_TRUE((*software)->next_frame().value_or(false)) << "software frame " << i;
+    EXPECT_NEAR((*hardware)->timestamp(), (*software)->timestamp(), 1e-9) << "frame " << i;
+  }
+}
+
+TEST_F(ReferenceMedia, RequestingHardwareWithoutADeviceStillDecodes) {
+  // No compositor device supplied: D3D12VA makes its own, which decodes fine
+  // and merely cannot be sampled without a copy.
+  auto decoder = VideoDecoder::open(path_, {.preferred = Acceleration::D3D12Va});
+  ASSERT_TRUE(decoder.has_value()) << decoder.error();
+  EXPECT_TRUE((*decoder)->next_frame().value_or(false));
+}
+
 TEST_F(ReferenceMedia, SeekLandsAtOrBeforeTheTarget) {
   auto decoder = VideoDecoder::open(path_);
   ASSERT_TRUE(decoder.has_value()) << decoder.error();

@@ -19,6 +19,8 @@
 
 #include <windows.h>
 
+#include <timeapi.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -275,6 +277,11 @@ int main(int argc, char** argv) {
   std::println("");
   std::println("space play/pause   left/right seek   shift+arrow 5s   home/end   esc quit");
 
+  // Windows' default scheduler tick is 15.6 ms, so a one-millisecond sleep is
+  // most of a frame at 60 Hz and the loop cannot keep up however fast the
+  // compositor is. Media players ask for a finer tick; this is why.
+  timeBeginPeriod(1);
+
   SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&state));
   ShowWindow(window, SW_SHOW);
 
@@ -303,15 +310,19 @@ int main(int argc, char** argv) {
 
     if (state.player->playing()) {
       const double now = state.player->position();
-      if (std::abs(now - state.last_drawn) >= frame_step * 0.5) {
+      // A whole frame, not half of one. Drawing more often than the project's
+      // own rate cannot show anything new, and asking for a time the decoder
+      // has already passed is what makes it look like a move backwards.
+      if (std::abs(now - state.last_drawn) >= frame_step) {
         const double previous = state.last_drawn;
         draw(state, now);
         ++state.frames_drawn;
         if (previous >= 0.0 && now > previous) state.played_seconds += now - previous;
         update_title(window, state);
       } else {
-        // The sound card has not moved on yet. Yielding beats spinning, and the
-        // next buffer is only a few milliseconds away.
+        // The playhead has not reached the next frame yet. `Sleep(1)` really
+        // sleeps about 15 ms at Windows' default timer resolution, which is
+        // most of a frame at 60 Hz — hence `timeBeginPeriod` below.
         Sleep(1);
       }
     } else {
@@ -319,6 +330,7 @@ int main(int argc, char** argv) {
     }
   }
 
+  timeEndPeriod(1);
   state.player.reset();
   state.device->wait_for_idle();
 
@@ -340,6 +352,14 @@ int main(int argc, char** argv) {
                  100.0 * drawn_per_second / target);
     std::println("  {:.1f} ms compositing, {:.1f} ms presenting per frame",
                  per_frame(state.render_seconds), per_frame(state.present_seconds));
+
+    // A seek costs roughly seventeen times a sequential decode, so a preview
+    // that seeks per frame and one that decodes through look identical from
+    // outside and want opposite fixes.
+    const auto stats = state.renderer->decode_stats();
+    std::println("  {} source frames decoded, {} seeks ({} back, {} forward)",
+                 stats.frames_decoded, stats.seeks, stats.backward_seeks,
+                 stats.forward_seeks);
   }
   return 0;
 }
