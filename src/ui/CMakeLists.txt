@@ -1,4 +1,5 @@
 add_library(cutline_ui
+  src/layout.cpp
   src/painter.cpp
   src/recording_painter.cpp
   src/theme.cpp

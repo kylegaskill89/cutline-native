@@ -187,6 +187,29 @@ The split matters beyond testing. If a theme ever needs something the primitives
 cannot express, that is the model being wrong, and it surfaces at the painter
 rather than three layers into the timeline.
 
+### Layout is arithmetic, so it is proved rather than eyeballed
+
+Where things go is functions over plain data: rectangles in, rectangles out, no
+widgets and no state. `distribute` shares an axis between children that want
+fixed, flexible, or bounded amounts of it; `SplitLayout` is the draggable
+dividers between docked regions; `Viewport` is scrolling and zooming a region
+larger than its window.
+
+This is the part of a UI most likely to be subtly wrong and least pleasant to
+debug by dragging a window around. Kept as pure functions, the awkward
+questions are assertions instead: that a divider drag moves only its two
+neighbours and leaves the far side of the window alone, that panes and dividers
+exactly fill their bounds rather than leaving a sliver of unpainted background,
+that a scrollbar thumb can actually reach the end of its content — thumb travel
+is the track minus the thumb, not the track — and that zooming a timeline keeps
+the frame under the cursor under the cursor.
+
+Two rules fall out of the same reasoning. Sizes overflow honestly rather than
+being squashed to fit, because an overflowing panel is a scrolling panel and
+hiding that turns a layout bug into a missing control. And split sizes are held
+as fractions rather than pixels, so maximising a window keeps the proportions
+the user chose instead of handing the whole gain to one pane.
+
 ### Colour precision, and why HDR is deferred
 
 Compositing happens in **16-bit float linear light** throughout. Decode converts
