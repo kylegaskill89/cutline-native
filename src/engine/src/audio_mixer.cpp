@@ -2,6 +2,7 @@
 
 #include "cutline/audio/chain.hpp"
 #include "cutline/audio/limiter.hpp"
+#include "cutline/audio/stretch.hpp"
 #include "cutline/media/audio.hpp"
 #include "cutline/render/mix.hpp"
 
@@ -22,11 +23,64 @@ using SourceKey = std::pair<std::string, int>;
 /// One planned clip, with the samples and DSP it needs.
 struct Voice {
   render::PlannedAudioClip planned;
-  /// Points into the mixer's source cache; null when the media could not be
-  /// read, in which case the voice contributes silence.
+  /// Points into the mixer's source cache, or at `retimed` when the clip is
+  /// sped up, slowed down or reversed. Null when the media could not be read,
+  /// in which case the voice contributes silence.
   const media::AudioBuffer* source = nullptr;
+  /// Owned when retiming applies: the clip's own audio, already stretched and
+  /// reversed, laid out in *timeline* time so reading it is a plain sequential
+  /// walk. Empty otherwise, since the shared source serves directly.
+  media::AudioBuffer retimed;
+  bool timeline_indexed = false;
   audio::EffectChain chain;
 };
+
+/// Whether a clip needs its audio rendered ahead of time rather than read
+/// straight from the source.
+[[nodiscard]] bool needs_retiming(const render::PlannedAudioClip& planned) noexcept {
+  return planned.reverse || std::abs(planned.speed - 1.0) > 1e-6;
+}
+
+/// Renders a retimed clip's audio into timeline time.
+///
+/// Reading a source faster would shorten it *and* raise its pitch, which is a
+/// tape-speed effect rather than a speed change. The reference used FFmpeg's
+/// `atempo`, so the length changes here and the pitch does not.
+[[nodiscard]] media::AudioBuffer render_retimed(const media::AudioBuffer& source,
+                                                const render::PlannedAudioClip& planned,
+                                                int sample_rate, int channels) {
+  media::AudioBuffer out;
+  out.sample_rate = sample_rate;
+  out.channels = channels;
+
+  const auto lanes = static_cast<std::size_t>(channels);
+  const auto rate = static_cast<double>(sample_rate);
+  const auto frames = source.frame_count();
+
+  const auto begin = static_cast<std::size_t>(std::max(0.0, planned.source_in * rate));
+  const auto end = std::min(frames, static_cast<std::size_t>(
+                                        std::max(0.0, planned.source_out * rate)));
+  if (begin >= end) return out;
+
+  std::vector<float> trimmed(
+      source.samples.begin() + static_cast<std::ptrdiff_t>(begin * lanes),
+      source.samples.begin() + static_cast<std::ptrdiff_t>(end * lanes));
+
+  if (planned.reverse) {
+    // Frame by frame, not sample by sample: reversing the interleaved buffer
+    // outright would swap the channels as well as the time.
+    const std::size_t count = trimmed.size() / lanes;
+    for (std::size_t i = 0; i < count / 2; ++i) {
+      for (std::size_t c = 0; c < lanes; ++c) {
+        std::swap(trimmed[i * lanes + c], trimmed[(count - 1 - i) * lanes + c]);
+      }
+    }
+  }
+
+  // A clip at speed 2 lasts half as long, so the stretch factor is its inverse.
+  out.samples = audio::time_stretch(trimmed, channels, 1.0 / planned.speed);
+  return out;
+}
 
 /// One frame of a decoded source at a fractional position, linearly
 /// interpolated.
@@ -113,14 +167,31 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
           missing.insert(entry.media->id);
         }
       }
-      // Safe to hold across later insertions: a map is node-based, so its
-      // values never move once they are in it.
-      if (found != impl->sources.end()) voice.source = &found->second;
+      if (found != impl->sources.end()) {
+        if (needs_retiming(entry)) {
+          voice.retimed = render_retimed(found->second, entry, settings.sample_rate,
+                                         settings.channels);
+          // `source` is left null and pointed at the voice's own buffer below,
+          // once the vector has stopped moving its elements around.
+          voice.timeline_indexed = true;
+        } else {
+          // Safe to hold across later insertions: a map is node-based, so its
+          // values never move once they are in it.
+          voice.source = &found->second;
+        }
+      }
     } else {
       missing.insert(entry.clip->media_id);
     }
 
     impl->voices.push_back(std::move(voice));
+  }
+
+  // Retimed voices own their audio, so their pointers can only be taken once
+  // every push_back is done and the vector's elements have stopped moving.
+  for (Voice& voice : impl->voices) {
+    if (!voice.timeline_indexed) continue;
+    voice.source = voice.retimed.frame_count() > 0 ? &voice.retimed : nullptr;
   }
 
   impl->missing.assign(missing.begin(), missing.end());
@@ -172,9 +243,16 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
     for (std::size_t i = 0; i < span; ++i) {
       const double now =
           static_cast<double>(base + static_cast<std::int64_t>(first + i)) / rate;
-      const double source_time = render::audio_source_time_at(voice.planned, now);
 
-      sample_into(*voice.source, source_time * rate, channels,
+      // A retimed voice was rendered into timeline time already, so its read
+      // position is just how far into the clip we are; anything else is read
+      // from the shared source at the source time the plan asks for.
+      const double position =
+          voice.timeline_indexed
+              ? (now - voice.planned.start) * rate
+              : render::audio_source_time_at(voice.planned, now) * rate;
+
+      sample_into(*voice.source, position, channels,
                   std::span(impl_->voice_block).subspan(i * channels, channels));
 
       // Gain and fades before the effects, matching the reference's chain.

@@ -4,6 +4,7 @@ add_executable(cutline_core_tests
   audio/biquad_test.cpp
   audio/chain_test.cpp
   audio/limiter_test.cpp
+  audio/stretch_test.cpp
   core/animate_test.cpp
   core/arrange_test.cpp
   core/edit_test.cpp

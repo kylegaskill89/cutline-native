@@ -2,7 +2,8 @@ add_library(cutline_audio
   src/biquad.cpp
   src/chain.cpp
   src/compressor.cpp
-  src/limiter.cpp)
+  src/limiter.cpp
+  src/stretch.cpp)
 add_library(cutline::audio ALIAS cutline_audio)
 
 target_include_directories(cutline_audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

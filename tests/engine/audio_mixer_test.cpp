@@ -258,6 +258,84 @@ TEST(AudioMixer, AnEffectStackChangesTheSound) {
   EXPECT_LT(rms_of(settled), expected_rms(kToneAmplitude) * 0.3);
 }
 
+// ---------------------------------------------------------------- retiming --
+
+/// Energy at one frequency, by the Goertzel algorithm — enough to tell whether
+/// a retime moved the pitch, without a full spectrum.
+[[nodiscard]] double energy_at(const std::vector<float>& interleaved, double freq) {
+  const std::size_t frames = interleaved.size() / kChannels;
+  if (frames == 0) return 0.0;
+
+  const double omega = 2.0 * std::numbers::pi * freq / kRate;
+  const double coefficient = 2.0 * std::cos(omega);
+
+  double s1 = 0.0;
+  double s2 = 0.0;
+  for (std::size_t i = 0; i < frames; ++i) {
+    const double s0 = static_cast<double>(interleaved[i * kChannels]) + coefficient * s1 - s2;
+    s2 = s1;
+    s1 = s0;
+  }
+  return std::sqrt(s1 * s1 + s2 * s2 - coefficient * s1 * s2) / static_cast<double>(frames);
+}
+
+TEST(AudioMixer, ARetimedClipKeepsItsPitch) {
+  // Resampling would put a double-speed clip's 440 Hz tone at 880 Hz, which is
+  // a tape-speed effect rather than a speed change.
+  Project p;
+  p.media = {tone_media()};
+  p.tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 8.0)})};
+  p.tracks[0].clips[0].speed = 2.0;
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  const auto samples = mix_span(*mixer, 1.0, 2.0);
+
+  EXPECT_GT(energy_at(samples, 440.0), energy_at(samples, 880.0) * 5.0);
+  EXPECT_GT(rms_of(samples), 0.1);
+}
+
+TEST(AudioMixer, ARetimedClipOccupiesItsRetimedSpan) {
+  // Eight seconds of source at double speed is four seconds of timeline, and
+  // there should be sound throughout and silence after.
+  Project p;
+  p.media = {tone_media()};
+  p.tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 8.0)})};
+  p.tracks[0].clips[0].speed = 2.0;
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  EXPECT_GT(rms_of(mix_span(*mixer, 3.0, 0.8)), 0.1);
+  mixer->reset();
+  EXPECT_LT(rms_of(mix_span(*mixer, 4.5, 0.5)), 0.001);
+}
+
+TEST(AudioMixer, ASlowedClipAlsoKeepsItsPitch) {
+  Project p;
+  p.media = {tone_media()};
+  p.tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 2.0)})};
+  p.tracks[0].clips[0].speed = 0.5;
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  const auto samples = mix_span(*mixer, 1.0, 2.0);
+
+  EXPECT_GT(energy_at(samples, 440.0), energy_at(samples, 220.0) * 5.0);
+  EXPECT_GT(rms_of(samples), 0.1);
+}
+
+TEST(AudioMixer, AReversedClipStillPlays) {
+  Project p;
+  p.media = {tone_media()};
+  p.tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 5.0)})};
+  p.tracks[0].clips[0].reverse = true;
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  const auto samples = mix_span(*mixer, 1.0, 2.0);
+  EXPECT_NEAR(rms_of(samples), expected_rms(kToneAmplitude), 0.05);
+}
+
 // ----------------------------------------------------------------- plumbing --
 
 TEST(AudioMixer, MixingInBlocksMatchesMixingItWhole) {
