@@ -247,7 +247,26 @@ class WidgetHost {
 
   /// Whether something asked for layout since it last ran.
   [[nodiscard]] bool needs_layout() const noexcept { return layout_dirty_; }
-  void request_layout() noexcept { layout_dirty_ = true; }
+  void request_layout() noexcept {
+    layout_dirty_ = true;
+    paint_dirty_ = true;
+  }
+
+  /// Whether anything that would change the picture has happened since the last
+  /// `clear_paint`.
+  ///
+  /// Set when the hovered, pressed or focused widget changes, when layout is
+  /// asked for, and when any event is handled — an event nobody handled cannot
+  /// have changed what is drawn. This is what stops a window repainting itself
+  /// because the pointer moved across a panel that does not care, which at a
+  /// few milliseconds a frame is the difference between an interface that feels
+  /// immediate and one that does not.
+  ///
+  /// A widget that changes its own appearance without any of that happening has
+  /// to say so, through `invalidate_layout` or `request_paint`.
+  [[nodiscard]] bool needs_paint() const noexcept { return paint_dirty_; }
+  void request_paint() noexcept { paint_dirty_ = true; }
+  void clear_paint() noexcept { paint_dirty_ = false; }
 
   /// Lays the tree out again if anything asked for it, and reports whether it
   /// did. Call this once per frame, before painting — it is the point at which
@@ -301,8 +320,12 @@ class WidgetHost {
   /// Walks up from `target` offering the event to each widget until one takes
   /// it. Stops at a disabled widget, which swallows rather than passing on:
   /// clicking a greyed-out button should do nothing, not hit the panel behind.
+  ///
+  /// Also marks the picture as needing repainting when something takes it: an
+  /// event nobody handled cannot have changed what is drawn, and this is the
+  /// one place every kind of event passes through.
   template <typename Fn>
-  [[nodiscard]] Widget* bubble(Widget* target, Fn&& deliver) const;
+  [[nodiscard]] Widget* bubble(Widget* target, Fn&& deliver);
 
   void set_hovered(Widget* widget);
   void set_pressed(Widget* widget);
@@ -311,6 +334,7 @@ class WidgetHost {
   std::unique_ptr<Widget> root_;
   Rect bounds_;
   bool layout_dirty_ = false;
+  bool paint_dirty_ = true;
   Widget* hovered_ = nullptr;
   Widget* focused_ = nullptr;
   Widget* captured_ = nullptr;

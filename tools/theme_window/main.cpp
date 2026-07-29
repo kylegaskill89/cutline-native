@@ -60,6 +60,8 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdio>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -1188,6 +1190,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       render(*app, window);
       EndPaint(window, &paint);
       app->dirty = false;
+      app->host->clear_paint();
       return 0;
     }
 
@@ -1197,27 +1200,30 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT), TME_LEAVE, window, 0};
       TrackMouseEvent(&track);
       app->host->mouse_move(mouse_from(lparam, MouseButton::Left));
-      app->dirty = true;
+      // Not unconditionally: the pointer crossing a panel that does not care
+      // leaves the picture exactly as it was, and a full repaint costs
+      // milliseconds. `--benchmark` is where that number comes from.
+      if (app->host->needs_paint()) app->dirty = true;
       return 0;
     }
     case WM_MOUSELEAVE:
       app->host->mouse_exit();
-      app->dirty = true;
+      if (app->host->needs_paint()) app->dirty = true;
       return 0;
 
     case WM_LBUTTONDOWN:
       SetCapture(window);
       app->host->mouse_down(mouse_from(lparam, MouseButton::Left));
-      app->dirty = true;
+      if (app->host->needs_paint()) app->dirty = true;
       return 0;
     case WM_LBUTTONDBLCLK:
       app->host->mouse_down(mouse_from(lparam, MouseButton::Left, 2));
-      app->dirty = true;
+      if (app->host->needs_paint()) app->dirty = true;
       return 0;
     case WM_LBUTTONUP:
       ReleaseCapture();
       app->host->mouse_up(mouse_from(lparam, MouseButton::Left));
-      app->dirty = true;
+      if (app->host->needs_paint()) app->dirty = true;
       return 0;
 
     case WM_MOUSEWHEEL: {
@@ -1231,7 +1237,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                                   .y = static_cast<double>(at.y),
                                   .delta_y = notches,
                                   .modifiers = modifiers_now()});
-      app->dirty = true;
+      if (app->host->needs_paint()) app->dirty = true;
       return 0;
     }
 
@@ -1302,6 +1308,83 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     if (DockView* found = find_dock(*child); found != nullptr) return found;
   }
   return nullptr;
+}
+
+/// Times the frame, so "it feels sluggish" becomes a number.
+///
+/// Interface drawing here is Skia into a CPU raster surface, blitted with GDI.
+/// That is a deliberate choice rather than a placeholder, but it is only the
+/// right choice while a frame is cheap, and the way to know is to measure it at
+/// the sizes people actually run at rather than to assume.
+///
+/// Layout and paint are timed apart because the fixes are different: a slow
+/// paint argues for the GPU, a slow layout argues for doing less of it.
+[[nodiscard]] int benchmark() {
+  struct Size {
+    const char* name;
+    int width;
+    int height;
+  };
+  constexpr std::array kSizes{
+      Size{"1280x800", 1280, 800},
+      Size{"1920x1080", 1920, 1080},
+      Size{"2560x1440", 2560, 1440},
+      Size{"3840x2160", 3840, 2160},
+  };
+  constexpr int kFrames = 5;
+
+  std::println("{:<12} {:>10} {:>10} {:>10}", "size", "layout", "paint", "total");
+
+  for (const Theme& theme : built_in_themes()) {
+  std::println("-- {}", theme.name);
+  for (const Size& size : kSizes) {
+    const sk_sp<SkSurface> surface =
+        SkSurfaces::Raster(SkImageInfo::MakeN32Premul(size.width, size.height));
+    if (surface == nullptr) {
+      std::println("{}: no raster surface", size.name);
+      return 1;
+    }
+
+    WidgetHost host(build_interface(nullptr));
+    const std::unique_ptr<SkiaPainter> painter = SkiaPainter::create(surface->getCanvas());
+    const LayoutContext context{theme, *painter};
+    const Rect client{0.0, 0.0, static_cast<double>(size.width),
+                      static_cast<double>(size.height)};
+    host.resize(client, context);
+
+    double layout_ms = 0.0;
+    double paint_ms = 0.0;
+    for (int i = 0; i < kFrames; ++i) {
+      using clock = std::chrono::steady_clock;
+
+      const auto laid_out_from = clock::now();
+      // What a resize costs. A drag of a divider pays this every frame.
+      host.resize(client, context);
+      const auto laid_out_to = clock::now();
+
+      surface->getCanvas()->clear(SK_ColorBLACK);
+      paint_surface(*painter, client, theme.style(cutline::ui::Part::Window));
+      host.paint(*painter, theme);
+      // Skia records lazily, so nothing is really drawn until the pixels are
+      // asked for. Timing without this measures the recording and not the work.
+      SkPixmap pixels;
+      surface->peekPixels(&pixels);
+      const auto painted_to = clock::now();
+
+      layout_ms += std::chrono::duration<double, std::milli>(laid_out_to - laid_out_from).count();
+      paint_ms += std::chrono::duration<double, std::milli>(painted_to - laid_out_to).count();
+    }
+
+    layout_ms /= kFrames;
+    paint_ms /= kFrames;
+    std::println("{:<12} {:>9.2f}ms {:>9.2f}ms {:>9.2f}ms", size.name, layout_ms, paint_ms,
+                 layout_ms + paint_ms);
+    // Flushed as it goes, so a theme that turns out to be pathologically slow
+    // is named by the output rather than having to be guessed at from a hang.
+    std::fflush(stdout);
+  }
+  }
+  return 0;
 }
 
 /// Renders one frame of every theme with no window, and reports what came out.
@@ -1401,6 +1484,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
 
 int main(int argc, char** argv) {
   if (argc > 1 && std::string_view(argv[1]) == "--check") return self_check();
+  if (argc > 1 && std::string_view(argv[1]) == "--benchmark") return benchmark();
 
   App app;
   app.host = std::make_unique<WidgetHost>(build_interface(&app));

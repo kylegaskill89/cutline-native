@@ -559,6 +559,89 @@ TEST(Appearance, AHiddenSubtreeIsNotPainted) {
   EXPECT_TRUE(painter.calls().empty());
 }
 
+// ---------------------------------------------------------------- repaints --
+//
+// What stops a window redrawing itself because the pointer moved. A full repaint
+// is milliseconds, so getting this wrong once per mouse move is the difference
+// between an interface that feels immediate and one that does not — and it is
+// invisible from the outside, which is exactly why it is asserted here.
+
+TEST(Repaints, AMoveOverSomethingThatDoesNotCareChangesNothing) {
+  Fixture fixture;
+  fixture.left->takes_mouse = false;
+
+  // The first move is a hover change, which does need drawing.
+  fixture.host->mouse_move(press(10.0, 10.0));
+  ASSERT_TRUE(fixture.host->needs_paint());
+  fixture.host->clear_paint();
+
+  // The second is over the same widget, and does nothing at all.
+  fixture.host->mouse_move(press(20.0, 20.0));
+  EXPECT_FALSE(fixture.host->needs_paint());
+}
+
+TEST(Repaints, MovingOntoSomethingElseHasToBeDrawn) {
+  // The hover highlight moved, even though nothing handled anything.
+  Fixture fixture;
+  fixture.host->mouse_move(press(10.0, 10.0));
+  fixture.host->clear_paint();
+
+  fixture.host->mouse_move(press(150.0, 10.0));
+  EXPECT_TRUE(fixture.host->needs_paint());
+}
+
+TEST(Repaints, AHandledEventIsAssumedToHaveChangedSomething) {
+  Fixture fixture;
+  fixture.left->takes_mouse = true;
+  fixture.host->mouse_move(press(10.0, 10.0));
+  fixture.host->clear_paint();
+
+  // Same widget, so no hover change — but it took the event, and a widget that
+  // handles a move is nearly always drawing something different afterwards.
+  fixture.host->mouse_move(press(20.0, 20.0));
+  EXPECT_TRUE(fixture.host->needs_paint());
+}
+
+TEST(Repaints, AskingForLayoutAsksForPaint) {
+  Fixture fixture;
+  fixture.host->clear_paint();
+  fixture.left->invalidate_layout();
+  EXPECT_TRUE(fixture.host->needs_paint());
+}
+
+TEST(Repaints, TakingTheKeyboardHasToBeDrawn) {
+  Fixture fixture;
+  fixture.left->set_focusable(true);
+  fixture.host->clear_paint();
+
+  EXPECT_TRUE(fixture.host->set_focus(fixture.left));
+  EXPECT_TRUE(fixture.host->needs_paint());
+}
+
+TEST(Repaints, APressChangesHowAControlLooks) {
+  Fixture fixture;
+  fixture.left->takes_mouse = true;
+  fixture.host->clear_paint();
+
+  fixture.host->mouse_down(press(10.0, 10.0));
+  EXPECT_TRUE(fixture.host->needs_paint());
+}
+
+TEST(Repaints, AWindowStartsOutNeedingToBeDrawn) {
+  // Otherwise the first frame never happens and the window opens blank.
+  const Fixture fixture;
+  EXPECT_TRUE(fixture.host->needs_paint());
+}
+
+TEST(Repaints, AKeyNobodyWantedChangesNothing) {
+  Fixture fixture;
+  fixture.left->takes_keys = false;
+  fixture.host->clear_paint();
+
+  fixture.host->key_down(KeyEvent{.key = Key::Q});
+  EXPECT_FALSE(fixture.host->needs_paint());
+}
+
 TEST(Appearance, KeysHaveNames) {
   EXPECT_EQ(to_string(Key::Z), "Z");
   EXPECT_EQ(to_string(Key::Space), " ");

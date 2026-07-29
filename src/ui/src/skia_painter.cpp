@@ -279,8 +279,25 @@ void SkiaPainter::backdrop_blur(const Rect& bounds, double corner_radius, double
   // `saveLayer` with a backdrop filter is the only way to read what has already
   // been drawn. It is expensive, which is why `paint_surface` skips it whenever
   // the radius is zero.
-  const sk_sp<SkImageFilter> blur =
-      SkImageFilters::Blur(sigma_for(radius), sigma_for(radius), nullptr);
+  //
+  // Blurred at a quarter scale and stretched back, rather than at full size. A
+  // blur is a low-pass filter, so the detail a downsample throws away is very
+  // nearly the detail the blur was about to destroy anyway — the result is hard
+  // to tell apart at a sixteenth of the pixels.
+  //
+  // Worth about 45% of an Aero frame on a CPU raster surface, and no more than
+  // that: the measurement says most of the cost is the layer each glass surface
+  // needs rather than the blur kernel inside it, so this helps and does not
+  // rescue. What would is fewer layers, or a GPU.
+  constexpr float kScale = 0.25f;
+  constexpr SkSamplingOptions kSmooth{SkFilterMode::kLinear};
+  const SkScalar sigma = sigma_for(radius) * kScale;
+
+  const sk_sp<SkImageFilter> blur = SkImageFilters::MatrixTransform(
+      SkMatrix::Scale(1.0f / kScale, 1.0f / kScale), kSmooth,
+      SkImageFilters::Blur(sigma, sigma,
+                           SkImageFilters::MatrixTransform(SkMatrix::Scale(kScale, kScale),
+                                                           kSmooth, nullptr)));
 
   impl_->canvas->save();
   impl_->canvas->clipRRect(rounded(bounds, corner_radius), true);

@@ -212,12 +212,18 @@ bool WidgetHost::update_layout(const LayoutContext& context) {
 }
 
 template <typename Fn>
-Widget* WidgetHost::bubble(Widget* target, Fn&& deliver) const {
+Widget* WidgetHost::bubble(Widget* target, Fn&& deliver) {
   for (Widget* node = target; node != nullptr; node = node->parent_) {
     // A disabled widget swallows rather than passing on: clicking a greyed-out
     // button should do nothing at all, not fall through to the panel behind it.
     if (!node->enabled_ || !node->visible_) return nullptr;
-    if (deliver(*node)) return node;
+    if (deliver(*node)) {
+      // Handled, so assume it changed something. The converse is the one that
+      // pays: a mouse move nobody wanted leaves the picture exactly as it was,
+      // and repainting for it is most of a window's idle cost.
+      paint_dirty_ = true;
+      return node;
+    }
   }
   return nullptr;
 }
@@ -325,6 +331,7 @@ void WidgetHost::mouse_exit() {
 
 void WidgetHost::set_hovered(Widget* widget) {
   if (hovered_ == widget) return;
+  paint_dirty_ = true;
   Widget* previous = hovered_;
   hovered_ = widget;
   // Flags updated before the callbacks, so a handler asking what is hovered
@@ -341,6 +348,7 @@ void WidgetHost::set_hovered(Widget* widget) {
 
 void WidgetHost::set_pressed(Widget* widget) {
   if (pressed_ == widget) return;
+  paint_dirty_ = true;
   if (pressed_ != nullptr) pressed_->pressed_ = false;
   pressed_ = widget;
   if (pressed_ != nullptr) pressed_->pressed_ = true;
@@ -350,6 +358,7 @@ bool WidgetHost::set_focus(Widget* widget) {
   if (widget != nullptr && (!widget->focusable_ || !interactive(widget))) return false;
   if (focused_ == widget) return true;
 
+  paint_dirty_ = true;
   Widget* previous = focused_;
   focused_ = widget;
   if (previous != nullptr) {
