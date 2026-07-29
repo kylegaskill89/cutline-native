@@ -9,6 +9,7 @@
 add_library(cutline_editor
   src/commands.cpp
   src/document.cpp
+  src/import.cpp
   src/inspector.cpp
   src/session.cpp
   src/timeline_binding.cpp)

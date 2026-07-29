@@ -17,6 +17,7 @@ add_executable(cutline_core_tests
   core/time_test.cpp
   editor/commands_test.cpp
   editor/document_test.cpp
+  editor/import_test.cpp
   editor/inspector_test.cpp
   editor/session_test.cpp
   editor/timeline_binding_test.cpp
