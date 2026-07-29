@@ -1,0 +1,20 @@
+# Where the halves meet the media layer.
+#
+# Everything below this is deliberately partial: the UI draws without knowing
+# what a project is, the editor edits without knowing what a decoder is, and
+# both build and test with neither FFmpeg nor a GPU present. This is the only
+# target that needs all of it at once, which is exactly why it is small and
+# separate — pulling the media layer into either half would cost them their
+# testability for the sake of two functions.
+add_library(cutline_app src/preview.cpp)
+add_library(cutline::app ALIAS cutline_app)
+
+target_include_directories(cutline_app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(cutline_app PUBLIC
+  cutline::core
+  cutline::editor
+  cutline::engine
+  cutline::gpu
+  cutline::media
+  cutline::options
+  cutline::ui)

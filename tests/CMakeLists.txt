@@ -103,5 +103,16 @@ if(CUTLINE_WITH_GPU)
       GTest::gtest_main)
     cutline_gpu_shaders(cutline_engine_tests)
     gtest_discover_tests(cutline_engine_tests)
+
+    # The whole stack: a file on disk becomes pixels for the monitor. Every
+    # layer is already tested without media; this is the only place they are
+    # checked against a real one, so it skips unless the footage is present.
+    add_executable(cutline_app_tests app/preview_test.cpp)
+    target_link_libraries(cutline_app_tests PRIVATE
+      cutline::app
+      GTest::gtest
+      GTest::gtest_main)
+    cutline_gpu_shaders(cutline_app_tests)
+    gtest_discover_tests(cutline_app_tests)
   endif()
 endif()

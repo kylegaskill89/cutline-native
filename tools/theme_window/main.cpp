@@ -31,6 +31,10 @@
 #include "cutline/ui/widget.hpp"
 #include "cutline/ui/widgets.hpp"
 
+#if CUTLINE_HAVE_PREVIEW
+#include "cutline/app/preview.hpp"
+#endif
+
 #include <windows.h>
 // Both of these need windows.h first: one for the message parameters it
 // defines, the other for the types in its own signatures.
@@ -198,8 +202,19 @@ struct App {
   /// scrolling with it.
   Box* inspector = nullptr;
   MonitorView* monitor = nullptr;
-  /// Owned here so the pixels outlive every paint that borrows them.
+  /// Shown when there is nothing to decode — which is always under the skia
+  /// preset, and until something is imported under the ui one.
   TestPattern pattern;
+
+#if CUTLINE_HAVE_PREVIEW
+  /// Made on first use rather than at startup: creating a Direct3D device
+  /// costs a moment, and a window that only ever shows chrome should not pay
+  /// for one.
+  std::unique_ptr<cutline::app::ProjectPreview> preview;
+  bool preview_failed = false;
+  /// Set when the picture no longer matches the playhead or the project.
+  bool preview_stale = true;
+#endif
 
   std::size_t theme = 0;
   bool dirty = true;
@@ -225,6 +240,8 @@ struct App {
 
 void set_theme(App& app, std::size_t index);
 void refresh_timeline(App& app);
+void invalidate_preview(App& app);
+void complain(HWND owner, const std::string& message);
 
 /// Rebuilds the inspector for whatever is selected.
 ///
@@ -262,6 +279,7 @@ void refresh_inspector(App& app) {
       app.session.apply(cutline::editor::set_clip_parameter(app.session.project(), clip_id,
                                                             param, value));
       refresh_timeline(app);
+      invalidate_preview(app);
       // Marked, not rebuilt: this lambda belongs to the slider that a rebuild
       // would destroy. It has to be rebuilt though — the model may have
       // clamped the value, and a speed change alters the clip's length, which
@@ -288,6 +306,62 @@ void refresh_timeline(App& app) {
   app.dirty = true;
 }
 
+/// Renders the frame under the playhead into the monitor.
+///
+/// Deferred and coalesced like everything else: scrubbing produces a mouse
+/// move per pixel, and a read-back stalls the GPU, so rendering on each one
+/// would make the drag itself the slow part.
+void refresh_preview(App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.monitor == nullptr || app.preview_failed) return;
+
+  // Nothing to show until something has been imported. Rendering an empty
+  // project would replace the colour bars with a black rectangle and look
+  // like a fault.
+  bool has_media = false;
+  for (const cutline::core::Track& track : app.session.project().tracks) {
+    if (!track.clips.empty()) has_media = true;
+  }
+  if (!has_media) return;
+
+  const cutline::core::Project& project = app.session.project();
+  if (app.preview == nullptr) {
+    auto made = cutline::app::ProjectPreview::create(project.canvas_w, project.canvas_h);
+    if (!made.has_value()) {
+      // Once, and then never again: a machine with no usable device will not
+      // acquire one, and complaining on every scrub would be unbearable.
+      app.preview_failed = true;
+      complain(app.window, "Preview is unavailable.\n\n" + made.error());
+      return;
+    }
+    app.preview = std::move(*made);
+  }
+
+  const auto frame = app.preview->frame_at(project, app.session.playhead());
+  if (!frame.has_value()) {
+    app.preview_failed = true;
+    complain(app.window, "Could not render the preview.\n\n" + frame.error());
+    return;
+  }
+
+  app.monitor->set_frame(*frame);
+  app.monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
+  app.dirty = true;
+#else
+  (void)app;
+#endif
+}
+
+/// Marks the picture as no longer matching the playhead or the project.
+void invalidate_preview(App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  app.preview_stale = true;
+  app.dirty = true;
+#else
+  (void)app;
+#endif
+}
+
 /// Puts the document's name where it can be seen — in the caption the theme
 /// draws, and in the window text the taskbar reads.
 void refresh_title(App& app) {
@@ -301,12 +375,44 @@ void refresh_title(App& app) {
 void refresh_all(App& app) {
   refresh_timeline(app);
   refresh_title(app);
+  invalidate_preview(app);
   app.inspector_stale = true;
   if (app.monitor != nullptr) {
     const cutline::core::Project& project = app.session.project();
     app.monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
   }
   if (app.host != nullptr) app.host->request_layout();
+}
+
+/// Brings a file into the project and drops it at the playhead.
+void import_media(App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  std::array<wchar_t, MAX_PATH> buffer{};
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = app.window;
+  dialog.lpstrFilter =
+      L"Media\0*.mp4;*.mov;*.mkv;*.avi;*.webm;*.wav;*.mp3;*.flac;*.png;*.jpg\0"
+      L"All files\0*.*\0";
+  dialog.lpstrFile = buffer.data();
+  dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+  dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+  if (GetOpenFileNameW(&dialog) == FALSE) return;
+
+  const std::filesystem::path path{buffer.data()};
+  const auto source = cutline::app::probe_source(path.string());
+  if (!source.has_value()) {
+    complain(app.window, "Could not read that file.\n\n" + source.error());
+    return;
+  }
+
+  // At the playhead, which is where an editor expects a drop to land.
+  app.session.apply(cutline::editor::import_and_place(app.session.project(), *source,
+                                                      app.session.playhead()));
+  refresh_all(app);
+#else
+  complain(app.window, "This build has no media layer, so there is nothing to import with.");
+#endif
 }
 
 /// The system's open or save dialog.
@@ -429,6 +535,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     if (cutline::editor::run(app.session, binding.command)) {
       refresh_timeline(app);
       refresh_title(app);
+      invalidate_preview(app);
       app.inspector_stale = true;
     }
     app.dirty = true;
@@ -538,6 +645,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
       app->readout->set_text(
           cutline::core::seconds_to_timecode(app->session.playhead(), app->session.project().fps));
     }
+    invalidate_preview(*app);
   });
 
   tracks.set_on_select([app](std::optional<cutline::ui::BlockRef> ref) {
@@ -653,6 +761,16 @@ void render(App& app, HWND window) {
     app.inspector_stale = false;
     refresh_inspector(app);
   }
+
+#if CUTLINE_HAVE_PREVIEW
+  // Once per frame at most, however many mouse moves a scrub produced. A
+  // read-back stalls the GPU, so rendering on each one would make the drag
+  // itself the slow part.
+  if (app.preview_stale) {
+    app.preview_stale = false;
+    refresh_preview(app);
+  }
+#endif
 
   // The one place a theme and a text measurer are both in hand, which is
   // exactly why layout is deferred to here rather than done where the size
@@ -852,6 +970,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       }
       if (held.control && wparam == 'N') {
         new_project(*app);
+        return 0;
+      }
+      if (held.control && wparam == 'I') {
+        import_media(*app);
         return 0;
       }
       const KeyEvent event{.key = key_from_win32(wparam),

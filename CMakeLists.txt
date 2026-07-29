@@ -69,12 +69,6 @@ add_subdirectory(src/ui)
 # widget. Pure like they are.
 add_subdirectory(src/editor)
 
-if(CUTLINE_WITH_SKIA)
-  # A window to look at the interface in. Needs no media and no GPU: chrome is
-  # drawn on the CPU and blitted, and the video has its own path.
-  add_subdirectory(tools/theme_window)
-endif()
-
 if(CUTLINE_WITH_MEDIA)
   add_subdirectory(src/media)
   add_subdirectory(tools/decode_bench)
@@ -85,11 +79,22 @@ if(CUTLINE_WITH_GPU)
   # The engine joins decoding to compositing, so it needs both halves present.
   if(CUTLINE_WITH_MEDIA)
     add_subdirectory(src/engine)
+    # The application layer needs decoding, compositing and the interface all
+    # at once, so it only exists when the media half is present.
+    add_subdirectory(src/app)
     add_subdirectory(tools/play_project)
     add_subdirectory(tools/preview_window)
     add_subdirectory(tools/render_frame)
     add_subdirectory(tools/export_project)
   endif()
+endif()
+
+# Last, because it links the application layer when that exists and does
+# without it when it does not: under the skia preset it is a chrome harness,
+# and under the ui preset it decodes and previews. One window that gains
+# capability with the preset beats two windows that drift apart.
+if(CUTLINE_WITH_SKIA)
+  add_subdirectory(tools/theme_window)
 endif()
 
 if(CUTLINE_BUILD_TESTS)
