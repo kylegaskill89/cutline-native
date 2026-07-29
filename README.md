@@ -39,8 +39,10 @@ forced.
 
 **Phase 3 complete, bar two items** — the Direct3D 12 device, the compositor,
 and the on-screen presenter. Video is converted to linear light in a shader and
-drawn into a 16-bit float target, which an `_SRGB` render target view encodes
-for display.
+drawn into a 16-bit float target, which the present pass encodes for display.
+The encode is in the shader rather than in an `_SRGB` view because the same
+texture is handed to Skia, and a typeless target that could be viewed both ways
+is not one Direct3D will make a shader resource view of.
 
 **Phase 6 (export) works** — `export_project` renders a project to an MP4 with
 no window and no UI. The 8-second 4K clip that took roughly **18 minutes** in the
@@ -131,9 +133,24 @@ Two colour decisions worth knowing about, both in `docs/architecture.md`:
   defined and where the spec specifies them. Each operation happens in the space
   it was defined in.
 
-Still to come: titles, which need a text rasteriser and so wait on Skia; Skia
-sharing the device; and keeping hardware-decoded frames on the GPU instead of
-uploading them from system memory.
+All eleven are reachable from the Effect Controls panel, which reads a
+catalogue that lives beside the resolver: what an effect is called, what it
+takes, and where each parameter starts. Effects can be added, removed,
+reordered, disabled without being removed, and adjusted.
+
+Still to come: titles, which need a text rasteriser (no longer blocked — Skia
+draws the interface); a colour picker, so the chroma keyer's colour can be
+changed rather than only read; keyframes from the panel; and keeping
+hardware-decoded frames on the GPU instead of uploading them from system
+memory.
+
+**Phase 7 (interface) underway** — one window, drawn on the GPU with Skia,
+sharing the compositor's Direct3D device so a decoded frame reaches the screen
+without a copy through system memory. Panels dock, tear out into windows of
+their own, and remember where they were; four themes change the chrome rather
+than only the colours. The timeline edits, the sequence plays at rate against
+the audio clock, and export runs on its own thread with progress and cancel.
+1315 tests, plus a headless check that lays every panel out in every theme.
 
 ## Building
 
