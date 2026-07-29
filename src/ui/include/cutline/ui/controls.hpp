@@ -157,4 +157,141 @@ class Checkbox : public Widget {
   std::function<void(bool)> on_change_;
 };
 
+/// A vertical list of choices, drawn as a menu.
+///
+/// Built for the host's popup layer rather than for the tree, which is what a
+/// dropdown's list and a menu's contents both are. One widget drawing rows
+/// rather than a box of buttons, for the same reason the browser and the
+/// timeline draw their own: a hundred entries would otherwise be a hundred
+/// widgets to lay out, each needing the same styling talked into it.
+class MenuList : public Widget {
+ public:
+  explicit MenuList(std::vector<std::string> items = {});
+
+  [[nodiscard]] const std::vector<std::string>& items() const noexcept { return items_; }
+  void set_items(std::vector<std::string> items);
+
+  /// The row drawn as the current one — a dropdown's selected entry. Past the
+  /// end means none, which is what a menu wants.
+  [[nodiscard]] std::size_t current() const noexcept { return current_; }
+  void set_current(std::size_t index) noexcept { current_ = index; }
+
+  /// The row under the pointer or the keyboard, and what Enter would take.
+  [[nodiscard]] std::size_t highlighted() const noexcept { return highlighted_; }
+
+  void set_on_choose(std::function<void(std::size_t)> on_choose) {
+    on_choose_ = std::move(on_choose);
+  }
+
+  [[nodiscard]] double row_height() const noexcept { return row_height_; }
+  /// Where row `index` is. Empty when it is not one.
+  [[nodiscard]] Rect row_rect(std::size_t index) const;
+  /// The row at a point, or past the end when there is none.
+  [[nodiscard]] std::size_t row_at(double y) const;
+
+  [[nodiscard]] Part part() const noexcept override { return Part::Menu; }
+  [[nodiscard]] bool paints_surface() const noexcept override { return true; }
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  void layout(const LayoutContext& context) override;
+  void paint_content(Painter& painter, const Theme& theme) const override;
+
+  bool on_mouse_move(const MouseEvent& event) override;
+  bool on_mouse_down(const MouseEvent& event) override;
+  bool on_mouse_up(const MouseEvent& event) override;
+  bool on_key_down(const KeyEvent& event) override;
+
+ private:
+  void choose(std::size_t index);
+
+  std::vector<std::string> items_;
+  std::size_t current_ = static_cast<std::size_t>(-1);
+  std::size_t highlighted_ = static_cast<std::size_t>(-1);
+  /// Taken at layout, where the metrics are, because painting and hit-testing
+  /// both need it and neither has them.
+  double row_height_ = 22.0;
+  double font_size_ = 13.0;
+  double padding_ = 4.0;
+
+  std::function<void(std::size_t)> on_choose_;
+};
+
+/// One choice from a list — the control Premiere is mostly built out of.
+///
+/// Shows the current value and opens a `MenuList` on the host's popup layer.
+/// It has to be a popup: a dropdown near the bottom of a panel must draw its
+/// list over everything beneath it, and a list inside the tree would be
+/// clipped away by the panel holding it.
+class Dropdown : public Widget {
+ public:
+  explicit Dropdown(std::vector<std::string> options = {}, std::size_t selected = 0);
+  ~Dropdown() override;
+
+  [[nodiscard]] const std::vector<std::string>& options() const noexcept { return options_; }
+  void set_options(std::vector<std::string> options);
+
+  [[nodiscard]] std::size_t selected() const noexcept { return selected_; }
+  /// Sets it without calling back — for showing a value that changed elsewhere.
+  void set_selected(std::size_t index) noexcept;
+  /// The current option's text, or empty when there is none.
+  [[nodiscard]] const std::string& value() const noexcept;
+
+  void set_on_change(std::function<void(std::size_t)> on_change) {
+    on_change_ = std::move(on_change);
+  }
+
+  /// Opens the list. Does nothing without a host to open it on, which is the
+  /// case in a layout test.
+  void open();
+  [[nodiscard]] bool is_open() const noexcept { return open_; }
+
+  /// Where the arrow is drawn, on the trailing edge.
+  [[nodiscard]] Rect arrow() const;
+
+  [[nodiscard]] Part part() const noexcept override { return Part::Input; }
+  [[nodiscard]] bool paints_surface() const noexcept override { return true; }
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  void paint_content(Painter& painter, const Theme& theme) const override;
+
+  bool on_mouse_down(const MouseEvent& event) override;
+  bool on_key_down(const KeyEvent& event) override;
+
+ private:
+  std::vector<std::string> options_;
+  std::size_t selected_ = 0;
+  bool open_ = false;
+  double arrow_width_ = 18.0;
+
+  std::function<void(std::size_t)> on_change_;
+};
+
+/// A bar that fills as something finishes.
+///
+/// Takes no input and reports nothing. Kept apart from `Slider` deliberately:
+/// they look alike and mean opposite things, and a progress bar that can be
+/// dragged is a bug rather than a feature.
+class ProgressBar : public Widget {
+ public:
+  explicit ProgressBar(double fraction = 0.0);
+
+  /// Clamped to 0..1.
+  [[nodiscard]] double fraction() const noexcept { return fraction_; }
+  void set_fraction(double fraction) noexcept;
+
+  /// Drawn over the bar. Empty for none.
+  [[nodiscard]] const std::string& text() const noexcept { return text_; }
+  void set_text(std::string text) { text_ = std::move(text); }
+
+  /// The filled part of the groove.
+  [[nodiscard]] Rect filled() const;
+
+  [[nodiscard]] Part part() const noexcept override { return Part::Slider; }
+  [[nodiscard]] bool paints_surface() const noexcept override { return true; }
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  void paint_content(Painter& painter, const Theme& theme) const override;
+
+ private:
+  double fraction_ = 0.0;
+  std::string text_;
+};
+
 }  // namespace cutline::ui

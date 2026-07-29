@@ -314,9 +314,46 @@ class WidgetHost {
   /// subtree is cleared; call it directly before removing a widget by hand.
   void forget(Widget* widget);
 
+  // ---------------------------------------------------------------- popups --
+
+  /// Shows `content` above everything else, near `anchor`.
+  ///
+  /// The layer a menu and a dropdown list need, and it cannot be part of the
+  /// tree: a list opening from a control near the bottom of a panel has to
+  /// draw over its neighbours and outside its parent's clip, and no amount of
+  /// arranging inside the tree gets that — the panel would clip it away.
+  ///
+  /// One at a time, which is what these are for. Opening a second closes the
+  /// first.
+  ///
+  /// `anchor` is in window coordinates and is what the popup hangs under —
+  /// flipped above it when there is no room below, and pushed back inside when
+  /// it would run off an edge. A list that opens half outside the window is
+  /// worse than one that opens somewhere slightly unexpected.
+  void open_popup(std::unique_ptr<Widget> content, const Rect& anchor);
+
+  /// Closes it, if one is open.
+  ///
+  /// The widget is not destroyed here. What asks for this is very often a
+  /// button *inside* the popup, running its own click handler, so freeing it
+  /// now would return into freed memory. It goes at the next `update_layout`
+  /// — the same deferral the dock rearrangement uses, for the same reason.
+  void close_popup() noexcept;
+
+  [[nodiscard]] bool popup_open() const noexcept {
+    return popup_ != nullptr && !popup_closing_;
+  }
+  [[nodiscard]] Widget* popup() const noexcept { return popup_closing_ ? nullptr : popup_.get(); }
+
   void paint(Painter& painter, const Theme& theme) const;
 
  private:
+  /// Places the popup near its anchor, inside the window.
+  void arrange_popup(const LayoutContext& context);
+
+  /// What the pointer is over: the popup when one is open, the tree otherwise.
+  /// Null outside an open popup, because nothing under it is reachable.
+  [[nodiscard]] Widget* target_at(double x, double y);
   /// Walks up from `target` offering the event to each widget until one takes
   /// it. Stops at a disabled widget, which swallows rather than passing on:
   /// clicking a greyed-out button should do nothing, not hit the panel behind.
@@ -332,6 +369,11 @@ class WidgetHost {
   void collect_focusable(Widget& widget, std::vector<Widget*>& out) const;
 
   std::unique_ptr<Widget> root_;
+  /// Drawn after the root and offered input before it. Null when none is open.
+  std::unique_ptr<Widget> popup_;
+  Rect popup_anchor_;
+  /// Set by `close_popup`, acted on at the next layout. See the note there.
+  bool popup_closing_ = false;
   Rect bounds_;
   bool layout_dirty_ = false;
   bool paint_dirty_ = true;

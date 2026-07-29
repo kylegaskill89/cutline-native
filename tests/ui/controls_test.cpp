@@ -9,10 +9,13 @@
 #include "cutline/ui/recording_painter.hpp"
 #include "cutline/ui/theme.hpp"
 #include "cutline/ui/widget.hpp"
+#include "cutline/ui/widgets.hpp"
 
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace cutline::ui {
@@ -468,6 +471,212 @@ TEST(Checkbox, TakesTheKeyboardButNotEveryShortcut) {
   EXPECT_FALSE(test.host->key_down(
       KeyEvent{.key = Key::Space, .modifiers = Modifiers{.control = true}}));
   EXPECT_FALSE(test.box->checked());
+}
+
+// ------------------------------------------------------------- menu lists --
+
+/// A list on its own, arranged where it was asked for.
+struct Listed {
+  explicit Listed(std::vector<std::string> items = {"One", "Two", "Three"}) {
+    auto owned = std::make_unique<MenuList>(std::move(items));
+    list = owned.get();
+    host = std::make_unique<WidgetHost>(std::move(owned));
+    host->resize(Rect{0.0, 0.0, 200.0, 300.0}, flat_context());
+  }
+
+  MenuList* list = nullptr;
+  std::unique_ptr<WidgetHost> host;
+};
+
+TEST(MenuList, RowsFollowEachOtherDownTheList) {
+  const Listed test;
+  const Rect first = test.list->row_rect(0);
+  const Rect second = test.list->row_rect(1);
+
+  ASSERT_FALSE(first.empty());
+  ASSERT_FALSE(second.empty());
+  EXPECT_DOUBLE_EQ(second.y - first.y, test.list->row_height());
+  EXPECT_DOUBLE_EQ(first.x, second.x);
+}
+
+TEST(MenuList, APointFindsTheRowItIsIn) {
+  const Listed test;
+  const Rect second = test.list->row_rect(1);
+  EXPECT_EQ(test.list->row_at(second.y + second.height * 0.5), 1u);
+}
+
+TEST(MenuList, AboveOrBelowEveryRowIsNoRow) {
+  const Listed test;
+  EXPECT_GE(test.list->row_at(-50.0), test.list->items().size());
+  EXPECT_GE(test.list->row_at(10000.0), test.list->items().size());
+}
+
+TEST(MenuList, ChoosingReportsWhichRow) {
+  Listed test;
+  std::optional<std::size_t> chosen;
+  test.list->set_on_choose([&](std::size_t index) { chosen = index; });
+
+  const Rect row = test.list->row_rect(2);
+  test.host->mouse_down(press(row.x + 5.0, row.y + row.height * 0.5));
+  test.host->mouse_up(press(row.x + 5.0, row.y + row.height * 0.5));
+
+  ASSERT_TRUE(chosen.has_value());
+  EXPECT_EQ(*chosen, 2u);
+}
+
+TEST(MenuList, ReleasingOutsideEveryRowChoosesNothing) {
+  Listed test;
+  bool chosen = false;
+  test.list->set_on_choose([&](std::size_t) { chosen = true; });
+
+  test.host->mouse_down(press(10.0, 5.0));
+  test.host->mouse_up(press(10.0, 1000.0));
+  EXPECT_FALSE(chosen);
+}
+
+TEST(MenuList, TheKeyboardWrapsAtBothEnds) {
+  Listed test;
+  test.list->on_key_down(KeyEvent{.key = Key::Up});
+  EXPECT_EQ(test.list->highlighted(), 2u) << "up from nothing should reach the last row";
+
+  test.list->on_key_down(KeyEvent{.key = Key::Down});
+  EXPECT_EQ(test.list->highlighted(), 0u) << "down from the last row should wrap to the first";
+}
+
+// --------------------------------------------------------------- dropdown --
+
+struct Chosen {
+  Chosen() {
+    auto root = std::make_unique<Box>(Axis::Vertical);
+    box = &root->emplace<Dropdown>(std::vector<std::string>{"H.264", "HEVC"}, 0u);
+    host = std::make_unique<WidgetHost>(std::move(root));
+    host->resize(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());
+  }
+
+  Dropdown* box = nullptr;
+  std::unique_ptr<WidgetHost> host;
+};
+
+TEST(Dropdown, ShowsTheOptionItIsOn) {
+  Chosen test;
+  EXPECT_EQ(test.box->value(), "H.264");
+  test.box->set_selected(1);
+  EXPECT_EQ(test.box->value(), "HEVC");
+}
+
+TEST(Dropdown, AnOutOfRangeSelectionIsRefusedRatherThanRead) {
+  Chosen test;
+  test.box->set_selected(99);
+  EXPECT_EQ(test.box->selected(), 0u) << "it should have kept the one it had";
+  EXPECT_EQ(test.box->value(), "H.264");
+}
+
+TEST(Dropdown, PressingItOpensAListOnThePopupLayer) {
+  Chosen test;
+  EXPECT_FALSE(test.host->popup_open());
+
+  const Rect area = test.box->bounds();
+  test.host->mouse_down(press(area.x + 5.0, area.y + area.height * 0.5));
+
+  EXPECT_TRUE(test.box->is_open());
+  ASSERT_TRUE(test.host->popup_open());
+  EXPECT_NE(dynamic_cast<MenuList*>(test.host->popup()), nullptr);
+}
+
+TEST(Dropdown, TheListIsPlacedUnderTheControl) {
+  Chosen test;
+  const Rect area = test.box->bounds();
+  test.host->mouse_down(press(area.x + 5.0, area.y + area.height * 0.5));
+  // Placed at the next layout, because opening happens in a click handler and
+  // that has no theme to measure with.
+  test.host->update_layout(flat_context());
+
+  ASSERT_TRUE(test.host->popup_open());
+  const Rect list = test.host->popup()->bounds();
+  EXPECT_DOUBLE_EQ(list.y, area.bottom());
+  EXPECT_GE(list.width, area.width) << "a list should be at least as wide as its control";
+}
+
+TEST(Dropdown, ChoosingFromTheListChangesTheValueAndClosesIt) {
+  Chosen test;
+  std::optional<std::size_t> reported;
+  test.box->set_on_change([&](std::size_t index) { reported = index; });
+
+  const Rect area = test.box->bounds();
+  // Down *and* up: a press captures the control it lands on, and leaving the
+  // button held would send the next press back to the dropdown rather than to
+  // the list it opened.
+  test.host->mouse_down(press(area.x + 5.0, area.y + area.height * 0.5));
+  test.host->mouse_up(press(area.x + 5.0, area.y + area.height * 0.5));
+  test.host->update_layout(flat_context());
+
+  auto* list = dynamic_cast<MenuList*>(test.host->popup());
+  ASSERT_NE(list, nullptr);
+  const Rect row = list->row_rect(1);
+  test.host->mouse_down(press(row.x + 5.0, row.y + row.height * 0.5));
+  test.host->mouse_up(press(row.x + 5.0, row.y + row.height * 0.5));
+
+  EXPECT_EQ(test.box->selected(), 1u);
+  EXPECT_EQ(test.box->value(), "HEVC");
+  ASSERT_TRUE(reported.has_value());
+  EXPECT_EQ(*reported, 1u);
+  EXPECT_FALSE(test.host->popup_open()) << "choosing should have closed the list";
+}
+
+TEST(Dropdown, TheArrowNeedsNoFont) {
+  Chosen test;
+  RecordingPainter painter;
+  test.box->paint(painter, default_theme());
+  // Lines, like the tick and the caption buttons, because no font can be
+  // relied on to have an arrow in it.
+  EXPECT_GE(painter.count(DrawCall::Kind::Line), 2u);
+}
+
+TEST(Dropdown, TheKeyboardStepsWithoutOpening) {
+  Chosen test;
+  test.box->on_key_down(KeyEvent{.key = Key::Down});
+  EXPECT_EQ(test.box->selected(), 1u);
+  EXPECT_FALSE(test.box->is_open());
+
+  // And stops rather than wrapping: a dropdown is a value, and stepping past
+  // the last option should not land back on the first.
+  test.box->on_key_down(KeyEvent{.key = Key::Down});
+  EXPECT_EQ(test.box->selected(), 1u);
+}
+
+// ----------------------------------------------------------- progress bar --
+
+TEST(ProgressBar, FillsInProportion) {
+  ProgressBar bar;
+  bar.arrange(Rect{0.0, 0.0, 200.0, 20.0}, flat_context());
+
+  bar.set_fraction(0.25);
+  EXPECT_DOUBLE_EQ(bar.filled().width, 50.0);
+  EXPECT_DOUBLE_EQ(bar.filled().height, 20.0);
+}
+
+TEST(ProgressBar, NonsenseIsClampedRatherThanDrawn) {
+  ProgressBar bar;
+  bar.arrange(Rect{0.0, 0.0, 200.0, 20.0}, flat_context());
+
+  bar.set_fraction(-1.0);
+  EXPECT_DOUBLE_EQ(bar.fraction(), 0.0);
+  EXPECT_TRUE(bar.filled().empty());
+
+  bar.set_fraction(4.0);
+  EXPECT_DOUBLE_EQ(bar.fraction(), 1.0);
+  EXPECT_DOUBLE_EQ(bar.filled().width, 200.0);
+}
+
+TEST(ProgressBar, NothingDoneDrawsNoFill) {
+  ProgressBar bar;
+  bar.arrange(Rect{0.0, 0.0, 200.0, 20.0}, flat_context());
+
+  RecordingPainter painter;
+  bar.paint(painter, default_theme());
+  // The groove is the widget's own surface; an empty bar must not draw a
+  // zero-width fill over it as well.
+  EXPECT_EQ(painter.count(DrawCall::Kind::Fill), 1u);
 }
 
 }  // namespace

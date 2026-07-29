@@ -198,17 +198,89 @@ WidgetHost::WidgetHost(std::unique_ptr<Widget> root) : root_(std::move(root)) {
 void WidgetHost::resize(const Rect& bounds, const LayoutContext& context) {
   bounds_ = bounds;
   root_->arrange(bounds_, context);
+  if (popup_ != nullptr && !popup_closing_) arrange_popup(context);
   layout_dirty_ = false;
   // The pointer has not moved but what is under it may have. Without this, a
   // panel that opens under a resting cursor never lights up until it is
   // nudged.
-  if (has_mouse_ && captured_ == nullptr) set_hovered(root_->at(mouse_x_, mouse_y_));
+  if (has_mouse_ && captured_ == nullptr) set_hovered(target_at(mouse_x_, mouse_y_));
+}
+
+void WidgetHost::arrange_popup(const LayoutContext& context) {
+  // Its own preferred size, not the anchor's: a list is as wide as its longest
+  // entry, which is usually wider than the control it came from.
+  const double width = std::max(popup_->sizing(Axis::Horizontal, context).basis,
+                                popup_anchor_.width);
+  const double height = popup_->sizing(Axis::Vertical, context).basis;
+
+  // Under the anchor by preference, above it when there is no room — the same
+  // rule every menu on the platform follows, and the reason a dropdown near
+  // the bottom of a window opens upwards instead of off the edge.
+  double y = popup_anchor_.bottom();
+  if (y + height > bounds_.bottom() && popup_anchor_.y - height >= bounds_.y) {
+    y = popup_anchor_.y - height;
+  }
+
+  double x = popup_anchor_.x;
+  if (x + width > bounds_.right()) x = bounds_.right() - width;
+
+  // Clamped last, so a popup taller or wider than the window still starts
+  // inside it rather than being pushed out by the corrections above.
+  x = std::max(bounds_.x, x);
+  y = std::max(bounds_.y, y);
+
+  popup_->arrange(Rect{x, y, width, height}, context);
 }
 
 bool WidgetHost::update_layout(const LayoutContext& context) {
+  // Before the early return: a popup closes whether or not anything asked for
+  // layout, and this is the one point in the frame where destroying it cannot
+  // land inside the click handler that asked for it.
+  if (popup_closing_) {
+    if (popup_ != nullptr) {
+      forget(popup_.get());
+      popup_.reset();
+    }
+    popup_closing_ = false;
+    paint_dirty_ = true;
+    // What the pointer is over has changed, and the pointer has not moved.
+    if (has_mouse_ && captured_ == nullptr) set_hovered(root_->at(mouse_x_, mouse_y_));
+  }
+
   if (!layout_dirty_) return false;
   resize(bounds_, context);
   return true;
+}
+
+void WidgetHost::open_popup(std::unique_ptr<Widget> content, const Rect& anchor) {
+  if (content == nullptr) return;
+
+  // The one being replaced goes now rather than at the next frame: it is not
+  // the thing running, because whatever asked for this belongs to the tree or
+  // to a popup that is on its way out either way.
+  if (popup_ != nullptr) forget(popup_.get());
+
+  popup_ = std::move(content);
+  popup_->host_ = this;
+  popup_anchor_ = anchor;
+  popup_closing_ = false;
+  // Placed at the next layout, where a theme and a text measurer are in hand.
+  // Nothing that opens a popup — a click handler — has either.
+  request_layout();
+}
+
+void WidgetHost::close_popup() noexcept {
+  if (popup_ == nullptr) return;
+  popup_closing_ = true;
+  paint_dirty_ = true;
+}
+
+Widget* WidgetHost::target_at(double x, double y) {
+  if (!popup_open()) return root_->at(x, y);
+  // Inside the popup, or nothing. What is underneath is unreachable while one
+  // is open, which is the whole meaning of a modal layer: a click that lands
+  // outside dismisses it and goes no further.
+  return popup_->at(x, y);
 }
 
 template <typename Fn>
@@ -233,7 +305,15 @@ bool WidgetHost::mouse_down(const MouseEvent& event) {
   mouse_y_ = event.y;
   has_mouse_ = true;
 
-  Widget* target = captured_ != nullptr ? captured_ : root_->at(event.x, event.y);
+  // A press outside an open popup dismisses it and stops there. Letting it
+  // through as well would mean closing a menu also pressed whatever happened
+  // to be behind it, which is never what was meant.
+  if (popup_open() && captured_ == nullptr && popup_->at(event.x, event.y) == nullptr) {
+    close_popup();
+    return true;
+  }
+
+  Widget* target = captured_ != nullptr ? captured_ : target_at(event.x, event.y);
   if (target == nullptr) return false;
 
   Widget* handler = bubble(target, [&](Widget& widget) { return widget.on_mouse_down(event); });
@@ -264,7 +344,7 @@ bool WidgetHost::mouse_up(const MouseEvent& event) {
   mouse_y_ = event.y;
   has_mouse_ = true;
 
-  Widget* target = captured_ != nullptr ? captured_ : root_->at(event.x, event.y);
+  Widget* target = captured_ != nullptr ? captured_ : target_at(event.x, event.y);
   Widget* handler =
       target == nullptr
           ? nullptr
@@ -275,7 +355,7 @@ bool WidgetHost::mouse_up(const MouseEvent& event) {
     release_capture();
     // Hover was frozen for the duration of the drag, so it is very likely
     // stale by the time the button comes back up.
-    set_hovered(root_->at(event.x, event.y));
+    set_hovered(target_at(event.x, event.y));
   }
   return handler != nullptr;
 }
@@ -292,14 +372,14 @@ bool WidgetHost::mouse_move(const MouseEvent& event) {
            nullptr;
   }
 
-  Widget* target = root_->at(event.x, event.y);
+  Widget* target = target_at(event.x, event.y);
   set_hovered(target);
   if (target == nullptr) return false;
   return bubble(target, [&](Widget& widget) { return widget.on_mouse_move(event); }) != nullptr;
 }
 
 bool WidgetHost::wheel(const WheelEvent& event) {
-  Widget* target = captured_ != nullptr ? captured_ : root_->at(event.x, event.y);
+  Widget* target = captured_ != nullptr ? captured_ : target_at(event.x, event.y);
   if (target == nullptr) return false;
   // Bubbles, so scrolling over a clip scrolls the timeline that holds it
   // rather than doing nothing.
@@ -307,6 +387,14 @@ bool WidgetHost::wheel(const WheelEvent& event) {
 }
 
 bool WidgetHost::key_down(const KeyEvent& event) {
+  // Escape closes a popup before anything else sees it. A menu that will not
+  // go away without a click is a trap, and this is the key everyone reaches
+  // for — which also means nothing behind it should act on the same press.
+  if (popup_open() && event.key == Key::Escape) {
+    close_popup();
+    return true;
+  }
+
   Widget* target = focused_ != nullptr ? focused_ : root_.get();
   return bubble(target, [&](Widget& widget) { return widget.on_key_down(event); }) != nullptr;
 }
@@ -413,6 +501,9 @@ void WidgetHost::forget(Widget* widget) {
 
 void WidgetHost::paint(Painter& painter, const Theme& theme) const {
   root_->paint(painter, theme);
+  // After everything, and outside every clip the tree set up. That is the
+  // entire reason this is not a widget in the tree.
+  if (popup_ != nullptr && !popup_closing_) popup_->paint(painter, theme);
 }
 
 }  // namespace cutline::ui
