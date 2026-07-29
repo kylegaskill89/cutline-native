@@ -18,11 +18,13 @@ add_executable(cutline_core_tests
   editor/browser_binding_test.cpp
   editor/commands_test.cpp
   editor/document_test.cpp
+  editor/effects_binding_test.cpp
   editor/import_test.cpp
   editor/inspector_test.cpp
   editor/session_test.cpp
   editor/timeline_binding_test.cpp
   editor/workspace_test.cpp
+  render/effect_catalog_test.cpp
   render/effects_test.cpp
   render/mix_test.cpp
   render/plan_test.cpp

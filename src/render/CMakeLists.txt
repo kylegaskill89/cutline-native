@@ -1,4 +1,5 @@
 add_library(cutline_render
+  src/effect_catalog.cpp
   src/effects.cpp
   src/mix.cpp
   src/plan.cpp)

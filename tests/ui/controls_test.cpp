@@ -644,6 +644,77 @@ TEST(Dropdown, TheKeyboardStepsWithoutOpening) {
   EXPECT_EQ(test.box->selected(), 1u);
 }
 
+// ------------------------------------------------------------ icon button --
+
+/// The lines an icon button drew.
+[[nodiscard]] std::vector<DrawCall> lines_of(IconButton::Icon icon) {
+  IconButton button(icon);
+  button.arrange(Rect{0.0, 0.0, 24.0, 24.0}, flat_context());
+
+  RecordingPainter painter;
+  button.paint(painter, default_theme());
+
+  std::vector<DrawCall> lines;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::Line) lines.push_back(call);
+  }
+  return lines;
+}
+
+TEST(IconButton, DrawsItsMarkWithoutAFont) {
+  // Lines, like the tick and the dropdown's arrow: no font can be relied on to
+  // have an arrow in it, and the ones that do disagree about its size.
+  for (const IconButton::Icon icon :
+       {IconButton::Icon::ArrowUp, IconButton::Icon::ArrowDown, IconButton::Icon::Cross,
+        IconButton::Icon::Plus}) {
+    EXPECT_EQ(lines_of(icon).size(), 2u) << "icon " << static_cast<int>(icon);
+  }
+}
+
+TEST(IconButton, TheArrowsPointOppositeWays) {
+  // An up arrow's apex is above where its strokes begin and a down arrow's is
+  // below. Without this the two could be drawn identically and only a person
+  // looking at the screen would ever know.
+  const std::vector<DrawCall> up = lines_of(IconButton::Icon::ArrowUp);
+  const std::vector<DrawCall> down = lines_of(IconButton::Icon::ArrowDown);
+  ASSERT_EQ(up.size(), 2u);
+  ASSERT_EQ(down.size(), 2u);
+
+  // A line is stored as its first point plus an offset to the second, so the
+  // sign of the offset is which way the stroke runs.
+  EXPECT_LT(up.front().bounds.height, 0.0) << "the first stroke should rise";
+  EXPECT_GT(down.front().bounds.height, 0.0) << "the first stroke should fall";
+}
+
+TEST(IconButton, IsSquareWhateverTheTheme) {
+  const IconButton button(IconButton::Icon::Cross);
+  const LayoutContext context = flat_context();
+  EXPECT_DOUBLE_EQ(button.sizing(Axis::Horizontal, context).basis,
+                   button.sizing(Axis::Vertical, context).basis);
+}
+
+TEST(IconButton, ClicksLikeAnyOtherButton) {
+  int clicks = 0;
+  auto owned = std::make_unique<IconButton>(IconButton::Icon::Cross, [&] { ++clicks; });
+  IconButton* button = owned.get();
+
+  WidgetHost host(std::move(owned));
+  host.resize(Rect{0.0, 0.0, 100.0, 40.0}, flat_context());
+
+  const Rect area = button->bounds();
+  const double x = area.x + area.width * 0.5;
+  const double y = area.y + area.height * 0.5;
+  host.mouse_down(press(x, y));
+  host.mouse_up(press(x, y));
+  EXPECT_EQ(clicks, 1);
+
+  // And a press that slides off is cancelled, which is `Button`'s behaviour and
+  // the reason this is one rather than a widget of its own.
+  host.mouse_down(press(x, y));
+  host.mouse_up(press(x + 500.0, y));
+  EXPECT_EQ(clicks, 1);
+}
+
 // ----------------------------------------------------------- progress bar --
 
 TEST(ProgressBar, FillsInProportion) {

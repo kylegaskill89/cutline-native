@@ -515,6 +515,44 @@ bool Dropdown::on_key_down(const KeyEvent& event) {
   }
 }
 
+// ------------------------------------------------------------ icon button --
+
+IconButton::IconButton(Icon icon, std::function<void()> on_click)
+    : Button({}, std::move(on_click)), icon_(icon) {
+  set_part(Part::ToolButton);
+}
+
+void IconButton::paint_content(Painter& painter, const Theme& theme) const {
+  const SurfaceStyle& style = theme.style(part(), state());
+  const Rect area = bounds();
+  const double cx = area.x + area.width * 0.5;
+  const double cy = area.y + area.height * 0.5;
+
+  // Fixed rather than scaled with the button: these sit in a row with text and
+  // want to match its weight, not the theme's padding.
+  constexpr double reach = 4.0;
+  constexpr double width = 1.5;
+
+  switch (icon_) {
+    case Icon::ArrowUp:
+      painter.line(cx - reach, cy + reach * 0.5, cx, cy - reach * 0.5, style.text, width);
+      painter.line(cx, cy - reach * 0.5, cx + reach, cy + reach * 0.5, style.text, width);
+      break;
+    case Icon::ArrowDown:
+      painter.line(cx - reach, cy - reach * 0.5, cx, cy + reach * 0.5, style.text, width);
+      painter.line(cx, cy + reach * 0.5, cx + reach, cy - reach * 0.5, style.text, width);
+      break;
+    case Icon::Cross:
+      painter.line(cx - reach, cy - reach, cx + reach, cy + reach, style.text, width);
+      painter.line(cx - reach, cy + reach, cx + reach, cy - reach, style.text, width);
+      break;
+    case Icon::Plus:
+      painter.line(cx - reach, cy, cx + reach, cy, style.text, width);
+      painter.line(cx, cy - reach, cx, cy + reach, style.text, width);
+      break;
+  }
+}
+
 // ----------------------------------------------------------- progress bar --
 
 ProgressBar::ProgressBar(double fraction) { set_fraction(fraction); }

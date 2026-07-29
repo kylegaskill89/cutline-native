@@ -14,6 +14,9 @@
 
 #include "cutline/ui/layout.hpp"
 #include "cutline/ui/widget.hpp"
+// For `Button`, which the icon button is one of: everything about pressing,
+// releasing and cancelling a click is the same, and only the mark differs.
+#include "cutline/ui/widgets.hpp"
 
 #include <functional>
 #include <optional>
@@ -262,6 +265,36 @@ class Dropdown : public Widget {
   double arrow_width_ = 18.0;
 
   std::function<void(std::size_t)> on_change_;
+};
+
+/// A button carrying a drawn mark rather than a word.
+///
+/// The marks are lines, like the dropdown's arrow and the checkbox's tick, and
+/// for the same reason: no font can be relied on to have an arrow in it, and
+/// the ones that do disagree about its size and baseline. A row of three of
+/// these — up, down, remove — is what a stack of effects needs and what a word
+/// per button would make far too wide.
+///
+/// A `Button` with no text, so it inherits the square sizing and every bit of
+/// the press-and-release behaviour.
+class IconButton : public Button {
+ public:
+  enum class Icon {
+    ArrowUp,
+    ArrowDown,
+    Cross,
+    Plus,
+  };
+
+  explicit IconButton(Icon icon, std::function<void()> on_click = {});
+
+  [[nodiscard]] Icon icon() const noexcept { return icon_; }
+  void set_icon(Icon icon) noexcept { icon_ = icon; }
+
+  void paint_content(Painter& painter, const Theme& theme) const override;
+
+ private:
+  Icon icon_;
 };
 
 /// A bar that fills as something finishes.

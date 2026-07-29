@@ -18,11 +18,14 @@
 /// Not the editor. A harness for the parts of it that exist.
 
 #include "cutline/core/edit.hpp"
+#include "cutline/core/effects.hpp"
 #include "cutline/core/model.hpp"
+#include "cutline/core/query.hpp"
 #include "cutline/core/time.hpp"
 #include "cutline/editor/browser_binding.hpp"
 #include "cutline/editor/commands.hpp"
 #include "cutline/editor/document.hpp"
+#include "cutline/editor/effects_binding.hpp"
 #include "cutline/editor/import.hpp"
 #include "cutline/editor/inspector.hpp"
 #include "cutline/editor/session.hpp"
@@ -95,6 +98,8 @@ using cutline::ui::Checkbox;
 using cutline::ui::DockLayout;
 using cutline::ui::Dropdown;
 using cutline::ui::Edges;
+using cutline::ui::IconButton;
+using cutline::ui::MenuList;
 using cutline::ui::DockNode;
 using cutline::ui::DockView;
 using cutline::ui::FloatingDock;
@@ -491,6 +496,147 @@ void toggle_playback(App& app);
 void import_media(App& app);
 void complain(HWND owner, const std::string& message);
 
+/// A heading inside the inspector, over the group of controls it names.
+void inspector_heading(App& app, std::string text) {
+  auto& label = app.inspector->emplace<Label>(std::move(text));
+  label.set_bold(true);
+}
+
+/// Offers the catalogue, and adds what is chosen.
+///
+/// On the popup layer rather than in the panel, for the reason every menu is:
+/// the inspector is a scroll view, and a list opened at the bottom of it would
+/// be clipped to the panel that holds it.
+void open_effect_menu(App& app, const std::string& clip_id, const Rect& anchor) {
+  if (app.main.host == nullptr) return;
+
+  const std::vector<cutline::editor::EffectChoice> choices =
+      cutline::editor::addable_effects();
+  std::vector<std::string> names;
+  names.reserve(choices.size());
+  for (const cutline::editor::EffectChoice& choice : choices) names.push_back(choice.name);
+
+  auto list = std::make_unique<MenuList>(std::move(names));
+  list->set_on_choose([&app, clip_id, choices](std::size_t index) {
+    if (index >= choices.size()) return;
+    app.session.apply(cutline::editor::add_effect(app.session.project(), clip_id,
+                                                  choices[index].type));
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    app.inspector_stale = true;
+    invalidate_preview(app);
+  });
+
+  app.main.host->open_popup(std::move(list), anchor);
+}
+
+/// The effect stack: a header per effect, its parameters beneath it.
+///
+/// The order of the rows is the order the effects apply in, which is why moving
+/// one is an edit rather than a view preference — a blur before a crop and a
+/// blur after it are different pictures.
+void build_effect_controls(App& app, const std::string& clip_id) {
+  auto& header = app.inspector->emplace<Box>(Axis::Horizontal);
+  header.emplace<Label>("Video Effects").set_bold(true);
+  header.emplace<Spacer>();
+
+  auto& add = header.emplace<Button>("Add Effect");
+  add.set_on_click([&app, clip_id, control = &add] {
+    open_effect_menu(app, clip_id, control->bounds());
+  });
+
+  const std::vector<cutline::editor::EffectRow> rows =
+      cutline::editor::clip_effects(app.session.project(), clip_id);
+  if (rows.empty()) {
+    app.inspector->emplace<Label>("No effects").set_small(true);
+    return;
+  }
+
+  const std::size_t count = rows.size();
+  for (const cutline::editor::EffectRow& row : rows) {
+    auto& line = app.inspector->emplace<Box>(Axis::Horizontal);
+
+    // The checkbox is the name as well: a disabled effect stays in the stack
+    // and stays visible, which is the whole point of disabling rather than
+    // removing it.
+    auto& on = line.emplace<Checkbox>(row.name, row.enabled);
+    on.set_on_change([&app, clip_id, index = row.index](bool) {
+      app.session.apply(
+          cutline::core::toggle_clip_effect(app.session.project(), clip_id, index));
+      app.inspector_stale = true;
+      invalidate_preview(app);
+    });
+
+    line.emplace<Spacer>();
+
+    // Moving is by button rather than by dragging the row. Dragging is what
+    // Premiere does and what this should eventually do; a button is what can be
+    // reached from the keyboard and what can be tested without a pointer.
+    auto& up = line.emplace<IconButton>(IconButton::Icon::ArrowUp);
+    up.set_enabled(row.index > 0);
+    up.set_on_click([&app, clip_id, index = row.index] {
+      app.session.apply(
+          cutline::core::move_clip_effect(app.session.project(), clip_id, index, -1));
+      app.inspector_stale = true;
+      invalidate_preview(app);
+    });
+
+    auto& down = line.emplace<IconButton>(IconButton::Icon::ArrowDown);
+    down.set_enabled(row.index + 1 < count);
+    down.set_on_click([&app, clip_id, index = row.index] {
+      app.session.apply(
+          cutline::core::move_clip_effect(app.session.project(), clip_id, index, 1));
+      app.inspector_stale = true;
+      invalidate_preview(app);
+    });
+
+    line.emplace<IconButton>(IconButton::Icon::Cross, [&app, clip_id, index = row.index] {
+      app.session.apply(
+          cutline::core::remove_clip_effect(app.session.project(), clip_id, index));
+      app.inspector_stale = true;
+      invalidate_preview(app);
+    });
+
+    if (row.unknown) {
+      app.inspector->emplace<Label>("Not available in this version").set_small(true);
+      continue;
+    }
+
+    for (const cutline::editor::EffectParamRow& param : row.params) {
+      if (param.toggle) {
+        auto& box = app.inspector->emplace<Checkbox>(param.name, param.value >= 0.5);
+        box.set_on_change([&app, clip_id, index = row.index, key = param.key](bool checked) {
+          app.session.apply(cutline::core::set_clip_effect_param(
+              app.session.project(), clip_id, index, key, checked ? 1.0 : 0.0));
+          app.inspector_stale = true;
+          invalidate_preview(app);
+        });
+        continue;
+      }
+
+      // The unit goes in the label, because the slider has no readout to put it
+      // in and "Amount" alone does not say whether 40 is pixels or percent.
+      const std::string label =
+          param.suffix.empty() ? param.name : param.name + " (" + param.suffix + ")";
+      app.inspector->emplace<Label>(label).set_small(true);
+      auto& slider = app.inspector->emplace<Slider>(param.range, param.value);
+      slider.set_default_value(param.fallback);
+      slider.set_on_commit([&app, clip_id, index = row.index, key = param.key](double value) {
+        app.session.apply(cutline::core::set_clip_effect_param(app.session.project(), clip_id,
+                                                               index, key, value));
+        invalidate_preview(app);
+        app.inspector_stale = true;
+      });
+    }
+
+    for (const cutline::editor::EffectColorRow& color : row.colors) {
+      // Shown, not editable: there is no colour picker yet, and a hex nobody
+      // can change is still better than a key colour nobody can see.
+      auto& swatch = app.inspector->emplace<Label>(color.name + ": " + color.value);
+      swatch.set_small(true);
+    }
+  }
+}
+
 /// Rebuilds the inspector for whatever is selected.
 ///
 /// A loop over `clip_parameters` rather than a hand-built form, so a property
@@ -514,6 +660,13 @@ void refresh_inspector(App& app) {
   }
 
   const std::string clip_id{selection.front()};
+  const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), clip_id);
+  const bool visual = clip != nullptr && clip->kind == cutline::core::TrackKind::Video;
+
+  // Premiere's own heading for the built-in transform, and the honest one for
+  // an audio clip, which has no geometry to move.
+  inspector_heading(app, visual ? "Motion" : "Audio");
+
   for (const cutline::editor::ParamSpec& spec :
        cutline::editor::clip_parameters(app.session.project(), clip_id)) {
     app.inspector->emplace<Label>(spec.name).set_small(true);
@@ -535,6 +688,12 @@ void refresh_inspector(App& app) {
       app.inspector_stale = true;
     });
   }
+
+  // Visual effects only, since that is the stack the compositor draws. An
+  // audio clip has its own, and it belongs here too — but it needs the audio
+  // registry described the same way first.
+  if (visual) build_effect_controls(app, clip_id);
+
   app.inspector->emplace<Spacer>();
 
   app.main.host->request_layout();
@@ -2706,7 +2865,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     int counted = 0;
     const auto walk = [&](this const auto& self, const Widget& widget) -> void {
       ++counted;
-      if (widget.bounds().empty()) ++empty;
+      // A spacer is the exception: it exists to absorb whatever room is left
+      // over, and when a column has overflowed its panel there is none. Zero is
+      // the right answer there, not a layout that went wrong.
+      if (widget.bounds().empty() && dynamic_cast<const Spacer*>(&widget) == nullptr) ++empty;
       if (widget.bounds().x < -0.5 || widget.bounds().right() > kWidth + 0.5) ++escaped;
       for (const auto& child : widget.children()) self(*child);
     };
@@ -2725,6 +2887,53 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         host.paint(*painter, theme);
         walk(host.root());
       }
+    }
+
+    // With a document behind it, and something selected.
+    //
+    // `build_interface(nullptr)` builds every panel with no session, which is
+    // what the pass above checks — but an inspector with nothing selected is
+    // two labels, and the panel that is actually made of controls is never laid
+    // out at all. That is the gap a dead Export button and a missing shader
+    // both hid in. Every effect in the catalogue goes on the clip, so each kind
+    // of parameter row — slider, toggle, colour — is laid out in every theme.
+    {
+      App app;
+      app.main.host = std::make_unique<WidgetHost>(build_interface(&app));
+
+      // Shown, not merely present. Only the active panel in a group is built,
+      // and in the default arrangement the inspector is a tab behind another —
+      // so without this the panel under test is never constructed at all.
+      if (DockView* dock = find_dock(app.main.host->root()); dock != nullptr) {
+        DockLayout layout = layout_of(app);
+        cutline::ui::activate_panel(layout, "effects");
+        dock->set_node(layout.root);
+      }
+      app.main.host->resize(client, context);
+
+      std::string clip_id;
+      for (const auto& track : app.session.project().tracks) {
+        if (track.kind != cutline::core::TrackKind::Video || track.clips.empty()) continue;
+        clip_id = track.clips.front().id;
+        break;
+      }
+
+      if (!clip_id.empty()) {
+        app.session.select_one(clip_id);
+        for (const cutline::editor::EffectChoice& choice : cutline::editor::addable_effects()) {
+          app.session.apply(
+              cutline::editor::add_effect(app.session.project(), clip_id, choice.type));
+        }
+      }
+
+      refresh_inspector(app);
+      if (app.inspector == nullptr || app.inspector->children().empty()) {
+        std::println("{}: the inspector built nothing for a selected clip", theme.id);
+        ++failures;
+      }
+      app.main.host->update_layout(context);
+      app.main.host->paint(*painter, theme);
+      walk(app.main.host->root());
     }
 
     // And the theme has to reach the pixels. Sampling a scatter of points
