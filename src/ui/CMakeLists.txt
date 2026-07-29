@@ -33,11 +33,11 @@ target_link_libraries(cutline_ui PUBLIC cutline::core cutline::options)
 if(CUTLINE_WITH_SKIA)
   find_package(unofficial-skia CONFIG REQUIRED)
 
-  add_library(cutline_ui_skia src/skia_painter.cpp)
+  add_library(cutline_ui_skia src/skia_painter.cpp src/skia_window.cpp)
   add_library(cutline::ui_skia ALIAS cutline_ui_skia)
 
   target_include_directories(cutline_ui_skia PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(cutline_ui_skia
     PUBLIC cutline::ui cutline::options
-    PRIVATE unofficial::skia::skia)
+    PRIVATE unofficial::skia::skia d3d12 dxgi)
 endif()

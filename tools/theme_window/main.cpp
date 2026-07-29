@@ -6,12 +6,14 @@
 /// built-in themes, so the claim that they differ in *chrome* rather than in
 /// colour can be checked by looking at it.
 ///
-/// The chrome is drawn by Skia into a raster surface and blitted with GDI. That
-/// is deliberate and not a placeholder to feel bad about: interface drawing is
-/// a few hundred rounded rectangles a frame, it only happens when something
-/// changes, and going through the GPU for it would mean sharing a device and a
-/// swapchain with the compositor for no measurable gain. Video frames have
-/// their own path already.
+/// The chrome is drawn by Skia onto a Direct3D 12 swapchain. It used to go into
+/// a CPU raster surface and be blitted with GDI, on the argument that interface
+/// drawing is a few hundred rounded rectangles a frame and the GPU would be no
+/// measurable gain. That argument was made without measuring and it was wrong:
+/// `--benchmark` puts an Aero frame at 1080p at well over half a second on the
+/// CPU and under fifty milliseconds on the GPU, because every glass surface
+/// wants its own blurred layer and filling pixels is precisely what a GPU is
+/// for. Video frames still have their own path.
 ///
 /// Not the editor. A harness for the parts of it that exist.
 
@@ -32,6 +34,7 @@
 #include "cutline/ui/dock_view.hpp"
 #include "cutline/ui/monitor.hpp"
 #include "cutline/ui/skia_painter.hpp"
+#include "cutline/ui/skia_window.hpp"
 #include "cutline/ui/theme.hpp"
 #include "cutline/ui/timeline.hpp"
 #include "cutline/ui/widget.hpp"
@@ -259,10 +262,13 @@ struct Shell {
 
   /// Rebuilt whenever the window changes size. Skia's raster surface owns the
   /// pixels; the blit reads them straight out.
-  sk_sp<SkSurface> surface;
+  std::unique_ptr<cutline::ui::SkiaWindow> surface;
   int width = 0;
   int height = 0;
   bool dirty = true;
+  /// Set once a drawing failure has been reported, so it is said once rather
+  /// than on every frame that follows it.
+  bool warned = false;
   /// Set by `WM_SIZE`, cleared by the next render. Laying out on the message
   /// itself would need a painter to measure with, and there is no canvas at
   /// that point — the same reason input defers layout.
@@ -1402,13 +1408,39 @@ void refresh_float_titles(App& app) {
   };
 }
 
+/// Makes or resizes the window's swapchain.
+///
+/// A failure is said once and then the window simply does not draw. There is
+/// nothing sensible to fall back to: the raster path this replaced was slower
+/// by an order of magnitude, and the themes with a blur behind their chrome
+/// were not usable on it at all.
 void resize_surface(Shell& shell, int width, int height) {
   if (width <= 0 || height <= 0) return;
   if (shell.surface != nullptr && width == shell.width && height == shell.height) return;
 
   shell.width = width;
   shell.height = height;
-  shell.surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
+
+  if (shell.surface != nullptr) {
+    if (const auto resized = shell.surface->resize(width, height); !resized.has_value()) {
+      shell.surface.reset();
+      if (!shell.warned) {
+        shell.warned = true;
+        complain(shell.window, "The window stopped drawing.\n\n" + resized.error());
+      }
+    }
+    return;
+  }
+
+  auto made = cutline::ui::SkiaWindow::create(shell.window, width, height);
+  if (!made.has_value()) {
+    if (!shell.warned) {
+      shell.warned = true;
+      complain(shell.window, "Could not draw on this display.\n\n" + made.error());
+    }
+    return;
+  }
+  shell.surface = std::move(*made);
 }
 
 /// The work that belongs to the document rather than to any one window.
@@ -1444,11 +1476,18 @@ void render(Shell& shell) {
   if (shell.app == nullptr || shell.host == nullptr || shell.surface == nullptr) return;
   App& app = *shell.app;
 
-  SkCanvas* canvas = shell.surface->getCanvas();
-  const Theme& theme = app.current();
+  // The swapchain's next buffer, once the GPU has finished with it. Null means
+  // the swapchain is not usable, and the window goes unpainted rather than
+  // being drawn somewhere nothing will look.
+  auto* canvas = static_cast<SkCanvas*>(shell.surface->begin_frame());
+  if (canvas == nullptr) return;
 
+  const Theme& theme = app.current();
   const std::unique_ptr<SkiaPainter> painter = SkiaPainter::create(canvas);
-  if (painter == nullptr) return;
+  if (painter == nullptr) {
+    shell.surface->present();
+    return;
+  }
 
   const Rect client{0.0, 0.0, static_cast<double>(shell.width),
                     static_cast<double>(shell.height)};
@@ -1472,23 +1511,7 @@ void render(Shell& shell) {
   paint_surface(*painter, client, theme.style(cutline::ui::Part::Window));
   shell.host->paint(*painter, theme);
 
-  SkPixmap pixels;
-  if (!shell.surface->peekPixels(&pixels)) return;
-
-  BITMAPINFO info{};
-  info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-  info.bmiHeader.biWidth = shell.width;
-  // Negative, because Skia's rows run top to bottom and a DIB's run the other
-  // way by default. Without this the whole interface comes out upside down.
-  info.bmiHeader.biHeight = -shell.height;
-  info.bmiHeader.biPlanes = 1;
-  info.bmiHeader.biBitCount = 32;
-  info.bmiHeader.biCompression = BI_RGB;
-
-  const HDC dc = GetDC(shell.window);
-  StretchDIBits(dc, 0, 0, shell.width, shell.height, 0, 0, shell.width, shell.height,
-                pixels.addr(), &info, DIB_RGB_COLORS, SRCCOPY);
-  ReleaseDC(shell.window, dc);
+  shell.surface->present();
 }
 
 void set_theme(App& app, std::size_t index) {
@@ -1747,8 +1770,71 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       Size{"2560x1440", 2560, 1440},
       Size{"3840x2160", 3840, 2160},
   };
-  constexpr int kFrames = 5;
+  constexpr int kFrames = 30;
 
+  // The same tree, the same themes, on the GPU. A hidden window, because a
+  // swapchain needs one and none of this needs to be looked at.
+  const HWND hidden =
+      CreateWindowExW(0, kWindowClass, L"Cutline benchmark", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64,
+                      nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+  std::println("-- on the GPU");
+  std::println("{:<12} {:>10} {:>12}", "size", "theme", "paint");
+  for (const Theme& theme : built_in_themes()) {
+    for (const Size& size : kSizes) {
+      auto surface = cutline::ui::SkiaWindow::create(hidden, size.width, size.height);
+      if (!surface.has_value()) {
+        std::println("{:<12} {:>10} {:>12}", size.name, theme.name, "no device");
+        continue;
+      }
+
+      WidgetHost host(build_interface(nullptr));
+      const Rect client{0.0, 0.0, static_cast<double>(size.width),
+                        static_cast<double>(size.height)};
+
+      // One buffer, drawn into repeatedly and never presented. Presenting waits
+      // for the display, so timing through it reports the refresh rate and
+      // nothing whatever about the drawing.
+      auto* canvas = static_cast<SkCanvas*>((*surface)->begin_frame());
+      if (canvas == nullptr) continue;
+
+      const std::unique_ptr<SkiaPainter> painter = SkiaPainter::create(canvas);
+      if (painter == nullptr) continue;
+      const LayoutContext context{theme, *painter};
+
+      const auto draw_one = [&] {
+        host.resize(client, context);
+        canvas->clear(SK_ColorBLACK);
+        paint_surface(*painter, client, theme.style(cutline::ui::Part::Window));
+        host.paint(*painter, theme);
+        // Waits for the GPU, so what is timed is the drawing finishing rather
+        // than merely being asked for.
+        (*surface)->flush_and_wait();
+      };
+
+      // Warmed up first: a GPU compiles the pipelines it needs the first time
+      // it meets them, and counting that would say a frame costs what the
+      // first one did.
+      for (int warm = 0; warm < 10; ++warm) draw_one();
+
+      double paint_ms = 0.0;
+      for (int i = 0; i < kFrames; ++i) {
+        const auto from = std::chrono::steady_clock::now();
+        draw_one();
+        const auto to = std::chrono::steady_clock::now();
+        paint_ms += std::chrono::duration<double, std::milli>(to - from).count();
+      }
+      (*surface)->present();
+
+      std::println("{:<12} {:>10} {:>10.2f}ms {}", size.name, theme.name, paint_ms / kFrames,
+                   (*surface)->is_software() ? "(software rasteriser)" : "");
+      std::fflush(stdout);
+    }
+  }
+  if (hidden != nullptr) DestroyWindow(hidden);
+
+  std::println("");
+  std::println("-- on the CPU, which is what the headless check still uses");
   std::println("{:<12} {:>10} {:>10} {:>10}", "size", "layout", "paint", "total");
 
   for (const Theme& theme : built_in_themes()) {
@@ -1900,6 +1986,17 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
 
 int main(int argc, char** argv) {
   if (argc > 1 && std::string_view(argv[1]) == "--check") return self_check();
+  // Both of these make windows now -- the benchmark a hidden one for its
+  // swapchain -- so the class has to exist first.
+  WNDCLASSEXW window_class{};
+  window_class.cbSize = sizeof(WNDCLASSEXW);
+  window_class.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
+  window_class.lpfnWndProc = window_proc;
+  window_class.hInstance = GetModuleHandleW(nullptr);
+  window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+  window_class.lpszClassName = kWindowClass;
+  RegisterClassExW(&window_class);
+
   if (argc > 1 && std::string_view(argv[1]) == "--benchmark") return benchmark();
 
   App app;
@@ -1916,15 +2013,6 @@ int main(int argc, char** argv) {
   app.main.host = std::make_unique<WidgetHost>(build_interface(&app));
 
   const HINSTANCE instance = GetModuleHandleW(nullptr);
-  WNDCLASSEXW window_class{};
-  window_class.cbSize = sizeof(WNDCLASSEXW);
-  window_class.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
-  window_class.lpfnWndProc = window_proc;
-  window_class.hInstance = instance;
-  window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-  window_class.lpszClassName = kWindowClass;
-  RegisterClassExW(&window_class);
-
   const HWND window =
       CreateWindowExW(0, kWindowClass, L"Cutline", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
                       CW_USEDEFAULT, 1280, 800, nullptr, nullptr, instance, nullptr);
