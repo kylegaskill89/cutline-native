@@ -170,6 +170,83 @@ namespace {
   button_disabled.text = hex("#aca899");
   t.set(Part::Button, State::Disabled, button_disabled);
 
+  // Latched: which theme is showing, which tool is chosen, which parameter is
+  // animated. XP drew this as a pressed-in button with the selection wash over
+  // it, which is a different thing again from held-down — the bevel is sunken
+  // but the fill is tinted rather than merely darker.
+  SurfaceStyle button_selected = button;
+  button_selected.fill = Fill::gradient({{0.00f, hex("#ffe9a8")},
+                                         {0.50f, hex("#ffdc80")},
+                                         {1.00f, hex("#ffefc0")}});
+  button_selected.bevel = sunken("#ffffff", "#9d9a8f");
+  button_selected.border = hex("#c08000");
+  t.set(Part::Button, State::Selected, button_selected);
+
+  // Toolbar buttons: an icon in a row, not a labelled control. XP drew them
+  // flat until the pointer arrived, which is the whole reason a toolbar full of
+  // them does not look like a wall of buttons.
+  SurfaceStyle tool = button;
+  tool.fill = Fill::solid(hex("#00000000"));
+  tool.bevel.reset();
+  tool.border = hex("#00000000");
+  tool.border_width = 0.0;
+  t.set(Part::ToolButton, State::Normal, tool);
+
+  SurfaceStyle tool_hover = tool;
+  tool_hover.fill = Fill::gradient({{0.0f, hex("#fffdf4")}, {1.0f, hex("#ffe894")}});
+  tool_hover.bevel = raised("#ffffff", "#c0a060");
+  tool_hover.border = hex("#e0a000");
+  tool_hover.border_width = 1.0;
+  t.set(Part::ToolButton, State::Hover, tool_hover);
+
+  SurfaceStyle tool_pressed = tool_hover;
+  tool_pressed.fill = Fill::solid(hex("#e6e3d5"));
+  tool_pressed.bevel = sunken("#ffffff", "#8a8779");
+  t.set(Part::ToolButton, State::Pressed, tool_pressed);
+
+  SurfaceStyle tool_selected = tool_hover;
+  tool_selected.fill = Fill::solid(hex("#ffdc80"));
+  tool_selected.bevel = sunken("#ffffff", "#9d9a8f");
+  tool_selected.border = hex("#c08000");
+  t.set(Part::ToolButton, State::Selected, tool_selected);
+
+  SurfaceStyle tool_disabled = tool;
+  tool_disabled.text = hex("#aca899");
+  t.set(Part::ToolButton, State::Disabled, tool_disabled);
+
+  // The trackbar: a sunken channel with a raised handle, which is the one
+  // control XP drew in two clearly different depths.
+  t.set(Part::Slider, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#ece9d8")),
+                     .bevel = sunken("#ffffff", "#9d9a8f"),
+                     .border = hex("#7b7a70"),
+                     .border_width = 1.0,
+                     .corner_radius = 2.0,
+                     .text = hex("#000000")});
+  // The thumb's fill is also the filled part of the groove, so it carries the
+  // Luna blue rather than more grey plastic.
+  t.set(Part::SliderThumb, State::Normal,
+        SurfaceStyle{.fill = Fill::gradient({{0.00f, hex("#dbe9ff")},
+                                             {0.45f, hex("#a8c4e8")},
+                                             {0.50f, hex("#7fa8dd")},
+                                             {1.00f, hex("#c4dbf5")}}),
+                     .bevel = raised("#ffffff", "#4a6f9e"),
+                     .border = hex("#3d6b9e"),
+                     .border_width = 1.0,
+                     .corner_radius = 2.0,
+                     .text = hex("#000000")});
+
+  // Menus were white with the highlight in Luna blue.
+  t.set(Part::MenuItem, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#ffffff")), .text = hex("#000000")});
+  t.set(Part::MenuItem, State::Hover,
+        SurfaceStyle{.fill = Fill::solid(hex("#316ac5")), .text = hex("#ffffff")});
+  t.set(Part::MenuItem, State::Selected,
+        SurfaceStyle{.fill = Fill::solid(hex("#d8e4f8")),
+                     .border = hex("#316ac5"),
+                     .border_width = 1.0,
+                     .text = hex("#000000")});
+
   t.set(Part::Input, State::Normal,
         SurfaceStyle{
             .fill = Fill::solid(hex("#ffffff")),
@@ -388,6 +465,83 @@ namespace {
   button_disabled.shadow.reset();
   t.set(Part::Button, State::Disabled, button_disabled);
 
+  // Latched. Aero's own answer to this was the glass going blue and staying
+  // lit, which is the hover glow kept on rather than a darker surface.
+  SurfaceStyle button_selected = button;
+  button_selected.fill = Fill::gradient({{0.00f, hex("#cfe8ffdd")},
+                                         {0.48f, hex("#a8d4f5cc")},
+                                         {0.52f, hex("#8fc4eecc")},
+                                         {1.00f, hex("#c4e2ffdd")}});
+  button_selected.border = t.accent;
+  button_selected.border_width = 2.0;
+  button_selected.shadow = Shadow{.offset_x = 0.0, .offset_y = 0.0, .blur = 10.0,
+                                  .color = hex("#7fd0ffa0"), .inner = true};
+  t.set(Part::Button, State::Selected, button_selected);
+
+  // Toolbar buttons are barely-there glass until they are pointed at, which is
+  // what let Aero put a dozen of them in a row without it reading as chrome.
+  SurfaceStyle tool = button;
+  tool.fill = Fill::solid(hex("#ffffff22"));
+  tool.border = hex("#00000000");
+  tool.border_width = 0.0;
+  tool.shadow.reset();
+  t.set(Part::ToolButton, State::Normal, tool);
+
+  SurfaceStyle tool_hover = button_hover;
+  tool_hover.border_width = 1.0;
+  t.set(Part::ToolButton, State::Hover, tool_hover);
+  t.set(Part::ToolButton, State::Pressed, button_pressed);
+  t.set(Part::ToolButton, State::Selected, button_selected);
+
+  SurfaceStyle tool_disabled = tool;
+  tool_disabled.text = hex("#12222e66");
+  t.set(Part::ToolButton, State::Disabled, tool_disabled);
+
+  // A glass trough with the light coming from inside it.
+  t.set(Part::Slider, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#ffffff55")),
+                     .shadow = Shadow{.offset_x = 0.0, .offset_y = 1.0, .blur = 3.0,
+                                      .color = hex("#00000040"), .inner = true},
+                     .border = hex("#8fb8d8"),
+                     .border_width = 1.0,
+                     .corner_radius = 3.0,
+                     .text = hex("#12222e")});
+  t.set(Part::SliderThumb, State::Normal,
+        SurfaceStyle{.fill = Fill::gradient({{0.00f, hex("#ffffffee")},
+                                             {0.48f, hex("#dff2ffcc")},
+                                             {0.52f, hex("#b8e4ffaa")},
+                                             {1.00f, hex("#eaf8ffdd")}}),
+                     .shadow = Shadow{.offset_x = 0.0, .offset_y = 1.0, .blur = 3.0,
+                                      .color = hex("#00000030")},
+                     .border = t.accent,
+                     .border_width = 1.0,
+                     .corner_radius = 3.0,
+                     .text = hex("#12222e")});
+
+  t.set(Part::MenuItem, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#ffffff00")), .text = hex("#12222e")});
+  t.set(Part::MenuItem, State::Hover,
+        SurfaceStyle{.fill = Fill::gradient({{0.0f, hex("#dff2ffdd")}, {1.0f, hex("#b8e4ffcc")}}),
+                     .border = t.accent,
+                     .border_width = 1.0,
+                     .corner_radius = 3.0,
+                     .text = hex("#0d1a26")});
+  t.set(Part::MenuItem, State::Selected,
+        SurfaceStyle{.fill = Fill::solid(hex("#a8d4f5aa")),
+                     .corner_radius = 3.0,
+                     .text = hex("#0d1a26")});
+
+  // Aero's tooltips were near-white glass with a hairline, not the grey box
+  // every other part of the interface falls back to.
+  t.set(Part::Tooltip, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#f8fcffee")),
+                     .shadow = Shadow{.offset_x = 0.0, .offset_y = 2.0, .blur = 6.0,
+                                      .color = hex("#00000040")},
+                     .border = hex("#8fb8d8"),
+                     .border_width = 1.0,
+                     .corner_radius = 3.0,
+                     .text = hex("#12222e")});
+
   t.set(Part::Input, State::Normal,
         SurfaceStyle{
             .fill = Fill::solid(hex("#ffffffdd")),
@@ -567,6 +721,68 @@ namespace {
   button_focused.border = hex("#4c9aff");
   button_focused.border_width = 2.0;
   t.set(Part::Button, State::Focused, button_focused);
+
+  // Latched. A flat theme has no bevel to invert, so this is the one case where
+  // the accent has to carry the whole difference: filled rather than outlined.
+  SurfaceStyle button_selected = button;
+  button_selected.fill = Fill::solid(hex("#2b4c78"));
+  button_selected.border = t.accent;
+  button_selected.text = hex("#ffffff");
+  t.set(Part::Button, State::Selected, button_selected);
+
+  // Toolbar buttons carry no surface at all until they are pointed at. This
+  // theme is defined by its borders, and a row of icons each in its own box is
+  // exactly the noise it exists to avoid.
+  SurfaceStyle tool = button;
+  tool.fill = Fill::solid(hex("#00000000"));
+  tool.border = hex("#00000000");
+  tool.border_width = 0.0;
+  tool.text = hex("#b9c2cc");
+  t.set(Part::ToolButton, State::Normal, tool);
+
+  SurfaceStyle tool_hover = tool;
+  tool_hover.fill = Fill::solid(hex("#2b323b"));
+  tool_hover.text = hex("#e6ebf2");
+  t.set(Part::ToolButton, State::Hover, tool_hover);
+
+  SurfaceStyle tool_pressed = tool_hover;
+  tool_pressed.fill = Fill::solid(hex("#1c2129"));
+  t.set(Part::ToolButton, State::Pressed, tool_pressed);
+
+  SurfaceStyle tool_selected = tool;
+  tool_selected.fill = Fill::solid(hex("#2b4c78"));
+  tool_selected.border = t.accent;
+  tool_selected.border_width = 1.0;
+  tool_selected.text = hex("#ffffff");
+  t.set(Part::ToolButton, State::Selected, tool_selected);
+
+  SurfaceStyle tool_disabled = tool;
+  tool_disabled.text = hex("#5a636e");
+  t.set(Part::ToolButton, State::Disabled, tool_disabled);
+
+  // A thin channel and a small round handle. The thumb's fill is also the
+  // filled part of the groove, so the accent shows how far along the value is.
+  t.set(Part::Slider, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#181c22")),
+                     .border = hex("#2f353d"),
+                     .border_width = 1.0,
+                     .corner_radius = 3.0,
+                     .text = hex("#d8dee6")});
+  t.set(Part::SliderThumb, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(t.accent),
+                     .corner_radius = 4.0,
+                     .text = hex("#0d1218")});
+
+  t.set(Part::MenuItem, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#00000000")), .text = hex("#d8dee6")});
+  t.set(Part::MenuItem, State::Hover,
+        SurfaceStyle{.fill = Fill::solid(hex("#2b323b")),
+                     .corner_radius = 4.0,
+                     .text = hex("#ffffff")});
+  t.set(Part::MenuItem, State::Selected,
+        SurfaceStyle{.fill = Fill::solid(hex("#2b4c78")),
+                     .corner_radius = 4.0,
+                     .text = hex("#ffffff")});
 
   t.set(Part::Input, State::Normal,
         SurfaceStyle{.fill = Fill::solid(hex("#12151a")),
@@ -752,6 +968,73 @@ namespace {
   button_disabled.text = hex("#805400");
   button_disabled.text_glow = 1.0;
   t.set(Part::Button, State::Disabled, button_disabled);
+
+  // Latched, and deliberately not the same as held down: pressed inverts to
+  // solid amber, this stays dark and burns brighter. On a phosphor display the
+  // difference between on and off is how much it glows.
+  SurfaceStyle button_selected = button;
+  button_selected.fill = Fill::solid(hex("#4a3400"));
+  button_selected.border = amber;
+  button_selected.border_width = 2.0;
+  button_selected.shadow = Shadow{.offset_x = 0.0, .offset_y = 0.0, .blur = 12.0,
+                                  .color = hex("#ffb00080")};
+  button_selected.text = hex("#ffd060");
+  button_selected.text_glow = 8.0;
+  t.set(Part::Button, State::Selected, button_selected);
+
+  // Toolbar buttons: no box, and the dimmer amber that everything unlit uses.
+  SurfaceStyle tool = button;
+  tool.fill = Fill::solid(hex("#00000000"));
+  tool.border = hex("#00000000");
+  tool.border_width = 0.0;
+  tool.text = dim;
+  tool.text_glow = 2.0;
+  t.set(Part::ToolButton, State::Normal, tool);
+
+  SurfaceStyle tool_hover = tool;
+  tool_hover.fill = Fill::solid(hex("#2a1e00"));
+  tool_hover.text = amber;
+  tool_hover.text_glow = 6.0;
+  t.set(Part::ToolButton, State::Hover, tool_hover);
+
+  SurfaceStyle tool_pressed = tool_hover;
+  tool_pressed.fill = Fill::solid(amber);
+  tool_pressed.text = hex("#0a0800");
+  tool_pressed.text_glow = 0.0;
+  t.set(Part::ToolButton, State::Pressed, tool_pressed);
+
+  t.set(Part::ToolButton, State::Selected, button_selected);
+
+  SurfaceStyle tool_disabled = tool;
+  tool_disabled.text = hex("#805400");
+  tool_disabled.text_glow = 1.0;
+  t.set(Part::ToolButton, State::Disabled, tool_disabled);
+
+  // A dim channel that lights up behind the handle, since the filled part of
+  // the groove takes the thumb's own fill.
+  t.set(Part::Slider, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#0a0700")),
+                     .border = dim,
+                     .border_width = 1.0,
+                     .text = amber});
+  t.set(Part::SliderThumb, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(amber),
+                     .shadow = Shadow{.offset_x = 0.0, .offset_y = 0.0, .blur = 8.0,
+                                      .color = hex("#ffb00070")},
+                     .text = hex("#0a0800")});
+
+  // Inverse video for the row under the pointer, which is what a terminal menu
+  // has always been.
+  t.set(Part::MenuItem, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#00000000")), .text = dim, .text_glow = 2.0});
+  t.set(Part::MenuItem, State::Hover,
+        SurfaceStyle{.fill = Fill::solid(amber), .text = hex("#0a0800")});
+  t.set(Part::MenuItem, State::Selected,
+        SurfaceStyle{.fill = Fill::solid(hex("#4a3400")),
+                     .border = amber,
+                     .border_width = 1.0,
+                     .text = hex("#ffd060"),
+                     .text_glow = 5.0});
 
   t.set(Part::Input, State::Normal,
         SurfaceStyle{.fill = Fill::solid(hex("#000000")),

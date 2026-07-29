@@ -170,14 +170,36 @@ TEST(BuiltInThemes, ThereIsADefault) {
 
 TEST(BuiltInThemes, EveryPartIsStyledEverywhere) {
   // A part no theme styles would be a widget nobody can theme — exactly the
-  // thing this design exists to prevent. The fallback covers it, but silently.
+  // thing this design exists to prevent. The fallback covers it, but silently:
+  // asking only that the style *looks* usable is what let tool buttons go
+  // unstyled in all four themes without anything noticing.
   for (const Theme& theme : built_in_themes()) {
     for (int i = 0; i <= static_cast<int>(Part::ScrollThumb); ++i) {
       const auto part = static_cast<Part>(i);
-      const SurfaceStyle& style = theme.style(part);
+      EXPECT_TRUE(theme.defines(part, State::Normal))
+          << theme.id << " leaves " << to_string(part) << " to the fallback";
       // Text has to be visible against something; fully transparent text is
       // always a mistake.
-      EXPECT_GT(style.text.a, 0.0f) << theme.id << " / " << to_string(part);
+      EXPECT_GT(theme.style(part).text.a, 0.0f) << theme.id << " / " << to_string(part);
+    }
+  }
+}
+
+TEST(BuiltInThemes, AButtonThatIsOnLooksLikeIt) {
+  // Which theme is showing, which tool is chosen, which parameter is animated:
+  // every one of those is a button drawn selected, and a selected style that
+  // falls back to Normal makes all of them invisible.
+  for (const Theme& theme : built_in_themes()) {
+    for (const Part part : {Part::Button, Part::ToolButton}) {
+      EXPECT_TRUE(theme.defines(part, State::Selected))
+          << theme.id << " / " << to_string(part);
+      EXPECT_NE(theme.style(part, State::Selected), theme.style(part, State::Normal))
+          << theme.id << " draws " << to_string(part) << " the same on as off";
+      // And not the same as held down. Latched and pressed are different states
+      // that happen to look similar, and conflating them makes a toggle read as
+      // stuck rather than as on.
+      EXPECT_NE(theme.style(part, State::Selected), theme.style(part, State::Pressed))
+          << theme.id << " draws " << to_string(part) << " selected as pressed";
     }
   }
 }
