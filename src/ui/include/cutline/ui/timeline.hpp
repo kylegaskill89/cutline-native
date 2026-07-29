@@ -38,6 +38,13 @@ struct TimelineBlock {
   std::string label;
   bool selected = false;
 
+  /// Where this clip is animated, in seconds from its own start.
+  ///
+  /// Drawn as marks along the block. Keyframes are otherwise visible only in
+  /// the inspector, one parameter at a time, which makes an animation
+  /// something to be remembered rather than something that can be seen.
+  std::vector<double> keyframes;
+
   [[nodiscard]] double duration() const noexcept { return end - start; }
 
   friend bool operator==(const TimelineBlock&, const TimelineBlock&) = default;

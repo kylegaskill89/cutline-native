@@ -284,6 +284,13 @@ class IconButton : public Button {
     ArrowDown,
     Cross,
     Plus,
+    /// Premiere's animation toggle: a clock face with one hand.
+    Stopwatch,
+    /// One keyframe. Hollow, with the button's own selected state saying
+    /// whether there is a keyframe here — a filled and a hollow diamond a few
+    /// pixels across are much harder to tell apart than a lit button and an
+    /// unlit one.
+    Diamond,
   };
 
   explicit IconButton(Icon icon, std::function<void()> on_click = {});

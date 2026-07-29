@@ -1,11 +1,15 @@
 #include "cutline/editor/timeline_binding.hpp"
 
 #include "cutline/core/edit.hpp"
+#include "cutline/core/effects.hpp"
+#include "cutline/core/keyframe.hpp"
 #include "cutline/core/query.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <string>
+#include <vector>
 
 namespace cutline::editor {
 namespace {
@@ -23,6 +27,32 @@ namespace {
   if (media == nullptr) return "(missing)";
   if (!media->name.empty()) return media->name;
   return media->path.empty() ? "(untitled)" : media->path;
+}
+
+/// Every moment a clip is animated at, from every property and every effect,
+/// deduplicated and in order.
+///
+/// One list rather than one per property: the block is a few pixels tall, and
+/// what it can usefully say is "something happens here", not which of eleven
+/// parameters it was. The panel is where a keyframe is identified.
+[[nodiscard]] std::vector<double> keyframe_times(const core::Clip& clip) {
+  std::vector<double> times = core::effect_keyframe_times(clip);
+
+  for (const core::AnimProp prop : core::kAnimProps) {
+    for (const core::Keyframe& frame : clip.keyframes[core::anim_prop_index(prop)]) {
+      times.push_back(frame.t);
+    }
+  }
+  for (const core::Keyframe& frame : clip.gain_keyframes) times.push_back(frame.t);
+
+  std::ranges::sort(times);
+  // Two properties keyed at the same instant are one mark, not two drawn on
+  // top of each other.
+  const auto duplicates = std::ranges::unique(times, [](double a, double b) {
+    return std::abs(a - b) <= core::kKeyframeMatchEps;
+  });
+  times.erase(duplicates.begin(), duplicates.end());
+  return times;
 }
 
 }  // namespace
@@ -80,6 +110,7 @@ ui::TimelineModel timeline_model(const core::Project& project,
           .end = core::clip_end(clip),
           .label = label_for(project, clip),
           .selected = std::ranges::find(selection, clip.id) != selection.end(),
+          .keyframes = keyframe_times(clip),
       });
     }
     model.tracks.push_back(std::move(row));

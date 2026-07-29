@@ -138,9 +138,18 @@ catalogue that lives beside the resolver: what an effect is called, what it
 takes, and where each parameter starts. Effects can be added, removed,
 reordered, disabled without being removed, and adjusted.
 
+Every parameter that can be animated has a stopwatch, as Premiere's does.
+Turning it on makes the value it already had the first keyframe, so nothing
+about the picture changes at the moment it is pressed; turning it off keeps the
+value the keyframes were producing at the playhead. While it is on, moving a
+slider writes a keyframe there rather than a stored value, and the row shows
+what the animation is doing at the playhead rather than a number nothing is
+using. Keyframes are drawn on the clip in the timeline, so an animation is
+visible where the editing happens.
+
 Still to come: titles, which need a text rasteriser (no longer blocked — Skia
 draws the interface); a colour picker, so the chroma keyer's colour can be
-changed rather than only read; keyframes from the panel; and keeping
+changed rather than only read; dragging keyframes in time; and keeping
 hardware-decoded frames on the GPU instead of uploading them from system
 memory.
 
@@ -150,7 +159,7 @@ without a copy through system memory. Panels dock, tear out into windows of
 their own, and remember where they were; four themes change the chrome rather
 than only the colours. The timeline edits, the sequence plays at rate against
 the audio clock, and export runs on its own thread with progress and cancel.
-1315 tests, plus a headless check that lays every panel out in every theme.
+1340 tests, plus a headless check that lays every panel out in every theme.
 
 ## Building
 

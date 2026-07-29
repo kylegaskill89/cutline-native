@@ -111,6 +111,48 @@ TEST(Timeline, ABlockLandsWhereItsTimeSays) {
   EXPECT_DOUBLE_EQ(box.height, fixture.view->track_rect(0).height);
 }
 
+TEST(Timeline, KeyframesAreDrawnOnTheBlockThatCarriesThem) {
+  const Fixture plain;
+  RecordingPainter before;
+  plain.view->paint(before, default_theme());
+
+  TimelineModel animated = sample_model();
+  // Two keyframes on the second track's first block, which runs 0s to 5s.
+  animated.tracks[1].blocks[0].keyframes = {1.0, 3.0};
+
+  Fixture keyed;
+  keyed.view->set_model(animated);
+  keyed.host->resize(Rect{0.0, 0.0, 1000.0, 400.0}, flat_context());
+
+  RecordingPainter after;
+  keyed.view->paint(after, default_theme());
+
+  // Four lines to a diamond, so two of them is eight more than were there.
+  EXPECT_EQ(after.count(DrawCall::Kind::Line), before.count(DrawCall::Kind::Line) + 8);
+}
+
+TEST(Timeline, AKeyframeIsDrawnAtItsOwnTimeWithinTheBlock) {
+  TimelineModel animated = sample_model();
+  animated.tracks[1].blocks[0].keyframes = {1.0};
+
+  Fixture fixture;
+  fixture.view->set_model(animated);
+  fixture.host->resize(Rect{0.0, 0.0, 1000.0, 400.0}, flat_context());
+
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  // One second in at 100 px/s, and low in the block: the mark sits along its
+  // foot so a label cannot cover it.
+  const double expected = box.x + 100.0;
+  const bool marked = std::ranges::any_of(painter.calls(), [expected, &box](const DrawCall& c) {
+    return c.kind == DrawCall::Kind::Line && std::abs(c.bounds.x - expected) <= 4.0 &&
+           c.bounds.y > box.y + box.height * 0.5;
+  });
+  EXPECT_TRUE(marked) << "no keyframe mark one second into the block";
+}
+
 TEST(Timeline, ScrollingMovesTheBlocksAndNotTheHeaders) {
   Fixture fixture;
   const double before = fixture.view->block_rect(0, 0).x;

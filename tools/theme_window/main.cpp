@@ -502,6 +502,87 @@ void inspector_heading(App& app, std::string text) {
   label.set_bold(true);
 }
 
+/// Where the playhead is within a clip, in the seconds keyframes are stored in.
+///
+/// Clip-local: keyframe times run from the clip's start, which is also what the
+/// renderer resolves them against. Clamped to the clip, so a keyframe cannot be
+/// dropped outside the span it belongs to.
+[[nodiscard]] double local_playhead(const App& app, const std::string& clip_id) {
+  const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), clip_id);
+  if (clip == nullptr) return 0.0;
+  return std::clamp(app.session.playhead() - clip->start, 0.0,
+                    cutline::core::clip_duration(*clip));
+}
+
+/// Rebuilds the inspector when moving the playhead changes what it shows.
+///
+/// Which is only when the selected clip animates something: an animated row
+/// reads its value at the playhead and a static one does not care where it is.
+/// Guarded rather than unconditional because a rebuild is dozens of widgets and
+/// playback moves the playhead thirty times a second.
+void follow_playhead(App& app) {
+  const auto selection = app.session.selection();
+  if (selection.empty()) return;
+
+  const cutline::core::Clip* clip =
+      cutline::core::find_clip(app.session.project(), selection.front());
+  if (clip == nullptr) return;
+
+  const bool animated =
+      cutline::core::clip_has_effect_keyframes(*clip) ||
+      cutline::core::is_gain_animated(*clip) ||
+      std::ranges::any_of(cutline::core::kAnimProps, [clip](cutline::core::AnimProp prop) {
+        return cutline::core::is_animated(*clip, prop);
+      });
+  if (animated) app.inspector_stale = true;
+}
+
+/// One parameter, in Premiere's arrangement: the stopwatch that turns animation
+/// on, the name, a marker saying whether there is a keyframe at the playhead,
+/// and the control itself underneath.
+struct ParamRow {
+  std::string name;
+  std::string suffix;
+  ValueRange range;
+  double value = 0.0;
+  double fallback = 0.0;
+  bool animatable = false;
+  bool animated = false;
+  bool keyed_here = false;
+};
+
+void build_param_row(App& app, const ParamRow& row, std::function<void(double)> on_commit,
+                     std::function<void(bool)> on_animate, std::function<void()> on_keyframe) {
+  auto& head = app.inspector->emplace<Box>(Axis::Horizontal);
+
+  if (row.animatable) {
+    auto& watch = head.emplace<IconButton>(
+        IconButton::Icon::Stopwatch,
+        [animate = std::move(on_animate), animated = row.animated] { animate(!animated); });
+    watch.set_selected(row.animated);
+  }
+
+  // The unit goes in the label, because the slider has no readout to put it in
+  // and "Amount" alone does not say whether 40 is pixels or percent.
+  auto& label =
+      head.emplace<Label>(row.suffix.empty() ? row.name : row.name + " (" + row.suffix + ")");
+  label.set_small(true);
+  head.emplace<Spacer>();
+
+  // Only once animation is on. Before that there is no list to add to, and a
+  // marker that silently started one would mean the same as the stopwatch.
+  if (row.animated) {
+    auto& mark = head.emplace<IconButton>(IconButton::Icon::Diamond, std::move(on_keyframe));
+    mark.set_selected(row.keyed_here);
+  }
+
+  auto& slider = app.inspector->emplace<Slider>(row.range, row.value);
+  slider.set_default_value(row.fallback);
+  // On commit rather than on change: the control follows the pointer as it
+  // goes, and the project is written once, at the end of the gesture.
+  slider.set_on_commit(std::move(on_commit));
+}
+
 /// Offers the catalogue, and adds what is chosen.
 ///
 /// On the popup layer rather than in the panel, for the reason every menu is:
@@ -545,7 +626,8 @@ void build_effect_controls(App& app, const std::string& clip_id) {
   });
 
   const std::vector<cutline::editor::EffectRow> rows =
-      cutline::editor::clip_effects(app.session.project(), clip_id);
+      cutline::editor::clip_effects(app.session.project(), clip_id,
+                                    local_playhead(app, clip_id));
   if (rows.empty()) {
     app.inspector->emplace<Label>("No effects").set_small(true);
     return;
@@ -613,19 +695,38 @@ void build_effect_controls(App& app, const std::string& clip_id) {
         continue;
       }
 
-      // The unit goes in the label, because the slider has no readout to put it
-      // in and "Amount" alone does not say whether 40 is pixels or percent.
-      const std::string label =
-          param.suffix.empty() ? param.name : param.name + " (" + param.suffix + ")";
-      app.inspector->emplace<Label>(label).set_small(true);
-      auto& slider = app.inspector->emplace<Slider>(param.range, param.value);
-      slider.set_default_value(param.fallback);
-      slider.set_on_commit([&app, clip_id, index = row.index, key = param.key](double value) {
-        app.session.apply(cutline::core::set_clip_effect_param(app.session.project(), clip_id,
-                                                               index, key, value));
-        invalidate_preview(app);
-        app.inspector_stale = true;
-      });
+      const ParamRow line{.name = param.name,
+                          .suffix = param.suffix,
+                          .range = param.range,
+                          .value = param.value,
+                          .fallback = param.fallback,
+                          .animatable = true,
+                          .animated = param.animated,
+                          .keyed_here = param.keyed_here};
+
+      build_param_row(
+          app, line,
+          [&app, clip_id, index = row.index, key = param.key](double value) {
+            app.session.apply(cutline::editor::set_effect_parameter(
+                app.session.project(), clip_id, index, key, value,
+                local_playhead(app, clip_id)));
+            invalidate_preview(app);
+            app.inspector_stale = true;
+          },
+          [&app, clip_id, index = row.index, key = param.key](bool animated) {
+            app.session.apply(cutline::editor::set_effect_parameter_animated(
+                app.session.project(), clip_id, index, key, animated,
+                local_playhead(app, clip_id)));
+            invalidate_preview(app);
+            app.inspector_stale = true;
+          },
+          [&app, clip_id, index = row.index, key = param.key] {
+            app.session.apply(cutline::editor::toggle_effect_keyframe(
+                app.session.project(), clip_id, index, key, local_playhead(app, clip_id)));
+            refresh_timeline(app);
+            invalidate_preview(app);
+            app.inspector_stale = true;
+          });
     }
 
     for (const cutline::editor::EffectColorRow& color : row.colors) {
@@ -668,25 +769,46 @@ void refresh_inspector(App& app) {
   inspector_heading(app, visual ? "Motion" : "Audio");
 
   for (const cutline::editor::ParamSpec& spec :
-       cutline::editor::clip_parameters(app.session.project(), clip_id)) {
-    app.inspector->emplace<Label>(spec.name).set_small(true);
+       cutline::editor::clip_parameters(app.session.project(), clip_id,
+                                        local_playhead(app, clip_id))) {
+    const ParamRow line{.name = spec.name,
+                        // The transform's units are already in its names —
+                        // "Position X" in percent of the canvas — and repeating
+                        // them would read as noise.
+                        .range = spec.range,
+                        .value = spec.value,
+                        .fallback = spec.fallback,
+                        .animatable = spec.animatable,
+                        .animated = spec.animated,
+                        .keyed_here = spec.keyed_here};
 
-    auto& slider = app.inspector->emplace<Slider>(spec.range, spec.value);
-    slider.set_default_value(spec.fallback);
-
-    // On commit rather than on change: the control follows the pointer as it
-    // goes, and the project is written once, at the end of the gesture.
-    slider.set_on_commit([&app, clip_id, param = spec.param](double value) {
-      app.session.apply(cutline::editor::set_clip_parameter(app.session.project(), clip_id,
-                                                            param, value));
-      refresh_timeline(app);
-      invalidate_preview(app);
-      // Marked, not rebuilt: this lambda belongs to the slider that a rebuild
-      // would destroy. It has to be rebuilt though — the model may have
-      // clamped the value, and a speed change alters the clip's length, which
-      // moves the bounds of both fade controls.
-      app.inspector_stale = true;
-    });
+    build_param_row(
+        app, line,
+        [&app, clip_id, param = spec.param](double value) {
+          app.session.apply(cutline::editor::set_clip_parameter(
+              app.session.project(), clip_id, param, value, local_playhead(app, clip_id)));
+          refresh_timeline(app);
+          invalidate_preview(app);
+          // Marked, not rebuilt: this lambda belongs to the slider that a
+          // rebuild would destroy. It has to be rebuilt though — the model may
+          // have clamped the value, and a speed change alters the clip's
+          // length, which moves the bounds of both fade controls.
+          app.inspector_stale = true;
+        },
+        [&app, clip_id, param = spec.param](bool animated) {
+          app.session.apply(cutline::editor::set_clip_parameter_animated(
+              app.session.project(), clip_id, param, animated, local_playhead(app, clip_id)));
+          refresh_timeline(app);
+          invalidate_preview(app);
+          app.inspector_stale = true;
+        },
+        [&app, clip_id, param = spec.param] {
+          app.session.apply(cutline::editor::toggle_clip_parameter_keyframe(
+              app.session.project(), clip_id, param, local_playhead(app, clip_id)));
+          refresh_timeline(app);
+          invalidate_preview(app);
+          app.inspector_stale = true;
+        });
   }
 
   // Visual effects only, since that is the stack the compositor draws. An
@@ -1015,6 +1137,7 @@ void advance_playback(App& app) {
   if (app.readout != nullptr) {
     app.readout->set_text(cutline::core::seconds_to_timecode(at, app.session.project().fps));
   }
+  follow_playhead(app);
   refresh_timeline(app);
   invalidate_preview(app);
 #else
@@ -1349,6 +1472,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
       app->readout->set_text(
           cutline::core::seconds_to_timecode(app->session.playhead(), app->session.project().fps));
     }
+    follow_playhead(*app);
 #if CUTLINE_HAVE_PREVIEW
     // Dragging the playhead while it is playing takes the sound with it.
     // Without this the audio carries on from where it was and the picture is
@@ -2924,6 +3048,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
           app.session.apply(
               cutline::editor::add_effect(app.session.project(), clip_id, choice.type));
         }
+        // One of each animated, so the keyframe markers are laid out too. They
+        // only exist once a parameter is animated, so a clip with none would
+        // leave that half of every row untested.
+        app.session.apply(cutline::editor::set_clip_parameter_animated(
+            app.session.project(), clip_id, cutline::editor::ClipParam::Opacity, true, 0.0));
+        app.session.apply(cutline::editor::set_effect_parameter_animated(
+            app.session.project(), clip_id, 0, "amount", true, 0.0));
       }
 
       refresh_inspector(app);

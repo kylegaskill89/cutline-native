@@ -290,6 +290,25 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
                               TextAlign::Left, false));
         painter.pop_clip();
       }
+
+      // Keyframes, as small diamonds along the foot of the block, so an
+      // animation is visible where the clip is rather than only in the
+      // inspector one parameter at a time. Clipped to the block, or one at the
+      // very end spills onto the clip after it.
+      if (!clip.keyframes.empty()) {
+        painter.push_clip(box, style.corner_radius);
+        constexpr double reach = 3.0;
+        const double y = box.bottom() - reach - 2.0;
+        for (const double at : clip.keyframes) {
+          const double x = box.x + at * scale_.pixels_per_second;
+          if (x < box.x - reach || x > box.right() + reach) continue;
+          painter.line(x, y - reach, x + reach, y, style.text, 1.0);
+          painter.line(x + reach, y, x, y + reach, style.text, 1.0);
+          painter.line(x, y + reach, x - reach, y, style.text, 1.0);
+          painter.line(x - reach, y, x, y - reach, style.text, 1.0);
+        }
+        painter.pop_clip();
+      }
     }
   }
   painter.pop_clip();

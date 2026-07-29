@@ -228,6 +228,97 @@ TEST(Inspector, TheModelStillClampsWhatItIsGiven) {
   EXPECT_GE(core::find_clip(quiet, "a1c")->gain, 0.0);
 }
 
+// -------------------------------------------------------------- keyframes --
+
+TEST(Inspector, TheTransformAndOpacityCanBeAnimatedAndTheFadesCannot) {
+  const std::vector<ParamSpec> specs = clip_parameters(sample_project(), "c1");
+  EXPECT_TRUE(find(specs, ClipParam::Opacity)->animatable);
+  EXPECT_TRUE(find(specs, ClipParam::X)->animatable);
+  EXPECT_TRUE(find(specs, ClipParam::Rotation)->animatable);
+
+  // A fade whose length changed over its own duration is not something the
+  // model can express, and neither is a speed that varies within a clip.
+  EXPECT_FALSE(find(specs, ClipParam::FadeIn)->animatable);
+  EXPECT_FALSE(find(specs, ClipParam::Speed)->animatable);
+}
+
+TEST(Inspector, VolumeCanBeAnimated) {
+  const std::vector<ParamSpec> specs = clip_parameters(sample_project(), "a1c");
+  EXPECT_TRUE(find(specs, ClipParam::Gain)->animatable);
+}
+
+TEST(Inspector, TurningTheStopwatchOnKeepsTheValueItHad) {
+  Project p = set_clip_parameter(sample_project(), "c1", ClipParam::Opacity, 60.0);
+  p = set_clip_parameter_animated(std::move(p), "c1", ClipParam::Opacity, true, 2.0);
+
+  const std::optional<ParamSpec> row = find(clip_parameters(p, "c1", 2.0), ClipParam::Opacity);
+  ASSERT_TRUE(row.has_value());
+  EXPECT_TRUE(row->animated);
+  EXPECT_TRUE(row->keyed_here);
+  EXPECT_DOUBLE_EQ(row->value, 60.0) << "pressing the stopwatch must not change the picture";
+}
+
+TEST(Inspector, AnAnimatedRowReadsItsValueAtTheGivenTime) {
+  Project p = set_clip_parameter(sample_project(), "c1", ClipParam::Opacity, 0.0);
+  p = set_clip_parameter_animated(std::move(p), "c1", ClipParam::Opacity, true, 0.0);
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::Opacity, 100.0, 4.0);
+
+  EXPECT_DOUBLE_EQ(find(clip_parameters(p, "c1", 0.0), ClipParam::Opacity)->value, 0.0);
+  EXPECT_DOUBLE_EQ(find(clip_parameters(p, "c1", 2.0), ClipParam::Opacity)->value, 50.0);
+  EXPECT_DOUBLE_EQ(find(clip_parameters(p, "c1", 4.0), ClipParam::Opacity)->value, 100.0);
+}
+
+TEST(Inspector, SettingAnAnimatedParameterWritesAKeyframeRatherThanTheStoredValue) {
+  Project p = set_clip_parameter_animated(sample_project(), "c1", ClipParam::X, true, 0.0);
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::X, 75.0, 3.0);
+
+  const Clip& clip = p.tracks.front().clips.front();
+  const auto& frames = clip.keyframes[core::anim_prop_index(core::AnimProp::X)];
+  ASSERT_EQ(frames.size(), 2u);
+  EXPECT_DOUBLE_EQ(frames[1].t, 3.0);
+  // Stored as a fraction of the canvas, shown as a percentage of it.
+  EXPECT_DOUBLE_EQ(frames[1].v, 0.75);
+}
+
+TEST(Inspector, TurningTheStopwatchOffKeepsTheValueAtThatTime) {
+  Project p = set_clip_parameter(sample_project(), "c1", ClipParam::Opacity, 0.0);
+  p = set_clip_parameter_animated(std::move(p), "c1", ClipParam::Opacity, true, 0.0);
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::Opacity, 100.0, 4.0);
+  p = set_clip_parameter_animated(std::move(p), "c1", ClipParam::Opacity, false, 1.0);
+
+  const Clip& clip = p.tracks.front().clips.front();
+  EXPECT_TRUE(clip.keyframes[core::anim_prop_index(core::AnimProp::Opacity)].empty());
+  EXPECT_DOUBLE_EQ(clip.opacity, 0.25) << "a quarter of the way along the ramp";
+}
+
+TEST(Inspector, AKeyframeCanBeAddedAndTakenAwayWithoutChangingTheAnimation) {
+  Project p = set_clip_parameter(sample_project(), "c1", ClipParam::Opacity, 0.0);
+  p = set_clip_parameter_animated(std::move(p), "c1", ClipParam::Opacity, true, 0.0);
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::Opacity, 100.0, 4.0);
+
+  const Project added = toggle_clip_parameter_keyframe(p, "c1", ClipParam::Opacity, 2.0);
+  ASSERT_EQ(added.tracks.front().clips.front()
+                .keyframes[core::anim_prop_index(core::AnimProp::Opacity)]
+                .size(),
+            3u);
+  EXPECT_DOUBLE_EQ(find(clip_parameters(added, "c1", 2.0), ClipParam::Opacity)->value, 50.0)
+      << "adding a keyframe on the ramp must not bend it";
+
+  const Project removed = toggle_clip_parameter_keyframe(added, "c1", ClipParam::Opacity, 2.0);
+  EXPECT_EQ(removed, p);
+}
+
+TEST(Inspector, AKeyframeMarkerDoesNothingUntilTheStopwatchIsOn) {
+  const Project before = sample_project();
+  EXPECT_EQ(toggle_clip_parameter_keyframe(before, "c1", ClipParam::Opacity, 1.0), before);
+}
+
+TEST(Inspector, AParameterThatCannotBeAnimatedRefusesToBe) {
+  const Project before = sample_project();
+  EXPECT_EQ(set_clip_parameter_animated(before, "c1", ClipParam::Speed, true, 0.0), before);
+  EXPECT_EQ(set_clip_parameter_animated(before, "c1", ClipParam::FadeIn, true, 0.0), before);
+}
+
 TEST(Inspector, EveryParameterHasAName) {
   for (const ClipParam param :
        {ClipParam::Opacity, ClipParam::X, ClipParam::Y, ClipParam::ScaleX, ClipParam::ScaleY,

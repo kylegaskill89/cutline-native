@@ -662,12 +662,21 @@ TEST(Dropdown, TheKeyboardStepsWithoutOpening) {
 }
 
 TEST(IconButton, DrawsItsMarkWithoutAFont) {
-  // Lines, like the tick and the dropdown's arrow: no font can be relied on to
-  // have an arrow in it, and the ones that do disagree about its size.
+  // Lines and strokes, like the tick and the dropdown's arrow: no font can be
+  // relied on to have an arrow in it, and the ones that do disagree about its
+  // size and baseline.
   for (const IconButton::Icon icon :
        {IconButton::Icon::ArrowUp, IconButton::Icon::ArrowDown, IconButton::Icon::Cross,
-        IconButton::Icon::Plus}) {
-    EXPECT_EQ(lines_of(icon).size(), 2u) << "icon " << static_cast<int>(icon);
+        IconButton::Icon::Plus, IconButton::Icon::Stopwatch, IconButton::Icon::Diamond}) {
+    IconButton button(icon);
+    button.arrange(Rect{0.0, 0.0, 24.0, 24.0}, flat_context());
+
+    RecordingPainter painter;
+    button.paint(painter, default_theme());
+    EXPECT_GE(painter.count(DrawCall::Kind::Line) + painter.count(DrawCall::Kind::Stroke), 2u)
+        << "icon " << static_cast<int>(icon);
+    EXPECT_EQ(painter.count(DrawCall::Kind::Text), 0u)
+        << "icon " << static_cast<int>(icon) << " should need no font";
   }
 }
 
@@ -684,6 +693,24 @@ TEST(IconButton, TheArrowsPointOppositeWays) {
   // sign of the offset is which way the stroke runs.
   EXPECT_LT(up.front().bounds.height, 0.0) << "the first stroke should rise";
   EXPECT_GT(down.front().bounds.height, 0.0) << "the first stroke should fall";
+}
+
+TEST(IconButton, AToggleShowsItsStateInTheMarkItself) {
+  // No theme defines a selected state for a tool button, so the surface
+  // underneath cannot be relied on to say anything. A stopwatch that looks the
+  // same running as stopped is worse than no stopwatch at all.
+  const auto marks = [](IconButton::Icon icon, bool on) {
+    IconButton button(icon);
+    button.set_selected(on);
+    button.arrange(Rect{0.0, 0.0, 24.0, 24.0}, flat_context());
+
+    RecordingPainter painter;
+    button.paint(painter, default_theme());
+    return painter.count(DrawCall::Kind::Fill);
+  };
+
+  EXPECT_GT(marks(IconButton::Icon::Stopwatch, true), marks(IconButton::Icon::Stopwatch, false));
+  EXPECT_GT(marks(IconButton::Icon::Diamond, true), marks(IconButton::Icon::Diamond, false));
 }
 
 TEST(IconButton, IsSquareWhateverTheTheme) {

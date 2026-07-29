@@ -7,7 +7,9 @@
 
 #include "cutline/editor/timeline_binding.hpp"
 
+#include "cutline/core/animate.hpp"
 #include "cutline/core/edit.hpp"
+#include "cutline/core/effects.hpp"
 #include "cutline/core/query.hpp"
 
 #include <gtest/gtest.h>
@@ -93,6 +95,37 @@ TEST(Binding, TheDurationIsTheProjectsOwn) {
   const Project project = sample_project();
   const ui::TimelineModel model = timeline_model(project);
   EXPECT_DOUBLE_EQ(model.duration, core::timeline_duration(project));
+}
+
+TEST(Binding, ABlockCarriesTheTimesItIsAnimatedAt) {
+  Project project = sample_project();
+  project = core::set_keyframe(std::move(project), "c1", core::AnimProp::Opacity, 1.0, 0.5);
+  project = core::set_keyframe(std::move(project), "c1", core::AnimProp::Opacity, 3.0, 1.0);
+  project = core::add_clip_effect(std::move(project), "c1", "blur", {{"amount", 5.0}});
+  project = core::set_effect_keyframe(std::move(project), "c1", 0, "amount", 2.0, 10.0);
+
+  // The model by value: a reference bound to a *member* of a temporary is not
+  // lifetime-extended, and reads whatever is left at the semicolon.
+  const ui::TimelineModel model = timeline_model(project);
+  const ui::TimelineBlock& block = model.tracks[1].blocks[0];
+  ASSERT_EQ(block.keyframes.size(), 3u);
+  EXPECT_DOUBLE_EQ(block.keyframes[0], 1.0);
+  EXPECT_DOUBLE_EQ(block.keyframes[1], 2.0) << "an effect's keyframes count too";
+  EXPECT_DOUBLE_EQ(block.keyframes[2], 3.0) << "and they come out in time order";
+}
+
+TEST(Binding, TwoPropertiesKeyedTogetherAreOneMark) {
+  // The block is a few pixels tall; two diamonds drawn on top of each other
+  // are one diamond with the drawing done twice.
+  Project project = sample_project();
+  project = core::set_keyframe(std::move(project), "c1", core::AnimProp::X, 2.0, 0.25);
+  project = core::set_keyframe(std::move(project), "c1", core::AnimProp::Y, 2.0, 0.75);
+
+  EXPECT_EQ(timeline_model(project).tracks[1].blocks[0].keyframes.size(), 1u);
+}
+
+TEST(Binding, AClipWithNoAnimationHasNoMarks) {
+  EXPECT_TRUE(timeline_model(sample_project()).tracks[1].blocks[0].keyframes.empty());
 }
 
 TEST(Binding, AClipWithNoMediaStillDraws) {

@@ -1,8 +1,11 @@
 #include "cutline/editor/effects_binding.hpp"
 
 #include "cutline/core/effects.hpp"
+#include "cutline/core/keyframe.hpp"
 #include "cutline/core/query.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <map>
 #include <utility>
 
@@ -21,9 +24,29 @@ namespace {
   return found == effect.params.end() ? spec.fallback : found->second;
 }
 
+/// The effect at `index`, or null.
+[[nodiscard]] const core::ClipEffect* effect_at(const core::Project& project,
+                                                std::string_view clip_id, std::size_t index) {
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr || index >= clip->effects.size()) return nullptr;
+  return &clip->effects[index];
+}
+
+/// Whether a keyframe sits at `local_t`, within the tolerance an edit at that
+/// time would land on.
+[[nodiscard]] bool keyed_at(const core::ClipEffect& effect, std::string_view key,
+                            double local_t) {
+  const auto found = effect.keyframes.find(std::string(key));
+  if (found == effect.keyframes.end()) return false;
+  return std::ranges::any_of(found->second, [local_t](const core::Keyframe& frame) {
+    return std::abs(frame.t - local_t) <= core::kKeyframeMatchEps;
+  });
+}
+
 }  // namespace
 
-std::vector<EffectRow> clip_effects(const core::Project& project, std::string_view clip_id) {
+std::vector<EffectRow> clip_effects(const core::Project& project, std::string_view clip_id,
+                                    double local_t) {
   const core::Clip* clip = core::find_clip(project, clip_id);
   if (clip == nullptr) return {};
 
@@ -46,15 +69,20 @@ std::vector<EffectRow> clip_effects(const core::Project& project, std::string_vi
     }
 
     for (const render::EffectParamSpec& param : spec->params) {
+      const bool animated = core::is_effect_param_animated(effect, param.key);
       row.params.push_back(EffectParamRow{
           .key = std::string(param.key),
           .name = std::string(param.name),
           .range = {.minimum = param.minimum, .maximum = param.maximum},
-          .value = stored_or_default(effect, param),
+          // Animated parameters ignore what is stored, so showing the stored
+          // value would put a number on screen that nothing is using.
+          .value = animated ? core::effect_param_at(effect, param.key, local_t)
+                            : stored_or_default(effect, param),
           .fallback = param.fallback,
           .suffix = std::string(param.suffix),
           .toggle = param.toggle,
-          .animated = core::is_effect_param_animated(effect, param.key)});
+          .animated = animated,
+          .keyed_here = animated && keyed_at(effect, param.key, local_t)});
     }
 
     for (const render::EffectColorSpec& color : spec->colors) {
@@ -102,6 +130,59 @@ core::Project add_effect(core::Project project, std::string_view clip_id,
 
   return core::add_clip_effect(std::move(project), clip_id, std::string(spec->type),
                                std::move(params), std::move(colors));
+}
+
+core::Project set_effect_parameter(core::Project project, std::string_view clip_id,
+                                   std::size_t index, std::string_view key, double value,
+                                   double local_t) {
+  const core::ClipEffect* effect = effect_at(project, clip_id, index);
+  if (effect == nullptr) return project;
+
+  if (core::is_effect_param_animated(*effect, key)) {
+    return core::set_effect_keyframe(std::move(project), clip_id, index, std::string(key),
+                                     local_t, value);
+  }
+  return core::set_clip_effect_param(std::move(project), clip_id, index, std::string(key),
+                                     value);
+}
+
+core::Project set_effect_parameter_animated(core::Project project, std::string_view clip_id,
+                                            std::size_t index, std::string_view key,
+                                            bool animated, double local_t) {
+  const core::ClipEffect* effect = effect_at(project, clip_id, index);
+  if (effect == nullptr) return project;
+
+  const bool already = core::is_effect_param_animated(*effect, key);
+  if (already == animated) return project;
+
+  // Read before either edit: turning animation on has to keep the value the
+  // parameter already had, and turning it off has to keep the one the
+  // keyframes were producing.
+  const double current = core::effect_param_at(*effect, key, local_t);
+
+  if (animated) {
+    return core::set_effect_keyframe(std::move(project), clip_id, index, std::string(key),
+                                     local_t, current);
+  }
+
+  project = core::clear_effect_keyframes(std::move(project), clip_id, index, key);
+  return core::set_clip_effect_param(std::move(project), clip_id, index, std::string(key),
+                                     current);
+}
+
+core::Project toggle_effect_keyframe(core::Project project, std::string_view clip_id,
+                                     std::size_t index, std::string_view key, double local_t) {
+  const core::ClipEffect* effect = effect_at(project, clip_id, index);
+  if (effect == nullptr) return project;
+  // Not animated: there is no list to add to, and silently starting one here
+  // would make the stopwatch and this marker mean the same thing.
+  if (!core::is_effect_param_animated(*effect, key)) return project;
+
+  if (keyed_at(*effect, key, local_t)) {
+    return core::remove_effect_keyframe_at(std::move(project), clip_id, index, key, local_t);
+  }
+  return core::set_effect_keyframe(std::move(project), clip_id, index, std::string(key), local_t,
+                                   core::effect_param_at(*effect, key, local_t));
 }
 
 }  // namespace cutline::editor

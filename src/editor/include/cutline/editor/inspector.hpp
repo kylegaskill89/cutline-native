@@ -50,22 +50,57 @@ struct ParamSpec {
   /// Appended to the readout: "%", "°", "x", "s".
   std::string suffix;
 
+  /// Whether keyframes are possible at all. Speed and the fades are not
+  /// animatable — a fade whose length changed over its own duration is not
+  /// something the model can express — so their rows get no stopwatch.
+  bool animatable = false;
+  /// Animated, so `value` is what the keyframes evaluate to rather than the
+  /// stored one.
+  bool animated = false;
+  /// Animated, with a keyframe at the time asked about.
+  bool keyed_here = false;
+
   friend bool operator==(const ParamSpec&, const ParamSpec&) = default;
 };
 
-/// The parameters worth showing for a clip, in the order they should appear.
+/// The parameters worth showing for a clip, in the order they should appear,
+/// as they stand at clip-local time `local_t`.
 ///
 /// A video clip gets its transform and opacity; an audio clip gets gain, and
 /// none of the geometry that would mean nothing on it. Empty when the clip is
 /// not there, which is also what an empty selection produces.
 [[nodiscard]] std::vector<ParamSpec> clip_parameters(const core::Project& project,
-                                                     std::string_view clip_id);
+                                                     std::string_view clip_id,
+                                                     double local_t = 0.0);
 
 /// Applies one parameter, taking a value in display units.
+///
+/// A keyframe at `local_t` when the parameter is animated, the stored value
+/// when it is not. Which of those a drag means is a property of the parameter
+/// rather than of the control, so it is decided here instead of by each caller.
 ///
 /// Returns the project unchanged when it cannot apply, like everything else
 /// that edits, so the session can skip the undo entry.
 [[nodiscard]] core::Project set_clip_parameter(core::Project project, std::string_view clip_id,
-                                               ClipParam param, double value);
+                                               ClipParam param, double value,
+                                               double local_t = 0.0);
+
+/// Turns animation on or off — Premiere's stopwatch.
+///
+/// On, the value the parameter has now becomes its first keyframe at `local_t`,
+/// so switching it on changes nothing about the picture. Off, every keyframe is
+/// dropped and the value at `local_t` is kept as the static one, so switching
+/// it off does not either.
+[[nodiscard]] core::Project set_clip_parameter_animated(core::Project project,
+                                                        std::string_view clip_id,
+                                                        ClipParam param, bool animated,
+                                                        double local_t);
+
+/// Adds a keyframe at `local_t` holding the current value, or removes the one
+/// already there. Does nothing when the parameter is not animated: the first
+/// keyframe is the stopwatch's job.
+[[nodiscard]] core::Project toggle_clip_parameter_keyframe(core::Project project,
+                                                           std::string_view clip_id,
+                                                           ClipParam param, double local_t);
 
 }  // namespace cutline::editor

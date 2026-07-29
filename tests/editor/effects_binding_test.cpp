@@ -191,6 +191,112 @@ TEST(ClipEffects, AnUnknownEffectIsShownAsItselfRatherThanDropped) {
   EXPECT_TRUE(rows.front().params.empty());
 }
 
+// -------------------------------------------------------------- keyframes --
+
+/// A clip with one blur on it, which has a single numeric parameter.
+[[nodiscard]] Project blurred() { return add_effect(one_clip(), "c1", "blur"); }
+
+[[nodiscard]] const core::ClipEffect& only_effect(const Project& p) {
+  return only_clip(p).effects.front();
+}
+
+TEST(SetEffectParameter, WritesTheStoredValueWhenNotAnimated) {
+  const Project p = set_effect_parameter(blurred(), "c1", 0, "amount", 12.0, 3.0);
+  EXPECT_DOUBLE_EQ(only_effect(p).params.at("amount"), 12.0);
+  EXPECT_TRUE(only_effect(p).keyframes.empty()) << "a static parameter gains no keyframes";
+}
+
+TEST(SetEffectParameter, WritesAKeyframeWhenAnimated) {
+  Project p = set_effect_parameter_animated(blurred(), "c1", 0, "amount", true, 1.0);
+  p = set_effect_parameter(std::move(p), "c1", 0, "amount", 20.0, 4.0);
+
+  const auto& frames = only_effect(p).keyframes.at("amount");
+  ASSERT_EQ(frames.size(), 2u);
+  EXPECT_DOUBLE_EQ(frames[1].t, 4.0);
+  EXPECT_DOUBLE_EQ(frames[1].v, 20.0);
+}
+
+TEST(SetEffectParameterAnimated, TurningItOnKeepsTheValueItHad) {
+  // The point of the stopwatch is that nothing about the picture changes when
+  // it is pressed — the value it had becomes the first keyframe.
+  Project p = set_effect_parameter(blurred(), "c1", 0, "amount", 7.0);
+  p = set_effect_parameter_animated(std::move(p), "c1", 0, "amount", true, 2.0);
+
+  const auto& frames = only_effect(p).keyframes.at("amount");
+  ASSERT_EQ(frames.size(), 1u);
+  EXPECT_DOUBLE_EQ(frames.front().t, 2.0);
+  EXPECT_DOUBLE_EQ(frames.front().v, 7.0);
+}
+
+TEST(SetEffectParameterAnimated, TurningItOffKeepsTheValueAtThatTime) {
+  Project p = set_effect_parameter_animated(blurred(), "c1", 0, "amount", true, 0.0);
+  p = set_effect_parameter(std::move(p), "c1", 0, "amount", 10.0, 0.0);
+  p = set_effect_parameter(std::move(p), "c1", 0, "amount", 30.0, 4.0);
+
+  // Halfway between them, so the value being kept is one only the keyframes
+  // ever produced.
+  p = set_effect_parameter_animated(std::move(p), "c1", 0, "amount", false, 2.0);
+
+  EXPECT_TRUE(only_effect(p).keyframes.empty());
+  EXPECT_DOUBLE_EQ(only_effect(p).params.at("amount"), 20.0);
+}
+
+TEST(SetEffectParameterAnimated, AskingForWhatIsAlreadyTheCaseChangesNothing) {
+  const Project before = blurred();
+  EXPECT_EQ(set_effect_parameter_animated(before, "c1", 0, "amount", false, 0.0), before);
+
+  const Project animated = set_effect_parameter_animated(before, "c1", 0, "amount", true, 0.0);
+  EXPECT_EQ(set_effect_parameter_animated(animated, "c1", 0, "amount", true, 3.0), animated)
+      << "a second press must not add a keyframe";
+}
+
+TEST(ToggleEffectKeyframe, AddsOneHoldingTheCurrentValue) {
+  Project p = set_effect_parameter_animated(blurred(), "c1", 0, "amount", true, 0.0);
+  p = set_effect_parameter(std::move(p), "c1", 0, "amount", 40.0, 4.0);
+  p = toggle_effect_keyframe(std::move(p), "c1", 0, "amount", 2.0);
+
+  const auto& frames = only_effect(p).keyframes.at("amount");
+  ASSERT_EQ(frames.size(), 3u);
+  EXPECT_DOUBLE_EQ(frames[1].t, 2.0);
+  // Halfway along a linear ramp from 0 to 40, so adding a keyframe changed the
+  // shape of the animation not at all — which is what a marker should do.
+  EXPECT_DOUBLE_EQ(frames[1].v, 20.0);
+}
+
+TEST(ToggleEffectKeyframe, RemovesTheOneAlreadyThere) {
+  Project p = set_effect_parameter_animated(blurred(), "c1", 0, "amount", true, 0.0);
+  p = set_effect_parameter(std::move(p), "c1", 0, "amount", 40.0, 4.0);
+  p = toggle_effect_keyframe(std::move(p), "c1", 0, "amount", 4.0);
+
+  ASSERT_EQ(only_effect(p).keyframes.at("amount").size(), 1u);
+  EXPECT_DOUBLE_EQ(only_effect(p).keyframes.at("amount").front().t, 0.0);
+}
+
+TEST(ToggleEffectKeyframe, DoesNothingToAParameterThatIsNotAnimated) {
+  const Project before = blurred();
+  EXPECT_EQ(toggle_effect_keyframe(before, "c1", 0, "amount", 1.0), before);
+}
+
+TEST(ClipEffects, AnAnimatedRowReadsItsValueAtTheGivenTime) {
+  Project p = set_effect_parameter_animated(blurred(), "c1", 0, "amount", true, 0.0);
+  p = set_effect_parameter(std::move(p), "c1", 0, "amount", 50.0, 4.0);
+
+  const EffectParamRow& at_start = clip_effects(p, "c1", 0.0).front().params.front();
+  EXPECT_DOUBLE_EQ(at_start.value, 0.0);
+  EXPECT_TRUE(at_start.animated);
+  EXPECT_TRUE(at_start.keyed_here);
+
+  const EffectParamRow& midway = clip_effects(p, "c1", 2.0).front().params.front();
+  EXPECT_DOUBLE_EQ(midway.value, 25.0);
+  EXPECT_FALSE(midway.keyed_here) << "there is no keyframe at two seconds";
+}
+
+TEST(ClipEffects, AStaticRowIgnoresTheTime) {
+  const Project p = set_effect_parameter(blurred(), "c1", 0, "amount", 9.0);
+  EXPECT_DOUBLE_EQ(clip_effects(p, "c1", 0.0).front().params.front().value, 9.0);
+  EXPECT_DOUBLE_EQ(clip_effects(p, "c1", 99.0).front().params.front().value, 9.0);
+}
+
 // ----------------------------------------------------------------- offers --
 
 TEST(AddableEffects, OffersTheWholeCatalogue) {

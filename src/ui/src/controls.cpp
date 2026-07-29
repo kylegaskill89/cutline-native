@@ -550,6 +550,33 @@ void IconButton::paint_content(Painter& painter, const Theme& theme) const {
       painter.line(cx - reach, cy, cx + reach, cy, style.text, width);
       painter.line(cx, cy - reach, cx, cy + reach, style.text, width);
       break;
+
+    case Icon::Stopwatch: {
+      // A circle is a rectangle with its corners rounded all the way, which
+      // saves the painter an ellipse primitive it has no other use for.
+      const Rect face{cx - reach, cy - reach, reach * 2.0, reach * 2.0};
+      painter.stroke(face, reach, style.text, width);
+      // One hand, pointing up and to the right, so a clock face reads as one
+      // at this size rather than as a ring.
+      painter.line(cx, cy, cx + reach * 0.6, cy - reach * 0.6, style.text, width);
+      break;
+    }
+
+    case Icon::Diamond:
+      painter.line(cx, cy - reach, cx + reach, cy, style.text, width);
+      painter.line(cx + reach, cy, cx, cy + reach, style.text, width);
+      painter.line(cx, cy + reach, cx - reach, cy, style.text, width);
+      painter.line(cx - reach, cy, cx, cy - reach, style.text, width);
+      break;
+  }
+
+  // Whether the toggle is on is drawn into the mark rather than left to the
+  // surface underneath. No theme defines a selected state for a tool button, so
+  // `set_selected` alone would light nothing — and a stopwatch that looks the
+  // same running as stopped is worse than no stopwatch.
+  if (selected() && (icon_ == Icon::Stopwatch || icon_ == Icon::Diamond)) {
+    const double dot = reach * 0.5;
+    painter.fill(Rect{cx - dot, cy - dot, dot * 2.0, dot * 2.0}, dot, Fill::solid(style.text));
   }
 }
 

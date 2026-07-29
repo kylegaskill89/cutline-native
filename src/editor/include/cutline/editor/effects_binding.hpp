@@ -41,8 +41,12 @@ struct EffectParamRow {
   std::string suffix;
   /// Worth a checkbox rather than a slider.
   bool toggle = false;
-  /// Animated, so the value shown is the static one the keyframes override.
+  /// Animated, so `value` is what the keyframes evaluate to rather than the
+  /// stored one — which is ignored entirely while a parameter is animated.
   bool animated = false;
+  /// Animated, and one of the keyframes is at the time asked about. What the
+  /// keyframe marker draws as filled rather than hollow.
+  bool keyed_here = false;
 
   friend bool operator==(const EffectParamRow&, const EffectParamRow&) = default;
 };
@@ -76,10 +80,17 @@ struct EffectRow {
   friend bool operator==(const EffectRow&, const EffectRow&) = default;
 };
 
-/// A clip's visual effect stack. Empty when the clip is not there, which is
-/// also what an empty selection produces.
+/// A clip's visual effect stack, as it stands at clip-local time `local_t`.
+///
+/// The time is what an animated parameter is read at, so the panel shows what
+/// the picture is actually doing at the playhead rather than a stored number
+/// the keyframes are overriding.
+///
+/// Empty when the clip is not there, which is also what an empty selection
+/// produces.
 [[nodiscard]] std::vector<EffectRow> clip_effects(const core::Project& project,
-                                                  std::string_view clip_id);
+                                                  std::string_view clip_id,
+                                                  double local_t = 0.0);
 
 /// An effect that can be added, for the menu that offers them.
 struct EffectChoice {
@@ -99,5 +110,37 @@ struct EffectChoice {
 /// the undo entry.
 [[nodiscard]] core::Project add_effect(core::Project project, std::string_view clip_id,
                                        std::string_view type);
+
+// -------------------------------------------------------------- keyframes --
+
+/// Sets a parameter: a keyframe at `local_t` when it is animated, the stored
+/// value when it is not.
+///
+/// One entry point rather than two, because which of them a drag means is not
+/// the slider's business — it is a property of the parameter being dragged, and
+/// asking every caller to check would eventually get it wrong somewhere.
+[[nodiscard]] core::Project set_effect_parameter(core::Project project,
+                                                 std::string_view clip_id, std::size_t index,
+                                                 std::string_view key, double value,
+                                                 double local_t = 0.0);
+
+/// Turns animation on or off — Premiere's stopwatch.
+///
+/// On, the value the parameter has now becomes its first keyframe at `local_t`,
+/// so switching it on changes nothing about the picture. Off, every keyframe is
+/// dropped and the value at `local_t` is kept as the static one, so switching
+/// it off does not either. Anything else loses work silently.
+[[nodiscard]] core::Project set_effect_parameter_animated(core::Project project,
+                                                          std::string_view clip_id,
+                                                          std::size_t index,
+                                                          std::string_view key, bool animated,
+                                                          double local_t);
+
+/// Adds a keyframe at `local_t` holding the current value, or removes the one
+/// already there. Does nothing when the parameter is not animated: the first
+/// keyframe is the stopwatch's job.
+[[nodiscard]] core::Project toggle_effect_keyframe(core::Project project,
+                                                   std::string_view clip_id, std::size_t index,
+                                                   std::string_view key, double local_t);
 
 }  // namespace cutline::editor
