@@ -233,6 +233,58 @@ TEST(Timeline, TheTopmostOverlappingClipAnswers) {
   EXPECT_EQ(hit->block, 1u) << "the clip drawn underneath answered the click";
 }
 
+// ------------------------------------------------------------------ drops --
+
+TEST(Timeline, ADropReportsTheTrackAndTheTimeUnderIt) {
+  const Fixture fixture;  // 100 px/s, starting at zero
+  const Rect row = fixture.view->track_rect(1);
+
+  const auto where = fixture.view->drop_at(fixture.view->time_area().x + 350.0, row.y + 5.0);
+  ASSERT_TRUE(where.has_value());
+  EXPECT_EQ(where->track, 1u);
+  EXPECT_DOUBLE_EQ(where->time, 3.5);
+}
+
+TEST(Timeline, ADropFollowsTheScroll) {
+  Fixture fixture;
+  fixture.view->set_scale(TimeScale{.pixels_per_second = 100.0, .start = 4.0});
+
+  const Rect row = fixture.view->track_rect(0);
+  const auto where = fixture.view->drop_at(fixture.view->time_area().x + 100.0, row.y + 5.0);
+  ASSERT_TRUE(where.has_value());
+  EXPECT_DOUBLE_EQ(where->time, 5.0);
+}
+
+TEST(Timeline, ADropOverTheHeadersIsRefused) {
+  // Not clamped to zero: a drop that has no time is not a drop at the start of
+  // the sequence, and quietly turning one into the other puts clips where
+  // nobody asked for them.
+  const Fixture fixture;
+  const Rect row = fixture.view->track_rect(1);
+  EXPECT_FALSE(fixture.view->drop_at(10.0, row.y + 5.0).has_value());
+}
+
+TEST(Timeline, ADropOverTheRulerOrPastTheLastTrackIsRefused) {
+  const Fixture fixture;
+  const Rect ruler = fixture.view->ruler_area();
+  EXPECT_FALSE(fixture.view->drop_at(ruler.x + 50.0, ruler.y + 2.0).has_value());
+
+  const Rect last = fixture.view->track_rect(2);
+  EXPECT_FALSE(fixture.view->drop_at(last.x + 50.0, last.bottom() + 20.0).has_value());
+}
+
+TEST(Timeline, ADropOnAnAudioTrackIsStillADrop) {
+  // Whether an audio track can take what was dropped is a question about the
+  // project, and the timeline does not answer those.
+  const Fixture fixture;
+  const Rect row = fixture.view->track_rect(2);
+  ASSERT_TRUE(fixture.view->model().tracks[2].audio);
+
+  const auto where = fixture.view->drop_at(fixture.view->time_area().x + 200.0, row.y + 5.0);
+  ASSERT_TRUE(where.has_value());
+  EXPECT_EQ(where->track, 2u);
+}
+
 // -------------------------------------------------------------- scrubbing --
 
 TEST(Timeline, ClickingTheRulerMovesThePlayhead) {

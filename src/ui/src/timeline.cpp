@@ -199,6 +199,21 @@ std::optional<BlockRef> TimelineView::block_at(double x, double y) const {
   return std::nullopt;
 }
 
+std::optional<DropPoint> TimelineView::drop_at(double x, double y) const {
+  const Rect time = time_area();
+  // The header column sits alongside the tracks but is not part of them: a drop
+  // there has no time, and letting it round to zero would quietly put the clip
+  // at the start of the sequence instead of refusing.
+  if (!tracks_area().contains(x, y) || x < time.x) return std::nullopt;
+
+  for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
+    const Rect row = track_rect(track);
+    if (row.empty() || y < row.y || y >= row.bottom()) continue;
+    return DropPoint{.track = track, .time = std::max(0.0, scale_.to_time(x - time.x))};
+  }
+  return std::nullopt;
+}
+
 double TimelineView::trim_handle_width(std::size_t track, std::size_t block) const {
   const Rect box = block_rect(track, block);
   return std::min(kTrimHandle, box.width / 3.0);

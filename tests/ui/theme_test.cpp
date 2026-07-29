@@ -227,6 +227,8 @@ TEST(BuiltInThemes, MetricsAreSane) {
     EXPECT_GT(theme.metrics.scrollbar_width, 0.0) << theme.id;
     // A control shorter than its own text would clip it.
     EXPECT_GT(theme.metrics.control_height, theme.metrics.font_size) << theme.id;
+    // And so would a list row, which is where a whole pool of names is read.
+    EXPECT_GT(theme.metrics.list_row_height, theme.metrics.font_size) << theme.id;
   }
 }
 
@@ -243,6 +245,8 @@ TEST(ThemeChrome, MetricsDifferBetweenThemes) {
   EXPECT_NE(xp.metrics, flat.metrics);
   EXPECT_NE(xp.metrics.scrollbar_width, flat.metrics.scrollbar_width)
       << "XP scrollbars were noticeably chunkier";
+  EXPECT_NE(xp.metrics.list_row_height, flat.metrics.list_row_height)
+      << "Explorer's lists were tight and flat chrome leans roomy";
 }
 
 TEST(ThemeChrome, XpUsesBevelsAndFlatDoesNot) {

@@ -15,6 +15,7 @@ add_executable(cutline_core_tests
   core/segments_test.cpp
   core/serialize_test.cpp
   core/time_test.cpp
+  editor/browser_binding_test.cpp
   editor/commands_test.cpp
   editor/document_test.cpp
   editor/import_test.cpp
@@ -24,6 +25,7 @@ add_executable(cutline_core_tests
   render/effects_test.cpp
   render/mix_test.cpp
   render/plan_test.cpp
+  ui/browser_test.cpp
   ui/containers_test.cpp
   ui/controls_test.cpp
   ui/layout_test.cpp

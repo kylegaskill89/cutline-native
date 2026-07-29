@@ -18,11 +18,14 @@
 #include "cutline/core/edit.hpp"
 #include "cutline/core/model.hpp"
 #include "cutline/core/time.hpp"
+#include "cutline/editor/browser_binding.hpp"
 #include "cutline/editor/commands.hpp"
 #include "cutline/editor/document.hpp"
+#include "cutline/editor/import.hpp"
 #include "cutline/editor/inspector.hpp"
 #include "cutline/editor/session.hpp"
 #include "cutline/editor/timeline_binding.hpp"
+#include "cutline/ui/browser.hpp"
 #include "cutline/ui/controls.hpp"
 #include "cutline/ui/monitor.hpp"
 #include "cutline/ui/skia_painter.hpp"
@@ -53,6 +56,7 @@
 #pragma warning(pop)
 #endif
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -76,6 +80,7 @@ using cutline::ui::Key;
 using cutline::ui::KeyEvent;
 using cutline::ui::Label;
 using cutline::ui::LayoutContext;
+using cutline::ui::MediaBrowser;
 using cutline::ui::Modifiers;
 using cutline::ui::MonitorView;
 using cutline::ui::MouseButton;
@@ -197,6 +202,10 @@ struct App {
   cutline::editor::Session session{sample_project()};
   TimelineView* timeline = nullptr;
   Label* readout = nullptr;
+  /// The media pool down the left, and the button that cycles its order.
+  MediaBrowser* browser = nullptr;
+  Button* sort_button = nullptr;
+  cutline::editor::BrowserSort browser_sort = cutline::editor::BrowserSort::Pool;
   /// The column the parameter controls live in, inside the inspector's scroll
   /// view. A `Box` rather than the panel, so clearing it does not take the
   /// scrolling with it.
@@ -240,7 +249,10 @@ struct App {
 
 void set_theme(App& app, std::size_t index);
 void refresh_timeline(App& app);
+void refresh_browser(App& app);
+void refresh_all(App& app);
 void invalidate_preview(App& app);
+void import_media(App& app);
 void complain(HWND owner, const std::string& message);
 
 /// Rebuilds the inspector for whatever is selected.
@@ -304,6 +316,95 @@ void refresh_timeline(App& app) {
       cutline::editor::timeline_model(app.session.project(), app.session.selection()));
   app.timeline->set_playhead(app.session.playhead());
   app.dirty = true;
+}
+
+/// What the sort button says, and what pressing it moves to next.
+[[nodiscard]] std::string_view sort_name(cutline::editor::BrowserSort sort) noexcept {
+  using cutline::editor::BrowserSort;
+  switch (sort) {
+    case BrowserSort::Pool: return "Pool";
+    case BrowserSort::Name: return "Name";
+    case BrowserSort::Kind: return "Kind";
+    case BrowserSort::Duration: return "Length";
+    case BrowserSort::Uses: return "Used";
+  }
+  return "Pool";
+}
+
+/// Rebuilds the media pool from the session.
+///
+/// Through the binding every time rather than being patched, for the same
+/// reason the timeline is: an undo can put media back that no incremental
+/// update would know to restore.
+void refresh_browser(App& app) {
+  if (app.browser == nullptr) return;
+
+  cutline::editor::BrowserOptions options;
+  options.sort = app.browser_sort;
+#if CUTLINE_HAVE_PREVIEW
+  // Whatever the renderer could not open. It only knows once it has tried, so
+  // a file that has moved shows as offline after the first render rather than
+  // the moment the project opens.
+  if (app.preview != nullptr) options.offline = app.preview->missing_media();
+#endif
+
+  app.browser->set_items(cutline::editor::browser_items(app.session.project(), options));
+  if (app.sort_button != nullptr) {
+    app.sort_button->set_text("Sort: " + std::string(sort_name(app.browser_sort)));
+  }
+  app.dirty = true;
+}
+
+/// Puts a pool entry on the timeline.
+///
+/// `where` is where it was dropped, or nothing for a double-click — which
+/// lands at the playhead on the topmost video track, the way every editor's
+/// "insert" does.
+void place_from_pool(App& app, std::size_t index,
+                     std::optional<cutline::ui::DropPoint> where = std::nullopt) {
+  if (app.browser == nullptr || index >= app.browser->items().size()) return;
+  const std::string media_id = app.browser->items()[index].id;
+
+  double at = app.session.playhead();
+  std::string track_id;
+
+  if (where.has_value() && app.timeline != nullptr) {
+    at = cutline::core::snap_to_frame(where->time, app.session.project().fps);
+
+    // Only a video track can be named here: `place_media` puts the audio
+    // streams on lanes of its own choosing, and handing it an audio track as
+    // the video one would put a picture where no picture can go.
+    const cutline::ui::TimelineModel& model = app.timeline->model();
+    if (where->track < model.tracks.size() && !model.tracks[where->track].audio) {
+      track_id = model.tracks[where->track].id;
+    }
+  }
+
+  app.session.apply(
+      cutline::core::place_media(app.session.project(), media_id, at, track_id));
+  refresh_all(app);
+}
+
+/// Takes an entry out of the pool, and every clip that used it with it.
+void remove_from_pool(App& app) {
+  if (app.browser == nullptr) return;
+  const cutline::ui::MediaItem* chosen = app.browser->selected();
+  if (chosen == nullptr) return;
+
+  // Asked rather than assumed. Removing media the sequence is built from is
+  // undoable, but it is still not something to do on a mis-click.
+  if (chosen->uses > 0) {
+    const std::string message = chosen->name + " is used by " + std::to_string(chosen->uses) +
+                                (chosen->uses == 1 ? " clip." : " clips.") +
+                                "\n\nRemoving it takes them out of the sequence too.";
+    if (MessageBoxA(app.window, message.c_str(), "Cutline", MB_OKCANCEL | MB_ICONWARNING) !=
+        IDOK) {
+      return;
+    }
+  }
+
+  app.session.apply(cutline::editor::remove_media(app.session.project(), chosen->id));
+  refresh_all(app);
 }
 
 /// Renders the frame under the playhead into the monitor.
@@ -374,6 +475,7 @@ void refresh_title(App& app) {
 /// Everything a view needs told after the document has been replaced.
 void refresh_all(App& app) {
   refresh_timeline(app);
+  refresh_browser(app);
   refresh_title(app);
   invalidate_preview(app);
   app.inspector_stale = true;
@@ -589,13 +691,60 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   auto root = std::make_unique<Splitter>(Axis::Horizontal);
   root->set_fractions({0.28, 0.72});
 
-  auto& browser = root->emplace<Panel>("Project");
-  auto& list = browser.emplace<ScrollView>(Axis::Vertical);
-  auto clips = std::make_unique<Box>(Axis::Vertical);
-  for (int i = 1; i <= 24; ++i) {
-    clips->emplace<Button>("Clip " + std::to_string(i));
+  // The project panel: the media pool the sequence is built from, and the two
+  // things that change it.
+  auto& browser_panel = root->emplace<Panel>("Project");
+
+  auto& pool_tools = browser_panel.emplace<Box>(Axis::Horizontal);
+  pool_tools.emplace<Button>("Import", [app] {
+    if (app != nullptr) import_media(*app);
+  });
+  pool_tools.emplace<Button>("Remove", [app] {
+    if (app != nullptr) remove_from_pool(*app);
+  });
+  pool_tools.emplace<Spacer>();
+
+  auto& sort_choice = pool_tools.emplace<Button>("Sort: Pool", [app] {
+    if (app == nullptr) return;
+    using cutline::editor::BrowserSort;
+    // Cycled rather than offered in a menu, because there is no menu yet and a
+    // button that does one useful thing beats a control that does nothing.
+    constexpr std::array kOrder{BrowserSort::Pool, BrowserSort::Name, BrowserSort::Kind,
+                                BrowserSort::Duration, BrowserSort::Uses};
+    const auto found = std::ranges::find(kOrder, app->browser_sort);
+    const auto next = (found == kOrder.end() || found + 1 == kOrder.end()) ? kOrder.begin()
+                                                                          : found + 1;
+    app->browser_sort = *next;
+    refresh_browser(*app);
+    app->host->request_layout();
+  });
+  if (app != nullptr) app->sort_button = &sort_choice;
+
+  auto& pool = browser_panel.emplace<MediaBrowser>();
+  if (app != nullptr) {
+    app->browser = &pool;
+  } else {
+    // The headless check builds this tree with no session behind it. Filling
+    // the pool anyway is what makes it lay out and paint real rows in every
+    // theme, which is the only thing that would catch a row too tall for the
+    // one theme whose lists are roomier.
+    pool.set_items(cutline::editor::browser_items(sample_project()));
   }
-  list.set_content(std::move(clips));
+
+  // Double-click or Enter drops it at the playhead; dragging it out puts it
+  // where it was released. Both go through the same placement, so a clip
+  // arrives the same way however it was asked for.
+  pool.set_on_activate([app](std::size_t index) {
+    if (app != nullptr) place_from_pool(*app, index);
+  });
+  pool.set_on_drop([app](std::size_t index, double x, double y) {
+    if (app == nullptr) return;
+    const auto where =
+        app->timeline == nullptr ? std::nullopt : app->timeline->drop_at(x, y);
+    // A drag that ended anywhere but over a track is a drag that was thought
+    // better of, not one that meant the playhead.
+    if (where.has_value()) place_from_pool(*app, index, where);
+  });
 
   auto& middle = root->emplace<Splitter>(Axis::Horizontal);
   middle.set_fractions({0.72, 0.28});
@@ -677,7 +826,10 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     refresh_timeline(*app);
   });
 
-  if (app != nullptr) refresh_timeline(*app);
+  if (app != nullptr) {
+    refresh_timeline(*app);
+    refresh_browser(*app);
+  }
 
   // The inspector. Its contents are rebuilt from whatever is selected, so all
   // that is built here is somewhere to put them — inside a scroll view,

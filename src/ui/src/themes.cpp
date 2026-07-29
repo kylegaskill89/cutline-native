@@ -46,6 +46,7 @@ namespace {
   t.metrics.panel_padding = 6.0;
   t.metrics.title_bar_height = 30.0;
   t.metrics.panel_header_height = 24.0;
+  t.metrics.list_row_height = 20.0;  // Explorer's lists were tight
   t.metrics.font_size = 12.0;
   t.metrics.small_font_size = 11.0;
   t.metrics.scrollbar_width = 17.0;  // XP scrollbars were chunky
@@ -239,6 +240,7 @@ namespace {
   t.metrics.panel_padding = 10.0;
   t.metrics.title_bar_height = 34.0;
   t.metrics.panel_header_height = 28.0;
+  t.metrics.list_row_height = 26.0;
   t.metrics.font_size = 13.0;
   t.metrics.scrollbar_width = 16.0;
   t.metrics.track_height = 58.0;
@@ -424,6 +426,7 @@ namespace {
   t.metrics.panel_padding = 12.0;
   t.metrics.title_bar_height = 36.0;
   t.metrics.panel_header_height = 30.0;
+  t.metrics.list_row_height = 30.0;  // flat chrome leans roomy
   t.metrics.font_size = 13.0;
   t.metrics.scrollbar_width = 10.0;
   t.metrics.splitter_width = 4.0;  // flat chrome wants a hairline, not a bar
@@ -573,6 +576,7 @@ namespace {
   t.metrics.panel_padding = 10.0;
   t.metrics.title_bar_height = 28.0;
   t.metrics.panel_header_height = 24.0;
+  t.metrics.list_row_height = 24.0;
   t.metrics.font_size = 13.0;
   t.metrics.small_font_size = 12.0;
   t.metrics.line_height = 1.5;  // terminals breathe

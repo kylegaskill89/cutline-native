@@ -76,6 +76,14 @@ struct BlockRef {
   friend bool operator==(const BlockRef&, const BlockRef&) = default;
 };
 
+/// Where something dragged from elsewhere would land.
+struct DropPoint {
+  std::size_t track = 0;
+  double time = 0.0;
+
+  friend bool operator==(const DropPoint&, const DropPoint&) = default;
+};
+
 /// What a drag is doing.
 enum class DragMode {
   None,
@@ -174,6 +182,15 @@ class TimelineView : public Widget {
   [[nodiscard]] double playhead_x() const;
 
   [[nodiscard]] std::optional<BlockRef> block_at(double x, double y) const;
+
+  /// Which track and what time a point over the tracks falls on, or nothing
+  /// when it is over the ruler, the headers, or empty space below the last
+  /// track.
+  ///
+  /// What a drag from somewhere else — the browser, most obviously — asks in
+  /// order to know where it was dropped. The timeline answers in its own terms
+  /// and stays ignorant of what was being dragged.
+  [[nodiscard]] std::optional<DropPoint> drop_at(double x, double y) const;
 
   /// How tall the tracks are altogether, and how far they are scrolled.
   [[nodiscard]] const Viewport& vertical() const noexcept { return vertical_; }

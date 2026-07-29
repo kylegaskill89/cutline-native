@@ -191,6 +191,10 @@ struct Metrics {
 
   double title_bar_height = 30.0;
   double panel_header_height = 26.0;
+  /// One row of a list: the browser's entries, and anything else that stacks
+  /// identical rows. Its own metric rather than `control_height`, because a
+  /// theme with roomy buttons does not necessarily want a roomy list.
+  double list_row_height = 26.0;
   double scrollbar_width = 12.0;
   double splitter_width = 6.0;
   /// The smallest a pane may be dragged to. Stops a docked region being lost
