@@ -328,6 +328,10 @@ void DockView::wire(DockGroup& group) {
   which->strip_->set_on_drag([this, which](std::size_t index, double x, double y) {
     if (index >= which->panels_.size()) return;
     set_drag(which->panels_[index], x, y);
+    // Reported outwards as well, so a drag can be shown in another window.
+    // Fired from here rather than inside `set_drag` so that a window being
+    // *told* about someone else's drag does not report it straight back.
+    if (on_drag_) on_drag_(which->panels_[index], x, y);
   });
 }
 

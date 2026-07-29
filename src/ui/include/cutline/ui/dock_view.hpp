@@ -201,6 +201,15 @@ class DockView : public Widget {
   void set_on_tear_out(std::function<void(PanelId, double, double)> on_tear_out) {
     on_tear_out_ = std::move(on_tear_out);
   }
+  /// Called on every move of a tab drag that started in this view.
+  ///
+  /// What lets a drag be shown in a *different* window from the one it began
+  /// in: this view cannot know what else is on screen, so it reports and the
+  /// application forwards.
+  void set_on_drag(std::function<void(const PanelId&, double, double)> on_drag) {
+    on_drag_ = std::move(on_drag);
+  }
+
   void set_on_close(std::function<void(PanelId)> on_close) { on_close_ = std::move(on_close); }
   void set_on_activate(std::function<void(PanelId)> on_activate) {
     on_activate_ = std::move(on_activate);
@@ -245,6 +254,7 @@ class DockView : public Widget {
 
   Metrics metrics_;
 
+  std::function<void(const PanelId&, double, double)> on_drag_;
   std::function<void(PanelId, DropTarget)> on_dock_;
   std::function<void(PanelId, double, double)> on_tear_out_;
   std::function<void(PanelId)> on_close_;

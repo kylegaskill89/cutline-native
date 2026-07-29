@@ -435,6 +435,52 @@ TEST(Dock, TwoPanelsCanShareAFloatingWindow) {
   expect_canonical(layout);
 }
 
+TEST(Dock, EachFloatingWindowGetsItsOwnName) {
+  DockLayout layout = sample_layout();
+  ASSERT_TRUE(float_panel(layout, "effects", Rect{0.0, 0.0, 400.0, 300.0}));
+  ASSERT_TRUE(float_panel(layout, "monitor", Rect{0.0, 0.0, 400.0, 300.0}));
+
+  ASSERT_EQ(layout.floating.size(), 2u);
+  EXPECT_NE(layout.floating[0].id, layout.floating[1].id);
+  EXPECT_FALSE(layout.floating[0].id.empty());
+}
+
+TEST(Dock, AWindowsNameOutlivesWhatIsInIt) {
+  // The platform layer matches a real window to its entry by this, so it has
+  // to survive the panels changing underneath.
+  DockLayout layout = sample_layout();
+  ASSERT_TRUE(float_panel(layout, "effects", Rect{0.0, 0.0, 400.0, 300.0}));
+  const std::string named = layout.floating[0].id;
+
+  ASSERT_TRUE(dock_panel(layout, "monitor", "effects", DockSide::Bottom));
+  ASSERT_TRUE(dock_panel(layout, "effects", "timeline", DockSide::Centre));
+
+  ASSERT_EQ(layout.floating.size(), 1u);
+  EXPECT_EQ(layout.floating[0].id, named) << "the window was renamed when its first panel left";
+  EXPECT_EQ(panels_in(layout.floating[0].root), (std::vector<PanelId>{"monitor"}));
+}
+
+TEST(Dock, ANameIsFreedWhenItsWindowGoes) {
+  // Otherwise the ids climb forever over a session of tearing panels out and
+  // putting them back, and a saved workspace is full of arbitrary numbers.
+  DockLayout layout = sample_layout();
+  ASSERT_TRUE(float_panel(layout, "effects", Rect{0.0, 0.0, 400.0, 300.0}));
+  const std::string first = layout.floating[0].id;
+
+  ASSERT_TRUE(dock_panel(layout, "effects", "timeline", DockSide::Centre));
+  ASSERT_TRUE(layout.floating.empty());
+
+  ASSERT_TRUE(float_panel(layout, "monitor", Rect{0.0, 0.0, 400.0, 300.0}));
+  EXPECT_EQ(layout.floating[0].id, first);
+}
+
+TEST(Dock, AWindowCanBeGivenTheNameItHadBefore) {
+  // What restoring a saved workspace does: the windows already have names.
+  DockLayout layout = sample_layout();
+  ASSERT_TRUE(float_panel(layout, "effects", Rect{0.0, 0.0, 400.0, 300.0}, "inspector-window"));
+  EXPECT_EQ(layout.floating[0].id, "inspector-window");
+}
+
 TEST(Dock, FloatingSomethingThatIsNotThereDoesNothing) {
   DockLayout layout = sample_layout();
   const DockLayout before = layout;

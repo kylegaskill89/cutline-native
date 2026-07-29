@@ -80,6 +80,12 @@ struct DockNode {
 
 /// A tree that has been dragged out into a window of its own.
 struct FloatingDock {
+  /// Stable for as long as the window exists, and not derived from what is in
+  /// it — the panels come and go. What lets the platform layer match a real
+  /// window to its entry here after a rearrangement, and what a saved
+  /// workspace names its windows by.
+  std::string id;
+
   DockNode root;
   /// Where the window is, in whatever coordinates the platform layer uses.
   /// Nothing here interprets them.
@@ -155,11 +161,20 @@ bool dock_panel(DockLayout& layout, std::string_view panel, std::string_view tar
 /// everything", not "beside whichever panel happens to be nearest".
 bool dock_panel_at_edge(DockLayout& layout, std::string_view panel, DockSide side);
 
+/// A window id no floating window is using. Deterministic, so the same layout
+/// always produces the same next id and a test can name it.
+[[nodiscard]] std::string fresh_window_id(const DockLayout& layout);
+
 /// Takes `panel` out into a window of its own at `bounds`.
 ///
 /// A panel that is already alone in a floating window is only moved, so that
 /// dragging one around does not keep destroying and remaking it.
-bool float_panel(DockLayout& layout, std::string_view panel, const Rect& bounds);
+///
+/// The new window is given `id`, or a fresh one when that is empty. Passing it
+/// explicitly is for restoring a saved workspace, where the windows already
+/// have names.
+bool float_panel(DockLayout& layout, std::string_view panel, const Rect& bounds,
+                 std::string id = {});
 
 /// Shows `panel` in its tab group. Does nothing if it is already showing.
 bool activate_panel(DockLayout& layout, std::string_view panel);

@@ -83,6 +83,7 @@ using cutline::ui::Checkbox;
 using cutline::ui::DockLayout;
 using cutline::ui::DockNode;
 using cutline::ui::DockView;
+using cutline::ui::FloatingDock;
 using cutline::ui::Key;
 using cutline::ui::KeyEvent;
 using cutline::ui::Label;
@@ -228,17 +229,56 @@ struct TestPattern {
   std::vector<std::uint8_t> bytes;
 };
 
-struct App {
+struct App;
+
+/// One window class for every window there is. The main one and the torn-out
+/// ones want exactly the same message handling — drawn caption, deferred
+/// layout, all of it — and the only thing that differs is which dock they show.
+constexpr const wchar_t* kWindowClass = L"CutlineWindow";
+
+/// One real window: its widgets, its pixels, and where the two meet.
+///
+/// The main window is one of these and every torn-out panel is another. Kept as
+/// a single type deliberately: it is the only place a surface is made, resized,
+/// painted into and blitted, so there is one site to change rather than one per
+/// window when that stops being a CPU raster surface.
+struct Shell {
+  App* app = nullptr;
+  HWND window = nullptr;
+
+  /// Empty for the main window; the floating dock's id otherwise. This is what
+  /// ties a real window to its entry in the layout across a rearrangement.
+  std::string floating_id;
+  [[nodiscard]] bool is_main() const noexcept { return floating_id.empty(); }
+
   std::unique_ptr<WidgetHost> host;
-  /// The switcher's buttons, so the selected one can be moved without
-  /// rebuilding the tree. Rebuilding would destroy the button whose click is
-  /// still on the stack.
-  std::vector<Button*> theme_buttons;
+  DockView* dock = nullptr;
   /// Asked which parts of the caption are draggable, so the buttons in it stay
   /// clickable while the rest of it moves the window.
   TitleBar* title_bar = nullptr;
   CaptionButton* maximise = nullptr;
-  HWND window = nullptr;
+
+  /// Rebuilt whenever the window changes size. Skia's raster surface owns the
+  /// pixels; the blit reads them straight out.
+  sk_sp<SkSurface> surface;
+  int width = 0;
+  int height = 0;
+  bool dirty = true;
+  /// Set by `WM_SIZE`, cleared by the next render. Laying out on the message
+  /// itself would need a painter to measure with, and there is no canvas at
+  /// that point — the same reason input defers layout.
+  bool resized = true;
+};
+
+struct App {
+  /// The editor's window, and any panels dragged out of it.
+  Shell main;
+  std::vector<std::unique_ptr<Shell>> floats;
+
+  /// The switcher's buttons, so the selected one can be moved without
+  /// rebuilding the tree. Rebuilding would destroy the button whose click is
+  /// still on the stack.
+  std::vector<Button*> theme_buttons;
 
   /// The document being edited. Everything the timeline shows is derived from
   /// it, and everything a drag does goes back through it.
@@ -250,11 +290,11 @@ struct App {
   Button* sort_button = nullptr;
   cutline::editor::BrowserSort browser_sort = cutline::editor::BrowserSort::Pool;
 
-  /// Where the panels are. The view draws it; every rearrangement goes through
-  /// the operations in `dock.hpp` and comes back here.
+  /// Where the panels are, across every window. The views draw it; every
+  /// rearrangement goes through the operations in `dock.hpp` and comes back
+  /// here.
   DockLayout layout = default_layout();
-  DockView* dock = nullptr;
-  /// Set when the arrangement has changed and the view needs rebuilding.
+  /// Set when the arrangement has changed and the views need rebuilding.
   ///
   /// Deferred for the same reason the inspector is, and more sharply: what
   /// asks for it is usually a tab strip that the rebuild destroys, so doing it
@@ -281,7 +321,6 @@ struct App {
 #endif
 
   std::size_t theme = 0;
-  bool dirty = true;
   /// Set when the inspector needs rebuilding, and acted on at the next render.
   ///
   /// Deferred rather than done on the spot because the thing asking for it is
@@ -289,23 +328,30 @@ struct App {
   /// that slider while its own callback was still running.
   bool inspector_stale = true;
 
-  /// Rebuilt whenever the window changes size. Skia's raster surface owns the
-  /// pixels; the blit reads them straight out.
-  sk_sp<SkSurface> surface;
-  int width = 0;
-  int height = 0;
-  /// Set by `WM_SIZE`, cleared by the next render. Laying out on the message
-  /// itself would need a painter to measure with, and there is no canvas at
-  /// that point — the same reason input defers layout.
-  bool resized = true;
-
   [[nodiscard]] const Theme& current() const { return built_in_themes()[theme]; }
+
+  /// Every window there is. The main one is never null; the rest come and go.
+  [[nodiscard]] std::vector<Shell*> shells() {
+    std::vector<Shell*> all{&main};
+    for (const std::unique_ptr<Shell>& shell : floats) all.push_back(shell.get());
+    return all;
+  }
 };
+
+/// Marks every window as needing to be drawn again.
+///
+/// Most changes are to the document or the theme, and those show in whichever
+/// windows happen to be open rather than in one of them.
+void mark_dirty(App& app) {
+  for (Shell* shell : app.shells()) shell->dirty = true;
+}
 
 void set_theme(App& app, std::size_t index);
 void refresh_timeline(App& app);
 void refresh_browser(App& app);
 void refresh_dock(App& app);
+void reconcile_windows(App& app);
+void refresh_float_titles(App& app);
 void refresh_all(App& app);
 void invalidate_preview(App& app);
 void import_media(App& app);
@@ -317,7 +363,7 @@ void complain(HWND owner, const std::string& message);
 /// added to the model turns up here without anyone remembering to come and add
 /// a control for it.
 void refresh_inspector(App& app) {
-  if (app.inspector == nullptr || app.host == nullptr) return;
+  if (app.inspector == nullptr || app.main.host == nullptr) return;
 
   // Rebuilt from nothing each time. `clear_children` tells the host to drop
   // hover, focus and capture first, so a slider that was mid-drag when the
@@ -328,8 +374,8 @@ void refresh_inspector(App& app) {
   if (selection.empty()) {
     app.inspector->emplace<Label>("Nothing selected").set_small(true);
     app.inspector->emplace<Spacer>();
-    app.host->request_layout();
-    app.dirty = true;
+    app.main.host->request_layout();
+    mark_dirty(app);
     return;
   }
 
@@ -357,8 +403,8 @@ void refresh_inspector(App& app) {
   }
   app.inspector->emplace<Spacer>();
 
-  app.host->request_layout();
-  app.dirty = true;
+  app.main.host->request_layout();
+  mark_dirty(app);
 }
 
 /// Rebuilds what the timeline draws from the session.
@@ -371,7 +417,7 @@ void refresh_timeline(App& app) {
   app.timeline->set_model(
       cutline::editor::timeline_model(app.session.project(), app.session.selection()));
   app.timeline->set_playhead(app.session.playhead());
-  app.dirty = true;
+  mark_dirty(app);
 }
 
 /// What the sort button says, and what pressing it moves to next.
@@ -408,7 +454,7 @@ void refresh_browser(App& app) {
   if (app.sort_button != nullptr) {
     app.sort_button->set_text("Sort: " + std::string(sort_name(app.browser_sort)));
   }
-  app.dirty = true;
+  mark_dirty(app);
 }
 
 /// Puts a pool entry on the timeline.
@@ -453,7 +499,7 @@ void remove_from_pool(App& app) {
     const std::string message = chosen->name + " is used by " + std::to_string(chosen->uses) +
                                 (chosen->uses == 1 ? " clip." : " clips.") +
                                 "\n\nRemoving it takes them out of the sequence too.";
-    if (MessageBoxA(app.window, message.c_str(), "Cutline", MB_OKCANCEL | MB_ICONWARNING) !=
+    if (MessageBoxA(app.main.window, message.c_str(), "Cutline", MB_OKCANCEL | MB_ICONWARNING) !=
         IDOK) {
       return;
     }
@@ -488,7 +534,7 @@ void refresh_preview(App& app) {
       // Once, and then never again: a machine with no usable device will not
       // acquire one, and complaining on every scrub would be unbearable.
       app.preview_failed = true;
-      complain(app.window, "Preview is unavailable.\n\n" + made.error());
+      complain(app.main.window, "Preview is unavailable.\n\n" + made.error());
       return;
     }
     app.preview = std::move(*made);
@@ -497,13 +543,13 @@ void refresh_preview(App& app) {
   const auto frame = app.preview->frame_at(project, app.session.playhead());
   if (!frame.has_value()) {
     app.preview_failed = true;
-    complain(app.window, "Could not render the preview.\n\n" + frame.error());
+    complain(app.main.window, "Could not render the preview.\n\n" + frame.error());
     return;
   }
 
   app.monitor->set_frame(*frame);
   app.monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
-  app.dirty = true;
+  mark_dirty(app);
 #else
   (void)app;
 #endif
@@ -513,7 +559,7 @@ void refresh_preview(App& app) {
 void invalidate_preview(App& app) {
 #if CUTLINE_HAVE_PREVIEW
   app.preview_stale = true;
-  app.dirty = true;
+  mark_dirty(app);
 #else
   (void)app;
 #endif
@@ -523,9 +569,9 @@ void invalidate_preview(App& app) {
 /// draws, and in the window text the taskbar reads.
 void refresh_title(App& app) {
   const std::string title = app.session.document_title() + " - Cutline";
-  if (app.title_bar != nullptr) app.title_bar->set_title(title);
-  if (app.window != nullptr) SetWindowTextA(app.window, title.c_str());
-  app.dirty = true;
+  if (app.main.title_bar != nullptr) app.main.title_bar->set_title(title);
+  if (app.main.window != nullptr) SetWindowTextA(app.main.window, title.c_str());
+  mark_dirty(app);
 }
 
 /// Everything a view needs told after the document has been replaced.
@@ -539,7 +585,7 @@ void refresh_all(App& app) {
     const cutline::core::Project& project = app.session.project();
     app.monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
   }
-  if (app.host != nullptr) app.host->request_layout();
+  if (app.main.host != nullptr) app.main.host->request_layout();
 }
 
 /// Brings a file into the project and drops it at the playhead.
@@ -548,7 +594,7 @@ void import_media(App& app) {
   std::array<wchar_t, MAX_PATH> buffer{};
   OPENFILENAMEW dialog{};
   dialog.lStructSize = sizeof(dialog);
-  dialog.hwndOwner = app.window;
+  dialog.hwndOwner = app.main.window;
   dialog.lpstrFilter =
       L"Media\0*.mp4;*.mov;*.mkv;*.avi;*.webm;*.wav;*.mp3;*.flac;*.png;*.jpg\0"
       L"All files\0*.*\0";
@@ -560,7 +606,7 @@ void import_media(App& app) {
   const std::filesystem::path path{buffer.data()};
   const auto source = cutline::app::probe_source(path.string());
   if (!source.has_value()) {
-    complain(app.window, "Could not read that file.\n\n" + source.error());
+    complain(app.main.window, "Could not read that file.\n\n" + source.error());
     return;
   }
 
@@ -569,7 +615,7 @@ void import_media(App& app) {
                                                       app.session.playhead()));
   refresh_all(app);
 #else
-  complain(app.window, "This build has no media layer, so there is nothing to import with.");
+  complain(app.main.window, "This build has no media layer, so there is nothing to import with.");
 #endif
 }
 
@@ -599,12 +645,12 @@ void complain(HWND owner, const std::string& message) {
 }
 
 void open_project(App& app) {
-  const auto path = choose_file(app.window, false);
+  const auto path = choose_file(app.main.window, false);
   if (!path.has_value()) return;
 
   const auto loaded = cutline::editor::read_project(*path);
   if (!loaded.has_value()) {
-    complain(app.window, "Could not open that project.\n\n" + loaded.error());
+    complain(app.main.window, "Could not open that project.\n\n" + loaded.error());
     return;
   }
 
@@ -616,7 +662,7 @@ void open_project(App& app) {
   if (!loaded->warnings.empty()) {
     std::string message = "The project opened with warnings:\n";
     for (const std::string& warning : loaded->warnings) message += "\n" + warning;
-    complain(app.window, message);
+    complain(app.main.window, message);
   }
 }
 
@@ -625,14 +671,14 @@ void open_project(App& app) {
 bool save_project(App& app, bool ask_where) {
   std::filesystem::path path = app.session.path();
   if (ask_where || path.empty()) {
-    const auto chosen = choose_file(app.window, true);
+    const auto chosen = choose_file(app.main.window, true);
     if (!chosen.has_value()) return false;
     path = cutline::editor::with_project_extension(*chosen);
   }
 
   const auto written = cutline::editor::write_project(path, app.session.project());
   if (!written.has_value()) {
-    complain(app.window, "Could not save the project.\n\n" + written.error());
+    complain(app.main.window, "Could not save the project.\n\n" + written.error());
     return false;
   }
 
@@ -696,7 +742,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
       invalidate_preview(app);
       app.inspector_stale = true;
     }
-    app.dirty = true;
+    mark_dirty(app);
     return true;
   }
   return false;
@@ -732,7 +778,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
         (found == kOrder.end() || found + 1 == kOrder.end()) ? kOrder.begin() : found + 1;
     app->browser_sort = *next;
     refresh_browser(*app);
-    app->host->request_layout();
+    app->main.host->request_layout();
   });
 
   auto& pool = panel->emplace<MediaBrowser>();
@@ -879,63 +925,116 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   return missing;
 }
 
-/// Rebuilds the dock from the layout.
+/// Where a drop at a point on the screen would land: which window, and where in
+/// its dock.
 ///
-/// Panel contents are carried across by the view itself, so this costs a walk
-/// of the tree rather than building a browser and a timeline again.
-void refresh_dock(App& app) {
-  if (app.dock == nullptr) return;
-  app.dock->set_node(app.layout.root);
-  if (app.host != nullptr) app.host->request_layout();
-  app.dirty = true;
+/// Floating windows are asked before the main one, because they are above it.
+/// Nothing means the point is over no dock at all — the desktop, another
+/// application, or a window's own caption — which is what makes a new window.
+[[nodiscard]] std::optional<std::pair<Shell*, cutline::ui::DropTarget>> drop_across(
+    App& app, POINT screen) {
+  std::vector<Shell*> order;
+  for (const std::unique_ptr<Shell>& shell : app.floats) order.push_back(shell.get());
+  order.push_back(&app.main);
+
+  for (Shell* shell : order) {
+    if (shell->window == nullptr || shell->dock == nullptr) continue;
+
+    POINT local = screen;
+    ScreenToClient(shell->window, &local);
+
+    RECT client{};
+    GetClientRect(shell->window, &client);
+    if (local.x < 0 || local.y < 0 || local.x >= client.right || local.y >= client.bottom) {
+      continue;
+    }
+
+    // Over this window, so it answers — whether or not the answer is a drop.
+    // A point over a caption must not fall through to the window behind it.
+    const auto target =
+        shell->dock->drop_target(static_cast<double>(local.x), static_cast<double>(local.y));
+    if (target.has_value()) return std::pair{shell, *target};
+    return std::nullopt;
+  }
+  return std::nullopt;
 }
 
-/// The window's own widget tree: a caption, a theme switcher, and the dock.
-///
-/// `app` may be null, so the headless check can build the same tree with no
-/// window behind it.
-[[nodiscard]] std::unique_ptr<Widget> build_interface(App* app) {
-  auto shell = std::make_unique<Box>(Axis::Vertical);
-  shell->set_spacing(0.0);
+/// Shows a drag in whichever window the pointer is over, and nowhere else.
+void show_drag_across(App& app, const PanelId& panel, POINT screen) {
+  const auto landed = drop_across(app, screen);
 
-  // The window's own caption. The system one cannot be themed, so it is turned
-  // off in `WM_NCCALCSIZE` and this is drawn in its place.
-  auto& caption = shell->emplace<TitleBar>("Cutline");
-  if (app != nullptr) app->title_bar = &caption;
+  for (Shell* shell : app.shells()) {
+    if (shell->dock == nullptr) continue;
 
-  caption.emplace<CaptionButton>(CaptionButton::Kind::Minimise, [app] {
-    if (app != nullptr && app->window != nullptr) ShowWindow(app->window, SW_MINIMIZE);
-  });
-  auto& maximise = caption.emplace<CaptionButton>(CaptionButton::Kind::Maximise, [app] {
-    if (app == nullptr || app->window == nullptr) return;
-    ShowWindow(app->window, IsZoomed(app->window) ? SW_RESTORE : SW_MAXIMIZE);
-  });
-  caption.emplace<CaptionButton>(CaptionButton::Kind::Close, [app] {
-    if (app != nullptr && app->window != nullptr) PostMessageW(app->window, WM_CLOSE, 0, 0);
-  });
-  if (app != nullptr) app->maximise = &maximise;
-
-  // The switcher lives in the window rather than on a keyboard shortcut. A
-  // harness whose only control is an undocumented keystroke is one nobody can
-  // use, including whoever wrote it.
-  auto& bar = shell->emplace<Box>(Axis::Horizontal);
-  bar.set_padding(cutline::ui::Edges::all(4.0));
-  bar.emplace<Label>("Theme");
-  for (std::size_t i = 0; i < built_in_themes().size(); ++i) {
-    auto& choice = bar.emplace<Button>(built_in_themes()[i].name, [app, i] {
-      if (app != nullptr) set_theme(*app, i);
-    });
-    choice.set_selected(app != nullptr && i == app->theme);
-    if (app != nullptr) app->theme_buttons.push_back(&choice);
+    if (landed.has_value() && landed->first == shell && !panel.empty()) {
+      POINT local = screen;
+      ScreenToClient(shell->window, &local);
+      shell->dock->set_drag(panel, static_cast<double>(local.x), static_cast<double>(local.y));
+    } else {
+      shell->dock->set_drag(std::nullopt, 0.0, 0.0);
+    }
+    shell->dirty = true;
+    if (shell->window != nullptr) InvalidateRect(shell->window, nullptr, FALSE);
   }
-  bar.emplace<Spacer>();
+}
 
-  // Everything under the toolbar is the dock. Which panel is where is data now
-  // rather than structure: this builds a view over a layout, and dragging a tab
-  // is what changes the layout.
-  auto& dock = shell->emplace<DockView>();
-  if (app != nullptr) app->dock = &dock;
+/// Docks every panel of a torn-out window back into the main one.
+///
+/// What closing a floating window does. Throwing the panels away would be the
+/// one action in the application with no way back, because there is no menu to
+/// reopen a panel from yet.
+void return_panels_home(App& app, const std::string& window_id) {
+  const auto found =
+      std::ranges::find(app.layout.floating, window_id, &cutline::ui::FloatingDock::id);
+  if (found == app.layout.floating.end()) return;
 
+  for (const PanelId& panel : cutline::ui::panels_in(found->root)) {
+    const std::vector<PanelId> home = cutline::ui::panels_in(app.layout.root);
+    if (home.empty()) {
+      // Nothing to dock against: it becomes the main window's whole layout.
+      cutline::ui::close_panel(app.layout, panel);
+      cutline::ui::open_panel(app.layout, panel);
+      continue;
+    }
+    cutline::ui::dock_panel(app.layout, panel, home.front(), cutline::ui::DockSide::Centre);
+  }
+  app.dock_stale = true;
+}
+
+/// Tears out whichever panel the pointer is over, without a drag.
+///
+/// The gesture is the drag; this is the same thing on a key. Worth having in
+/// its own right — a drag across two windows is not a reachable action for
+/// everyone — and it is also the only way any of this can be exercised without
+/// a hand on a mouse.
+void float_panel_under_cursor(App& app, Shell& shell) {
+  if (shell.dock == nullptr || shell.window == nullptr) return;
+
+  POINT screen{};
+  GetCursorPos(&screen);
+  POINT local = screen;
+  ScreenToClient(shell.window, &local);
+
+  for (const cutline::ui::DockGroup* group : shell.dock->groups()) {
+    if (!group->bounds().contains(static_cast<double>(local.x), static_cast<double>(local.y))) {
+      continue;
+    }
+    const PanelId panel = group->active_panel();
+    if (panel.empty()) return;
+
+    const cutline::ui::Rect where{static_cast<double>(screen.x) - 130.0,
+                                  static_cast<double>(screen.y) - 12.0, 520.0, 380.0};
+    if (cutline::ui::float_panel(app.layout, panel, where)) app.dock_stale = true;
+    return;
+  }
+}
+
+/// Everything a dock reports, wired to the layout.
+///
+/// The same for the main window and for a torn-out one: which window a panel is
+/// in is a fact about the layout, so the handlers are identical and only the
+/// tree they were reported from differs.
+void wire_dock(App* app, Shell* shell, DockView& dock) {
   dock.set_titles(panel_title);
   dock.set_content_factory(
       [app](const PanelId& id) -> std::unique_ptr<Widget> { return make_panel(app, id); });
@@ -958,15 +1057,236 @@ void refresh_dock(App& app) {
     if (moved) app->dock_stale = true;
   });
 
-  // A divider is read back rather than rebuilt: nothing about the arrangement
-  // changed, only its proportions, and a rebuild would be work for nothing.
-  dock.set_on_resize([app] {
-    if (app == nullptr || app->dock == nullptr) return;
-    app->dock->read_fractions_into(app->layout.root);
+  dock.set_on_drag([app, shell](const PanelId& panel, double x, double y) {
+    if (app == nullptr || shell == nullptr || shell->window == nullptr) return;
+    POINT screen{static_cast<LONG>(x), static_cast<LONG>(y)};
+    ClientToScreen(shell->window, &screen);
+    show_drag_across(*app, panel, screen);
   });
 
+  // Dropped somewhere this window's own dock did not want it. It may still be
+  // over another window — a panel dragged out of a torn-out window and back
+  // into the editor comes through here — and only if it is over nothing at all
+  // does it become a window of its own.
+  dock.set_on_tear_out([app, shell](PanelId panel, double x, double y) {
+    if (app == nullptr || shell == nullptr || shell->window == nullptr) return;
+
+    POINT screen{static_cast<LONG>(x), static_cast<LONG>(y)};
+    ClientToScreen(shell->window, &screen);
+    show_drag_across(*app, PanelId{}, screen);
+
+    if (const auto landed = drop_across(*app, screen); landed.has_value()) {
+      const cutline::ui::DropTarget& target = landed->second;
+      const bool moved =
+          target.at_edge ? cutline::ui::dock_panel_at_edge(app->layout, panel, target.side)
+                         : cutline::ui::dock_panel(app->layout, panel, target.onto, target.side);
+      if (moved) app->dock_stale = true;
+      return;
+    }
+
+    // Placed so the caption lands near the cursor rather than the far corner,
+    // because the tab being dragged was already under it.
+    constexpr double kTornWidth = 520.0;
+    constexpr double kTornHeight = 380.0;
+    const cutline::ui::Rect where{static_cast<double>(screen.x) - kTornWidth * 0.25,
+                                  static_cast<double>(screen.y) - 12.0, kTornWidth, kTornHeight};
+    if (cutline::ui::float_panel(app->layout, panel, where)) app->dock_stale = true;
+  });
+
+  // A divider is read back rather than rebuilt: nothing about the arrangement
+  // changed, only its proportions, and a rebuild would be work for nothing.
+  dock.set_on_resize([app, shell] {
+    if (app == nullptr || shell == nullptr || shell->dock == nullptr) return;
+    if (shell->is_main()) {
+      shell->dock->read_fractions_into(app->layout.root);
+      return;
+    }
+    const auto found = std::ranges::find(app->layout.floating, shell->floating_id,
+                                         &cutline::ui::FloatingDock::id);
+    if (found != app->layout.floating.end()) shell->dock->read_fractions_into(found->root);
+  });
+}
+
+/// Rebuilds the dock from the layout.
+///
+/// Panel contents are carried across by the view itself, so this costs a walk
+/// of the tree rather than building a browser and a timeline again.
+void refresh_dock(App& app) {
+  // Windows first: a rearrangement may have emptied one or made another, and
+  // rebuilding a view that is about to be destroyed is wasted work.
+  reconcile_windows(app);
+
+  for (Shell* shell : app.shells()) {
+    if (shell->dock == nullptr) continue;
+
+    const DockNode* node = &app.layout.root;
+    if (!shell->is_main()) {
+      const auto found =
+          std::ranges::find(app.layout.floating, shell->floating_id, &FloatingDock::id);
+      if (found == app.layout.floating.end()) continue;
+      node = &found->root;
+    }
+
+    shell->dock->set_node(*node);
+    if (shell->host != nullptr) shell->host->request_layout();
+    shell->dirty = true;
+    if (shell->window != nullptr) InvalidateRect(shell->window, nullptr, FALSE);
+  }
+  refresh_float_titles(app);
+}
+
+/// The window's own widget tree: a caption, a theme switcher, and the dock.
+///
+/// `app` may be null, so the headless check can build the same tree with no
+/// window behind it.
+[[nodiscard]] std::unique_ptr<Widget> build_interface(App* app) {
+  auto shell = std::make_unique<Box>(Axis::Vertical);
+  shell->set_spacing(0.0);
+
+  // The window's own caption. The system one cannot be themed, so it is turned
+  // off in `WM_NCCALCSIZE` and this is drawn in its place.
+  auto& caption = shell->emplace<TitleBar>("Cutline");
+  if (app != nullptr) app->main.title_bar = &caption;
+
+  caption.emplace<CaptionButton>(CaptionButton::Kind::Minimise, [app] {
+    if (app != nullptr && app->main.window != nullptr) ShowWindow(app->main.window, SW_MINIMIZE);
+  });
+  auto& maximise = caption.emplace<CaptionButton>(CaptionButton::Kind::Maximise, [app] {
+    if (app == nullptr || app->main.window == nullptr) return;
+    ShowWindow(app->main.window, IsZoomed(app->main.window) ? SW_RESTORE : SW_MAXIMIZE);
+  });
+  caption.emplace<CaptionButton>(CaptionButton::Kind::Close, [app] {
+    if (app != nullptr && app->main.window != nullptr) PostMessageW(app->main.window, WM_CLOSE, 0, 0);
+  });
+  if (app != nullptr) app->main.maximise = &maximise;
+
+  // The switcher lives in the window rather than on a keyboard shortcut. A
+  // harness whose only control is an undocumented keystroke is one nobody can
+  // use, including whoever wrote it.
+  auto& bar = shell->emplace<Box>(Axis::Horizontal);
+  bar.set_padding(cutline::ui::Edges::all(4.0));
+  bar.emplace<Label>("Theme");
+  for (std::size_t i = 0; i < built_in_themes().size(); ++i) {
+    auto& choice = bar.emplace<Button>(built_in_themes()[i].name, [app, i] {
+      if (app != nullptr) set_theme(*app, i);
+    });
+    choice.set_selected(app != nullptr && i == app->theme);
+    if (app != nullptr) app->theme_buttons.push_back(&choice);
+  }
+  bar.emplace<Spacer>();
+
+  // Everything under the toolbar is the dock. Which panel is where is data now
+  // rather than structure: this builds a view over a layout, and dragging a tab
+  // is what changes the layout.
+  auto& dock = shell->emplace<DockView>();
+  if (app != nullptr) app->main.dock = &dock;
+
+  wire_dock(app, app == nullptr ? nullptr : &app->main, dock);
   dock.set_node(app == nullptr ? default_layout().root : app->layout.root);
   return shell;
+}
+
+// ------------------------------------------------------------------ windows --
+
+/// The tree a torn-out window gets: a caption it can be dragged by, and its
+/// dock. No theme switcher and no menu — it is one or two panels, not a second
+/// copy of the editor.
+[[nodiscard]] std::unique_ptr<Widget> build_floating_interface(App* app, Shell* shell) {
+  auto root = std::make_unique<Box>(Axis::Vertical);
+  root->set_spacing(0.0);
+
+  auto& caption = root->emplace<TitleBar>("Cutline");
+  shell->title_bar = &caption;
+
+  caption.emplace<CaptionButton>(CaptionButton::Kind::Close, [app, shell] {
+    // The panels go home rather than being thrown away. There is no menu to
+    // reopen one from yet, so closing a window would otherwise be the one
+    // action in the application that cannot be undone by any means.
+    if (app != nullptr) return_panels_home(*app, shell->floating_id);
+  });
+
+  auto& dock = root->emplace<DockView>();
+  shell->dock = &dock;
+  wire_dock(app, shell, dock);
+  return root;
+}
+
+/// Opens a real window for a floating dock.
+void open_float_window(App& app, const cutline::ui::FloatingDock& floating) {
+  auto shell = std::make_unique<Shell>();
+  shell->app = &app;
+  shell->floating_id = floating.id;
+  shell->host = std::make_unique<WidgetHost>(build_floating_interface(&app, shell.get()));
+  shell->dock->set_node(floating.root);
+
+  // `WS_POPUP | WS_THICKFRAME` is a window with no caption that can still be
+  // resized by its edges, which is what a drawn caption needs. Owned by the
+  // main window so it stays above it and goes away with it.
+  const HWND window = CreateWindowExW(
+      WS_EX_TOOLWINDOW, kWindowClass, L"Cutline", WS_POPUP | WS_THICKFRAME,
+      static_cast<int>(floating.bounds.x), static_cast<int>(floating.bounds.y),
+      static_cast<int>(floating.bounds.width), static_cast<int>(floating.bounds.height),
+      app.main.window, nullptr, GetModuleHandleW(nullptr), nullptr);
+  if (window == nullptr) return;
+
+  shell->window = window;
+  SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(shell.get()));
+
+  const MARGINS shadow{0, 0, 1, 0};
+  DwmExtendFrameIntoClientArea(window, &shadow);
+  SetWindowPos(window, nullptr, 0, 0, 0, 0,
+               SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+
+  // Shown without taking the keyboard: the panel was dragged out, not asked
+  // to become the thing being typed into.
+  ShowWindow(window, SW_SHOWNOACTIVATE);
+  app.floats.push_back(std::move(shell));
+}
+
+void reconcile_windows(App& app) {
+  // Windows whose dock has gone, because its last panel was docked elsewhere.
+  for (auto it = app.floats.begin(); it != app.floats.end();) {
+    const bool alive =
+        std::ranges::find(app.layout.floating, (*it)->floating_id,
+                          &cutline::ui::FloatingDock::id) != app.layout.floating.end();
+    if (alive) {
+      ++it;
+      continue;
+    }
+
+    const HWND doomed = (*it)->window;
+    // Unhooked before it is destroyed. `DestroyWindow` sends `WM_DESTROY`
+    // straight back here, and the shell it would look up is about to be freed.
+    if (doomed != nullptr) SetWindowLongPtrW(doomed, GWLP_USERDATA, 0);
+    it = app.floats.erase(it);
+    if (doomed != nullptr) DestroyWindow(doomed);
+  }
+
+  // Docks with no window yet, because something was just torn out.
+  for (const cutline::ui::FloatingDock& floating : app.layout.floating) {
+    const bool built = std::ranges::any_of(app.floats, [&](const std::unique_ptr<Shell>& shell) {
+      return shell->floating_id == floating.id;
+    });
+    if (!built) open_float_window(app, floating);
+  }
+}
+
+/// A torn-out window is named after whatever it is showing.
+void refresh_float_titles(App& app) {
+  for (const std::unique_ptr<Shell>& shell : app.floats) {
+    if (shell->title_bar == nullptr || shell->dock == nullptr) continue;
+
+    std::string title = "Cutline";
+    if (const auto showing = shell->dock->node().active_panel(); showing.has_value()) {
+      title = panel_title(*showing);
+    } else if (const std::vector<PanelId> inside = cutline::ui::panels_in(shell->dock->node());
+               !inside.empty()) {
+      title = panel_title(inside.front());
+    }
+
+    shell->title_bar->set_title(title);
+    if (shell->window != nullptr) SetWindowTextA(shell->window, title.c_str());
+  }
 }
 
 /// Win32 virtual keys to the ones the interface knows about. Only the keys
@@ -1011,28 +1331,21 @@ void refresh_dock(App& app) {
   };
 }
 
-void resize_surface(App& app, int width, int height) {
+void resize_surface(Shell& shell, int width, int height) {
   if (width <= 0 || height <= 0) return;
-  if (app.surface != nullptr && width == app.width && height == app.height) return;
+  if (shell.surface != nullptr && width == shell.width && height == shell.height) return;
 
-  app.width = width;
-  app.height = height;
-  app.surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
+  shell.width = width;
+  shell.height = height;
+  shell.surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
 }
 
-/// Draws the tree and puts the pixels on the window.
-void render(App& app, HWND window) {
-  if (app.surface == nullptr) return;
-
-  SkCanvas* canvas = app.surface->getCanvas();
-  const Theme& theme = app.current();
-
-  const std::unique_ptr<SkiaPainter> painter = SkiaPainter::create(canvas);
-  if (painter == nullptr) return;
-
-  const Rect client{0.0, 0.0, static_cast<double>(app.width), static_cast<double>(app.height)};
-  const LayoutContext context{theme, *painter};
-
+/// The work that belongs to the document rather than to any one window.
+///
+/// Done once a frame, from whichever window is drawing first. Each of these
+/// rebuilds part of the interface, so none of them can happen where they are
+/// asked for — the thing asking is usually inside what the rebuild replaces.
+void settle(App& app) {
   // The arrangement first, because rebuilding it is what creates a panel that
   // has never been shown before — and that panel then wants filling in this
   // same frame rather than staying blank until something else changes.
@@ -1040,14 +1353,10 @@ void render(App& app, HWND window) {
     app.dock_stale = false;
     refresh_dock(app);
   }
-
-  // Rebuilt here for the same reason layout is: whatever asked for it was
-  // usually a control inside the panel being rebuilt.
   if (app.inspector_stale) {
     app.inspector_stale = false;
     refresh_inspector(app);
   }
-
 #if CUTLINE_HAVE_PREVIEW
   // Once per frame at most, however many mouse moves a scrub produced. A
   // read-back stalls the GPU, so rendering on each one would make the drag
@@ -1057,40 +1366,58 @@ void render(App& app, HWND window) {
     refresh_preview(app);
   }
 #endif
+}
+
+/// Draws one window's tree and puts the pixels on it.
+void render(Shell& shell) {
+  if (shell.app == nullptr || shell.host == nullptr || shell.surface == nullptr) return;
+  App& app = *shell.app;
+
+  SkCanvas* canvas = shell.surface->getCanvas();
+  const Theme& theme = app.current();
+
+  const std::unique_ptr<SkiaPainter> painter = SkiaPainter::create(canvas);
+  if (painter == nullptr) return;
+
+  const Rect client{0.0, 0.0, static_cast<double>(shell.width),
+                    static_cast<double>(shell.height)};
+  const LayoutContext context{theme, *painter};
+
+  settle(app);
 
   // The one place a theme and a text measurer are both in hand, which is
   // exactly why layout is deferred to here rather than done where the size
   // changed or the drag happened.
-  if (app.resized) {
-    app.host->resize(client, context);
-    app.resized = false;
+  if (shell.resized) {
+    shell.host->resize(client, context);
+    shell.resized = false;
   } else {
-    app.host->update_layout(context);
+    shell.host->update_layout(context);
   }
 
   // Through the painter rather than a canvas clear, so a themed background
   // that is a gradient stays one.
   canvas->clear(SK_ColorBLACK);
   paint_surface(*painter, client, theme.style(cutline::ui::Part::Window));
-  app.host->paint(*painter, theme);
+  shell.host->paint(*painter, theme);
 
   SkPixmap pixels;
-  if (!app.surface->peekPixels(&pixels)) return;
+  if (!shell.surface->peekPixels(&pixels)) return;
 
   BITMAPINFO info{};
   info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-  info.bmiHeader.biWidth = app.width;
+  info.bmiHeader.biWidth = shell.width;
   // Negative, because Skia's rows run top to bottom and a DIB's run the other
   // way by default. Without this the whole interface comes out upside down.
-  info.bmiHeader.biHeight = -app.height;
+  info.bmiHeader.biHeight = -shell.height;
   info.bmiHeader.biPlanes = 1;
   info.bmiHeader.biBitCount = 32;
   info.bmiHeader.biCompression = BI_RGB;
 
-  const HDC dc = GetDC(window);
-  StretchDIBits(dc, 0, 0, app.width, app.height, 0, 0, app.width, app.height, pixels.addr(),
-                &info, DIB_RGB_COLORS, SRCCOPY);
-  ReleaseDC(window, dc);
+  const HDC dc = GetDC(shell.window);
+  StretchDIBits(dc, 0, 0, shell.width, shell.height, 0, 0, shell.width, shell.height,
+                pixels.addr(), &info, DIB_RGB_COLORS, SRCCOPY);
+  ReleaseDC(shell.window, dc);
 }
 
 void set_theme(App& app, std::size_t index) {
@@ -1101,19 +1428,21 @@ void set_theme(App& app, std::size_t index) {
     app.theme_buttons[i]->set_selected(i == index);
   }
 
-  // Metrics change with the theme, so everything has to be measured again.
-  app.host->request_layout();
-  app.dirty = true;
-  if (app.window != nullptr) {
-    SetWindowTextA(app.window, ("Cutline - " + app.current().name).c_str());
+  // Metrics change with the theme, so everything has to be measured again —
+  // in every window, not only the one whose button was pressed.
+  for (Shell* shell : app.shells()) {
+    if (shell->host != nullptr) shell->host->request_layout();
+    shell->dirty = true;
+    if (shell->window != nullptr) InvalidateRect(shell->window, nullptr, FALSE);
   }
 }
 
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
-  auto* app = reinterpret_cast<App*>(GetWindowLongPtrW(window, GWLP_USERDATA));
-  if (app == nullptr || app->host == nullptr) {
+  auto* shell = reinterpret_cast<Shell*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+  if (shell == nullptr || shell->app == nullptr || shell->host == nullptr) {
     return DefWindowProcW(window, message, wparam, lparam);
   }
+  App* app = shell->app;
 
   switch (message) {
     case WM_NCCALCSIZE: {
@@ -1165,21 +1494,21 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       // does, and anything sitting on it — a button — does not. Asking the
       // tree rather than comparing against a height is what keeps the two from
       // drifting apart.
-      if (app->title_bar != nullptr &&
-          app->host->root().at(static_cast<double>(at.x), static_cast<double>(at.y)) ==
-              app->title_bar) {
+      if (shell->title_bar != nullptr &&
+          shell->host->root().at(static_cast<double>(at.x), static_cast<double>(at.y)) ==
+              shell->title_bar) {
         return HTCAPTION;
       }
       return HTCLIENT;
     }
 
     case WM_SIZE:
-      resize_surface(*app, LOWORD(lparam), HIWORD(lparam));
-      app->resized = true;
-      app->dirty = true;
+      resize_surface(*shell, LOWORD(lparam), HIWORD(lparam));
+      shell->resized = true;
+      shell->dirty = true;
       // Maximising swaps which glyph the middle caption button shows.
-      if (app->maximise != nullptr) {
-        app->maximise->set_kind(IsZoomed(window) ? CaptionButton::Kind::Restore
+      if (shell->maximise != nullptr) {
+        shell->maximise->set_kind(IsZoomed(window) ? CaptionButton::Kind::Restore
                                                  : CaptionButton::Kind::Maximise);
       }
       return 0;
@@ -1187,10 +1516,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     case WM_PAINT: {
       PAINTSTRUCT paint;
       BeginPaint(window, &paint);
-      render(*app, window);
+      render(*shell);
       EndPaint(window, &paint);
-      app->dirty = false;
-      app->host->clear_paint();
+      shell->dirty = false;
+      shell->host->clear_paint();
       return 0;
     }
 
@@ -1199,31 +1528,31 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       // when the pointer goes somewhere else entirely.
       TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT), TME_LEAVE, window, 0};
       TrackMouseEvent(&track);
-      app->host->mouse_move(mouse_from(lparam, MouseButton::Left));
+      shell->host->mouse_move(mouse_from(lparam, MouseButton::Left));
       // Not unconditionally: the pointer crossing a panel that does not care
       // leaves the picture exactly as it was, and a full repaint costs
       // milliseconds. `--benchmark` is where that number comes from.
-      if (app->host->needs_paint()) app->dirty = true;
+      if (shell->host->needs_paint()) shell->dirty = true;
       return 0;
     }
     case WM_MOUSELEAVE:
-      app->host->mouse_exit();
-      if (app->host->needs_paint()) app->dirty = true;
+      shell->host->mouse_exit();
+      if (shell->host->needs_paint()) shell->dirty = true;
       return 0;
 
     case WM_LBUTTONDOWN:
       SetCapture(window);
-      app->host->mouse_down(mouse_from(lparam, MouseButton::Left));
-      if (app->host->needs_paint()) app->dirty = true;
+      shell->host->mouse_down(mouse_from(lparam, MouseButton::Left));
+      if (shell->host->needs_paint()) shell->dirty = true;
       return 0;
     case WM_LBUTTONDBLCLK:
-      app->host->mouse_down(mouse_from(lparam, MouseButton::Left, 2));
-      if (app->host->needs_paint()) app->dirty = true;
+      shell->host->mouse_down(mouse_from(lparam, MouseButton::Left, 2));
+      if (shell->host->needs_paint()) shell->dirty = true;
       return 0;
     case WM_LBUTTONUP:
       ReleaseCapture();
-      app->host->mouse_up(mouse_from(lparam, MouseButton::Left));
-      if (app->host->needs_paint()) app->dirty = true;
+      shell->host->mouse_up(mouse_from(lparam, MouseButton::Left));
+      if (shell->host->needs_paint()) shell->dirty = true;
       return 0;
 
     case WM_MOUSEWHEEL: {
@@ -1233,11 +1562,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       ScreenToClient(window, &at);
       const double notches =
           -static_cast<double>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
-      app->host->wheel(WheelEvent{.x = static_cast<double>(at.x),
+      shell->host->wheel(WheelEvent{.x = static_cast<double>(at.x),
                                   .y = static_cast<double>(at.y),
                                   .delta_y = notches,
                                   .modifiers = modifiers_now()});
-      if (app->host->needs_paint()) app->dirty = true;
+      if (shell->host->needs_paint()) shell->dirty = true;
       return 0;
     }
 
@@ -1266,6 +1595,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         import_media(*app);
         return 0;
       }
+      if (held.control && held.shift && wparam == 'F') {
+        float_panel_under_cursor(*app, *shell);
+        return 0;
+      }
       const KeyEvent event{.key = key_from_win32(wparam),
                            .modifiers = held,
                            .repeat = (lparam & (1 << 30)) != 0};
@@ -1274,25 +1607,37 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       if (run_binding(*app, kApplicationKeys, event.key, held)) return 0;
 
       if (event.key == Key::Tab) {
-        app->host->focus_next(event.modifiers.shift);
-        app->dirty = true;
+        shell->host->focus_next(event.modifiers.shift);
+        mark_dirty(*app);
         return 0;
       }
 
       // After the tree, and only if it did not want the key. A focused slider
       // owns the arrows before the playhead does.
-      if (!app->host->key_down(event)) {
+      if (!shell->host->key_down(event)) {
         run_binding(*app, kTransportKeys, event.key, held);
       }
-      app->dirty = true;
+      mark_dirty(*app);
       return 0;
     }
 
     case WM_ERASEBKGND:
       return 1;  // every pixel is painted, so erasing only causes a flash
 
+    case WM_CLOSE:
+      // Closing a torn-out window sends its panels home rather than destroying
+      // it here. The window goes when the layout stops having a dock for it,
+      // which is what keeps the two from ever disagreeing about what exists.
+      if (!shell->is_main()) {
+        return_panels_home(*app, shell->floating_id);
+        return 0;
+      }
+      break;
+
     case WM_DESTROY:
-      PostQuitMessage(0);
+      // Only the editor's own window ends the session. A floating one closing
+      // is a rearrangement.
+      if (shell->is_main()) PostQuitMessage(0);
       return 0;
 
     default:
@@ -1487,7 +1832,8 @@ int main(int argc, char** argv) {
   if (argc > 1 && std::string_view(argv[1]) == "--benchmark") return benchmark();
 
   App app;
-  app.host = std::make_unique<WidgetHost>(build_interface(&app));
+  app.main.app = &app;
+  app.main.host = std::make_unique<WidgetHost>(build_interface(&app));
 
   const HINSTANCE instance = GetModuleHandleW(nullptr);
   WNDCLASSEXW window_class{};
@@ -1496,20 +1842,21 @@ int main(int argc, char** argv) {
   window_class.lpfnWndProc = window_proc;
   window_class.hInstance = instance;
   window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-  window_class.lpszClassName = L"CutlineThemeWindow";
+  window_class.lpszClassName = kWindowClass;
   RegisterClassExW(&window_class);
 
   const HWND window =
-      CreateWindowExW(0, window_class.lpszClassName, L"Cutline", WS_OVERLAPPEDWINDOW,
-                      CW_USEDEFAULT, CW_USEDEFAULT, 1280, 800, nullptr, nullptr, instance,
-                      nullptr);
+      CreateWindowExW(0, kWindowClass, L"Cutline", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+                      CW_USEDEFAULT, 1280, 800, nullptr, nullptr, instance, nullptr);
   if (window == nullptr) {
     std::println("could not create a window");
     return 1;
   }
 
-  app.window = window;
-  SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&app));
+  app.main.window = window;
+  // The shell rather than the app: a floating window's proc needs to know
+  // which window it is, and every one of them finds its app through this.
+  SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&app.main));
   refresh_title(app);
 
   // One pixel of frame handed back to the compositor, which is enough to keep
@@ -1533,7 +1880,18 @@ int main(int argc, char** argv) {
     // Redrawn only when something actually changed. An interface that repaints
     // at sixty hertz while sitting still is heat for nothing, and the frames
     // that matter belong to the video.
-    if (app.dirty) InvalidateRect(window, nullptr, FALSE);
+    //
+    // Asked of every window, because most changes are to the document and show
+    // in whichever ones happen to be open.
+    for (Shell* shell : app.shells()) {
+      if (shell->dirty && shell->window != nullptr) {
+        InvalidateRect(shell->window, nullptr, FALSE);
+      }
+    }
   }
+
+  // The floating windows are owned by the main one and are already gone, but
+  // their shells still hold host pointers that a stray message would follow.
+  app.floats.clear();
   return 0;
 }

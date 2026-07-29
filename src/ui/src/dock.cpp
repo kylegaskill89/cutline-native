@@ -339,7 +339,20 @@ bool dock_panel_at_edge(DockLayout& layout, std::string_view panel, DockSide sid
   return layout != before;
 }
 
-bool float_panel(DockLayout& layout, std::string_view panel, const Rect& bounds) {
+std::string fresh_window_id(const DockLayout& layout) {
+  // Counted up from one rather than from a running total, so the id a layout
+  // produces depends only on the layout — closing a window and opening another
+  // reuses the name instead of drifting upwards forever.
+  for (int i = 1;; ++i) {
+    std::string candidate = "w" + std::to_string(i);
+    if (std::ranges::find(layout.floating, candidate, &FloatingDock::id) ==
+        layout.floating.end()) {
+      return candidate;
+    }
+  }
+}
+
+bool float_panel(DockLayout& layout, std::string_view panel, const Rect& bounds, std::string id) {
   if (panel.empty() || !anywhere(layout, panel)) return false;
 
   // Already out on its own: moved rather than remade, so that dragging a
@@ -356,8 +369,11 @@ bool float_panel(DockLayout& layout, std::string_view panel, const Rect& bounds)
 
   detach(layout, panel);
   normalise(layout);
-  layout.floating.push_back(
-      FloatingDock{.root = DockNode::tabs({PanelId(panel)}), .bounds = bounds});
+  // Named after the detach, so a window that emptied and was dropped has
+  // already released whatever it was called.
+  if (id.empty()) id = fresh_window_id(layout);
+  layout.floating.push_back(FloatingDock{
+      .id = std::move(id), .root = DockNode::tabs({PanelId(panel)}), .bounds = bounds});
 
   return layout != before;
 }
