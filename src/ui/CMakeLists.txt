@@ -1,6 +1,7 @@
 add_library(cutline_ui
   src/browser.cpp
   src/controls.cpp
+  src/dock.cpp
   src/layout.cpp
   src/monitor.cpp
   src/painter.cpp
