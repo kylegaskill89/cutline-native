@@ -42,6 +42,7 @@
 
 #if CUTLINE_HAVE_PREVIEW
 #include "cutline/app/preview.hpp"
+#include "cutline/engine/player.hpp"
 #endif
 
 #include <windows.h>
@@ -49,6 +50,9 @@
 // defines, the other for the types in its own signatures.
 #include <commdlg.h>
 #include <dwmapi.h>
+// For `timeBeginPeriod`: the default 15.6 ms scheduler tick is most of a frame
+// at 60 Hz, and the playback loop cannot pace itself with one that coarse.
+#include <timeapi.h>
 #include <windowsx.h>
 
 #if defined(_MSC_VER)
@@ -345,6 +349,32 @@ struct App {
   /// copied. Only true when the shared device was made — otherwise each built
   /// its own and they have no memory in common.
   [[nodiscard]] bool shares_device() const noexcept { return device != nullptr; }
+
+  /// Playback, with the sound card keeping time.
+  ///
+  /// Made on the first press of Play and dropped whenever the document changes:
+  /// it decoded the audio it needs when it was made, so a project edited since
+  /// is not the one it is playing.
+  std::unique_ptr<cutline::engine::Player> player;
+  /// The project the player was built from.
+  ///
+  /// Compared rather than a revision counter, because the session bumps its
+  /// revision for a change of selection too — and clicking a clip should not
+  /// stop the sound. This costs a project copy per press of Play, which is the
+  /// same copy every edit already makes.
+  cutline::core::Project player_project;
+  /// The session revision the project above was last checked against, so the
+  /// comparison happens when something changed rather than on every frame.
+  std::uint64_t player_revision = 0;
+  Button* play_button = nullptr;
+  /// Which frame the picture is showing, so the loop redraws once per frame
+  /// rather than as fast as it can spin. The playhead moves continuously; the
+  /// picture does not have to.
+  long long shown_frame = -1;
+  /// Said once. A machine with no output device will not grow one.
+  bool player_failed = false;
+
+  [[nodiscard]] bool playing() const noexcept { return player != nullptr && player->playing(); }
 #endif
 
   std::size_t theme = 0;
@@ -393,6 +423,8 @@ void reconcile_windows(App& app);
 void refresh_float_titles(App& app);
 void refresh_all(App& app);
 void invalidate_preview(App& app);
+void invalidate_playback(App& app);
+void toggle_playback(App& app);
 void import_media(App& app);
 void complain(HWND owner, const std::string& message);
 
@@ -616,6 +648,153 @@ void invalidate_preview(App& app) {
 #if CUTLINE_HAVE_PREVIEW
   app.preview_stale = true;
   mark_dirty(app);
+#else
+  (void)app;
+#endif
+}
+
+// ---------------------------------------------------------------- playback --
+
+/// Stops playback and puts the transport back the way it looks when idle.
+///
+/// Separate from pausing because it is also what happens at the end of the
+/// timeline and when the document changes underneath a playing project.
+void stop_playback(App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.player == nullptr) return;
+  if (app.player->playing()) {
+    app.player->pause();
+    // Windows' scheduler tick goes back to its lazy default. Asking for a
+    // millisecond costs power across the whole machine, so it is held only
+    // while something is actually being paced by it.
+    timeEndPeriod(1);
+  }
+  if (app.play_button != nullptr) app.play_button->set_text("Play");
+  app.shown_frame = -1;
+  mark_dirty(app);
+#else
+  (void)app;
+#endif
+}
+
+/// Forgets the player, because what it decoded no longer matches the document.
+void invalidate_playback(App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.player == nullptr) return;
+  stop_playback(app);
+  app.player.reset();
+#else
+  (void)app;
+#endif
+}
+
+void toggle_playback(App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.playing()) {
+    stop_playback(app);
+    return;
+  }
+  if (app.player_failed) return;
+
+  // A player that decoded a different project is no use. Dropped here rather
+  // than at every edit, so there is one place that decides and it is the place
+  // that knows what the player was made from.
+  if (app.player != nullptr && app.player_project != app.session.project()) {
+    app.player.reset();
+  }
+
+  if (app.player == nullptr) {
+    auto made = cutline::engine::Player::create(app.session.project());
+    if (!made.has_value()) {
+      // Once and no more: a machine with no output device will not acquire one,
+      // and a dialog on every press of Play would be worse than the silence.
+      app.player_failed = true;
+      complain(app.main.window, "Playback is unavailable.\n\n" + made.error());
+      return;
+    }
+    app.player = std::move(*made);
+    app.player_project = app.session.project();
+  }
+  app.player_revision = app.session.revision();
+
+  // From wherever the playhead is, not from wherever playback last stopped —
+  // the user may have scrubbed since.
+  app.player->seek(app.session.playhead());
+  app.player->play();
+  // Without this, `Sleep(1)` in the playback loop really sleeps about 15 ms,
+  // which is most of a frame at 60 Hz.
+  timeBeginPeriod(1);
+
+  if (app.play_button != nullptr) app.play_button->set_text("Pause");
+  app.shown_frame = -1;
+  mark_dirty(app);
+#else
+  (void)app;
+#endif
+}
+
+/// One turn of playback: follows the sound card and redraws when the frame it
+/// is pointing at changes.
+///
+/// The playhead is *read*, never advanced here. The sound card decides where
+/// time is, because it is the one that cannot be nudged — a repeated or dropped
+/// picture frame goes unnoticed, while a gap of the same length in audio is a
+/// click. So the picture is what adapts.
+void advance_playback(App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (!app.playing()) return;
+
+  if (!app.player->error().empty()) {
+    const std::string message = app.player->error();
+    stop_playback(app);
+    complain(app.main.window, "Playback stopped.\n\n" + message);
+    return;
+  }
+
+  // An edit while the sound is running leaves the player playing audio the
+  // document no longer describes. Stopping is the honest answer: it decoded
+  // what it needs up front, so there is nothing to update in place.
+  //
+  // Guarded by the revision so the project comparison happens when something
+  // changed rather than thirty times a second. The revision also moves for a
+  // change of selection, which is why the projects are then compared rather
+  // than trusted — clicking a clip should not stop playback.
+  if (app.session.revision() != app.player_revision) {
+    app.player_revision = app.session.revision();
+    if (app.player_project != app.session.project()) {
+      invalidate_playback(app);
+      return;
+    }
+  }
+
+  const double at = app.player->position();
+  if (app.player->finished()) {
+    app.session.set_playhead(at);
+    refresh_timeline(app);
+    invalidate_preview(app);
+    stop_playback(app);
+    return;
+  }
+
+  // Once per frame of the sequence, not once per turn of the loop. Rendering
+  // faster than the project's frame rate would draw the same picture twice and
+  // charge a decode for it.
+  const double fps = app.session.project().fps > 0.0 ? app.session.project().fps : 30.0;
+  const auto frame = static_cast<long long>(at * fps);
+  if (frame == app.shown_frame) {
+    // Nothing due yet. Sleeping rather than spinning, because the audio thread
+    // wants a core more than this loop does.
+    Sleep(1);
+    return;
+  }
+  app.shown_frame = frame;
+
+  app.session.set_playhead(at);
+  if (app.readout != nullptr) {
+    app.readout->set_text(cutline::core::seconds_to_timecode(at, app.session.project().fps));
+  }
+  refresh_timeline(app);
+  invalidate_preview(app);
 #else
   (void)app;
 #endif
@@ -880,7 +1059,16 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   transport.emplace<Button>("Mark In");
   transport.emplace<Button>("Mark Out");
   transport.emplace<Spacer>();
-  transport.emplace<Button>("Play");
+  auto& play = transport.emplace<Button>("Play", [app] {
+    if (app != nullptr) toggle_playback(*app);
+  });
+  if (app != nullptr) {
+    app->play_button = &play;
+    // The panel may have been rebuilt mid-playback — a rearrangement, a theme
+    // change — and a button that says Play while the sound is running is worse
+    // than one that does nothing.
+    if (app->playing()) play.set_text("Pause");
+  }
   transport.emplace<Button>("Export");
   return panel;
 }
@@ -917,6 +1105,15 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
       app->readout->set_text(
           cutline::core::seconds_to_timecode(app->session.playhead(), app->session.project().fps));
     }
+#if CUTLINE_HAVE_PREVIEW
+    // Dragging the playhead while it is playing takes the sound with it.
+    // Without this the audio carries on from where it was and the picture is
+    // somewhere else, which is worse than either.
+    if (app->playing()) {
+      app->player->seek(at);
+      app->shown_frame = -1;
+    }
+#endif
     invalidate_preview(*app);
   });
 
@@ -1761,6 +1958,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         float_panel_under_cursor(*app, *shell);
         return 0;
       }
+      // Space, before the tree sees it, because a focused button would
+      // otherwise take it as a press. Every editor in the world plays with it.
+      if (wparam == VK_SPACE && !held.control && !held.alt) {
+        toggle_playback(*app);
+        return 0;
+      }
       const KeyEvent event{.key = key_from_win32(wparam),
                            .modifiers = held,
                            .repeat = (lparam & (1 << 30)) != 0};
@@ -2115,14 +2318,34 @@ int main(int argc, char** argv) {
   reconcile_windows(app);
   refresh_float_titles(app);
 
+  // Two loops in one, and which is running is the difference between an
+  // interface and a video player.
+  //
+  // Sitting still, this blocks in `GetMessage` and does nothing at all until
+  // something happens: an interface that repaints at sixty hertz while nothing
+  // moves is heat for nothing. Playing, it cannot block — the playhead moves
+  // whether or not the mouse does — so it drains what has arrived and then asks
+  // playback whether a new frame is due.
   MSG message{};
-  while (GetMessageW(&message, nullptr, 0, 0) > 0) {
-    TranslateMessage(&message);
-    DispatchMessageW(&message);
-    // Redrawn only when something actually changed. An interface that repaints
-    // at sixty hertz while sitting still is heat for nothing, and the frames
-    // that matter belong to the video.
-    //
+  bool running = true;
+  while (running) {
+    if (app.playing()) {
+      while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+        if (message.message == WM_QUIT) {
+          running = false;
+          break;
+        }
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+      }
+      if (running) advance_playback(app);
+    } else if (GetMessageW(&message, nullptr, 0, 0) > 0) {
+      TranslateMessage(&message);
+      DispatchMessageW(&message);
+    } else {
+      running = false;
+    }
+
     // Asked of every window, because most changes are to the document and show
     // in whichever ones happen to be open.
     for (Shell* shell : app.shells()) {
@@ -2131,6 +2354,10 @@ int main(int argc, char** argv) {
       }
     }
   }
+
+  // Before the windows go, so the render thread is not still asking for audio
+  // while the things it reads are being torn down.
+  invalidate_playback(app);
 
   // Where the panels were left, so the next session opens the same way. On the
   // way out rather than on every drag: a rearrangement is a dozen small moves

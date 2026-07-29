@@ -11,7 +11,10 @@ target_link_libraries(theme_window PRIVATE
   # shadow and rounded corners the compositor draws around it.
   dwmapi
   # The open and save dialogs.
-  comdlg32)
+  comdlg32
+  # timeBeginPeriod, so the playback loop can pace itself to a frame rather
+  # than to Windows' default 15.6 ms scheduler tick.
+  winmm)
 
 # Skia is private to cutline::ui_skia, so it does not leak into the widget
 # layer. This tool needs it directly for one thing only: making the raster
