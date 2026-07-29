@@ -59,19 +59,22 @@ ProjectPreview::ProjectPreview(std::unique_ptr<Impl> impl) : impl_(std::move(imp
 ProjectPreview::~ProjectPreview() = default;
 
 std::expected<std::unique_ptr<ProjectPreview>, std::string> ProjectPreview::create(
-    int canvas_width, int canvas_height) {
+    int canvas_width, int canvas_height, std::shared_ptr<gpu::Device> device) {
   if (canvas_width <= 0 || canvas_height <= 0) {
     return std::unexpected("a preview needs a canvas with some size to it");
   }
 
-  auto device = gpu::Device::create();
-  if (!device.has_value()) return std::unexpected(device.error());
+  if (device == nullptr) {
+    auto made = gpu::Device::create();
+    if (!made.has_value()) return std::unexpected(made.error());
+    device = std::move(*made);
+  }
 
-  auto renderer = engine::FrameRenderer::create(*device, canvas_width, canvas_height);
+  auto renderer = engine::FrameRenderer::create(device, canvas_width, canvas_height);
   if (!renderer.has_value()) return std::unexpected(renderer.error());
 
   auto impl = std::make_unique<Impl>();
-  impl->device = std::move(*device);
+  impl->device = std::move(device);
   impl->renderer = std::move(*renderer);
   impl->width = canvas_width;
   impl->height = canvas_height;
@@ -117,6 +120,31 @@ std::expected<ui::ImageView, std::string> ProjectPreview::frame_at(const core::P
   return ui::ImageView{.pixels = impl_->frame.pixels.data(),
                        .width = impl_->frame.width,
                        .height = impl_->frame.height};
+}
+
+std::expected<ui::TextureView, std::string> ProjectPreview::texture_at(
+    const core::Project& project, double t) {
+  if (const auto matched = resize(project.canvas_w, project.canvas_h); !matched.has_value()) {
+    return std::unexpected(matched.error());
+  }
+
+  if (const auto rendered = impl_->renderer->render(project, t); !rendered.has_value()) {
+    return std::unexpected(rendered.error());
+  }
+
+  auto scene = impl_->renderer->compositor().display_texture();
+  if (!scene.has_value()) return std::unexpected(scene.error());
+
+  return ui::TextureView{.texture = scene->resource,
+                         .width = scene->width,
+                         .height = scene->height,
+                         .format = scene->format,
+                         .state = scene->state,
+                         .generation = scene->generation};
+}
+
+const std::shared_ptr<gpu::Device>& ProjectPreview::device() const noexcept {
+  return impl_->device;
 }
 
 int ProjectPreview::width() const noexcept { return impl_->width; }

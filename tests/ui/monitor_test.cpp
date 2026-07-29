@@ -237,5 +237,96 @@ TEST(Monitor, AStrideIsHonouredWhenGiven) {
   EXPECT_EQ(padded.row_bytes(), 320 * 4 + 64);
 }
 
+// ------------------------------------------------------- frames on the GPU --
+
+/// A texture the monitor can hold without there being a GPU anywhere.
+///
+/// Nothing here dereferences the pointer — the whole point of `TextureView`
+/// being untyped is that this layer never does — so an address that is merely
+/// distinctive is a truthful stand-in for a real resource.
+[[nodiscard]] TextureView fake_texture(int width, int height) {
+  static int marker = 0;
+  return TextureView{.texture = &marker, .width = width, .height = height};
+}
+
+TEST(Monitor, DrawsATextureIntoThePicture) {
+  const TextureView frame = fake_texture(320, 180);
+  MonitorView monitor;
+  monitor.set_texture(frame);
+  monitor.arrange(Rect{0.0, 0.0, 640.0, 480.0}, flat_context());
+
+  RecordingPainter painter;
+  monitor.paint(painter, default_theme());
+
+  const DrawCall* drawn = painter.first(DrawCall::Kind::Texture);
+  ASSERT_NE(drawn, nullptr);
+  EXPECT_EQ(drawn->bounds, monitor.picture());
+  EXPECT_EQ(drawn->frame.texture, frame.texture) << "it drew somebody else's frame";
+  EXPECT_EQ(painter.count(DrawCall::Kind::Image), 0u)
+      << "a frame already on the card should not also be drawn as pixels";
+}
+
+TEST(Monitor, LetterboxesToTheTexturesOwnShape) {
+  MonitorView monitor;
+  monitor.set_canvas_aspect(4.0 / 3.0);
+  monitor.set_texture(fake_texture(320, 180));
+  monitor.arrange(Rect{0.0, 0.0, 640.0, 480.0}, flat_context());
+
+  // The frame's shape wins over the sequence's, exactly as it does for pixels.
+  EXPECT_NEAR(monitor.picture().width / monitor.picture().height, 16.0 / 9.0, 1e-9);
+}
+
+TEST(Monitor, TheTwoKindsOfFrameAreAlternativesNotLayers) {
+  const Pixels pixels(320, 180);
+  MonitorView monitor;
+
+  monitor.set_frame(pixels.view());
+  monitor.set_texture(fake_texture(320, 180));
+  EXPECT_TRUE(monitor.frame().empty()) << "the pixels should have been forgotten";
+  EXPECT_FALSE(monitor.texture().empty());
+
+  monitor.set_frame(pixels.view());
+  EXPECT_TRUE(monitor.texture().empty()) << "the texture should have been forgotten";
+  EXPECT_FALSE(monitor.frame().empty());
+}
+
+TEST(Monitor, ATextureCountsAsHavingAPicture) {
+  MonitorView monitor;
+  EXPECT_FALSE(monitor.has_picture());
+
+  monitor.set_texture(fake_texture(320, 180));
+  EXPECT_TRUE(monitor.has_picture());
+  monitor.arrange(Rect{0.0, 0.0, 640.0, 480.0}, flat_context());
+
+  RecordingPainter painter;
+  monitor.paint(painter, default_theme());
+  // No placeholder: there is a picture, it just does not live in this process's
+  // memory. Saying "No preview" over a perfectly good frame is the bug here.
+  EXPECT_EQ(painter.count(DrawCall::Kind::Text), 0u);
+}
+
+TEST(Monitor, ClearingForgetsATextureToo) {
+  MonitorView monitor;
+  monitor.set_texture(fake_texture(320, 180));
+  monitor.clear_frame();
+  EXPECT_FALSE(monitor.has_picture());
+
+  monitor.arrange(Rect{0.0, 0.0, 640.0, 480.0}, flat_context());
+  RecordingPainter painter;
+  monitor.paint(painter, default_theme());
+  EXPECT_EQ(painter.count(DrawCall::Kind::Texture), 0u);
+}
+
+TEST(Monitor, ATextureViewKnowsItsOwnShape) {
+  EXPECT_NEAR(fake_texture(320, 180).aspect(), 16.0 / 9.0, 1e-9);
+  EXPECT_FALSE(fake_texture(320, 180).empty());
+
+  EXPECT_TRUE(TextureView{}.empty());
+  EXPECT_DOUBLE_EQ(TextureView{}.aspect(), 0.0);
+  // A resource with no size is as useless as no resource at all, and the
+  // monitor would divide by it.
+  EXPECT_TRUE(fake_texture(0, 180).empty());
+}
+
 }  // namespace
 }  // namespace cutline::ui

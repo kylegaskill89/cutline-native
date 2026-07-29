@@ -13,8 +13,24 @@ namespace {
 
 /// The linear-light scene everything composites into.
 constexpr DXGI_FORMAT kSceneFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
-/// The display encoding. An _SRGB view makes the hardware encode on write.
-constexpr DXGI_FORMAT kDisplayFormat = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+/// The display encoding: sRGB-encoded bytes in a plain, fully-typed target.
+///
+/// Deliberately *not* `_SRGB`, though it was until the interface started
+/// sampling this texture instead of copying it. The reasoning, because it is
+/// not obvious and the wrong choice is not visible in a picture:
+///
+///   - `_SRGB` lets the hardware encode on write for nothing, which is why it
+///     was chosen. But sampling an `_SRGB` texture decodes back to linear, so
+///     the preview would be drawn far too dark.
+///   - `TYPELESS` with an `_SRGB` view to write and a plain view to read is the
+///     textbook answer, and Direct3D will not have it: a shader resource view
+///     on a typeless resource is an invalid call that *removes the device*,
+///     which surfaces as the window dying rather than as an error.
+///
+/// So the encoding moved into `PSPresent` and the target holds exactly the
+/// bytes everyone wants: what `read_back` has always returned, and what a
+/// sampler reads without transforming.
+constexpr DXGI_FORMAT kDisplayFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
 /// Render target slots.
 constexpr UINT kSceneRtv = 0;
@@ -150,6 +166,9 @@ std::expected<void, std::string> Compositor::Impl::ensure_capacity(UINT layers) 
 
 std::expected<void, std::string> Compositor::Impl::create_targets() {
   gpu().wait_for_idle();
+  // Before anything is freed, so a caller that kept the old handle sees a
+  // different generation even if the replacement lands at the same address.
+  ++generation;
   scene.Reset();
   backdrop.Reset();
   display.Reset();
@@ -802,6 +821,74 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
   return {};
 }
 
+// ----------------------------------------------------------------- display --
+
+namespace {
+
+/// Runs the present pass: the linear scene encoded into the display target.
+///
+/// Both ways out of the compositor need this and only this in common — one
+/// then copies the result to the CPU, the other hands the texture over — so it
+/// lives in one place rather than being written twice and drifting.
+///
+/// Leaves `display` in RENDER_TARGET state; the caller transitions it onward
+/// to whatever it wants next.
+void record_display_pass(Compositor::Impl& d, ID3D12GraphicsCommandList* commands) {
+  ID3D12DescriptorHeap* heaps[] = {d.srv_heap.Get()};
+  commands->SetDescriptorHeaps(1, heaps);
+  commands->SetGraphicsRootSignature(d.root_signature.Get());
+
+  const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(d.width),
+                                static_cast<float>(d.height), 0.0f, 1.0f};
+  const D3D12_RECT scissor{0, 0, static_cast<LONG>(d.width), static_cast<LONG>(d.height)};
+  commands->RSSetViewports(1, &viewport);
+  commands->RSSetScissorRects(1, &scissor);
+  commands->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+  auto display_to_target = transition(d.display.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                      D3D12_RESOURCE_STATE_RENDER_TARGET);
+  commands->ResourceBarrier(1, &display_to_target);
+
+  const D3D12_CPU_DESCRIPTOR_HANDLE display_rtv = d.rtv(kDisplayRtv);
+  commands->OMSetRenderTargets(1, &display_rtv, FALSE, nullptr);
+
+  ShaderParams params{};
+  params.canvas[0] = static_cast<float>(d.width);
+  params.canvas[1] = static_cast<float>(d.height);
+  commands->SetPipelineState(d.pipeline_present.Get());
+  commands->SetGraphicsRootDescriptorTable(0, d.srv_gpu(d.present_slot()));
+  commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &params, 0);
+  commands->DrawInstanced(3, 1, 0, 0);
+}
+
+}  // namespace
+
+std::expected<SceneTexture, std::string> Compositor::display_texture() {
+  Impl& d = *impl_;
+  if (d.display == nullptr) return std::unexpected("nothing has been composited yet");
+
+  if (auto ok = d.gpu().begin(); !ok) return std::unexpected(ok.error());
+  ID3D12GraphicsCommandList* commands = d.gpu().commands.Get();
+
+  record_display_pass(d, commands);
+
+  // Straight back to a shader resource: the state it is created in, the state
+  // it is left in between frames, and the state Skia will be told it is in.
+  auto to_resource = transition(d.display.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+  commands->ResourceBarrier(1, &to_resource);
+
+  if (auto ok = d.gpu().submit(); !ok) return std::unexpected(ok.error());
+  d.gpu().wait_for_idle();
+
+  return SceneTexture{.resource = d.display.Get(),
+                      .width = d.width,
+                      .height = d.height,
+                      .format = static_cast<unsigned>(kDisplayFormat),
+                      .state = static_cast<unsigned>(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+                      .generation = d.generation};
+}
+
 // ---------------------------------------------------------------- readback --
 
 std::expected<Image, std::string> Compositor::read_back() {
@@ -839,31 +926,7 @@ std::expected<Image, std::string> Compositor::read_back() {
   if (auto ok = d.gpu().begin(); !ok) return std::unexpected(ok.error());
   ID3D12GraphicsCommandList* commands = d.gpu().commands.Get();
 
-  ID3D12DescriptorHeap* heaps[] = {d.srv_heap.Get()};
-  commands->SetDescriptorHeaps(1, heaps);
-  commands->SetGraphicsRootSignature(d.root_signature.Get());
-
-  const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(d.width),
-                                static_cast<float>(d.height), 0.0f, 1.0f};
-  const D3D12_RECT scissor{0, 0, static_cast<LONG>(d.width), static_cast<LONG>(d.height)};
-  commands->RSSetViewports(1, &viewport);
-  commands->RSSetScissorRects(1, &scissor);
-  commands->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-  auto display_to_target = transition(d.display.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                                      D3D12_RESOURCE_STATE_RENDER_TARGET);
-  commands->ResourceBarrier(1, &display_to_target);
-
-  const D3D12_CPU_DESCRIPTOR_HANDLE display_rtv = d.rtv(kDisplayRtv);
-  commands->OMSetRenderTargets(1, &display_rtv, FALSE, nullptr);
-
-  ShaderParams params{};
-  params.canvas[0] = static_cast<float>(d.width);
-  params.canvas[1] = static_cast<float>(d.height);
-  commands->SetPipelineState(d.pipeline_present.Get());
-  commands->SetGraphicsRootDescriptorTable(0, d.srv_gpu(d.present_slot()));
-  commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &params, 0);
-  commands->DrawInstanced(3, 1, 0, 0);
+  record_display_pass(d, commands);
 
   auto display_to_source = transition(d.display.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                                       D3D12_RESOURCE_STATE_COPY_SOURCE);

@@ -18,13 +18,22 @@
 
 namespace cutline::ui {
 
+class TextureCache;
+
 class SkiaPainter final : public Painter {
  public:
   /// `canvas` is an `SkCanvas*`, owned by the caller and outliving this.
   ///
   /// Font lookup goes through DirectWrite, so the interface uses the same
   /// fonts as the rest of the system rather than shipping its own.
-  [[nodiscard]] static std::unique_ptr<SkiaPainter> create(void* canvas);
+  ///
+  /// `textures` is where the wrappers for GPU frames are kept between paints,
+  /// and without one `texture` draws nothing. It is not optional out of
+  /// tidiness: the wrappers *must* outlive the frame that made them, so they
+  /// cannot live in a painter that is built and thrown away each frame.
+  /// `SkiaWindow` owns one and hands it over.
+  [[nodiscard]] static std::unique_ptr<SkiaPainter> create(void* canvas,
+                                                           TextureCache* textures = nullptr);
 
   SkiaPainter(const SkiaPainter&) = delete;
   SkiaPainter& operator=(const SkiaPainter&) = delete;
@@ -40,6 +49,7 @@ class SkiaPainter final : public Painter {
   void bevel(const Rect& bounds, const Bevel& bevel) override;
   void shadow(const Rect& bounds, double corner_radius, const Shadow& shadow) override;
   void image(const Rect& bounds, const ImageView& pixels) override;
+  void texture(const Rect& bounds, const TextureView& frame) override;
   void backdrop_blur(const Rect& bounds, double corner_radius, double radius) override;
   void text(const TextRun& run) override;
 

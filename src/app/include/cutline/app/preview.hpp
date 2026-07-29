@@ -10,6 +10,7 @@
 
 #include "cutline/core/model.hpp"
 #include "cutline/editor/import.hpp"
+#include "cutline/gpu/device.hpp"
 #include "cutline/ui/painter.hpp"
 
 #include <expected>
@@ -28,17 +29,26 @@ namespace cutline::app {
 [[nodiscard]] std::expected<editor::MediaSource, std::string> probe_source(
     std::string_view path);
 
-/// Renders a project frame and keeps it on the CPU for the interface to draw.
+/// Renders a project frame for the interface to draw.
 ///
-/// Read-back stalls the GPU, so this is a *scrubbing* preview: one frame per
-/// thing the user did, not sixty a second. Playing back at rate wants the
-/// frame never to leave the GPU, which is a different architecture — Skia on
-/// the same D3D12 device as the compositor — and a deliberate later step
-/// rather than something this is pretending to be.
+/// There are two ways out, and they are not equivalent. `texture_at` leaves the
+/// frame where it was rendered and hands over the texture, which costs no copy
+/// at all. `frame_at` brings it down to system memory, which moves a canvas
+/// across the bus and gives the interface something to upload again; it is for
+/// whoever has no GPU painter to draw with — the pixel tests, and anything that
+/// wants the actual bytes.
+///
+/// Both render one frame per call and wait for it. This is a *scrubbing*
+/// preview: one frame per thing the user did, not sixty a second. Playing at
+/// rate needs the frame loop to stop waiting as well, which is a change to how
+/// work is queued rather than to where the pixels live.
 class ProjectPreview {
  public:
+  /// `device` may be null, in which case one is made. Passing one in is how the
+  /// preview and the window end up on the same device — and sharing a device
+  /// is the whole of what makes `texture_at` a pointer instead of a copy.
   [[nodiscard]] static std::expected<std::unique_ptr<ProjectPreview>, std::string> create(
-      int canvas_width, int canvas_height);
+      int canvas_width, int canvas_height, std::shared_ptr<gpu::Device> device = nullptr);
 
   ProjectPreview(const ProjectPreview&) = delete;
   ProjectPreview& operator=(const ProjectPreview&) = delete;
@@ -50,6 +60,18 @@ class ProjectPreview {
   /// the monitor can borrow them for a paint without a copy.
   [[nodiscard]] std::expected<ui::ImageView, std::string> frame_at(const core::Project& project,
                                                                    double t);
+
+  /// Composites the project at `t` and hands back the texture it rendered into,
+  /// without copying anything.
+  ///
+  /// Valid until the next call, and only drawable by a painter on this
+  /// object's device — which is why `create` takes one.
+  [[nodiscard]] std::expected<ui::TextureView, std::string> texture_at(
+      const core::Project& project, double t);
+
+  /// The device everything here renders on, for handing to whoever draws the
+  /// result.
+  [[nodiscard]] const std::shared_ptr<gpu::Device>& device() const noexcept;
 
   /// Matches the renderer to a sequence of a different size. Cheap and does
   /// nothing when the size already agrees.

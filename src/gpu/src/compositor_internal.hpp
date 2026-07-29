@@ -66,6 +66,9 @@ struct Compositor::Impl {
 
   int width = 0;
   int height = 0;
+  /// Incremented by `create_targets`, so a cache downstream can tell a rebuilt
+  /// target from the one it saw last even at the same address and size.
+  unsigned generation = 0;
 
   [[nodiscard]] Device::Impl& gpu() noexcept { return owner->internals(); }
 

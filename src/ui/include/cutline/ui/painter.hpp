@@ -66,6 +66,40 @@ struct ImageView {
   friend bool operator==(const ImageView&, const ImageView&) = default;
 };
 
+/// A borrowed frame that is already on the GPU.
+///
+/// The same contract as `ImageView` — borrowed, alive until the draw returns —
+/// for the case where the pixels never came to the CPU in the first place. A
+/// composited frame is rendered on the graphics card and shown on the same
+/// card, and the round trip through system memory in between bought nothing
+/// except a way for the interface to be written without a GPU.
+///
+/// Untyped, and deliberately so. This library builds and is tested with no
+/// Direct3D anywhere near it; naming `ID3D12Resource` here would end that. The
+/// one painter that can do anything with this knows what the numbers mean, and
+/// every other painter can see that it is not empty and say so.
+struct TextureView {
+  void* texture = nullptr;  ///< ID3D12Resource*
+  int width = 0;
+  int height = 0;
+  unsigned format = 0;  ///< DXGI_FORMAT
+  unsigned state = 0;   ///< D3D12_RESOURCE_STATES the texture is in
+
+  /// Bumped by whoever owns the texture whenever it is rebuilt. A painter may
+  /// keep something derived from a texture between frames, and the handle alone
+  /// cannot say whether it is still the same one — a freed resource's address
+  /// gets handed straight back out.
+  unsigned generation = 0;
+
+  [[nodiscard]] bool empty() const noexcept {
+    return texture == nullptr || width <= 0 || height <= 0;
+  }
+  /// Width over height, or zero when there is no texture.
+  [[nodiscard]] double aspect() const noexcept;
+
+  friend bool operator==(const TextureView&, const TextureView&) = default;
+};
+
 enum class TextAlign { Left, Center, Right };
 
 struct TextRun {
@@ -128,6 +162,15 @@ class Painter : public TextMeasurer {
   /// business — `fit_aspect` works out the rectangle, this fills whatever it is
   /// given, so a deliberately squeezed frame stays possible.
   virtual void image(const Rect& bounds, const ImageView& pixels) = 0;
+
+  /// The same, for a frame that is already on the graphics card.
+  ///
+  /// Separate from `image` rather than an overload taking either, because the
+  /// two are not interchangeable: a painter drawing into a raster surface
+  /// cannot do this at all, and quietly drawing nothing would look like a
+  /// black preview rather than like a missing capability. Whoever calls this
+  /// is expected to know which kind of painter it has.
+  virtual void texture(const Rect& bounds, const TextureView& frame) = 0;
 
   /// Blurs whatever has already been drawn beneath `bounds`. The one primitive
   /// that reads the surface rather than writing to it, and the reason Vista's

@@ -178,5 +178,38 @@ TEST(Preview, AnEmptyProjectRendersWithoutComplaining) {
   EXPECT_EQ(frame->width, project.canvas_w);
 }
 
+TEST(Preview, RendersToATextureWithoutCopyingItBack) {
+  auto preview = ProjectPreview::create(160, 90);
+  if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
+
+  const core::Project project = core::empty_project(1, 1);
+  const auto frame = (*preview)->texture_at(project, 0.0);
+  ASSERT_TRUE(frame.has_value()) << frame.error();
+
+  EXPECT_FALSE(frame->empty());
+  EXPECT_EQ(frame->width, project.canvas_w);
+  EXPECT_EQ(frame->height, project.canvas_h);
+}
+
+TEST(Preview, AGivenDeviceIsTheOneItRendersOn) {
+  auto device = gpu::Device::create({.allow_software = true});
+  if (!device.has_value()) GTEST_SKIP() << "no usable device: " << device.error();
+
+  auto preview = ProjectPreview::create(160, 90, *device);
+  ASSERT_TRUE(preview.has_value()) << preview.error();
+
+  // The point of passing one in: the frame and whoever draws it end up in the
+  // same memory. Two devices and the texture would be meaningless to the
+  // window, which is the difference between handing a frame over and copying
+  // it through the CPU twice.
+  EXPECT_EQ((*preview)->device().get(), device->get());
+}
+
+TEST(Preview, WithoutADeviceItMakesItsOwn) {
+  auto preview = ProjectPreview::create(160, 90);
+  if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
+  EXPECT_NE((*preview)->device(), nullptr);
+}
+
 }  // namespace
 }  // namespace cutline::app

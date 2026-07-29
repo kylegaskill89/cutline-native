@@ -66,6 +66,7 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -319,13 +320,31 @@ struct App {
   TestPattern pattern;
 
 #if CUTLINE_HAVE_PREVIEW
-  /// Made on first use rather than at startup: creating a Direct3D device
-  /// costs a moment, and a window that only ever shows chrome should not pay
-  /// for one.
+  /// The one Direct3D device: the compositor renders on it and the windows
+  /// draw on it.
+  ///
+  /// Made at startup rather than on first use, which reverses the old note
+  /// here about not paying for a device until something needs one. The reason
+  /// is that a window has always created one anyway — so this is not a device
+  /// that would not otherwise exist, it is the *same* device instead of a
+  /// second one. Two devices meant a composited frame had to come down to
+  /// system memory and go back up before it could be shown.
+  std::shared_ptr<cutline::gpu::Device> device;
+  /// Set once when no device could be made, so it is not retried every frame.
+  /// Everything still works: the windows fall back to making their own and the
+  /// preview to copying frames through system memory.
+  bool device_failed = false;
+
   std::unique_ptr<cutline::app::ProjectPreview> preview;
   bool preview_failed = false;
   /// Set when the picture no longer matches the playhead or the project.
   bool preview_stale = true;
+
+  /// Whether the preview and the windows are on the same device, which is what
+  /// decides whether a frame can be handed over as a texture or has to be
+  /// copied. Only true when the shared device was made — otherwise each built
+  /// its own and they have no memory in common.
+  [[nodiscard]] bool shares_device() const noexcept { return device != nullptr; }
 #endif
 
   std::size_t theme = 0;
@@ -549,7 +568,10 @@ void refresh_preview(App& app) {
 
   const cutline::core::Project& project = app.session.project();
   if (app.preview == nullptr) {
-    auto made = cutline::app::ProjectPreview::create(project.canvas_w, project.canvas_h);
+    // The same device the windows draw on, when there is one. That is what
+    // lets the finished frame be handed over rather than copied.
+    auto made =
+        cutline::app::ProjectPreview::create(project.canvas_w, project.canvas_h, app.device);
     if (!made.has_value()) {
       // Once, and then never again: a machine with no usable device will not
       // acquire one, and complaining on every scrub would be unbearable.
@@ -560,14 +582,28 @@ void refresh_preview(App& app) {
     app.preview = std::move(*made);
   }
 
-  const auto frame = app.preview->frame_at(project, app.session.playhead());
-  if (!frame.has_value()) {
-    app.preview_failed = true;
-    complain(app.main.window, "Could not render the preview.\n\n" + frame.error());
-    return;
+  // Two ways to the same picture. Sharing a device means the frame is already
+  // in memory the window can draw from, so it is handed over as a texture;
+  // without one the two have nothing in common and it has to go down to the
+  // CPU and back up again.
+  if (app.shares_device()) {
+    const auto frame = app.preview->texture_at(project, app.session.playhead());
+    if (!frame.has_value()) {
+      app.preview_failed = true;
+      complain(app.main.window, "Could not render the preview.\n\n" + frame.error());
+      return;
+    }
+    app.monitor->set_texture(*frame);
+  } else {
+    const auto frame = app.preview->frame_at(project, app.session.playhead());
+    if (!frame.has_value()) {
+      app.preview_failed = true;
+      complain(app.main.window, "Could not render the preview.\n\n" + frame.error());
+      return;
+    }
+    app.monitor->set_frame(*frame);
   }
 
-  app.monitor->set_frame(*frame);
   app.monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
   mark_dirty(app);
 #else
@@ -1408,6 +1444,33 @@ void refresh_float_titles(App& app) {
   };
 }
 
+/// The device every window here draws on, made once and kept.
+///
+/// Empty when there is no compositor in this build, or when no device could be
+/// made — in both cases the window falls back to creating its own, which is
+/// what it did before there was anything to share.
+[[nodiscard]] cutline::ui::AdoptedDevice shared_device(App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.device == nullptr && !app.device_failed) {
+    auto made = cutline::gpu::Device::create();
+    if (made.has_value()) {
+      app.device = std::move(*made);
+    } else {
+      // Not worth interrupting anybody over: everything still works, just with
+      // a copy in the middle. The preview says so if it cannot start at all.
+      app.device_failed = true;
+    }
+  }
+  if (app.device == nullptr) return {};
+  return cutline::ui::AdoptedDevice{.adapter = app.device->native_adapter(),
+                                    .device = app.device->native_device(),
+                                    .queue = app.device->native_queue()};
+#else
+  (void)app;
+  return {};
+#endif
+}
+
 /// Makes or resizes the window's swapchain.
 ///
 /// A failure is said once and then the window simply does not draw. There is
@@ -1432,7 +1495,8 @@ void resize_surface(Shell& shell, int width, int height) {
     return;
   }
 
-  auto made = cutline::ui::SkiaWindow::create(shell.window, width, height);
+  auto made = cutline::ui::SkiaWindow::create(shell.window, width, height,
+                                              shared_device(*shell.app));
   if (!made.has_value()) {
     if (!shell.warned) {
       shell.warned = true;
@@ -1483,7 +1547,11 @@ void render(Shell& shell) {
   if (canvas == nullptr) return;
 
   const Theme& theme = app.current();
-  const std::unique_ptr<SkiaPainter> painter = SkiaPainter::create(canvas);
+  // The window's texture cache goes with the painter: a wrapper for somebody
+  // else's GPU frame has to outlive the paint that drew it, and the painter
+  // does not.
+  const std::unique_ptr<SkiaPainter> painter =
+      SkiaPainter::create(canvas, shell.surface->textures());
   if (painter == nullptr) {
     shell.surface->present();
     return;

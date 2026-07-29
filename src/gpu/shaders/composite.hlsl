@@ -460,6 +460,27 @@ float4 PSBlur(VSOutput input) : SV_Target {
 }
 
 float4 PSPresent(VSOutput input) : SV_Target {
-    // The render target is _SRGB, so the hardware encodes on write.
-    return texture0.Sample(linearSampler, input.uv);
+    // Encoded here rather than by an _SRGB render target view.
+    //
+    // The hardware would do this for nothing, and did, until the display target
+    // had to become something Skia can sample. An _SRGB view needs an _SRGB
+    // resource, and sampling one decodes back to linear on the way out, so the
+    // interface would draw the picture too dark. A typeless resource with two
+    // differently-typed views is the usual way out of that, and is not
+    // available either: Direct3D refuses to make a shader resource view on a
+    // typeless resource, and removes the device rather than failing the call.
+    //
+    // So the target is plain UNORM holding sRGB-encoded values that any sampler
+    // reads back exactly as stored, and the encoding happens here. It costs a
+    // handful of instructions once per frame.
+    const float4 scene = texture0.Sample(linearSampler, input.uv);
+
+    const float3 low = scene.rgb * 12.92;
+    const float3 high = 1.055 * pow(max(scene.rgb, 0.0), 1.0 / 2.4) - 0.055;
+    // `select` rather than `?:` — the condition is a vector, and HLSL 2021
+    // refuses to short-circuit one.
+    const float3 encoded = select(scene.rgb <= 0.0031308, low, high);
+
+    // Alpha is linear by definition and is not encoded.
+    return float4(encoded, scene.a);
 }

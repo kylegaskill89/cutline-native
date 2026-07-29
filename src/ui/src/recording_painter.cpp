@@ -18,6 +18,8 @@ std::string_view to_string(DrawCall::Kind kind) noexcept {
       return "line";
     case DrawCall::Kind::Image:
       return "image";
+    case DrawCall::Kind::Texture:
+      return "texture";
     case DrawCall::Kind::Bevel:
       return "bevel";
     case DrawCall::Kind::Shadow:
@@ -58,6 +60,13 @@ void RecordingPainter::image(const Rect& bounds, const ImageView& pixels) {
   // The view is recorded, not the pixels. Copying a frame here would be
   // megabytes per call and would say nothing a test wants to know.
   calls_.push_back({.kind = DrawCall::Kind::Image, .bounds = bounds, .image = pixels});
+}
+
+void RecordingPainter::texture(const Rect& bounds, const TextureView& frame) {
+  // Nothing here can sample a GPU texture, and nothing here needs to: what a
+  // test wants to know is that the monitor asked for the frame on the card
+  // rather than a copy of it, and in the right rectangle.
+  calls_.push_back({.kind = DrawCall::Kind::Texture, .bounds = bounds, .frame = frame});
 }
 
 void RecordingPainter::line(double x1, double y1, double x2, double y2, const Color& color,

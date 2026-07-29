@@ -118,6 +118,12 @@ inline constexpr UINT kSlotsPerLayer = 4;
 /// is a throughput optimisation to make once there is something to measure.
 struct Device::Impl {
   ComPtr<IDXGIFactory6> factory;
+  /// Kept rather than dropped after the device is made, because Skia wants the
+  /// adapter as well as the device in order to share this one. `IDXGIAdapter1`
+  /// specifically, including for WARP, because that is the type Skia's backend
+  /// context holds and handing it the base interface would mean a cast that
+  /// happens to work.
+  ComPtr<IDXGIAdapter1> adapter_object;
   ComPtr<ID3D12Device> device;
   ComPtr<ID3D12CommandQueue> queue;
   ComPtr<ID3D12CommandAllocator> allocator;

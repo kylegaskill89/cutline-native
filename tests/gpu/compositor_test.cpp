@@ -13,8 +13,14 @@
 
 #include <gtest/gtest.h>
 
+// Only for the resource-state constant the texture handover reports. The
+// compositor's own headers keep Direct3D out of sight; a test asserting on the
+// state may as well name it rather than write the number.
+#include <d3d12.h>
+
 #include <cmath>
 #include <memory>
+#include <vector>
 
 namespace cutline::gpu {
 namespace {
@@ -905,6 +911,76 @@ TEST_F(CompositorTest, ManyLayersGrowTheDescriptorHeapWithoutLosingAny) {
 
   const Rgba centre = pixel_at(render(layers), kWidth / 2, kHeight / 2);
   EXPECT_EQ(centre.g, 255);
+}
+
+// ------------------------------------------------- handing the frame across --
+
+TEST_F(CompositorTest, TheDisplayTextureDescribesTheCanvas) {
+  ASSERT_TRUE(compositor_->compose({}).has_value());
+
+  const auto scene = compositor_->display_texture();
+  ASSERT_TRUE(scene.has_value()) << scene.error();
+  EXPECT_FALSE(scene->empty());
+  EXPECT_EQ(scene->width, kWidth);
+  EXPECT_EQ(scene->height, kHeight);
+  // Whoever samples this is told the state, and being wrong about it is not
+  // the sort of mistake a picture shows.
+  EXPECT_EQ(scene->state, static_cast<unsigned>(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
+  // Plain, not _SRGB. Sampling through an _SRGB view would decode back to
+  // linear on the way out and the preview would come out washed out.
+  EXPECT_EQ(scene->format, static_cast<unsigned>(DXGI_FORMAT_R8G8B8A8_UNORM));
+}
+
+TEST_F(CompositorTest, TheSameFrameComesBackEitherWay) {
+  // The one failure that would go unnoticed: the texture path leaving the
+  // display target in a state the readback path does not expect, so that asking
+  // for the pixels after asking for the texture gives something else.
+  Layer layer = fill({0.0f, 1.0f, 0.0f, 1.0f});
+
+  ASSERT_TRUE(compositor_->compose({&layer, 1}).has_value());
+  const auto before = compositor_->read_back();
+  ASSERT_TRUE(before.has_value()) << before.error();
+
+  ASSERT_TRUE(compositor_->display_texture().has_value());
+
+  const auto after = compositor_->read_back();
+  ASSERT_TRUE(after.has_value()) << after.error();
+  EXPECT_EQ(after->pixels, before->pixels)
+      << "handing the texture over changed what the pixels read back as";
+}
+
+TEST_F(CompositorTest, TheTextureCanBeAskedForRepeatedly) {
+  ASSERT_TRUE(compositor_->compose({}).has_value());
+
+  const auto first = compositor_->display_texture();
+  ASSERT_TRUE(first.has_value()) << first.error();
+  const auto second = compositor_->display_texture();
+  ASSERT_TRUE(second.has_value()) << second.error();
+
+  // The same target every time, so a caller may keep the handle across frames
+  // and simply find newer pixels in it.
+  EXPECT_EQ(first->resource, second->resource);
+}
+
+TEST_F(CompositorTest, ResizingGivesATextureOfTheNewSize) {
+  ASSERT_TRUE(compositor_->compose({}).has_value());
+  ASSERT_TRUE(compositor_->display_texture().has_value());
+
+  ASSERT_TRUE(compositor_->resize(kWidth * 2, kHeight * 2).has_value());
+  ASSERT_TRUE(compositor_->compose({}).has_value());
+
+  const auto after = compositor_->display_texture();
+  ASSERT_TRUE(after.has_value()) << after.error();
+  EXPECT_EQ(after->width, kWidth * 2);
+  EXPECT_EQ(after->height, kHeight * 2);
+
+  // Deliberately no assertion that the handle changed. A resize frees the old
+  // target and Direct3D is free to put the new one at the same address — which
+  // it does often enough that asserting otherwise fails only when the tests run
+  // in a particular order. That reuse is exactly why the contract says a
+  // texture is good until the next call and no longer: a stale handle does not
+  // become invalid in any way a comparison could catch. It just quietly refers
+  // to something else.
 }
 
 }  // namespace

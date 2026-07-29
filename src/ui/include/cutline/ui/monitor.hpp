@@ -26,8 +26,26 @@ class MonitorView : public Widget {
   /// The frame to show. Borrowed: the caller keeps the pixels alive until the
   /// next call or the next paint, whichever comes first.
   void set_frame(const ImageView& frame);
+
+  /// The frame to show, when it is already on the graphics card and there is
+  /// no reason to bring it down. Borrowed on the same terms.
+  ///
+  /// The two are alternatives, not layers: setting either forgets the other.
+  /// A monitor holding both would have to decide which one wins on every
+  /// paint, and the answer would be whichever was written most recently —
+  /// which is this, said once, where it can be tested.
+  void set_texture(const TextureView& frame);
+
+  /// Forgets both.
   void clear_frame();
+
   [[nodiscard]] const ImageView& frame() const noexcept { return frame_; }
+  [[nodiscard]] const TextureView& texture() const noexcept { return texture_; }
+
+  /// Whether there is anything to show, from either source.
+  [[nodiscard]] bool has_picture() const noexcept {
+    return !frame_.empty() || !texture_.empty();
+  }
 
   /// The shape of the sequence, used to letterbox when there is no frame yet.
   /// Without it an empty monitor would be the shape of its panel, and the
@@ -55,6 +73,7 @@ class MonitorView : public Widget {
 
  private:
   ImageView frame_;
+  TextureView texture_;
   double canvas_aspect_ = 16.0 / 9.0;
   std::string placeholder_ = "No preview";
 };

@@ -142,6 +142,8 @@ Device::~Device() {
 const std::string& Device::adapter_name() const noexcept { return impl_->adapter; }
 bool Device::is_software() const noexcept { return impl_->software; }
 void* Device::native_device() const noexcept { return impl_->device.Get(); }
+void* Device::native_adapter() const noexcept { return impl_->adapter_object.Get(); }
+void* Device::native_queue() const noexcept { return impl_->queue.Get(); }
 void Device::wait_for_idle() { impl_->wait_for_idle(); }
 
 std::expected<std::shared_ptr<Device>, std::string> Device::create(DeviceOptions options) {
@@ -174,16 +176,18 @@ std::expected<std::shared_ptr<Device>, std::string> Device::create(DeviceOptions
     if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
                                     IID_PPV_ARGS(&impl->device)))) {
       impl->adapter = narrow(desc.Description);
+      impl->adapter_object = adapter;
       break;
     }
   }
 
   if (!impl->device && options.allow_software) {
-    ComPtr<IDXGIAdapter> warp;
+    ComPtr<IDXGIAdapter1> warp;
     if (SUCCEEDED(impl->factory->EnumWarpAdapter(IID_PPV_ARGS(&warp))) &&
         SUCCEEDED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0,
                                     IID_PPV_ARGS(&impl->device)))) {
       impl->adapter = "Microsoft Basic Render Driver (WARP)";
+      impl->adapter_object = warp;
       impl->software = true;
     }
   }

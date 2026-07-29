@@ -1,5 +1,7 @@
 #include "cutline/ui/skia_painter.hpp"
 
+#include "skia_texture.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <numbers>
@@ -84,6 +86,7 @@ void gradient_points(const Rect& bounds, double angle_deg, SkPoint out[2]) {
 
 struct SkiaPainter::Impl {
   SkCanvas* canvas = nullptr;
+  TextureCache* textures = nullptr;
   sk_sp<SkFontMgr> fonts;
   sk_sp<SkTypeface> regular;
   sk_sp<SkTypeface> bold;
@@ -99,11 +102,12 @@ struct SkiaPainter::Impl {
 SkiaPainter::SkiaPainter(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 SkiaPainter::~SkiaPainter() = default;
 
-std::unique_ptr<SkiaPainter> SkiaPainter::create(void* canvas) {
+std::unique_ptr<SkiaPainter> SkiaPainter::create(void* canvas, TextureCache* textures) {
   if (canvas == nullptr) return nullptr;
 
   auto impl = std::make_unique<Impl>();
   impl->canvas = static_cast<SkCanvas*>(canvas);
+  impl->textures = textures;
   impl->fonts = SkFontMgr_New_DirectWrite();
   if (impl->fonts != nullptr) {
     // Null family means the system default, which is what an interface should
@@ -198,6 +202,23 @@ void SkiaPainter::image(const Rect& bounds, const ImageView& view) {
   paint.setAntiAlias(true);
   // Linear rather than nearest: a preview is nearly always being scaled down,
   // and point sampling makes a moving picture crawl.
+  impl_->canvas->drawImageRect(image, to_sk(bounds),
+                               SkSamplingOptions(SkFilterMode::kLinear), &paint);
+}
+
+void SkiaPainter::texture(const Rect& bounds, const TextureView& frame) {
+  if (frame.empty() || bounds.empty() || impl_->textures == nullptr) return;
+
+  // From the cache, never made here: a wrapper built and dropped inside one
+  // paint takes the Direct3D device down with it. See `TextureCache`.
+  const sk_sp<SkImage> image = impl_->textures->image_for(impl_->canvas, frame);
+  if (image == nullptr) return;
+
+  SkPaint paint;
+  paint.setAntiAlias(true);
+  // The same sampling as the CPU path, for the same reason: a preview is
+  // nearly always scaled down, and point sampling makes a moving picture
+  // crawl.
   impl_->canvas->drawImageRect(image, to_sk(bounds),
                                SkSamplingOptions(SkFilterMode::kLinear), &paint);
 }

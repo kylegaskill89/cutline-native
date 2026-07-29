@@ -26,6 +26,8 @@
 
 namespace cutline::ui {
 
+class TextureCache;
+
 /// An existing Direct3D device to draw on rather than making another.
 ///
 /// The compositor already has one. Two devices on one machine means a video
@@ -70,6 +72,13 @@ class SkiaWindow {
   /// Hands the frame to the compositor. Must follow a `begin_frame` that
   /// returned a canvas.
   void present();
+
+  /// Where wrappers for other people's GPU textures are kept, to be handed to
+  /// `SkiaPainter::create`.
+  ///
+  /// It lives here because it has to be destroyed before the Skia context, and
+  /// this is what owns that. Never null.
+  [[nodiscard]] TextureCache* textures() noexcept;
 
   /// Issues the drawing recorded so far and waits for the GPU to finish it,
   /// without presenting anything.

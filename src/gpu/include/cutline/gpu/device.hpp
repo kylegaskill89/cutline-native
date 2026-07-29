@@ -59,6 +59,23 @@ class Device {
   /// this one and there is nothing to share.
   [[nodiscard]] void* native_device() const noexcept;
 
+  /// The `IDXGIAdapter1*` the device was created on.
+  [[nodiscard]] void* native_adapter() const noexcept;
+
+  /// The `ID3D12CommandQueue*` everything here submits to.
+  ///
+  /// Handed out for the same reason as the device, and with a sharper edge to
+  /// it. Two queues on one device need a fence between them to order a
+  /// composited frame against the drawing that samples it; one queue needs
+  /// nothing at all, because submission order *is* the order. The interface
+  /// draws on this queue, so a frame is finished before the frame that shows
+  /// it begins, and nobody waits.
+  ///
+  /// Which also means a borrower must only record and submit. Resetting it, or
+  /// signalling fences this device also uses, would break assumptions made
+  /// here. There is one borrower — Skia — and it does neither.
+  [[nodiscard]] void* native_queue() const noexcept;
+
   /// The Direct3D objects. Defined in an internal header: callers outside this
   /// library have no use for them, and keeping the type opaque is what stops
   /// d3d12.h leaking into the rest of the program.

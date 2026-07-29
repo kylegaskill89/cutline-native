@@ -24,4 +24,15 @@ target_link_libraries(theme_window PRIVATE unofficial::skia::skia)
 if(TARGET cutline::app)
   target_link_libraries(theme_window PRIVATE cutline::app)
   target_compile_definitions(theme_window PRIVATE CUTLINE_HAVE_PREVIEW=1)
+
+  # The compositor loads its shaders from beside the executable at runtime, so
+  # they have to be built next to this one as well.
+  #
+  # Every other consumer already did this; the window did not, and so the
+  # preview in the actual application has never once rendered a frame — it
+  # failed at "cannot open composite_layer_vs.cso" and showed the colour bars
+  # it starts with, which look exactly like a preview waiting for something to
+  # decode. Nothing caught it because no test runs the window, and the tools
+  # that do render are the ones that had the shaders.
+  cutline_gpu_shaders(theme_window)
 endif()

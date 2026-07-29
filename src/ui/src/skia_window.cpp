@@ -1,5 +1,7 @@
 #include "cutline/ui/skia_window.hpp"
 
+#include "skia_texture.hpp"
+
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
@@ -98,6 +100,11 @@ struct SkiaWindow::Impl {
   bool software = false;
   bool drawing = false;
   std::string adapter_name;
+
+  /// Declared after `context` on purpose. Members are destroyed in reverse, so
+  /// this goes first — and an image outliving the context it belongs to is a
+  /// crash at teardown rather than a leak.
+  TextureCache textures;
 
   ~Impl() {
     // The GPU may still be reading buffers that are about to be released.
@@ -276,6 +283,7 @@ int SkiaWindow::width() const noexcept { return impl_->width; }
 int SkiaWindow::height() const noexcept { return impl_->height; }
 bool SkiaWindow::is_software() const noexcept { return impl_->software; }
 const std::string& SkiaWindow::adapter_name() const noexcept { return impl_->adapter_name; }
+TextureCache* SkiaWindow::textures() noexcept { return &impl_->textures; }
 
 std::expected<void, std::string> SkiaWindow::resize(int width, int height) {
   if (width <= 0 || height <= 0) return std::unexpected("a window with no size cannot be drawn");

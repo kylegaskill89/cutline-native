@@ -30,6 +30,7 @@ struct DrawCall {
     Bevel,
     Shadow,
     Image,
+    Texture,
     BackdropBlur,
     Text,
   };
@@ -48,6 +49,7 @@ struct DrawCall {
   std::optional<Shadow> shadow;///< Shadow
   std::optional<TextRun> run;  ///< Text
   ImageView image;             ///< Image
+  TextureView frame;           ///< Texture
 };
 
 [[nodiscard]] std::string_view to_string(DrawCall::Kind kind) noexcept;
@@ -64,6 +66,7 @@ class RecordingPainter final : public Painter {
   void bevel(const Rect& bounds, const Bevel& bevel) override;
   void shadow(const Rect& bounds, double corner_radius, const Shadow& shadow) override;
   void image(const Rect& bounds, const ImageView& pixels) override;
+  void texture(const Rect& bounds, const TextureView& frame) override;
   void backdrop_blur(const Rect& bounds, double corner_radius, double radius) override;
   void text(const TextRun& run) override;
 

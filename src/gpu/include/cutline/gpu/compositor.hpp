@@ -152,6 +152,41 @@ struct Image {
   [[nodiscard]] bool empty() const noexcept { return pixels.empty(); }
 };
 
+/// The same frame left where it already is: on the GPU, display-encoded, ready
+/// to be sampled.
+///
+/// `read_back` exists because a test compares pixels and a still gets written
+/// to a file. Neither is true of the picture on screen, and paying a
+/// canvas-sized trip to system memory and back for every scrub was always the
+/// wrong shape — it was just the only shape available while the interface drew
+/// on the CPU. Now that it does not, the frame need never leave the card.
+///
+/// Untyped for the reason everything here is untyped: `d3d12.h` stays inside
+/// this library.
+struct SceneTexture {
+  void* resource = nullptr;  ///< ID3D12Resource*
+  int width = 0;
+  int height = 0;
+  unsigned format = 0;  ///< DXGI_FORMAT
+  /// The state the texture is left in, which is also the state whoever samples
+  /// it must declare. Disagreeing about this is not a visible bug so much as a
+  /// debug-layer message, and on some drivers not even that until it is a
+  /// wrong picture.
+  unsigned state = 0;  ///< D3D12_RESOURCE_STATES
+
+  /// Bumped every time the targets are rebuilt.
+  ///
+  /// Anyone caching something derived from this texture needs it. A rebuild
+  /// frees the old target, and Direct3D reuses addresses freely — so the same
+  /// pointer can come back, at the same size, referring to different memory.
+  /// Comparing the handle would say nothing had changed.
+  unsigned generation = 0;
+
+  [[nodiscard]] bool empty() const noexcept {
+    return resource == nullptr || width <= 0 || height <= 0;
+  }
+};
+
 class Compositor {
  public:
   [[nodiscard]] static std::expected<std::unique_ptr<Compositor>, std::string> create(
@@ -170,6 +205,20 @@ class Compositor {
   /// Slow by nature — this stalls on the GPU — and meant for tests and stills,
   /// not for every frame of an export.
   [[nodiscard]] std::expected<Image, std::string> read_back();
+
+  /// Encodes the scene for display and stops there, handing back the texture
+  /// rather than its contents. Nothing is copied.
+  ///
+  /// The result borrows the compositor's own display target, so it is valid
+  /// until the next `compose`/`display_texture` pair overwrites it and until
+  /// this compositor is destroyed. That is exactly a preview's lifetime, and
+  /// deliberately not something to hold on to.
+  ///
+  /// This still waits for the GPU, because everything here shares one command
+  /// allocator and resetting it under a running command list is not allowed.
+  /// What it does not do is copy a canvas to system memory and let the
+  /// interface upload it again — which was the expensive half, not the wait.
+  [[nodiscard]] std::expected<SceneTexture, std::string> display_texture();
 
   /// Changes the canvas size, discarding the current scene contents.
   [[nodiscard]] std::expected<void, std::string> resize(int width, int height);
