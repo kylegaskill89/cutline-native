@@ -416,12 +416,15 @@ struct App {
     std::size_t codec = 0;
     std::size_t quality = 1;
     std::size_t rate = 0;
+    std::size_t resolution = 0;
+    std::size_t mixdown = 0;
     bool audio = true;
   };
   ExportSetup export_setup;
 
   Button* export_output = nullptr;
   Button* export_start = nullptr;
+  Dropdown* export_mixdown = nullptr;
   ProgressBar* export_progress = nullptr;
   Label* export_status = nullptr;
 
@@ -1616,6 +1619,48 @@ constexpr std::array kExportRates{
     RateChoice{"50 fps", 50.0},          RateChoice{"60 fps", 60.0},
 };
 
+/// Output sizes, as a fraction of the sequence's own.
+///
+/// A fraction rather than a fixed pair of numbers, because the aspect ratio is
+/// the sequence's business: offering "1280 x 720" to a vertical sequence would
+/// have to either letterbox it or stretch it, and neither is what choosing a
+/// smaller size means. What each fraction works out to in pixels is put in the
+/// label, so nothing has to be taken on trust.
+struct ResolutionChoice {
+  const char* name;
+  double scale;
+};
+constexpr std::array kExportResolutions{
+    ResolutionChoice{"Same as sequence", 1.0}, ResolutionChoice{"3/4", 0.75},
+    ResolutionChoice{"2/3", 2.0 / 3.0},        ResolutionChoice{"1/2", 0.5},
+    ResolutionChoice{"1/3", 1.0 / 3.0},        ResolutionChoice{"1/4", 0.25},
+};
+
+/// How the mix is folded down. Mono sums the sources rather than dropping a
+/// side; the resampler does it as each one is decoded.
+struct MixdownChoice {
+  const char* name;
+  int channels;
+};
+constexpr std::array kExportMixdowns{
+    MixdownChoice{"Stereo", 2},
+    MixdownChoice{"Mono", 1},
+};
+
+/// The output size a resolution choice works out to for this project.
+///
+/// Even in both directions: H.264 and HEVC encode in even-sized blocks, and an
+/// odd size would be rounded down by the encoder anyway — better to round here,
+/// where it can be shown, than to say one size and write another.
+[[nodiscard]] std::pair<int, int> export_size(const App& app, std::size_t choice) {
+  const cutline::core::Project& project = app.session.project();
+  const double scale = choice < kExportResolutions.size() ? kExportResolutions[choice].scale : 1.0;
+  const auto even = [](double value) {
+    return std::max(2, static_cast<int>(std::llround(value)) & ~1);
+  };
+  return {even(project.canvas_w * scale), even(project.canvas_h * scale)};
+}
+
 void close_export_dialog(App& app);
 
 /// Where the export writes to by default: beside the project, named after it.
@@ -1637,6 +1682,7 @@ void refresh_export_dialog(App& app) {
 
   const bool busy = app.exporting();
   if (app.export_output != nullptr) app.export_output->set_text(output_label(app));
+  if (app.export_mixdown != nullptr) app.export_mixdown->set_enabled(app.export_setup.audio);
   if (app.export_start != nullptr) {
     app.export_start->set_text(busy ? "Cancel" : "Export");
     // Nothing to export to is not an error worth a dialog; it is a button that
@@ -1668,7 +1714,11 @@ void start_export(App& app) {
                                                : cutline::media::VideoCodec::H264;
   settings.quality = kExportQualities[app.export_setup.quality].quality;
   settings.fps = kExportRates[app.export_setup.rate].fps;
+  const auto [width, height] = export_size(app, app.export_setup.resolution);
+  settings.width = width;
+  settings.height = height;
   settings.audio = app.export_setup.audio;
+  settings.audio_channels = kExportMixdowns[app.export_setup.mixdown].channels;
 
   App::ExportJob& job = app.export_job;
   job.cancel = false;
@@ -1794,6 +1844,23 @@ void settle_export(App& app) {
     });
   }
   {
+    auto& line = row("Resolution");
+    std::vector<std::string> names;
+    for (std::size_t i = 0; i < kExportResolutions.size(); ++i) {
+      if (app == nullptr) {
+        names.emplace_back(kExportResolutions[i].name);
+        continue;
+      }
+      const auto [width, height] = export_size(*app, i);
+      names.push_back(std::format("{} ({} x {})", kExportResolutions[i].name, width, height));
+    }
+    auto& choice = line.emplace<Dropdown>(std::move(names),
+                                          app != nullptr ? app->export_setup.resolution : 0);
+    choice.set_on_change([app](std::size_t index) {
+      if (app != nullptr) app->export_setup.resolution = index;
+    });
+  }
+  {
     auto& line = row("Frame rate");
     std::vector<std::string> names;
     for (const RateChoice& rate : kExportRates) names.emplace_back(rate.name);
@@ -1819,9 +1886,25 @@ void settle_export(App& app) {
     if (app != nullptr) app->export_output = &output;
   }
 
+  {
+    auto& line = row("Audio");
+    std::vector<std::string> names;
+    for (const MixdownChoice& mix : kExportMixdowns) names.emplace_back(mix.name);
+    auto& choice =
+        line.emplace<Dropdown>(std::move(names), app != nullptr ? app->export_setup.mixdown : 0);
+    choice.set_on_change([app](std::size_t index) {
+      if (app != nullptr) app->export_setup.mixdown = index;
+    });
+    if (app != nullptr) app->export_mixdown = &choice;
+  }
+
   auto& sound = body.emplace<Checkbox>("Export audio", app == nullptr || app->export_setup.audio);
   sound.set_on_change([app](bool on) {
-    if (app != nullptr) app->export_setup.audio = on;
+    if (app == nullptr) return;
+    app->export_setup.audio = on;
+    // A mixdown for a file with no audio in it is a choice with nothing behind
+    // it, so it greys out rather than sitting there looking answerable.
+    refresh_export_dialog(*app);
   });
 
   body.emplace<Spacer>();
@@ -1869,7 +1952,7 @@ void open_export_dialog(App& app) {
   RECT owner{};
   GetWindowRect(app.main.window, &owner);
   constexpr int kWidth = 460;
-  constexpr int kHeight = 380;
+  constexpr int kHeight = 460;
   const int x = owner.left + ((owner.right - owner.left) - kWidth) / 2;
   const int y = owner.top + ((owner.bottom - owner.top) - kHeight) / 2;
 
@@ -1902,6 +1985,7 @@ void close_export_dialog(App& app) {
   app.export_progress = nullptr;
   app.export_status = nullptr;
   app.export_start = nullptr;
+  app.export_mixdown = nullptr;
 
   const HWND window = app.export_window->window;
   app.export_window.reset();

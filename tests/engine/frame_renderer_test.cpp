@@ -201,6 +201,27 @@ TEST_F(FrameRendererTest, TheTransformPlacesTheClipOnTheCanvas) {
   EXPECT_EQ(pixel_at(image, kWidth * 3 / 4, kHeight * 3 / 4).a, 0);
 }
 
+TEST_F(FrameRendererTest, ASmallerCanvasIsTheSamePictureSmaller) {
+  // What exporting at a lower resolution rests on: every transform in the model
+  // is a fraction of the canvas rather than a pixel count, so a smaller canvas
+  // scales the composition instead of cropping it.
+  Project p = canvas_project();
+  p.canvas_w = kWidth / 2;
+  p.canvas_h = kHeight / 2;
+  p.media = {matte("m", "#ffffff")};
+
+  Clip c = clip("c", "m", 0.0, 5.0);
+  c.transform = core::Transform{.x = 0.25, .y = 0.25, .scale_x = 0.5, .scale_y = 0.5};
+  p.tracks = {video_track("v1", {c})};
+
+  const gpu::Image image = render(p, 1.0);
+  ASSERT_EQ(image.width, kWidth / 2);
+
+  // The same square in the same corner, at half the size.
+  EXPECT_EQ(pixel_at(image, image.width / 4, image.height / 4).a, 255);
+  EXPECT_EQ(pixel_at(image, image.width * 3 / 4, image.height * 3 / 4).a, 0);
+}
+
 TEST_F(FrameRendererTest, OpacityCarriesThroughToThePixels) {
   Project p = canvas_project();
   p.media = {matte("red", "#ff0000"), matte("white", "#ffffff")};

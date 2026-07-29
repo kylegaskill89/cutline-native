@@ -36,12 +36,33 @@ std::expected<ExportResult, std::string> export_project(
   const auto total = static_cast<std::int64_t>(std::llround(duration * fps));
   if (total <= 0) return std::unexpected("the export range is shorter than one frame");
 
-  auto renderer = FrameRenderer::create(device, project.canvas_w, project.canvas_h);
+  // Rounded down to even, because both codecs encode in even-sized blocks and
+  // the encoder rounds to reach one. Doing it here as well is what keeps the
+  // frames the renderer produces the size the encoder is expecting.
+  const int width = (settings.width > 0 ? settings.width : project.canvas_w) & ~1;
+  const int height = (settings.height > 0 ? settings.height : project.canvas_h) & ~1;
+  if (width <= 0 || height <= 0) {
+    return std::unexpected("the output size must be at least two pixels each way");
+  }
+
+  // The renderer takes its canvas from the project it is handed, so exporting
+  // at another resolution is exporting a project whose canvas is that size.
+  // A copy, because the caller's project is not the export's to change.
+  core::Project resized;
+  const core::Project* source = &project;
+  if (width != project.canvas_w || height != project.canvas_h) {
+    resized = project;
+    resized.canvas_w = width;
+    resized.canvas_h = height;
+    source = &resized;
+  }
+
+  auto renderer = FrameRenderer::create(device, width, height);
   if (!renderer) return std::unexpected(renderer.error());
 
   media::VideoEncodeSettings encode;
-  encode.width = project.canvas_w;
-  encode.height = project.canvas_h;
+  encode.width = width;
+  encode.height = height;
   encode.fps = fps;
   encode.codec = settings.codec;
   encode.preference = settings.preference;
@@ -53,7 +74,7 @@ std::expected<ExportResult, std::string> export_project(
   // streams in the header, so that has to be known up front.
   std::unique_ptr<AudioMixer> mixer;
   if (settings.audio) {
-    auto built = AudioMixer::create(project, {.sample_rate = settings.audio_sample_rate,
+    auto built = AudioMixer::create(*source, {.sample_rate = settings.audio_sample_rate,
                                               .channels = settings.audio_channels});
     if (!built) return std::unexpected(built.error());
     if (!(*built)->silent()) mixer = std::move(*built);
@@ -107,7 +128,7 @@ std::expected<ExportResult, std::string> export_project(
     // rounding error cannot drift over a long timeline.
     const double t = start + static_cast<double>(frame) / fps;
 
-    if (auto ok = (*renderer)->render(project, t); !ok) {
+    if (auto ok = (*renderer)->render(*source, t); !ok) {
       return std::unexpected(std::format("frame {}: {}", frame, ok.error()));
     }
     for (const std::string& id : (*renderer)->missing_media()) missing.insert(id);

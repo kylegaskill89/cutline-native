@@ -6,6 +6,7 @@
 ///
 ///     export_project <project.json> <out.mp4> [--hevc] [--software]
 ///                    [--quality N] [--bitrate BPS] [--fps N]
+///                    [--width N] [--height N] [--mono] [--no-audio]
 ///                    [--start S] [--duration S]
 
 #include "cutline/core/serialize.hpp"
@@ -38,6 +39,7 @@ int main(int argc, char** argv) {
     std::println(stderr,
                  "usage: export_project <project.json> <out.mp4> [--hevc] [--software]\n"
                  "                      [--quality N] [--bitrate BPS] [--fps N]\n"
+                 "                      [--width N] [--height N] [--mono] [--no-audio]\n"
                  "                      [--start S] [--duration S]");
     return 2;
   }
@@ -63,6 +65,14 @@ int main(int argc, char** argv) {
       settings.bitrate = static_cast<std::int64_t>(value(0));
     } else if (flag == "--fps") {
       settings.fps = value(0);
+    } else if (flag == "--width") {
+      settings.width = static_cast<int>(value(0));
+    } else if (flag == "--height") {
+      settings.height = static_cast<int>(value(0));
+    } else if (flag == "--mono") {
+      settings.audio_channels = 1;
+    } else if (flag == "--no-audio") {
+      settings.audio = false;
     } else if (flag == "--start") {
       settings.start = value(0);
     } else if (flag == "--duration") {
@@ -97,7 +107,9 @@ int main(int argc, char** argv) {
   }
 
   const cutline::core::Project& project = loaded->project;
-  std::println("{}x{} @ {:.3f} fps on {}", project.canvas_w, project.canvas_h,
+  std::println("{}x{} @ {:.3f} fps on {}",
+               settings.width > 0 ? settings.width : project.canvas_w,
+               settings.height > 0 ? settings.height : project.canvas_h,
                settings.fps > 0.0 ? settings.fps : project.fps, (*device)->adapter_name());
 
   auto last_report = std::chrono::steady_clock::now();

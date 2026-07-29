@@ -36,6 +36,17 @@ struct ExportSettings {
   /// Output frame rate. Zero takes the project's.
   double fps = 0.0;
 
+  /// Output size. Zero takes the project's canvas, which is what exporting
+  /// normally means. Anything else scales the whole composition rather than
+  /// cropping it: every transform in the model is a fraction of the canvas, not
+  /// a pixel count, so a smaller canvas is the same picture at a smaller size.
+  ///
+  /// Odd sizes are rounded down. Both codecs encode in even-sized blocks and
+  /// the encoder rounds to reach one regardless; doing it here keeps the frames
+  /// the renderer produces the size the encoder is expecting.
+  int width = 0;
+  int height = 0;
+
   /// The span to render. A zero or negative `duration` takes the whole
   /// timeline, which is what exporting normally means.
   double start = 0.0;
@@ -45,6 +56,9 @@ struct ExportSettings {
   /// regardless, rather than a silent track nobody asked for.
   bool audio = true;
   int audio_sample_rate = 48000;
+  /// One channel mixes the project down to mono. The downmix happens in the
+  /// resampler as each source is decoded, so a stereo source is summed into it
+  /// rather than having one side dropped.
   int audio_channels = 2;
   std::int64_t audio_bitrate = 192000;
 };
