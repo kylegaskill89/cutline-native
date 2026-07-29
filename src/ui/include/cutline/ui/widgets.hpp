@@ -214,6 +214,14 @@ class Splitter : public Widget {
   /// Which divider is being dragged, or `SplitLayout::kNoDivider`.
   [[nodiscard]] std::size_t dragging() const noexcept { return dragging_; }
 
+  /// Called once, when a divider is let go.
+  ///
+  /// Not on every move: the panes already follow the pointer as it goes, and
+  /// whoever wants to keep the new proportions only needs to hear about them
+  /// at the end. Without this a splitter inside a rebuildable tree loses its
+  /// size the next time the tree is rebuilt.
+  void set_on_resize(std::function<void()> on_resize) { on_resize_ = std::move(on_resize); }
+
   void layout(const LayoutContext& context) override;
   void paint_overlay(Painter& painter, const Theme& theme) const override;
 
@@ -231,6 +239,8 @@ class Splitter : public Widget {
   /// meaningful because dividers are painted by the splitter rather than being
   /// widgets of their own.
   std::size_t hovered_divider_ = SplitLayout::kNoDivider;
+
+  std::function<void()> on_resize_;
 };
 
 /// A window onto content taller or wider than itself.

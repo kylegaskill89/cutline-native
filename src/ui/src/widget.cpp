@@ -88,6 +88,18 @@ void Widget::clear_children() {
   children_.clear();
 }
 
+std::unique_ptr<Widget> Widget::take(Widget* child) {
+  const auto found = std::ranges::find(children_, child, &std::unique_ptr<Widget>::get);
+  if (found == children_.end()) return nullptr;
+
+  std::unique_ptr<Widget> taken = std::move(*found);
+  children_.erase(found);
+  // Cleared so that `host()` walks up from wherever it is added next, rather
+  // than reporting the host it used to belong to while it is loose.
+  taken->parent_ = nullptr;
+  return taken;
+}
+
 WidgetHost* Widget::host() const noexcept {
   const Widget* node = this;
   while (node->parent_ != nullptr) node = node->parent_;

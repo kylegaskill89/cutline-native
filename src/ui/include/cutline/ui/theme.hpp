@@ -144,6 +144,8 @@ enum class Part {
   TitleBar,
   Panel,        ///< a docked region: timeline, inspector, browser
   PanelHeader,
+  TabBar,       ///< the strip a docked group's tabs sit on
+  Tab,          ///< one tab in it. `Selected` is the panel showing
   Splitter,     ///< the draggable strip between two docked regions
   Button,
   ToolButton,   ///< an icon-only button in a toolbar

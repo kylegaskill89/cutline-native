@@ -249,6 +249,32 @@ TEST(ThemeChrome, MetricsDifferBetweenThemes) {
       << "Explorer's lists were tight and flat chrome leans roomy";
 }
 
+TEST(ThemeChrome, EveryThemeSaysWhichTabIsShowing) {
+  // And says it in its own way. Luna raises the active tab out of the strip,
+  // Aero makes it the least translucent pane of glass, Slate underlines it in
+  // the accent and Phosphor lights it up. A theme that could only swap
+  // palettes could express none of those, and a tab strip where the active tab
+  // is not obvious is a panel nobody can find.
+  for (const Theme& theme : built_in_themes()) {
+    EXPECT_TRUE(theme.defines(Part::Tab, State::Normal)) << theme.id;
+    EXPECT_TRUE(theme.defines(Part::Tab, State::Selected)) << theme.id;
+    EXPECT_NE(theme.style(Part::Tab, State::Normal), theme.style(Part::Tab, State::Selected))
+        << theme.id << " draws the tab showing exactly like the ones behind it";
+  }
+}
+
+TEST(ThemeChrome, TabsDifferBetweenThemesInMoreThanColour) {
+  const SurfaceStyle& xp = built_in_theme("xp")->style(Part::Tab, State::Selected);
+  const SurfaceStyle& flat = built_in_theme("flat")->style(Part::Tab, State::Selected);
+  const SurfaceStyle& aero = built_in_theme("aero")->style(Part::Tab, State::Selected);
+
+  EXPECT_TRUE(xp.bevel.has_value()) << "Luna's active tab rises out of the strip";
+  EXPECT_FALSE(flat.bevel.has_value()) << "flat chrome has no bevel to rise with";
+  EXPECT_TRUE(flat.shadow.has_value() && flat.shadow->inner)
+      << "so it marks the active tab with an inset accent instead";
+  EXPECT_EQ(aero.fill.kind, FillKind::Glass);
+}
+
 TEST(ThemeChrome, XpUsesBevelsAndFlatDoesNot) {
   EXPECT_TRUE(built_in_theme("xp")->style(Part::Button).bevel.has_value());
   EXPECT_FALSE(built_in_theme("flat")->style(Part::Button).bevel.has_value());

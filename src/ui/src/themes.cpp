@@ -98,6 +98,40 @@ namespace {
             .text = hex("#0a246a"),
         });
 
+  // Luna's tabs: the one showing rises out of the strip and joins the panel
+  // below it, the rest sit back in shadow. That difference is bevels and a
+  // gradient direction, not a colour, which is the whole argument for the
+  // theme model.
+  t.set(Part::TabBar, State::Normal,
+        SurfaceStyle{.fill = Fill::gradient({{0.0f, hex("#e4e1d3")}, {1.0f, hex("#d4d0c0")}}),
+                     .border = hex("#aca899"),
+                     .border_width = 1.0,
+                     .text = hex("#000000")});
+
+  t.set(Part::Tab, State::Normal,
+        SurfaceStyle{
+            .fill = Fill::gradient({{0.0f, hex("#f0eee0")}, {1.0f, hex("#d8d4c4")}}),
+            .bevel = raised("#ffffff", "#aca899"),
+            .corner_radius = 3.0,
+            .text = hex("#3b3b3b"),
+        });
+  t.set(Part::Tab, State::Hover,
+        SurfaceStyle{
+            .fill = Fill::gradient({{0.0f, hex("#fffdf4")}, {1.0f, hex("#ffe894")}}),
+            .bevel = raised("#ffffff", "#c0a060"),
+            .corner_radius = 3.0,
+            .text = hex("#000000"),
+        });
+  t.set(Part::Tab, State::Selected,
+        SurfaceStyle{
+            .fill = Fill::gradient({{0.00f, hex("#ffffff")},
+                                    {0.45f, hex("#f6f5ec")},
+                                    {1.00f, hex("#ece9d8")}}),
+            .bevel = raised("#ffffff", "#ece9d8"),
+            .corner_radius = 3.0,
+            .text = hex("#0a246a"),
+        });
+
   // The button. Note the hard step at 0.5 -- above it the surface is bright and
   // ramps gently, below it darker and ramps back up, which is the plastic look.
   const SurfaceStyle button{
@@ -288,6 +322,34 @@ namespace {
             .text_glow = 2.0,
         });
 
+  // Aero's tabs are glass too, and the one showing is the least translucent:
+  // it is the pane you are meant to be looking through.
+  t.set(Part::TabBar, State::Normal,
+        SurfaceStyle{.fill = Fill::glass(hex("#ffffff3a"), 10.0),
+                     .border = hex("#ffffff55"),
+                     .border_width = 1.0,
+                     .text = hex("#12222e")});
+
+  t.set(Part::Tab, State::Normal,
+        SurfaceStyle{.fill = Fill::glass(hex("#ffffff2a"), 8.0),
+                     .corner_radius = 4.0,
+                     .text = hex("#2c3c4a"),
+                     .text_glow = 1.0});
+  t.set(Part::Tab, State::Hover,
+        SurfaceStyle{.fill = Fill::glass(hex("#a8e0ff66"), 8.0),
+                     .border = hex("#ffffff88"),
+                     .border_width = 1.0,
+                     .corner_radius = 4.0,
+                     .text = hex("#12222e"),
+                     .text_glow = 2.0});
+  t.set(Part::Tab, State::Selected,
+        SurfaceStyle{.fill = Fill::glass(hex("#ffffff8c"), 14.0),
+                     .border = hex("#ffffffaa"),
+                     .border_width = 1.0,
+                     .corner_radius = 4.0,
+                     .text = hex("#0d1a24"),
+                     .text_glow = 3.0});
+
   // Aero buttons are still glossy, but the gloss is a translucent white sheen
   // over glass rather than XP's opaque plastic.
   const SurfaceStyle button{
@@ -461,6 +523,23 @@ namespace {
                      .border_width = 1.0,
                      .text = hex("#9aa4b0")});
 
+  // Flat chrome has no bevel to lean on, so the tab showing is marked by an
+  // accent underline and by being the only one the panel colour runs into.
+  t.set(Part::TabBar, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#171b21")),
+                     .border = hex("#2a3037"),
+                     .border_width = 1.0,
+                     .text = hex("#9aa4b0")});
+
+  t.set(Part::Tab, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#171b21")), .text = hex("#7c8794")});
+  t.set(Part::Tab, State::Hover,
+        SurfaceStyle{.fill = Fill::solid(hex("#20252c")), .text = hex("#c8d2dd")});
+  t.set(Part::Tab, State::Selected,
+        SurfaceStyle{.fill = Fill::solid(hex("#20252c")),
+                     .shadow = Shadow{.offset_y = -2.0, .color = t.accent, .inner = true},
+                     .text = hex("#e6ecf2")});
+
   const SurfaceStyle button{
       .fill = Fill::solid(hex("#272d35")),
       .border = hex("#39414b"),
@@ -618,6 +697,32 @@ namespace {
                      .border_width = 1.0,
                      .text = amber,
                      .text_glow = 5.0});
+
+  // A terminal has no chrome to speak of, so the tab showing is the one that
+  // is lit: full amber with a glow, against dim outlines for the rest.
+  t.set(Part::TabBar, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#0a0700")),
+                     .border = dim,
+                     .border_width = 1.0,
+                     .text = dim});
+
+  t.set(Part::Tab, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#0a0700")),
+                     .border = dim,
+                     .border_width = 1.0,
+                     .text = dim});
+  t.set(Part::Tab, State::Hover,
+        SurfaceStyle{.fill = Fill::solid(hex("#1a1200")),
+                     .border = amber,
+                     .border_width = 1.0,
+                     .text = amber,
+                     .text_glow = 3.0});
+  t.set(Part::Tab, State::Selected,
+        SurfaceStyle{.fill = Fill::solid(hex("#241900")),
+                     .border = amber,
+                     .border_width = 1.0,
+                     .text = amber,
+                     .text_glow = 6.0});
 
   const SurfaceStyle button{
       .fill = Fill::solid(hex("#140f00")),

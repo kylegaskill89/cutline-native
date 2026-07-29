@@ -29,6 +29,7 @@ add_executable(cutline_core_tests
   ui/containers_test.cpp
   ui/controls_test.cpp
   ui/dock_test.cpp
+  ui/dock_view_test.cpp
   ui/layout_test.cpp
   ui/monitor_test.cpp
   ui/painter_test.cpp

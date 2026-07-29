@@ -328,6 +328,9 @@ bool Splitter::on_mouse_up(const MouseEvent& event) {
   if (dragging_ == SplitLayout::kNoDivider) return false;
   dragging_ = SplitLayout::kNoDivider;
   hovered_divider_ = split_.divider_at(bounds(), event.x, event.y);
+  // Once, at the end. Whoever is keeping these proportions somewhere outside
+  // the widget only needs to hear about them when the gesture is over.
+  if (on_resize_) on_resize_();
   return true;
 }
 

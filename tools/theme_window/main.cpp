@@ -27,6 +27,8 @@
 #include "cutline/editor/timeline_binding.hpp"
 #include "cutline/ui/browser.hpp"
 #include "cutline/ui/controls.hpp"
+#include "cutline/ui/dock.hpp"
+#include "cutline/ui/dock_view.hpp"
 #include "cutline/ui/monitor.hpp"
 #include "cutline/ui/skia_painter.hpp"
 #include "cutline/ui/theme.hpp"
@@ -76,6 +78,9 @@ using cutline::ui::Box;
 using cutline::ui::Button;
 using cutline::ui::CaptionButton;
 using cutline::ui::Checkbox;
+using cutline::ui::DockLayout;
+using cutline::ui::DockNode;
+using cutline::ui::DockView;
 using cutline::ui::Key;
 using cutline::ui::KeyEvent;
 using cutline::ui::Label;
@@ -86,6 +91,7 @@ using cutline::ui::MonitorView;
 using cutline::ui::MouseButton;
 using cutline::ui::MouseEvent;
 using cutline::ui::Panel;
+using cutline::ui::PanelId;
 using cutline::ui::Rect;
 using cutline::ui::ScrollView;
 using cutline::ui::SkiaPainter;
@@ -143,6 +149,41 @@ using cutline::ui::built_in_themes;
   project.tracks = {std::move(upper), std::move(lower), std::move(dialogue),
                     std::move(music)};
   return project;
+}
+
+/// The panels the window can show, and what their tabs say.
+///
+/// A panel is a name from here plus whatever `make_panel` builds for it. The
+/// layout only ever moves the name around, which is what lets an arrangement be
+/// saved and restored without saving any widgets.
+constexpr std::array<std::pair<std::string_view, std::string_view>, 4> kPanels{{
+    {"project", "Project"},
+    {"effects", "Effect Controls"},
+    {"monitor", "Program Monitor"},
+    {"timeline", "Timeline"},
+}};
+
+[[nodiscard]] std::string panel_title(const PanelId& id) {
+  using Entry = std::pair<std::string_view, std::string_view>;
+  const auto found = std::ranges::find(kPanels, id, &Entry::first);
+  return found == kPanels.end() ? id : std::string(found->second);
+}
+
+/// The arrangement the window opens with: the pool and the inspector tabbed
+/// down the left, the monitor over the timeline on the right.
+[[nodiscard]] DockLayout default_layout() {
+  using cutline::ui::Axis;
+
+  DockLayout layout;
+  layout.root = DockNode::split(
+      Axis::Horizontal,
+      {DockNode::tabs({"project", "effects"}),
+       DockNode::split(Axis::Vertical,
+                       {DockNode::tabs({"monitor"}), DockNode::tabs({"timeline"})})});
+  layout.root.fractions = {0.26, 0.74};
+  layout.root.children[1].fractions = {0.58, 0.42};
+  cutline::ui::normalise(layout);
+  return layout;
 }
 
 /// A frame for the monitor to show, generated rather than decoded.
@@ -206,6 +247,18 @@ struct App {
   MediaBrowser* browser = nullptr;
   Button* sort_button = nullptr;
   cutline::editor::BrowserSort browser_sort = cutline::editor::BrowserSort::Pool;
+
+  /// Where the panels are. The view draws it; every rearrangement goes through
+  /// the operations in `dock.hpp` and comes back here.
+  DockLayout layout = default_layout();
+  DockView* dock = nullptr;
+  /// Set when the arrangement has changed and the view needs rebuilding.
+  ///
+  /// Deferred for the same reason the inspector is, and more sharply: what
+  /// asks for it is usually a tab strip that the rebuild destroys, so doing it
+  /// on the spot would return into freed memory.
+  bool dock_stale = false;
+
   /// The column the parameter controls live in, inside the inspector's scroll
   /// view. A `Box` rather than the panel, so clearing it does not take the
   /// scrolling with it.
@@ -250,6 +303,7 @@ struct App {
 void set_theme(App& app, std::size_t index);
 void refresh_timeline(App& app);
 void refresh_browser(App& app);
+void refresh_dock(App& app);
 void refresh_all(App& app);
 void invalidate_preview(App& app);
 void import_media(App& app);
@@ -646,65 +700,25 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   return false;
 }
 
-/// The window's own widget tree: a switcher along the top, a browser down the
-/// left, a monitor and a timeline stacked on the right. Enough of the editor's
-/// shape to tell whether a theme holds together across it.
-///
-/// `app` may be null, so the headless check can build the same tree with no
-/// window behind it.
-[[nodiscard]] std::unique_ptr<Widget> build_interface(App* app) {
-  auto shell = std::make_unique<Box>(Axis::Vertical);
-  shell->set_spacing(0.0);
+// ------------------------------------------------------------------ panels --
+//
+// Each panel is built once, by name, and then moved around by the dock rather
+// than rebuilt. `app` may be null, so the headless check can build every panel
+// with no window and no session behind it.
 
-  // The window's own caption. The system one cannot be themed, so it is turned
-  // off in `WM_NCCALCSIZE` and this is drawn in its place.
-  auto& caption = shell->emplace<TitleBar>("Cutline");
-  if (app != nullptr) app->title_bar = &caption;
+[[nodiscard]] std::unique_ptr<Widget> make_project_panel(App* app) {
+  auto panel = std::make_unique<Panel>();
 
-  caption.emplace<CaptionButton>(CaptionButton::Kind::Minimise, [app] {
-    if (app != nullptr && app->window != nullptr) ShowWindow(app->window, SW_MINIMIZE);
-  });
-  auto& maximise = caption.emplace<CaptionButton>(CaptionButton::Kind::Maximise, [app] {
-    if (app == nullptr || app->window == nullptr) return;
-    ShowWindow(app->window, IsZoomed(app->window) ? SW_RESTORE : SW_MAXIMIZE);
-  });
-  caption.emplace<CaptionButton>(CaptionButton::Kind::Close, [app] {
-    if (app != nullptr && app->window != nullptr) PostMessageW(app->window, WM_CLOSE, 0, 0);
-  });
-  if (app != nullptr) app->maximise = &maximise;
-
-  // The switcher lives in the window rather than on a keyboard shortcut. A
-  // harness whose only control is an undocumented keystroke is one nobody can
-  // use, including whoever wrote it.
-  auto& bar = shell->emplace<Box>(Axis::Horizontal);
-  bar.set_padding(cutline::ui::Edges::all(4.0));
-  bar.emplace<Label>("Theme");
-  for (std::size_t i = 0; i < built_in_themes().size(); ++i) {
-    auto& choice = bar.emplace<Button>(built_in_themes()[i].name, [app, i] {
-      if (app != nullptr) set_theme(*app, i);
-    });
-    choice.set_selected(app != nullptr && i == app->theme);
-    if (app != nullptr) app->theme_buttons.push_back(&choice);
-  }
-  bar.emplace<Spacer>();
-
-  auto root = std::make_unique<Splitter>(Axis::Horizontal);
-  root->set_fractions({0.28, 0.72});
-
-  // The project panel: the media pool the sequence is built from, and the two
-  // things that change it.
-  auto& browser_panel = root->emplace<Panel>("Project");
-
-  auto& pool_tools = browser_panel.emplace<Box>(Axis::Horizontal);
-  pool_tools.emplace<Button>("Import", [app] {
+  auto& tools = panel->emplace<Box>(Axis::Horizontal);
+  tools.emplace<Button>("Import", [app] {
     if (app != nullptr) import_media(*app);
   });
-  pool_tools.emplace<Button>("Remove", [app] {
+  tools.emplace<Button>("Remove", [app] {
     if (app != nullptr) remove_from_pool(*app);
   });
-  pool_tools.emplace<Spacer>();
+  tools.emplace<Spacer>();
 
-  auto& sort_choice = pool_tools.emplace<Button>("Sort: Pool", [app] {
+  auto& sort_choice = tools.emplace<Button>("Sort: Pool", [app] {
     if (app == nullptr) return;
     using cutline::editor::BrowserSort;
     // Cycled rather than offered in a menu, because there is no menu yet and a
@@ -712,24 +726,14 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     constexpr std::array kOrder{BrowserSort::Pool, BrowserSort::Name, BrowserSort::Kind,
                                 BrowserSort::Duration, BrowserSort::Uses};
     const auto found = std::ranges::find(kOrder, app->browser_sort);
-    const auto next = (found == kOrder.end() || found + 1 == kOrder.end()) ? kOrder.begin()
-                                                                          : found + 1;
+    const auto next =
+        (found == kOrder.end() || found + 1 == kOrder.end()) ? kOrder.begin() : found + 1;
     app->browser_sort = *next;
     refresh_browser(*app);
     app->host->request_layout();
   });
-  if (app != nullptr) app->sort_button = &sort_choice;
 
-  auto& pool = browser_panel.emplace<MediaBrowser>();
-  if (app != nullptr) {
-    app->browser = &pool;
-  } else {
-    // The headless check builds this tree with no session behind it. Filling
-    // the pool anyway is what makes it lay out and paint real rows in every
-    // theme, which is the only thing that would catch a row too tall for the
-    // one theme whose lists are roomier.
-    pool.set_items(cutline::editor::browser_items(sample_project()));
-  }
+  auto& pool = panel->emplace<MediaBrowser>();
 
   // Double-click or Enter drops it at the playhead; dragging it out puts it
   // where it was released. Both go through the same placement, so a clip
@@ -739,43 +743,58 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   });
   pool.set_on_drop([app](std::size_t index, double x, double y) {
     if (app == nullptr) return;
-    const auto where =
-        app->timeline == nullptr ? std::nullopt : app->timeline->drop_at(x, y);
-    // A drag that ended anywhere but over a track is a drag that was thought
+    const auto where = app->timeline == nullptr ? std::nullopt : app->timeline->drop_at(x, y);
+    // A drag that ended anywhere but over a track is one that was thought
     // better of, not one that meant the playhead.
     if (where.has_value()) place_from_pool(*app, index, where);
   });
 
-  auto& middle = root->emplace<Splitter>(Axis::Horizontal);
-  middle.set_fractions({0.72, 0.28});
+  if (app != nullptr) {
+    app->browser = &pool;
+    app->sort_button = &sort_choice;
+    refresh_browser(*app);
+  } else {
+    // The headless check builds these with no session behind them. Filling the
+    // pool anyway is what makes it lay out and paint real rows in every theme,
+    // which is the only thing that would catch a row too tall for the one
+    // theme whose lists are roomier.
+    pool.set_items(cutline::editor::browser_items(sample_project()));
+  }
+  return panel;
+}
 
-  auto& right = middle.emplace<Splitter>(Axis::Vertical);
-  right.set_fractions({0.55, 0.45});
+[[nodiscard]] std::unique_ptr<Widget> make_monitor_panel(App* app) {
+  auto panel = std::make_unique<Panel>();
 
-  auto& monitor = right.emplace<Panel>("Program Monitor");
-  auto& picture = monitor.emplace<MonitorView>();
+  auto& picture = panel->emplace<MonitorView>();
   if (app != nullptr) {
     app->monitor = &picture;
     picture.set_frame(app->pattern.view());
   }
 
-  auto& transport = monitor.emplace<Box>(Axis::Horizontal);
+  auto& transport = panel->emplace<Box>(Axis::Horizontal);
   transport.emplace<Button>("Mark In");
   transport.emplace<Button>("Mark Out");
   transport.emplace<Spacer>();
   transport.emplace<Button>("Play");
   transport.emplace<Button>("Export");
+  return panel;
+}
 
-  auto& timeline = right.emplace<Panel>("Timeline");
-  auto& tools = timeline.emplace<Box>(Axis::Horizontal);
+[[nodiscard]] std::unique_ptr<Widget> make_timeline_panel(App* app) {
+  auto panel = std::make_unique<Panel>();
+
+  auto& tools = panel->emplace<Box>(Axis::Horizontal);
   tools.emplace<Button>("Undo", [app] {
     if (app == nullptr || !app->session.undo()) return;
     refresh_timeline(*app);
+    refresh_browser(*app);
     app->inspector_stale = true;
   });
   tools.emplace<Button>("Redo", [app] {
     if (app == nullptr || !app->session.redo()) return;
     refresh_timeline(*app);
+    refresh_browser(*app);
     app->inspector_stale = true;
   });
   tools.emplace<Spacer>();
@@ -783,7 +802,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   readout.set_align(cutline::ui::TextAlign::Right);
   if (app != nullptr) app->readout = &readout;
 
-  auto& tracks = timeline.emplace<TimelineView>();
+  auto& tracks = panel->emplace<TimelineView>();
   tracks.set_scale(TimeScale{.pixels_per_second = 60.0});
   if (app != nullptr) app->timeline = &tracks;
 
@@ -826,20 +845,125 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     refresh_timeline(*app);
   });
 
+  if (app != nullptr) refresh_timeline(*app);
+  return panel;
+}
+
+[[nodiscard]] std::unique_ptr<Widget> make_effects_panel(App* app) {
+  // Only somewhere to put the controls: they are rebuilt from whatever is
+  // selected, and a clip has more parameters than fit in a panel.
+  auto panel = std::make_unique<Panel>();
+  auto& scroll = panel->emplace<ScrollView>(Axis::Vertical);
+  auto& rows = scroll.set_content(std::make_unique<Box>(Axis::Vertical));
+
   if (app != nullptr) {
-    refresh_timeline(*app);
-    refresh_browser(*app);
+    app->inspector = static_cast<Box*>(&rows);
+    // Filled the first time the tab is shown, which may be long after startup.
+    app->inspector_stale = true;
   }
+  return panel;
+}
 
-  // The inspector. Its contents are rebuilt from whatever is selected, so all
-  // that is built here is somewhere to put them — inside a scroll view,
-  // because a clip has more parameters than fit in a panel.
-  auto& inspector_panel = middle.emplace<Panel>("Effect Controls");
-  auto& inspector_scroll = inspector_panel.emplace<ScrollView>(Axis::Vertical);
-  auto& rows = inspector_scroll.set_content(std::make_unique<Box>(Axis::Vertical));
-  if (app != nullptr) app->inspector = static_cast<Box*>(&rows);
+[[nodiscard]] std::unique_ptr<Widget> make_panel(App* app, const PanelId& id) {
+  if (id == "project") return make_project_panel(app);
+  if (id == "monitor") return make_monitor_panel(app);
+  if (id == "timeline") return make_timeline_panel(app);
+  if (id == "effects") return make_effects_panel(app);
 
-  shell->add(std::move(root));
+  // A layout naming a panel this build does not have. Saying so beats an empty
+  // rectangle, which looks like a panel that failed to draw.
+  auto missing = std::make_unique<Panel>();
+  missing->emplace<Label>("There is no panel called " + id).set_small(true);
+  return missing;
+}
+
+/// Rebuilds the dock from the layout.
+///
+/// Panel contents are carried across by the view itself, so this costs a walk
+/// of the tree rather than building a browser and a timeline again.
+void refresh_dock(App& app) {
+  if (app.dock == nullptr) return;
+  app.dock->set_node(app.layout.root);
+  if (app.host != nullptr) app.host->request_layout();
+  app.dirty = true;
+}
+
+/// The window's own widget tree: a caption, a theme switcher, and the dock.
+///
+/// `app` may be null, so the headless check can build the same tree with no
+/// window behind it.
+[[nodiscard]] std::unique_ptr<Widget> build_interface(App* app) {
+  auto shell = std::make_unique<Box>(Axis::Vertical);
+  shell->set_spacing(0.0);
+
+  // The window's own caption. The system one cannot be themed, so it is turned
+  // off in `WM_NCCALCSIZE` and this is drawn in its place.
+  auto& caption = shell->emplace<TitleBar>("Cutline");
+  if (app != nullptr) app->title_bar = &caption;
+
+  caption.emplace<CaptionButton>(CaptionButton::Kind::Minimise, [app] {
+    if (app != nullptr && app->window != nullptr) ShowWindow(app->window, SW_MINIMIZE);
+  });
+  auto& maximise = caption.emplace<CaptionButton>(CaptionButton::Kind::Maximise, [app] {
+    if (app == nullptr || app->window == nullptr) return;
+    ShowWindow(app->window, IsZoomed(app->window) ? SW_RESTORE : SW_MAXIMIZE);
+  });
+  caption.emplace<CaptionButton>(CaptionButton::Kind::Close, [app] {
+    if (app != nullptr && app->window != nullptr) PostMessageW(app->window, WM_CLOSE, 0, 0);
+  });
+  if (app != nullptr) app->maximise = &maximise;
+
+  // The switcher lives in the window rather than on a keyboard shortcut. A
+  // harness whose only control is an undocumented keystroke is one nobody can
+  // use, including whoever wrote it.
+  auto& bar = shell->emplace<Box>(Axis::Horizontal);
+  bar.set_padding(cutline::ui::Edges::all(4.0));
+  bar.emplace<Label>("Theme");
+  for (std::size_t i = 0; i < built_in_themes().size(); ++i) {
+    auto& choice = bar.emplace<Button>(built_in_themes()[i].name, [app, i] {
+      if (app != nullptr) set_theme(*app, i);
+    });
+    choice.set_selected(app != nullptr && i == app->theme);
+    if (app != nullptr) app->theme_buttons.push_back(&choice);
+  }
+  bar.emplace<Spacer>();
+
+  // Everything under the toolbar is the dock. Which panel is where is data now
+  // rather than structure: this builds a view over a layout, and dragging a tab
+  // is what changes the layout.
+  auto& dock = shell->emplace<DockView>();
+  if (app != nullptr) app->dock = &dock;
+
+  dock.set_titles(panel_title);
+  dock.set_content_factory(
+      [app](const PanelId& id) -> std::unique_ptr<Widget> { return make_panel(app, id); });
+
+  // Every one of these marks rather than rebuilds. What asked is a tab strip
+  // inside the tree the rebuild replaces.
+  dock.set_on_activate([app](PanelId panel) {
+    if (app == nullptr) return;
+    if (cutline::ui::activate_panel(app->layout, panel)) app->dock_stale = true;
+  });
+  dock.set_on_close([app](PanelId panel) {
+    if (app == nullptr) return;
+    if (cutline::ui::close_panel(app->layout, panel)) app->dock_stale = true;
+  });
+  dock.set_on_dock([app](PanelId panel, cutline::ui::DropTarget target) {
+    if (app == nullptr) return;
+    const bool moved =
+        target.at_edge ? cutline::ui::dock_panel_at_edge(app->layout, panel, target.side)
+                       : cutline::ui::dock_panel(app->layout, panel, target.onto, target.side);
+    if (moved) app->dock_stale = true;
+  });
+
+  // A divider is read back rather than rebuilt: nothing about the arrangement
+  // changed, only its proportions, and a rebuild would be work for nothing.
+  dock.set_on_resize([app] {
+    if (app == nullptr || app->dock == nullptr) return;
+    app->dock->read_fractions_into(app->layout.root);
+  });
+
+  dock.set_node(app == nullptr ? default_layout().root : app->layout.root);
   return shell;
 }
 
@@ -906,6 +1030,14 @@ void render(App& app, HWND window) {
 
   const Rect client{0.0, 0.0, static_cast<double>(app.width), static_cast<double>(app.height)};
   const LayoutContext context{theme, *painter};
+
+  // The arrangement first, because rebuilding it is what creates a panel that
+  // has never been shown before — and that panel then wants filling in this
+  // same frame rather than staying blank until something else changes.
+  if (app.dock_stale) {
+    app.dock_stale = false;
+    refresh_dock(app);
+  }
 
   // Rebuilt here for the same reason layout is: whatever asked for it was
   // usually a control inside the panel being rebuilt.
@@ -1163,6 +1295,15 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
   return DefWindowProcW(window, message, wparam, lparam);
 }
 
+/// The dock somewhere in a tree, for the headless check to drive.
+[[nodiscard]] DockView* find_dock(Widget& widget) {
+  if (auto* dock = dynamic_cast<DockView*>(&widget); dock != nullptr) return dock;
+  for (const std::unique_ptr<Widget>& child : widget.children()) {
+    if (DockView* found = find_dock(*child); found != nullptr) return found;
+  }
+  return nullptr;
+}
+
 /// Renders one frame of every theme with no window, and reports what came out.
 ///
 /// The unit tests cover each control on its own; this covers the whole tree
@@ -1209,6 +1350,21 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       for (const auto& child : widget.children()) self(*child);
     };
     walk(host.root());
+
+    // Every panel, not only the ones the default arrangement happens to show.
+    // A tabbed-away panel is built the first time it is shown, so without this
+    // the check never lays out the inspector at all — and the panel nobody
+    // looks at is exactly where a theme breaks unnoticed.
+    if (DockView* dock = find_dock(host.root()); dock != nullptr) {
+      DockLayout layout = default_layout();
+      for (const auto& [id, title] : kPanels) {
+        cutline::ui::activate_panel(layout, id);
+        dock->set_node(layout.root);
+        host.resize(client, context);
+        host.paint(*painter, theme);
+        walk(host.root());
+      }
+    }
 
     // And the theme has to reach the pixels. Sampling a scatter of points
     // rather than one keeps a theme that happens to share a background colour

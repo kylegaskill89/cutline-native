@@ -67,6 +67,16 @@ class Widget {
   /// freed memory.
   void clear_children();
 
+  /// Detaches one child and hands ownership back. Null if it is not a child.
+  ///
+  /// Deliberately does *not* tell the host to forget it. The widget is still
+  /// alive and is usually on its way somewhere else — a panel being dragged
+  /// into another dock group is the case this exists for — and dropping focus
+  /// and capture on every rearrangement would end the very gesture that caused
+  /// it. Whoever takes a child and then destroys it calls
+  /// `WidgetHost::forget` first.
+  [[nodiscard]] std::unique_ptr<Widget> take(Widget* child);
+
   /// A name for tests and for a future inspector. Not shown to anyone.
   [[nodiscard]] const std::string& name() const noexcept { return name_; }
   void set_name(std::string name) { name_ = std::move(name); }
