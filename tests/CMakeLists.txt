@@ -22,6 +22,7 @@ add_executable(cutline_core_tests
   editor/inspector_test.cpp
   editor/session_test.cpp
   editor/timeline_binding_test.cpp
+  editor/workspace_test.cpp
   render/effects_test.cpp
   render/mix_test.cpp
   render/plan_test.cpp

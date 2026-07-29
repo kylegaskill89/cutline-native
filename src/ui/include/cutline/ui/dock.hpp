@@ -182,6 +182,18 @@ bool activate_panel(DockLayout& layout, std::string_view panel);
 /// Removes `panel` from the layout entirely.
 bool close_panel(DockLayout& layout, std::string_view panel);
 
+/// Makes a layout show exactly the panels the application has.
+///
+/// Panels it does not recognise are removed, and panels it has that the layout
+/// never heard of are opened in the main window. Reports whether anything
+/// changed.
+///
+/// This is what lets a saved arrangement survive the application changing under
+/// it. A layout written by a build with a panel this one has dropped would
+/// otherwise leave a tab that cannot be filled, and a panel added since would
+/// be unreachable with no menu to open it from.
+bool reconcile_panels(DockLayout& layout, std::span<const PanelId> known);
+
 /// Adds `panel` to the layout if it is not already there, joining the tab group
 /// holding `beside` or the first group in the main window.
 ///

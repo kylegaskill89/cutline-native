@@ -13,8 +13,13 @@ add_library(cutline_editor
   src/import.cpp
   src/inspector.cpp
   src/session.cpp
-  src/timeline_binding.cpp)
+  src/timeline_binding.cpp
+  src/workspace.cpp)
 add_library(cutline::editor ALIAS cutline_editor)
 
 target_include_directories(cutline_editor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(cutline_editor PUBLIC cutline::core cutline::ui cutline::options)
+find_package(nlohmann_json CONFIG REQUIRED)
+
+target_link_libraries(cutline_editor
+  PUBLIC cutline::core cutline::ui cutline::options
+  PRIVATE nlohmann_json::nlohmann_json)

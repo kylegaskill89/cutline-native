@@ -25,6 +25,7 @@
 #include "cutline/editor/inspector.hpp"
 #include "cutline/editor/session.hpp"
 #include "cutline/editor/timeline_binding.hpp"
+#include "cutline/editor/workspace.hpp"
 #include "cutline/ui/browser.hpp"
 #include "cutline/ui/controls.hpp"
 #include "cutline/ui/dock.hpp"
@@ -166,27 +167,25 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 4> kPanels{{
     {"timeline", "Timeline"},
 }};
 
+/// The panels this build has, which is what a saved arrangement is measured
+/// against: one naming a panel that has since gone shows a tab nothing can
+/// fill, and one written before a panel existed leaves it unreachable.
+[[nodiscard]] std::vector<PanelId> known_panels() {
+  std::vector<PanelId> panels;
+  for (const auto& [id, title] : kPanels) panels.emplace_back(id);
+  return panels;
+}
+
 [[nodiscard]] std::string panel_title(const PanelId& id) {
   using Entry = std::pair<std::string_view, std::string_view>;
   const auto found = std::ranges::find(kPanels, id, &Entry::first);
   return found == kPanels.end() ? id : std::string(found->second);
 }
 
-/// The arrangement the window opens with: the pool and the inspector tabbed
-/// down the left, the monitor over the timeline on the right.
+/// The arrangement a window with no session behind it shows. Only the headless
+/// check has one of those; everything else reads it from the active workspace.
 [[nodiscard]] DockLayout default_layout() {
-  using cutline::ui::Axis;
-
-  DockLayout layout;
-  layout.root = DockNode::split(
-      Axis::Horizontal,
-      {DockNode::tabs({"project", "effects"}),
-       DockNode::split(Axis::Vertical,
-                       {DockNode::tabs({"monitor"}), DockNode::tabs({"timeline"})})});
-  layout.root.fractions = {0.26, 0.74};
-  layout.root.children[1].fractions = {0.58, 0.42};
-  cutline::ui::normalise(layout);
-  return layout;
+  return cutline::editor::built_in_workspaces().front().layout;
 }
 
 /// A frame for the monitor to show, generated rather than decoded.
@@ -290,10 +289,13 @@ struct App {
   Button* sort_button = nullptr;
   cutline::editor::BrowserSort browser_sort = cutline::editor::BrowserSort::Pool;
 
-  /// Where the panels are, across every window. The views draw it; every
-  /// rearrangement goes through the operations in `dock.hpp` and comes back
-  /// here.
-  DockLayout layout = default_layout();
+  /// The named arrangements, one of which is on screen. Where the panels are
+  /// lives in the active one, so a rearrangement is remembered against the
+  /// workspace it was made in rather than against the application.
+  cutline::editor::Workspaces workspaces = cutline::editor::default_workspaces();
+  /// Where the file was read from, and where it goes back to.
+  std::filesystem::path workspace_file = cutline::editor::default_workspace_path();
+  Button* workspace_button = nullptr;
   /// Set when the arrangement has changed and the views need rebuilding.
   ///
   /// Deferred for the same reason the inspector is, and more sharply: what
@@ -337,6 +339,18 @@ struct App {
     return all;
   }
 };
+
+/// Where the panels are: the active workspace's layout.
+///
+/// There is exactly one of these at a time and it is owned by the workspace, so
+/// dragging a panel is remembered against the arrangement it was dragged in.
+[[nodiscard]] DockLayout& layout_of(App& app) {
+  DockLayout* showing = app.workspaces.current();
+  // `settle` guarantees there is always one. This is the last resort so that a
+  // programming mistake is an empty window rather than a crash.
+  static DockLayout nothing;
+  return showing == nullptr ? nothing : *showing;
+}
 
 /// Marks every window as needing to be drawn again.
 ///
@@ -985,18 +999,18 @@ void show_drag_across(App& app, const PanelId& panel, POINT screen) {
 /// reopen a panel from yet.
 void return_panels_home(App& app, const std::string& window_id) {
   const auto found =
-      std::ranges::find(app.layout.floating, window_id, &cutline::ui::FloatingDock::id);
-  if (found == app.layout.floating.end()) return;
+      std::ranges::find(layout_of(app).floating, window_id, &cutline::ui::FloatingDock::id);
+  if (found == layout_of(app).floating.end()) return;
 
   for (const PanelId& panel : cutline::ui::panels_in(found->root)) {
-    const std::vector<PanelId> home = cutline::ui::panels_in(app.layout.root);
+    const std::vector<PanelId> home = cutline::ui::panels_in(layout_of(app).root);
     if (home.empty()) {
       // Nothing to dock against: it becomes the main window's whole layout.
-      cutline::ui::close_panel(app.layout, panel);
-      cutline::ui::open_panel(app.layout, panel);
+      cutline::ui::close_panel(layout_of(app), panel);
+      cutline::ui::open_panel(layout_of(app), panel);
       continue;
     }
-    cutline::ui::dock_panel(app.layout, panel, home.front(), cutline::ui::DockSide::Centre);
+    cutline::ui::dock_panel(layout_of(app), panel, home.front(), cutline::ui::DockSide::Centre);
   }
   app.dock_stale = true;
 }
@@ -1024,7 +1038,7 @@ void float_panel_under_cursor(App& app, Shell& shell) {
 
     const cutline::ui::Rect where{static_cast<double>(screen.x) - 130.0,
                                   static_cast<double>(screen.y) - 12.0, 520.0, 380.0};
-    if (cutline::ui::float_panel(app.layout, panel, where)) app.dock_stale = true;
+    if (cutline::ui::float_panel(layout_of(app), panel, where)) app.dock_stale = true;
     return;
   }
 }
@@ -1043,17 +1057,17 @@ void wire_dock(App* app, Shell* shell, DockView& dock) {
   // inside the tree the rebuild replaces.
   dock.set_on_activate([app](PanelId panel) {
     if (app == nullptr) return;
-    if (cutline::ui::activate_panel(app->layout, panel)) app->dock_stale = true;
+    if (cutline::ui::activate_panel(layout_of(*app), panel)) app->dock_stale = true;
   });
   dock.set_on_close([app](PanelId panel) {
     if (app == nullptr) return;
-    if (cutline::ui::close_panel(app->layout, panel)) app->dock_stale = true;
+    if (cutline::ui::close_panel(layout_of(*app), panel)) app->dock_stale = true;
   });
   dock.set_on_dock([app](PanelId panel, cutline::ui::DropTarget target) {
     if (app == nullptr) return;
     const bool moved =
-        target.at_edge ? cutline::ui::dock_panel_at_edge(app->layout, panel, target.side)
-                       : cutline::ui::dock_panel(app->layout, panel, target.onto, target.side);
+        target.at_edge ? cutline::ui::dock_panel_at_edge(layout_of(*app), panel, target.side)
+                       : cutline::ui::dock_panel(layout_of(*app), panel, target.onto, target.side);
     if (moved) app->dock_stale = true;
   });
 
@@ -1078,8 +1092,8 @@ void wire_dock(App* app, Shell* shell, DockView& dock) {
     if (const auto landed = drop_across(*app, screen); landed.has_value()) {
       const cutline::ui::DropTarget& target = landed->second;
       const bool moved =
-          target.at_edge ? cutline::ui::dock_panel_at_edge(app->layout, panel, target.side)
-                         : cutline::ui::dock_panel(app->layout, panel, target.onto, target.side);
+          target.at_edge ? cutline::ui::dock_panel_at_edge(layout_of(*app), panel, target.side)
+                         : cutline::ui::dock_panel(layout_of(*app), panel, target.onto, target.side);
       if (moved) app->dock_stale = true;
       return;
     }
@@ -1090,7 +1104,7 @@ void wire_dock(App* app, Shell* shell, DockView& dock) {
     constexpr double kTornHeight = 380.0;
     const cutline::ui::Rect where{static_cast<double>(screen.x) - kTornWidth * 0.25,
                                   static_cast<double>(screen.y) - 12.0, kTornWidth, kTornHeight};
-    if (cutline::ui::float_panel(app->layout, panel, where)) app->dock_stale = true;
+    if (cutline::ui::float_panel(layout_of(*app), panel, where)) app->dock_stale = true;
   });
 
   // A divider is read back rather than rebuilt: nothing about the arrangement
@@ -1098,13 +1112,59 @@ void wire_dock(App* app, Shell* shell, DockView& dock) {
   dock.set_on_resize([app, shell] {
     if (app == nullptr || shell == nullptr || shell->dock == nullptr) return;
     if (shell->is_main()) {
-      shell->dock->read_fractions_into(app->layout.root);
+      shell->dock->read_fractions_into(layout_of(*app).root);
       return;
     }
-    const auto found = std::ranges::find(app->layout.floating, shell->floating_id,
+    const auto found = std::ranges::find(layout_of(*app).floating, shell->floating_id,
                                          &cutline::ui::FloatingDock::id);
-    if (found != app->layout.floating.end()) shell->dock->read_fractions_into(found->root);
+    if (found != layout_of(*app).floating.end()) shell->dock->read_fractions_into(found->root);
   });
+}
+
+/// Moves to another named arrangement.
+///
+/// Nothing is copied: the layout being left *is* the workspace's, so whatever
+/// it was dragged into stays with it and is there on the way back.
+void set_workspace(App& app, std::string_view name) {
+  if (!cutline::editor::activate_workspace(app.workspaces, name)) return;
+  if (app.workspace_button != nullptr) {
+    app.workspace_button->set_text("Workspace: " + app.workspaces.active);
+  }
+  app.dock_stale = true;
+}
+
+/// Cycles to the next arrangement. A menu is what this wants to be; a button
+/// that does one useful thing is what it can be until there is one.
+void next_workspace(App& app) {
+  const auto& all = app.workspaces.named;
+  if (all.size() < 2) return;
+
+  const auto found = std::ranges::find(all, app.workspaces.active,
+                                       &cutline::editor::Workspace::name);
+  const auto next = (found == all.end() || found + 1 == all.end()) ? all.begin() : found + 1;
+  set_workspace(app, next->name);
+}
+
+/// Puts the arrangement back to how it was defined, and says so when there is
+/// nothing to go back to.
+void reset_workspace(App& app) {
+  if (cutline::editor::reset_workspace(app.workspaces, app.workspaces.active)) {
+    app.dock_stale = true;
+    return;
+  }
+  complain(app.main.window,
+           app.workspaces.active + " is already as it was defined, or is one you made "
+                                   "yourself and so has nothing to go back to.");
+}
+
+/// Writes the arrangements out. Quiet on success, and quiet on failure too
+/// except at the point it matters — losing a layout is not worth a dialog in
+/// the middle of an edit.
+void save_workspaces(App& app, bool complain_on_failure) {
+  const auto written = cutline::editor::write_workspaces(app.workspace_file, app.workspaces);
+  if (!written.has_value() && complain_on_failure) {
+    complain(app.main.window, "Could not save the workspace.\n\n" + written.error());
+  }
 }
 
 /// Rebuilds the dock from the layout.
@@ -1119,11 +1179,11 @@ void refresh_dock(App& app) {
   for (Shell* shell : app.shells()) {
     if (shell->dock == nullptr) continue;
 
-    const DockNode* node = &app.layout.root;
+    const DockNode* node = &layout_of(app).root;
     if (!shell->is_main()) {
       const auto found =
-          std::ranges::find(app.layout.floating, shell->floating_id, &FloatingDock::id);
-      if (found == app.layout.floating.end()) continue;
+          std::ranges::find(layout_of(app).floating, shell->floating_id, &FloatingDock::id);
+      if (found == layout_of(app).floating.end()) continue;
       node = &found->root;
     }
 
@@ -1175,6 +1235,17 @@ void refresh_dock(App& app) {
   }
   bar.emplace<Spacer>();
 
+  auto& workspace_choice = bar.emplace<Button>("Workspace: Editing", [app] {
+    if (app != nullptr) next_workspace(*app);
+  });
+  if (app != nullptr) {
+    app->workspace_button = &workspace_choice;
+    workspace_choice.set_text("Workspace: " + app->workspaces.active);
+  }
+  bar.emplace<Button>("Reset", [app] {
+    if (app != nullptr) reset_workspace(*app);
+  });
+
   // Everything under the toolbar is the dock. Which panel is where is data now
   // rather than structure: this builds a view over a layout, and dragging a tab
   // is what changes the layout.
@@ -1182,7 +1253,7 @@ void refresh_dock(App& app) {
   if (app != nullptr) app->main.dock = &dock;
 
   wire_dock(app, app == nullptr ? nullptr : &app->main, dock);
-  dock.set_node(app == nullptr ? default_layout().root : app->layout.root);
+  dock.set_node(app == nullptr ? default_layout().root : layout_of(*app).root);
   return shell;
 }
 
@@ -1247,8 +1318,8 @@ void reconcile_windows(App& app) {
   // Windows whose dock has gone, because its last panel was docked elsewhere.
   for (auto it = app.floats.begin(); it != app.floats.end();) {
     const bool alive =
-        std::ranges::find(app.layout.floating, (*it)->floating_id,
-                          &cutline::ui::FloatingDock::id) != app.layout.floating.end();
+        std::ranges::find(layout_of(app).floating, (*it)->floating_id,
+                          &cutline::ui::FloatingDock::id) != layout_of(app).floating.end();
     if (alive) {
       ++it;
       continue;
@@ -1263,7 +1334,7 @@ void reconcile_windows(App& app) {
   }
 
   // Docks with no window yet, because something was just torn out.
-  for (const cutline::ui::FloatingDock& floating : app.layout.floating) {
+  for (const cutline::ui::FloatingDock& floating : layout_of(app).floating) {
     const bool built = std::ranges::any_of(app.floats, [&](const std::unique_ptr<Shell>& shell) {
       return shell->floating_id == floating.id;
     });
@@ -1833,6 +1904,15 @@ int main(int argc, char** argv) {
 
   App app;
   app.main.app = &app;
+
+  // Read before the tree is built, so the window opens in the arrangement it
+  // was last left in rather than flashing the default and then moving.
+  if (auto read = cutline::editor::read_workspaces(app.workspace_file); read.has_value()) {
+    app.workspaces = std::move(*read);
+  }
+  // Reconciled against the panels this build has, whatever the file said.
+  cutline::editor::settle(app.workspaces, known_panels());
+
   app.main.host = std::make_unique<WidgetHost>(build_interface(&app));
 
   const HINSTANCE instance = GetModuleHandleW(nullptr);
@@ -1873,6 +1953,12 @@ int main(int argc, char** argv) {
   ShowWindow(window, SW_SHOW);
   SetForegroundWindow(window);
 
+  // A saved arrangement can have had panels torn out of it. Those windows are
+  // made here rather than at the first rearrangement, or they would not come
+  // back until something else moved.
+  reconcile_windows(app);
+  refresh_float_titles(app);
+
   MSG message{};
   while (GetMessageW(&message, nullptr, 0, 0) > 0) {
     TranslateMessage(&message);
@@ -1889,6 +1975,11 @@ int main(int argc, char** argv) {
       }
     }
   }
+
+  // Where the panels were left, so the next session opens the same way. On the
+  // way out rather than on every drag: a rearrangement is a dozen small moves
+  // and writing a file for each of them would be silly.
+  save_workspaces(app, false);
 
   // The floating windows are owned by the main one and are already gone, but
   // their shells still hold host pointers that a stray message would follow.

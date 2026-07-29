@@ -399,6 +399,22 @@ bool close_panel(DockLayout& layout, std::string_view panel) {
   return true;
 }
 
+bool reconcile_panels(DockLayout& layout, std::span<const PanelId> known) {
+  const DockLayout before = layout;
+
+  // Unknown ones first, so that opening the missing ones does not put them
+  // beside a panel that is about to be taken away.
+  for (const PanelId& panel : panels_in(layout)) {
+    if (std::ranges::find(known, panel) == known.end()) close_panel(layout, panel);
+  }
+  for (const PanelId& panel : known) {
+    if (!anywhere(layout, panel)) open_panel(layout, panel);
+  }
+
+  normalise(layout);
+  return layout != before;
+}
+
 bool open_panel(DockLayout& layout, PanelId panel, std::string_view beside) {
   if (panel.empty() || anywhere(layout, panel)) return false;
 
