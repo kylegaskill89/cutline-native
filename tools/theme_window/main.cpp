@@ -42,6 +42,7 @@
 
 #if CUTLINE_HAVE_PREVIEW
 #include "cutline/app/preview.hpp"
+#include "cutline/engine/exporter.hpp"
 #include "cutline/engine/player.hpp"
 #endif
 
@@ -73,8 +74,10 @@
 #include <cstdlib>
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
 #include <filesystem>
 #include <memory>
+#include <thread>
 #include <optional>
 #include <print>
 #include <span>
@@ -90,6 +93,8 @@ using cutline::ui::Button;
 using cutline::ui::CaptionButton;
 using cutline::ui::Checkbox;
 using cutline::ui::DockLayout;
+using cutline::ui::Dropdown;
+using cutline::ui::Edges;
 using cutline::ui::DockNode;
 using cutline::ui::DockView;
 using cutline::ui::FloatingDock;
@@ -103,6 +108,7 @@ using cutline::ui::MonitorView;
 using cutline::ui::MouseButton;
 using cutline::ui::MouseEvent;
 using cutline::ui::Panel;
+using cutline::ui::ProgressBar;
 using cutline::ui::PanelId;
 using cutline::ui::Rect;
 using cutline::ui::ScrollView;
@@ -110,6 +116,7 @@ using cutline::ui::SkiaPainter;
 using cutline::ui::Slider;
 using cutline::ui::Spacer;
 using cutline::ui::Splitter;
+using cutline::ui::TextAlign;
 using cutline::ui::Theme;
 using cutline::ui::TimelineView;
 using cutline::ui::TimeScale;
@@ -256,7 +263,10 @@ struct Shell {
   /// Empty for the main window; the floating dock's id otherwise. This is what
   /// ties a real window to its entry in the layout across a rearrangement.
   std::string floating_id;
-  [[nodiscard]] bool is_main() const noexcept { return floating_id.empty(); }
+  /// A window that holds no panels — the export settings. It has no dock, is
+  /// not in the layout, and closing it throws nothing away.
+  bool is_dialog = false;
+  [[nodiscard]] bool is_main() const noexcept { return floating_id.empty() && !is_dialog; }
 
   std::unique_ptr<WidgetHost> host;
   DockView* dock = nullptr;
@@ -375,6 +385,47 @@ struct App {
   bool player_failed = false;
 
   [[nodiscard]] bool playing() const noexcept { return player != nullptr && player->playing(); }
+
+  /// An export in flight.
+  ///
+  /// On its own thread because it is minutes of work and the window has to stay
+  /// answerable throughout — a progress bar that cannot be repainted is worse
+  /// than no progress bar. Everything crossing the thread boundary is either
+  /// atomic or guarded, and the rule is that the worker only ever *writes*
+  /// these and the interface only ever reads them, apart from `cancel`.
+  struct ExportJob {
+    std::thread worker;
+    std::atomic<bool> running{false};
+    /// Set by the interface, read by the worker's progress callback.
+    std::atomic<bool> cancel{false};
+    /// 0..1, for the bar.
+    std::atomic<double> fraction{0.0};
+    /// Set once, just before `running` goes false. Read after that.
+    std::string outcome;
+    bool failed = false;
+    /// Set when the worker has finished and the thread still needs joining.
+    std::atomic<bool> finished{false};
+  };
+  ExportJob export_job;
+  std::unique_ptr<Shell> export_window;
+
+  /// What the dialog is set to, kept on the application so reopening it
+  /// remembers what was chosen last time.
+  struct ExportSetup {
+    std::filesystem::path path;
+    std::size_t codec = 0;
+    std::size_t quality = 1;
+    std::size_t rate = 0;
+    bool audio = true;
+  };
+  ExportSetup export_setup;
+
+  Button* export_output = nullptr;
+  Button* export_start = nullptr;
+  ProgressBar* export_progress = nullptr;
+  Label* export_status = nullptr;
+
+  [[nodiscard]] bool exporting() const noexcept { return export_job.running.load(); }
 #endif
 
   std::size_t theme = 0;
@@ -391,6 +442,12 @@ struct App {
   [[nodiscard]] std::vector<Shell*> shells() {
     std::vector<Shell*> all{&main};
     for (const std::unique_ptr<Shell>& shell : floats) all.push_back(shell.get());
+#if CUTLINE_HAVE_PREVIEW
+    // Included so it is painted and invalidated with the rest, and kept out of
+    // `floats` so the layout reconciler does not treat it as a torn-out panel
+    // and close it.
+    if (export_window != nullptr) all.push_back(export_window.get());
+#endif
     return all;
   }
 };
@@ -424,6 +481,9 @@ void refresh_float_titles(App& app);
 void refresh_all(App& app);
 void invalidate_preview(App& app);
 void invalidate_playback(App& app);
+void open_export_dialog(App& app);
+void poll_export(App& app);
+void settle_export(App& app);
 void toggle_playback(App& app);
 void import_media(App& app);
 void complain(HWND owner, const std::string& message);
@@ -875,6 +935,26 @@ void import_media(App& app) {
   return std::filesystem::path(buffer.data());
 }
 
+/// Where an export should go. Its own dialog rather than a parameter on the
+/// one above, because the filters and the default extension are the whole of
+/// what that function does and threading them through would leave neither
+/// caller readable.
+[[nodiscard]] std::optional<std::filesystem::path> choose_movie_file(HWND owner) {
+  std::array<wchar_t, MAX_PATH> buffer{};
+
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = owner;
+  dialog.lpstrFilter = L"MP4 video\0*.mp4\0All files\0*.*\0";
+  dialog.lpstrFile = buffer.data();
+  dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+  dialog.lpstrDefExt = L"mp4";
+  dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+
+  if (GetSaveFileNameW(&dialog) == FALSE) return std::nullopt;
+  return std::filesystem::path(buffer.data());
+}
+
 void complain(HWND owner, const std::string& message) {
   MessageBoxA(owner, message.c_str(), "Cutline", MB_OK | MB_ICONWARNING);
 }
@@ -1069,7 +1149,9 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     // than one that does nothing.
     if (app->playing()) play.set_text("Pause");
   }
-  transport.emplace<Button>("Export");
+  transport.emplace<Button>("Export", [app] {
+    if (app != nullptr) open_export_dialog(*app);
+  });
   return panel;
 }
 
@@ -1501,6 +1583,338 @@ void refresh_dock(App& app) {
 /// The tree a torn-out window gets: a caption it can be dragged by, and its
 /// dock. No theme switcher and no menu — it is one or two panels, not a second
 /// copy of the editor.
+// ------------------------------------------------------------------ export --
+
+#if CUTLINE_HAVE_PREVIEW
+
+/// The formats offered, and what each means to the encoder.
+constexpr std::array kExportCodecs{"H.264", "HEVC (H.265)"};
+
+/// Named qualities rather than a bare number. The encoder wants a CRF, which
+/// is a scale most people have no reason to know and which runs the wrong way
+/// round — lower is better. Naming them is what the reference did too.
+struct QualityChoice {
+  const char* name;
+  int quality;
+};
+constexpr std::array kExportQualities{
+    QualityChoice{"Best (large file)", 16},
+    QualityChoice{"High", 18},
+    QualityChoice{"Medium", 21},
+    QualityChoice{"Low (small file)", 25},
+};
+
+/// Zero means the project's own rate, which is the honest default: re-timing a
+/// sequence on the way out is a decision, not a preference.
+struct RateChoice {
+  const char* name;
+  double fps;
+};
+constexpr std::array kExportRates{
+    RateChoice{"Same as sequence", 0.0}, RateChoice{"24 fps", 24.0},
+    RateChoice{"25 fps", 25.0},          RateChoice{"30 fps", 30.0},
+    RateChoice{"50 fps", 50.0},          RateChoice{"60 fps", 60.0},
+};
+
+void close_export_dialog(App& app);
+
+/// Where the export writes to by default: beside the project, named after it.
+[[nodiscard]] std::filesystem::path default_export_path(const App& app) {
+  const std::filesystem::path& project = app.session.path();
+  if (project.empty()) return {};
+  return std::filesystem::path(project).replace_extension(".mp4");
+}
+
+/// What the button under "Output Name" says. The full path is too long for the
+/// dialog and the interesting part is the end of it.
+[[nodiscard]] std::string output_label(const App& app) {
+  if (app.export_setup.path.empty()) return "Choose a file...";
+  return app.export_setup.path.filename().string();
+}
+
+void refresh_export_dialog(App& app) {
+  if (app.export_window == nullptr) return;
+
+  const bool busy = app.exporting();
+  if (app.export_output != nullptr) app.export_output->set_text(output_label(app));
+  if (app.export_start != nullptr) {
+    app.export_start->set_text(busy ? "Cancel" : "Export");
+    // Nothing to export to is not an error worth a dialog; it is a button that
+    // should not be pressable yet.
+    app.export_start->set_enabled(busy || !app.export_setup.path.empty());
+  }
+  if (app.export_progress != nullptr) {
+    app.export_progress->set_fraction(app.export_job.fraction.load());
+  }
+  if (app.export_status != nullptr && !busy && !app.export_job.outcome.empty()) {
+    app.export_status->set_text(app.export_job.outcome);
+  }
+  mark_dirty(app);
+}
+
+/// Runs the export on its own thread.
+///
+/// Its own `gpu::Device` as well, deliberately. The compositor keeps one
+/// command list and one allocator, so two threads compositing on the same
+/// device would be a race on both. The window keeps drawing on the shared
+/// device throughout; the export gets its own and they never meet.
+void start_export(App& app) {
+  if (app.exporting() || app.export_setup.path.empty()) return;
+
+  const cutline::core::Project project = app.session.project();
+  cutline::engine::ExportSettings settings;
+  settings.path = app.export_setup.path.string();
+  settings.codec = app.export_setup.codec == 1 ? cutline::media::VideoCodec::Hevc
+                                               : cutline::media::VideoCodec::H264;
+  settings.quality = kExportQualities[app.export_setup.quality].quality;
+  settings.fps = kExportRates[app.export_setup.rate].fps;
+  settings.audio = app.export_setup.audio;
+
+  App::ExportJob& job = app.export_job;
+  job.cancel = false;
+  job.fraction = 0.0;
+  job.finished = false;
+  job.failed = false;
+  job.outcome.clear();
+  job.running = true;
+
+  if (app.export_status != nullptr) app.export_status->set_text("Exporting...");
+
+  job.worker = std::thread([&app, &job, project, settings] {
+    auto device = cutline::gpu::Device::create();
+    if (!device.has_value()) {
+      job.outcome = "No usable graphics device: " + device.error();
+      job.failed = true;
+      job.finished = true;
+      job.running = false;
+      return;
+    }
+
+    const auto result = cutline::engine::export_project(
+        *device, project, settings, [&job](const cutline::engine::ExportProgress& progress) {
+          if (progress.total > 0) {
+            job.fraction = static_cast<double>(progress.frame) /
+                           static_cast<double>(progress.total);
+          }
+          // Returning false is how the exporter is told to stop, which leaves a
+          // truncated file rather than a complete one.
+          return !job.cancel.load();
+        });
+
+    if (!result.has_value()) {
+      job.outcome = result.error();
+      job.failed = true;
+    } else if (job.cancel.load()) {
+      job.outcome = "Cancelled.";
+      job.failed = true;
+    } else {
+      job.outcome = std::format("Done — {} frames in {:.1f}s ({:.1f} fps) via {}",
+                                result->frames, result->elapsed_seconds,
+                                result->frames_per_second(), result->encoder);
+    }
+    job.finished = true;
+    job.running = false;
+  });
+
+  refresh_export_dialog(app);
+}
+
+/// Asks the export to stop. It notices at the next frame it finishes.
+void cancel_export(App& app) {
+  if (!app.exporting()) return;
+  app.export_job.cancel = true;
+  if (app.export_status != nullptr) app.export_status->set_text("Cancelling...");
+  mark_dirty(app);
+}
+
+/// Joins a finished worker and shows what it did. Called once a frame while a
+/// window is open, which is also what keeps the progress bar moving.
+void poll_export(App& app) {
+  App::ExportJob& job = app.export_job;
+  if (job.running.load()) {
+    refresh_export_dialog(app);
+    return;
+  }
+  if (!job.finished.load()) return;
+
+  job.finished = false;
+  if (job.worker.joinable()) job.worker.join();
+  job.fraction = job.failed ? 0.0 : 1.0;
+  refresh_export_dialog(app);
+}
+
+/// Waits for an export to finish, because the process is going away and the
+/// thread reads a project this is about to destroy.
+void settle_export(App& app) {
+  if (app.export_job.running.load()) app.export_job.cancel = true;
+  if (app.export_job.worker.joinable()) app.export_job.worker.join();
+}
+
+[[nodiscard]] std::unique_ptr<Widget> build_export_interface(App* app, Shell* shell) {
+  auto root = std::make_unique<Box>(Axis::Vertical);
+  root->set_spacing(0.0);
+
+  auto& caption = root->emplace<TitleBar>("Export Settings");
+  shell->title_bar = &caption;
+  caption.emplace<CaptionButton>(CaptionButton::Kind::Close, [app] {
+    if (app != nullptr) close_export_dialog(*app);
+  });
+
+  auto& body = root->emplace<Box>(Axis::Vertical);
+  body.set_padding(Edges{16.0, 16.0, 16.0, 16.0});
+  body.set_spacing(10.0);
+
+  // One row per setting, label on the left, control on the right — which is
+  // how every settings dialog on the platform reads, Premiere's included.
+  const auto row = [&body](std::string label) -> Box& {
+    auto& line = body.emplace<Box>(Axis::Horizontal);
+    line.set_spacing(10.0);
+    auto& text = line.emplace<Label>(std::move(label));
+    text.set_align(TextAlign::Left);
+    return line;
+  };
+
+  {
+    auto& line = row("Format");
+    auto& choice = line.emplace<Dropdown>(
+        std::vector<std::string>{kExportCodecs.begin(), kExportCodecs.end()},
+        app != nullptr ? app->export_setup.codec : 0);
+    choice.set_on_change([app](std::size_t index) {
+      if (app != nullptr) app->export_setup.codec = index;
+    });
+  }
+  {
+    auto& line = row("Quality");
+    std::vector<std::string> names;
+    for (const QualityChoice& quality : kExportQualities) names.emplace_back(quality.name);
+    auto& choice =
+        line.emplace<Dropdown>(std::move(names), app != nullptr ? app->export_setup.quality : 1);
+    choice.set_on_change([app](std::size_t index) {
+      if (app != nullptr) app->export_setup.quality = index;
+    });
+  }
+  {
+    auto& line = row("Frame rate");
+    std::vector<std::string> names;
+    for (const RateChoice& rate : kExportRates) names.emplace_back(rate.name);
+    auto& choice =
+        line.emplace<Dropdown>(std::move(names), app != nullptr ? app->export_setup.rate : 0);
+    choice.set_on_change([app](std::size_t index) {
+      if (app != nullptr) app->export_setup.rate = index;
+    });
+  }
+  {
+    auto& line = row("Output name");
+    auto& output = line.emplace<Button>(app != nullptr ? output_label(*app) : "Choose a file...",
+                                        [app] {
+                                          if (app == nullptr) return;
+                                          const auto chosen = choose_movie_file(
+                                              app->export_window != nullptr
+                                                  ? app->export_window->window
+                                                  : app->main.window);
+                                          if (!chosen.has_value()) return;
+                                          app->export_setup.path = *chosen;
+                                          refresh_export_dialog(*app);
+                                        });
+    if (app != nullptr) app->export_output = &output;
+  }
+
+  auto& sound = body.emplace<Checkbox>("Export audio", app == nullptr || app->export_setup.audio);
+  sound.set_on_change([app](bool on) {
+    if (app != nullptr) app->export_setup.audio = on;
+  });
+
+  body.emplace<Spacer>();
+
+  auto& progress = body.emplace<ProgressBar>();
+  if (app != nullptr) app->export_progress = &progress;
+
+  auto& status = body.emplace<Label>("");
+  status.set_small(true);
+  if (app != nullptr) app->export_status = &status;
+
+  auto& buttons = body.emplace<Box>(Axis::Horizontal);
+  buttons.set_spacing(8.0);
+  buttons.emplace<Spacer>();
+  buttons.emplace<Button>("Close", [app] {
+    if (app != nullptr) close_export_dialog(*app);
+  });
+  auto& go = buttons.emplace<Button>("Export", [app] {
+    if (app == nullptr) return;
+    if (app->exporting()) {
+      cancel_export(*app);
+    } else {
+      start_export(*app);
+    }
+  });
+  if (app != nullptr) app->export_start = &go;
+
+  return root;
+}
+
+void open_export_dialog(App& app) {
+  if (app.export_window != nullptr) {
+    SetForegroundWindow(app.export_window->window);
+    return;
+  }
+  if (app.export_setup.path.empty()) app.export_setup.path = default_export_path(app);
+
+  auto shell = std::make_unique<Shell>();
+  shell->app = &app;
+  shell->is_dialog = true;
+  shell->host = std::make_unique<WidgetHost>(build_export_interface(&app, shell.get()));
+
+  // Centred on the main window, which is where a dialog belongs and where the
+  // eye already is.
+  RECT owner{};
+  GetWindowRect(app.main.window, &owner);
+  constexpr int kWidth = 460;
+  constexpr int kHeight = 380;
+  const int x = owner.left + ((owner.right - owner.left) - kWidth) / 2;
+  const int y = owner.top + ((owner.bottom - owner.top) - kHeight) / 2;
+
+  const HWND window =
+      CreateWindowExW(WS_EX_TOOLWINDOW, kWindowClass, L"Export Settings",
+                      WS_POPUP | WS_THICKFRAME, x, y, kWidth, kHeight, app.main.window, nullptr,
+                      GetModuleHandleW(nullptr), nullptr);
+  if (window == nullptr) return;
+
+  shell->window = window;
+  SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(shell.get()));
+
+  const MARGINS shadow{0, 0, 1, 0};
+  DwmExtendFrameIntoClientArea(window, &shadow);
+  SetWindowPos(window, nullptr, 0, 0, 0, 0,
+               SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+
+  app.export_window = std::move(shell);
+  ShowWindow(window, SW_SHOW);
+  SetForegroundWindow(window);
+  refresh_export_dialog(app);
+}
+
+void close_export_dialog(App& app) {
+  if (app.export_window == nullptr) return;
+  // An export in flight keeps going. It writes to a file, not to the dialog,
+  // and stopping it because a window was closed would throw away minutes of
+  // work for no reason anybody asked for.
+  app.export_output = nullptr;
+  app.export_progress = nullptr;
+  app.export_status = nullptr;
+  app.export_start = nullptr;
+
+  const HWND window = app.export_window->window;
+  app.export_window.reset();
+  if (window != nullptr) DestroyWindow(window);
+  mark_dirty(app);
+}
+
+#else
+void open_export_dialog(App&) {}
+void poll_export(App&) {}
+void settle_export(App&) {}
+#endif
+
 [[nodiscard]] std::unique_ptr<Widget> build_floating_interface(App* app, Shell* shell) {
   auto root = std::make_unique<Box>(Axis::Vertical);
   root->set_spacing(0.0);
@@ -1990,6 +2404,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       return 1;  // every pixel is painted, so erasing only causes a flash
 
     case WM_CLOSE:
+#if CUTLINE_HAVE_PREVIEW
+      // A dialog holds nothing but itself, so it simply goes.
+      if (shell->is_dialog) {
+        close_export_dialog(*app);
+        return 0;
+      }
+#endif
       // Closing a torn-out window sends its panels home rather than destroying
       // it here. The window goes when the layout stops having a dock for it,
       // which is what keeps the two from ever disagreeing about what exists.
@@ -2329,7 +2750,15 @@ int main(int argc, char** argv) {
   MSG message{};
   bool running = true;
   while (running) {
-    if (app.playing()) {
+    // Playing or exporting, the loop cannot block: the playhead moves and the
+    // progress bar fills whether or not anything is being clicked.
+    //
+    // `finished` is in here as well as `exporting`, and it matters. The worker
+    // clears `running` and sets `finished` as its last two acts, so a loop
+    // watching only the first would go back to blocking with a thread still to
+    // join and a bar stopped short of the end — which worked, whenever the
+    // timing happened to fall the right way.
+    if (app.playing() || app.exporting() || app.export_job.finished.load()) {
       while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
         if (message.message == WM_QUIT) {
           running = false;
@@ -2338,7 +2767,13 @@ int main(int argc, char** argv) {
         TranslateMessage(&message);
         DispatchMessageW(&message);
       }
-      if (running) advance_playback(app);
+      if (running) {
+        advance_playback(app);
+        poll_export(app);
+        // Nothing is due this instant when only the export is running, and the
+        // encoder wants the core far more than this loop does.
+        if (!app.playing()) Sleep(8);
+      }
     } else if (GetMessageW(&message, nullptr, 0, 0) > 0) {
       TranslateMessage(&message);
       DispatchMessageW(&message);
@@ -2355,9 +2790,10 @@ int main(int argc, char** argv) {
     }
   }
 
-  // Before the windows go, so the render thread is not still asking for audio
-  // while the things it reads are being torn down.
+  // Before the windows go, so neither the audio thread nor the export thread is
+  // still reading things that are being torn down.
   invalidate_playback(app);
+  settle_export(app);
 
   // Where the panels were left, so the next session opens the same way. On the
   // way out rather than on every drag: a rearrangement is a dozen small moves
