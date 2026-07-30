@@ -147,11 +147,19 @@ what the animation is doing at the playhead rather than a number nothing is
 using. Keyframes are drawn on the clip in the timeline, so an animation is
 visible where the editing happens.
 
-Still to come: titles, which need a text rasteriser (no longer blocked — Skia
-draws the interface); a colour picker, so the chroma keyer's colour can be
-changed rather than only read; dragging keyframes in time; and keeping
-hardware-decoded frames on the GPU instead of uploading them from system
-memory.
+Titles are drawn rather than decoded, so they take a route of their own:
+`cutline::text` rasterises one with Skia and the compositor samples it as
+premultiplied sRGB RGBA. Premultiplied because it is filtered — sampling
+straight alpha mixes the colour of transparent pixels into the edge of a glyph,
+which is how text acquires a halo. The shader divides the alpha back out before
+the effects, so a title takes a colour correction or a blur exactly like a video
+clip. A title is sized to its own text, which means the plan needs a font to ask;
+whoever can draw text supplies one, and a caller that cannot gets a title that
+fills the canvas rather than nothing.
+
+Still to come: a colour picker, so the chroma keyer's colour can be changed
+rather than only read; dragging keyframes in time; and keeping hardware-decoded
+frames on the GPU instead of uploading them from system memory.
 
 **Phase 7 (interface) underway** — one window, drawn on the GPU with Skia,
 sharing the compositor's Direct3D device so a decoded frame reaches the screen
@@ -159,7 +167,12 @@ without a copy through system memory. Panels dock, tear out into windows of
 their own, and remember where they were; four themes change the chrome rather
 than only the colours. The timeline edits, the sequence plays at rate against
 the audio clock, and export runs on its own thread with progress and cancel.
-1340 tests, plus a headless check that lays every panel out in every theme.
+Titles are made, typed and styled in the panel: `TextField` is the application's
+first editable control, with a caret, a selection, and the keyboard anyone would
+expect of one. 1411 tests, plus a headless check that lays every panel out in
+every theme — including the inspector with a clip selected, every effect on it,
+and a title, which is the only way the controls a panel is made of get checked at
+all.
 
 ## Building
 
