@@ -989,12 +989,71 @@ void IconButton::paint_content(Painter& painter, const Theme& theme) const {
       painter.line(cx, cy + reach, cx - reach, cy, style.text, width);
       painter.line(cx - reach, cy, cx, cy - reach, style.text, width);
       break;
+
+    case Icon::Pointer: {
+      // A cursor: tip at the top, two flanks, and a tail.
+      const double tip_x = cx - reach * 0.5;
+      const double tip_y = cy - reach;
+      painter.line(tip_x, tip_y, cx + reach * 0.55, cy + reach * 0.25, style.text, width);
+      painter.line(cx + reach * 0.55, cy + reach * 0.25, cx - reach * 0.05, cy + reach * 0.4,
+                   style.text, width);
+      painter.line(cx - reach * 0.05, cy + reach * 0.4, tip_x, tip_y, style.text, width);
+      painter.line(cx + reach * 0.2, cy + reach * 0.35, cx + reach * 0.5, cy + reach,
+                   style.text, width);
+      break;
+    }
+
+    case Icon::Razor: {
+      // One clip becoming two. What the cut leaves behind reads at eight pixels
+      // where a blade does not: a blade that size is a grey smudge.
+      const double w = reach * 0.75;
+      const double h = reach * 1.6;
+      painter.stroke(Rect{cx - reach, cy - h * 0.5, w, h}, 1.0, style.text, width);
+      painter.stroke(Rect{cx + reach - w, cy - h * 0.5, w, h}, 1.0, style.text, width);
+      break;
+    }
+
+    case Icon::RateStretch:
+      // A fixed span with speed inside it: two end bars and a pair of chevrons,
+      // which is a stretch that is going somewhere rather than a trim.
+      painter.line(cx - reach, cy - reach * 0.8, cx - reach, cy + reach * 0.8, style.text,
+                   width);
+      painter.line(cx + reach, cy - reach * 0.8, cx + reach, cy + reach * 0.8, style.text,
+                   width);
+      for (const double at : {-reach * 0.6, 0.0}) {
+        painter.line(cx + at, cy - reach * 0.5, cx + at + reach * 0.5, cy, style.text, width);
+        painter.line(cx + at + reach * 0.5, cy, cx + at, cy + reach * 0.5, style.text, width);
+      }
+      break;
+
+    case Icon::Slip:
+      // A bare double-headed arrow: the source moving, with nothing around it
+      // to say the clip does too. Two earlier attempts put it inside a box to
+      // mean "the frame stays put", and at eight pixels a box with an arrowhead
+      // in it is a blob. The plainest mark that reads is the right one, and this
+      // one cannot be confused with the two that have end bars.
+      painter.line(cx - reach, cy, cx + reach, cy, style.text, width);
+      painter.line(cx - reach, cy, cx - reach * 0.4, cy - reach * 0.6, style.text, width);
+      painter.line(cx - reach, cy, cx - reach * 0.4, cy + reach * 0.6, style.text, width);
+      painter.line(cx + reach, cy, cx + reach * 0.4, cy - reach * 0.6, style.text, width);
+      painter.line(cx + reach, cy, cx + reach * 0.4, cy + reach * 0.6, style.text, width);
+      break;
+
+    case Icon::Slide:
+      // A block moving between two that stay where they are.
+      painter.line(cx - reach, cy - reach * 0.8, cx - reach, cy + reach * 0.8, style.text,
+                   width);
+      painter.line(cx + reach, cy - reach * 0.8, cx + reach, cy + reach * 0.8, style.text,
+                   width);
+      painter.fill(Rect{cx - reach * 0.45, cy - reach * 0.6, reach * 0.9, reach * 1.2}, 1.0,
+                   Fill::solid(style.text));
+      break;
   }
 
-  // Whether the toggle is on is drawn into the mark rather than left to the
-  // surface underneath. No theme defines a selected state for a tool button, so
-  // `set_selected` alone would light nothing — and a stopwatch that looks the
-  // same running as stopped is worse than no stopwatch.
+  // Whether the toggle is on is drawn into the mark as well as left to the
+  // surface beneath it. The themes do define a selected state now, but a lit
+  // background is a weaker signal than a filled centre at this size, and a
+  // stopwatch that looks the same running as stopped is worse than none.
   if (selected() && (icon_ == Icon::Stopwatch || icon_ == Icon::Diamond)) {
     const double dot = reach * 0.5;
     painter.fill(Rect{cx - dot, cy - dot, dot * 2.0, dot * 2.0}, dot, Fill::solid(style.text));

@@ -119,24 +119,60 @@ ui::TimelineModel timeline_model(const core::Project& project,
 }
 
 core::Project apply_timeline_edit(core::Project project, std::string_view clip_id,
-                                  ui::DragMode mode, double start, double end) {
+                                  const ui::TimelineEdit& edit) {
   const core::Clip* clip = core::find_clip(project, clip_id);
   if (clip == nullptr) return project;
 
-  switch (mode) {
-    case ui::DragMode::Move: {
+  const std::array<std::string, 1> ids{std::string(clip_id)};
+
+  switch (edit.mode) {
+    case ui::DragMode::Move:
       // Through move_clips rather than by assignment, so the whole linked
       // group travels and the clamp against the start of the timeline is the
       // model's rather than a second opinion about it.
-      const std::array<std::string, 1> ids{std::string(clip_id)};
-      return core::move_clips(std::move(project), ids, start - clip->start);
-    }
+      return core::move_clips(std::move(project), ids, edit.result.start - clip->start);
 
     case ui::DragMode::TrimStart:
-      return core::set_clip_edge(std::move(project), clip_id, core::ClipEdge::In, start);
+      return core::set_clip_edge(std::move(project), clip_id, core::ClipEdge::In,
+                                 edit.result.start);
 
     case ui::DragMode::TrimEnd:
-      return core::set_clip_edge(std::move(project), clip_id, core::ClipEdge::Out, end);
+      return core::set_clip_edge(std::move(project), clip_id, core::ClipEdge::Out,
+                                 edit.result.end);
+
+    case ui::DragMode::RateStart:
+      return core::rate_stretch_edge(std::move(project), clip_id, core::ClipEdge::In,
+                                     edit.result.start);
+
+    case ui::DragMode::RateEnd:
+      return core::rate_stretch_edge(std::move(project), clip_id, core::ClipEdge::Out,
+                                     edit.result.end);
+
+    case ui::DragMode::Slip: {
+      // The gesture is in timeline seconds and the core wants source seconds,
+      // which the clip's own speed converts: a clip at 2x shows twice as much
+      // footage for the same distance, so a second of dragging is two seconds
+      // of source. Dragging right shows *earlier* footage, as Premiere does —
+      // the clip's content follows the hand, so the window into it moves the
+      // other way.
+      const double source = -edit.delta * core::clip_speed(*clip);
+      return core::slip_clip(std::move(project), clip_id, source);
+    }
+
+    case ui::DragMode::Slide:
+      return core::slide_clip(std::move(project), clip_id, edit.result.start - clip->start);
+
+    case ui::DragMode::Razor: {
+      if (!edit.all_tracks) return core::split_at(std::move(project), edit.at, ids);
+      // Every clip in the project. `split_at` ignores the ones the cut does not
+      // fall inside, so this is "cut through everything" without the caller
+      // having to work out what that means.
+      std::vector<std::string> every;
+      for (const core::Track& track : project.tracks) {
+        for (const core::Clip& c : track.clips) every.push_back(c.id);
+      }
+      return core::split_at(std::move(project), edit.at, every);
+    }
 
     case ui::DragMode::None:
     case ui::DragMode::Scrub:

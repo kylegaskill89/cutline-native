@@ -412,6 +412,17 @@ class IconButton : public Button {
     /// pixels across are much harder to tell apart than a lit button and an
     /// unlit one.
     Diamond,
+
+    // The tool palette. Each of these says what the tool does to a clip rather
+    // than what the tool looks like: a pointer, a cut, a stretch, contents
+    // moving inside a fixed frame, and a frame moving between two fixed ones.
+    // Line drawings, like every other icon here, because no font can be relied
+    // on to have any of them.
+    Pointer,
+    Razor,
+    RateStretch,
+    Slip,
+    Slide,
   };
 
   explicit IconButton(Icon icon, std::function<void()> on_click = {});

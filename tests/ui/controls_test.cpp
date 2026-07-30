@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1052,7 +1053,9 @@ TEST(IconButton, DrawsItsMarkWithoutAFont) {
   // size and baseline.
   for (const IconButton::Icon icon :
        {IconButton::Icon::ArrowUp, IconButton::Icon::ArrowDown, IconButton::Icon::Cross,
-        IconButton::Icon::Plus, IconButton::Icon::Stopwatch, IconButton::Icon::Diamond}) {
+        IconButton::Icon::Plus, IconButton::Icon::Stopwatch, IconButton::Icon::Diamond,
+        IconButton::Icon::Pointer, IconButton::Icon::Razor, IconButton::Icon::RateStretch,
+        IconButton::Icon::Slip, IconButton::Icon::Slide}) {
     IconButton button(icon);
     button.arrange(Rect{0.0, 0.0, 24.0, 24.0}, flat_context());
 
@@ -1062,6 +1065,37 @@ TEST(IconButton, DrawsItsMarkWithoutAFont) {
         << "icon " << static_cast<int>(icon);
     EXPECT_EQ(painter.count(DrawCall::Kind::Text), 0u)
         << "icon " << static_cast<int>(icon) << " should need no font";
+  }
+}
+
+TEST(IconButton, NoTwoIconsAreDrawnAlike) {
+  // The palette is five buttons in a row and the only thing telling them apart
+  // is the mark. Two that drew the same would be a tool nobody could find.
+  const auto shape = [](IconButton::Icon icon) {
+    IconButton button(icon);
+    button.arrange(Rect{0.0, 0.0, 24.0, 24.0}, flat_context());
+    RecordingPainter painter;
+    button.paint(painter, default_theme());
+
+    std::vector<Rect> marks;
+    for (const DrawCall& call : painter.calls()) {
+      if (call.kind == DrawCall::Kind::Line || call.kind == DrawCall::Kind::Stroke ||
+          call.kind == DrawCall::Kind::Fill) {
+        marks.push_back(call.bounds);
+      }
+    }
+    return marks;
+  };
+
+  constexpr std::array kIcons{IconButton::Icon::Pointer, IconButton::Icon::Razor,
+                              IconButton::Icon::RateStretch, IconButton::Icon::Slip,
+                              IconButton::Icon::Slide};
+  for (std::size_t i = 0; i < kIcons.size(); ++i) {
+    for (std::size_t j = i + 1; j < kIcons.size(); ++j) {
+      EXPECT_NE(shape(kIcons[i]), shape(kIcons[j]))
+          << "icons " << static_cast<int>(kIcons[i]) << " and "
+          << static_cast<int>(kIcons[j]);
+    }
   }
 }
 

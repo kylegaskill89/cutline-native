@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -673,14 +674,10 @@ TEST(Timeline, AnEditIsReportedOnceWhenTheDragEnds) {
   Fixture fixture;
   fixture.view->set_snapping(false);
   int edits = 0;
-  TimelineBlock last;
-  BlockRef which;
-  DragMode how = DragMode::None;
-  fixture.view->set_on_edit([&](BlockRef ref, DragMode mode, TimelineBlock block) {
+  TimelineEdit last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) {
     ++edits;
-    which = ref;
-    how = mode;
-    last = block;
+    last = edit;
   });
 
   const Rect box = fixture.view->block_rect(0, 0);
@@ -691,17 +688,17 @@ TEST(Timeline, AnEditIsReportedOnceWhenTheDragEnds) {
 
   fixture.host->mouse_up(press(box.x + 250.0, box.y + 10.0));
   EXPECT_EQ(edits, 1);
-  EXPECT_EQ(which, (BlockRef{0, 0}));
-  EXPECT_NEAR(last.start, 4.0, 1.0 / kFps);
+  EXPECT_EQ(last.block, (BlockRef{0, 0}));
+  EXPECT_NEAR(last.result.start, 4.0, 1.0 / kFps);
   // The mode is reported rather than inferred: moving a clip and trimming
   // both its edges by the same amount leave the same numbers behind.
-  EXPECT_EQ(how, DragMode::Move);
+  EXPECT_EQ(last.mode, DragMode::Move);
 }
 
 TEST(Timeline, AClickReportsNoEdit) {
   Fixture fixture;
   int edits = 0;
-  fixture.view->set_on_edit([&](BlockRef, DragMode, TimelineBlock) { ++edits; });
+  fixture.view->set_on_edit([&](const TimelineEdit&) { ++edits; });
 
   const Rect box = fixture.view->block_rect(0, 0);
   fixture.host->mouse_down(press(box.x + 50.0, box.y + 10.0));
@@ -850,6 +847,335 @@ TEST(Timeline, AMutedTrackHeaderLooksDisabled) {
     }
   }
   EXPECT_TRUE(found);
+}
+
+// ------------------------------------------------------------- the tools --
+
+TEST(Tools, TheSelectionToolIsTheDefault) {
+  const Fixture fixture;
+  EXPECT_EQ(fixture.view->tool(), Tool::Selection);
+}
+
+TEST(Tools, EachToolSaysWhatAPressOnTheMiddleOfAClipMeans) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(0, 0);
+  const double middle = box.x + box.width * 0.5;
+  const double y = box.y + 10.0;
+
+  fixture.view->set_tool(Tool::Selection);
+  EXPECT_EQ(fixture.view->zone_at(middle, y), DragMode::Move);
+  fixture.view->set_tool(Tool::Razor);
+  EXPECT_EQ(fixture.view->zone_at(middle, y), DragMode::Razor);
+  fixture.view->set_tool(Tool::Slip);
+  EXPECT_EQ(fixture.view->zone_at(middle, y), DragMode::Slip);
+  fixture.view->set_tool(Tool::Slide);
+  EXPECT_EQ(fixture.view->zone_at(middle, y), DragMode::Slide);
+}
+
+TEST(Tools, AToolStillDoesNothingOffAClip) {
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Razor);
+  const Rect tracks = fixture.view->tracks_area();
+  EXPECT_EQ(fixture.view->zone_at(tracks.right() - 2.0, tracks.bottom() - 2.0), DragMode::None);
+}
+
+TEST(Tools, RateStretchTakesWhicheverEndIsNearer) {
+  // Halves rather than the trim handles: a rate stretch has nothing to do in
+  // the middle, so a dead zone there would be a tool ignoring most of what it
+  // is pointed at.
+  Fixture fixture;
+  fixture.view->set_tool(Tool::RateStretch);
+  const Rect box = fixture.view->block_rect(0, 0);
+  const double y = box.y + 10.0;
+
+  EXPECT_EQ(fixture.view->zone_at(box.x + box.width * 0.25, y), DragMode::RateStart);
+  EXPECT_EQ(fixture.view->zone_at(box.x + box.width * 0.75, y), DragMode::RateEnd);
+}
+
+TEST(Tools, TheSelectionToolsHandlesAreStillTheEdges) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(0, 0);
+  const double y = box.y + 10.0;
+
+  EXPECT_EQ(fixture.view->zone_at(box.x + 1.0, y), DragMode::TrimStart);
+  EXPECT_EQ(fixture.view->zone_at(box.right() - 1.0, y), DragMode::TrimEnd);
+}
+
+TEST(Tools, WhichEdgeIsBeingPulledIsTheSameQuestionForTrimAndRate) {
+  EXPECT_TRUE(pulls_start(DragMode::TrimStart));
+  EXPECT_TRUE(pulls_start(DragMode::RateStart));
+  EXPECT_TRUE(pulls_end(DragMode::TrimEnd));
+  EXPECT_TRUE(pulls_end(DragMode::RateEnd));
+  EXPECT_FALSE(pulls_start(DragMode::Move));
+  EXPECT_FALSE(pulls_end(DragMode::Slide));
+}
+
+TEST(Tools, EveryToolHasAName) {
+  // Used for widget names, so a palette button can be found in a test.
+  EXPECT_EQ(to_string(Tool::Selection), "selection");
+  EXPECT_EQ(to_string(Tool::Razor), "razor");
+  EXPECT_EQ(to_string(Tool::RateStretch), "rate");
+  EXPECT_EQ(to_string(Tool::Slip), "slip");
+  EXPECT_EQ(to_string(Tool::Slide), "slide");
+}
+
+// ----------------------------------------------------------------- razor --
+
+TEST(Razor, CutsOnThePressWithNothingToFollow) {
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Razor);
+
+  std::vector<TimelineEdit> edits;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { edits.push_back(edit); });
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.x + 60.0, box.y + 10.0));
+
+  ASSERT_EQ(edits.size(), 1u) << "a cut has no release to wait for";
+  EXPECT_EQ(edits[0].mode, DragMode::Razor);
+  EXPECT_EQ(edits[0].block, (BlockRef{1, 0}));
+  EXPECT_NEAR(edits[0].at, 0.6, 0.02) << "sixty pixels at a hundred a second";
+  EXPECT_FALSE(edits[0].all_tracks);
+
+  fixture.host->mouse_up(press(box.x + 60.0, box.y + 10.0));
+  EXPECT_EQ(edits.size(), 1u) << "and nothing more on the way up";
+}
+
+TEST(Razor, DoesNotSelectWhatItCuts) {
+  // The tool is used repeatedly. Leaving one of the two halves highlighted
+  // after every cut is a running commentary nobody asked for.
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Razor);
+  int selections = 0;
+  fixture.view->set_on_select([&](std::optional<BlockRef>) { ++selections; });
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.x + 60.0, box.y + 10.0));
+
+  EXPECT_EQ(selections, 0);
+  EXPECT_FALSE(fixture.view->selection().has_value());
+}
+
+TEST(Razor, DoesNotMoveTheClipItIsDraggedAcross) {
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Razor);
+  const TimelineBlock before = fixture.view->model().tracks[1].blocks[0];
+  const Rect box = fixture.view->block_rect(1, 0);
+
+  fixture.host->mouse_down(press(box.x + 60.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 260.0, box.y + 10.0));
+  fixture.host->mouse_up(press(box.x + 260.0, box.y + 10.0));
+
+  EXPECT_EQ(fixture.view->model().tracks[1].blocks[0], before);
+}
+
+TEST(Razor, ShiftAsksForEveryTrack) {
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Razor);
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  MouseEvent event = press(box.x + 60.0, box.y + 10.0);
+  event.modifiers.shift = true;
+  fixture.host->mouse_down(event);
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_TRUE(last->all_tracks);
+}
+
+// ---------------------------------------------------------- rate stretch --
+
+TEST(RateStretch, CanPullAnEdgePastTheEndOfTheClipsOwnLength) {
+  // A trim would run out of source; this changes the speed instead, so the
+  // view must let the edge go wherever the pointer does.
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  fixture.view->set_tool(Tool::RateStretch);
+
+  // The wide clip: 0 to 5 on V1, so both its edges are on screen.
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.right() - 5.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.right() + 300.0, box.y + 10.0));
+
+  const TimelineBlock& block = fixture.view->model().tracks[1].blocks[0];
+  EXPECT_NEAR(block.end, 8.05, 0.05) << "three hundred and five pixels further on";
+  EXPECT_DOUBLE_EQ(block.start, 0.0);
+}
+
+TEST(RateStretch, KeepsAtLeastAFrame) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  fixture.view->set_tool(Tool::RateStretch);
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.right() - 5.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x - 4000.0, box.y + 10.0));
+
+  const TimelineBlock& block = fixture.view->model().tracks[1].blocks[0];
+  EXPECT_GE(block.duration(), 1.0 / kFps - 1e-9);
+}
+
+TEST(RateStretch, ReportsWhichEdgeWasPulled) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  fixture.view->set_tool(Tool::RateStretch);
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  // The close-up, 5 to 12: its in-edge pulled back a second, which is a
+  // hundred pixels at this zoom.
+  const Rect box = fixture.view->block_rect(1, 1);
+  fixture.host->mouse_down(press(box.x + 5.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x - 95.0, box.y + 10.0));
+  fixture.host->mouse_up(press(box.x - 95.0, box.y + 10.0));
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::RateStart);
+  EXPECT_NEAR(last->result.start, 4.0, 0.02);
+}
+
+// ------------------------------------------------------------------ slip --
+
+TEST(Slip, LeavesTheClipExactlyWhereItIs) {
+  // The one mode with nothing to watch, and that is the point: what moves is
+  // inside the block.
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Slip);
+  const std::vector<TimelineBlock> before = fixture.view->model().tracks[1].blocks;
+
+  const Rect box = fixture.view->block_rect(1, 1);
+  fixture.host->mouse_down(press(box.x + 40.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 200.0, box.y + 10.0));
+
+  // Geometry, not the blocks themselves: the press selected one, and being
+  // selected is part of the model too.
+  const std::vector<TimelineBlock>& after = fixture.view->model().tracks[1].blocks;
+  ASSERT_EQ(after.size(), before.size());
+  for (std::size_t i = 0; i < after.size(); ++i) {
+    EXPECT_DOUBLE_EQ(after[i].start, before[i].start);
+    EXPECT_DOUBLE_EQ(after[i].end, before[i].end);
+  }
+}
+
+TEST(Slip, ReportsHowFarTheGestureWent) {
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Slip);
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect box = fixture.view->block_rect(1, 1);
+  fixture.host->mouse_down(press(box.x + 40.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 160.0, box.y + 10.0));
+  fixture.host->mouse_up(press(box.x + 160.0, box.y + 10.0));
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::Slip);
+  // A hundred and twenty pixels at a hundred a second, and the block reported
+  // is the block unchanged, because that is what the mode means.
+  EXPECT_NEAR(last->delta, 1.2, 0.02);
+  EXPECT_EQ(last->result, fixture.view->model().tracks[1].blocks[1]);
+}
+
+TEST(Slip, ReportsWholeFramesLikeEveryOtherEdit) {
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Slip);
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect box = fixture.view->block_rect(1, 1);
+  fixture.host->mouse_down(press(box.x + 40.0, box.y + 10.0));
+  // Seventeen pixels: a third of a frame past a whole number of them.
+  fixture.host->mouse_move(press(box.x + 57.0, box.y + 10.0));
+  fixture.host->mouse_up(press(box.x + 57.0, box.y + 10.0));
+
+  ASSERT_TRUE(last.has_value());
+  const double frames = last->delta * kFps;
+  EXPECT_NEAR(frames, std::round(frames), 1e-9);
+}
+
+// ----------------------------------------------------------------- slide --
+
+TEST(Slide, TakesTheLengthOutOfItsNeighbours) {
+  // V1 holds two abutting clips: 0 to 5 and 5 to 12. Sliding the second later
+  // grows the first and leaves the end of the sequence alone.
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  fixture.view->set_tool(Tool::Slide);
+
+  const Rect box = fixture.view->block_rect(1, 1);
+  fixture.host->mouse_down(press(box.x + 40.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 140.0, box.y + 10.0));  // one second later
+
+  const std::vector<TimelineBlock>& blocks = fixture.view->model().tracks[1].blocks;
+  EXPECT_NEAR(blocks[1].start, 6.0, 0.02);
+  EXPECT_NEAR(blocks[1].end, 13.0, 0.02);
+  EXPECT_NEAR(blocks[0].end, 6.0, 0.02) << "the clip before grew into the gap";
+  EXPECT_DOUBLE_EQ(blocks[0].start, 0.0);
+}
+
+TEST(Slide, LeavesTheClipItSlidesTheLengthItWas) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  fixture.view->set_tool(Tool::Slide);
+  const double was = fixture.view->model().tracks[1].blocks[1].duration();
+
+  const Rect box = fixture.view->block_rect(1, 1);
+  fixture.host->mouse_down(press(box.x + 40.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 220.0, box.y + 10.0));
+
+  EXPECT_NEAR(fixture.view->model().tracks[1].blocks[1].duration(), was, 1e-9);
+}
+
+TEST(Slide, CannotEatTheClipBeforeIt) {
+  // The neighbour that shrinks has to keep a frame, or it disappears and there
+  // is nothing left to slide back into.
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  fixture.view->set_tool(Tool::Slide);
+
+  const Rect box = fixture.view->block_rect(1, 1);
+  fixture.host->mouse_down(press(box.x + 40.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x - 2000.0, box.y + 10.0));
+
+  const std::vector<TimelineBlock>& blocks = fixture.view->model().tracks[1].blocks;
+  EXPECT_GE(blocks[0].duration(), 1.0 / kFps - 1e-9);
+  EXPECT_GE(blocks[1].start, blocks[0].start);
+}
+
+TEST(Slide, AClipWithNothingBesideItDoesNotMove) {
+  // The insert on V2 has a gap either side, so there is nothing to take the
+  // length out of — which is what the core says too, and if the view disagreed
+  // it would preview a slide the project then refused.
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  fixture.view->set_tool(Tool::Slide);
+  const TimelineBlock before = fixture.view->model().tracks[0].blocks[0];
+
+  const Rect box = fixture.view->block_rect(0, 0);
+  fixture.host->mouse_down(press(box.x + 40.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 200.0, box.y + 10.0));
+
+  const TimelineBlock& after = fixture.view->model().tracks[0].blocks[0];
+  EXPECT_DOUBLE_EQ(after.start, before.start);
+  EXPECT_DOUBLE_EQ(after.end, before.end);
+}
+
+TEST(Slide, ReportsWhereTheClipEndedUp) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  fixture.view->set_tool(Tool::Slide);
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect box = fixture.view->block_rect(1, 1);
+  fixture.host->mouse_down(press(box.x + 40.0, box.y + 10.0));
+  fixture.host->mouse_move(press(box.x + 140.0, box.y + 10.0));
+  fixture.host->mouse_up(press(box.x + 140.0, box.y + 10.0));
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::Slide);
+  EXPECT_NEAR(last->result.start, 6.0, 0.02);
 }
 
 }  // namespace

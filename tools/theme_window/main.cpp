@@ -324,6 +324,15 @@ struct App {
   Button* sort_button = nullptr;
   cutline::editor::BrowserSort browser_sort = cutline::editor::BrowserSort::Pool;
 
+  /// What a press on a clip does. Held here rather than only on the view,
+  /// because the timeline panel is rebuilt whenever the arrangement or the theme
+  /// changes and the tool somebody chose has to survive that.
+  cutline::ui::Tool tool = cutline::ui::Tool::Selection;
+  /// The palette's buttons, so the current one can be lit without rebuilding
+  /// the row — which would destroy the button whose click is still running, the
+  /// same trap the theme switcher has.
+  std::vector<IconButton*> tool_buttons;
+
   /// The named arrangements, one of which is on screen. Where the panels are
   /// lives in the active one, so a rearrangement is remembered against the
   /// workspace it was made in rather than against the application.
@@ -1497,6 +1506,38 @@ constexpr std::array kTransportKeys{
     Binding{Key::Escape, false, false, cutline::editor::Command::SelectNone},
 };
 
+/// The tool palette, in the order it is drawn and offered.
+///
+/// The keys are Premiere's, which is the point of choosing them: anybody who
+/// has used one of these reaches for V and C without thinking, and a shortcut
+/// somebody has to learn is one they will not use.
+struct ToolEntry {
+  cutline::ui::Tool tool;
+  IconButton::Icon icon;
+  Key key;
+};
+
+constexpr std::array kTools{
+    ToolEntry{cutline::ui::Tool::Selection, IconButton::Icon::Pointer, Key::V},
+    ToolEntry{cutline::ui::Tool::Razor, IconButton::Icon::Razor, Key::C},
+    ToolEntry{cutline::ui::Tool::RateStretch, IconButton::Icon::RateStretch, Key::R},
+    ToolEntry{cutline::ui::Tool::Slip, IconButton::Icon::Slip, Key::Y},
+    ToolEntry{cutline::ui::Tool::Slide, IconButton::Icon::Slide, Key::U},
+};
+
+/// Picks a tool, from the palette or from a key.
+///
+/// The buttons are lit here rather than rebuilt, so the one that was just
+/// clicked is still alive when its handler returns.
+void choose_tool(App& app, cutline::ui::Tool tool) {
+  app.tool = tool;
+  if (app.timeline != nullptr) app.timeline->set_tool(tool);
+  for (std::size_t i = 0; i < app.tool_buttons.size() && i < kTools.size(); ++i) {
+    app.tool_buttons[i]->set_selected(kTools[i].tool == tool);
+  }
+  mark_dirty(app);
+}
+
 /// Runs whichever command the key is bound to, if any.
 bool run_binding(App& app, std::span<const Binding> bindings, Key key,
                  const Modifiers& modifiers) {
@@ -1629,6 +1670,23 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     refresh_browser(*app);
     app->inspector_stale = true;
   });
+  // The tool palette, between the history buttons and the timecode. Premiere
+  // floats it over the timeline; a row in the toolbar is the same thing without
+  // a second window to keep track of, and it cannot be lost behind anything.
+  auto& palette = tools.emplace<Box>(Axis::Horizontal);
+  palette.set_spacing(2.0);
+  if (app != nullptr) app->tool_buttons.clear();
+  for (const ToolEntry& entry : kTools) {
+    auto& button = palette.emplace<IconButton>(entry.icon, [app, tool = entry.tool] {
+      if (app != nullptr) choose_tool(*app, tool);
+    });
+    button.set_name(std::string("tool.") + std::string(cutline::ui::to_string(entry.tool)));
+    if (app != nullptr) {
+      button.set_selected(app->tool == entry.tool);
+      app->tool_buttons.push_back(&button);
+    }
+  }
+
   tools.emplace<Spacer>();
   auto& readout = tools.emplace<Label>("00:00:00:00");
   readout.set_align(cutline::ui::TextAlign::Right);
@@ -1636,7 +1694,12 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
 
   auto& tracks = panel->emplace<TimelineView>();
   tracks.set_scale(TimeScale{.pixels_per_second = 60.0});
-  if (app != nullptr) app->timeline = &tracks;
+  if (app != nullptr) {
+    app->timeline = &tracks;
+    // The panel is new; the tool is not. A rearrangement or a theme change must
+    // not quietly put the selection tool back.
+    tracks.set_tool(app->tool);
+  }
 
   tracks.set_on_scrub([app](double at) {
     if (app == nullptr) return;
@@ -1673,18 +1736,22 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   // The drag goes back through the model's own operations, so a move that a
   // neighbour would not allow is refused there rather than being allowed here
   // and looking different once the view is rebuilt.
-  tracks.set_on_edit([app](cutline::ui::BlockRef ref, cutline::ui::DragMode mode,
-                           cutline::ui::TimelineBlock block) {
+  tracks.set_on_edit([app](const cutline::ui::TimelineEdit& edit) {
     if (app == nullptr || app->timeline == nullptr) return;
-    const auto id = cutline::editor::block_clip_id(app->timeline->model(), ref);
+    const auto id = cutline::editor::block_clip_id(app->timeline->model(), edit.block);
     if (!id.has_value()) return;
 
-    app->session.apply(cutline::editor::apply_timeline_edit(app->session.project(), *id, mode,
-                                                            block.start, block.end));
+    app->session.apply(
+        cutline::editor::apply_timeline_edit(app->session.project(), *id, edit));
     // Rebuilt whether or not the edit applied: when it did not, the view is
     // showing where the pointer went rather than where the clip is allowed to
     // be, and it has to snap back.
     refresh_timeline(*app);
+    // A cut leaves two clips where the panel was showing one, and a rate
+    // stretch changes the speed the panel reads out. Neither is visible from
+    // the block alone, so the inspector cannot be trusted to still be right.
+    app->inspector_stale = true;
+    invalidate_preview(*app);
   });
 
   if (app != nullptr) refresh_timeline(*app);
@@ -2926,6 +2993,18 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       // Application shortcuts, taken before the widget tree sees them: undo is
       // not something any one control should be able to swallow.
       const Modifiers held = modifiers_now();
+
+      // The tools, on bare letters. Before the tree for the same reason the
+      // theme digits are: no control wants a V, and a tool that only works when
+      // nothing happens to be focused is a tool nobody trusts.
+      if (!editing && held.none()) {
+        const Key pressed = key_from_win32(wparam);
+        const auto tool = std::ranges::find(kTools, pressed, &ToolEntry::key);
+        if (tool != kTools.end()) {
+          choose_tool(*app, tool->tool);
+          return 0;
+        }
+      }
       if (held.control && wparam == 'O') {
         open_project(*app);
         return 0;

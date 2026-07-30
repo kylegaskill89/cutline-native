@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace cutline::ui {
@@ -35,7 +36,31 @@ constexpr double kTrimHandle = 8.0;
   return Color{color.r, color.g, color.b, color.a * amount};
 }
 
+/// How close two times have to be to count as touching. The same tolerance the
+/// core's slide uses, and it has to be: a clip the view thinks abuts its
+/// neighbour and the core does not would preview a slide and then refuse it.
+constexpr double kAbutEps = 1e-3;
+
 }  // namespace
+
+std::string_view to_string(Tool tool) noexcept {
+  switch (tool) {
+    case Tool::Selection: return "selection";
+    case Tool::Razor: return "razor";
+    case Tool::RateStretch: return "rate";
+    case Tool::Slip: return "slip";
+    case Tool::Slide: return "slide";
+  }
+  return "selection";
+}
+
+bool pulls_start(DragMode mode) noexcept {
+  return mode == DragMode::TrimStart || mode == DragMode::RateStart;
+}
+
+bool pulls_end(DragMode mode) noexcept {
+  return mode == DragMode::TrimEnd || mode == DragMode::RateEnd;
+}
 
 std::vector<double> snap_points(const TimelineModel& model, double playhead,
                                 std::optional<BlockRef> exclude) {
@@ -224,8 +249,27 @@ DragMode TimelineView::zone_at(double x, double y) const {
   if (!hit.has_value()) return DragMode::None;
 
   const Rect box = block_rect(hit->track, hit->block);
-  const double handle = trim_handle_width(hit->track, hit->block);
 
+  switch (tool_) {
+    case Tool::Razor:
+      return DragMode::Razor;
+    case Tool::Slip:
+      return DragMode::Slip;
+    case Tool::Slide:
+      return DragMode::Slide;
+
+    // Halves rather than the trim handles. A rate stretch has nothing to do in
+    // the middle of a clip, so leaving a dead zone there would mean a tool that
+    // ignores most of what it is pointed at; whichever end is nearer is what
+    // was meant anyway.
+    case Tool::RateStretch:
+      return x < box.x + box.width * 0.5 ? DragMode::RateStart : DragMode::RateEnd;
+
+    case Tool::Selection:
+      break;
+  }
+
+  const double handle = trim_handle_width(hit->track, hit->block);
   if (x < box.x + handle) return DragMode::TrimStart;
   if (x >= box.right() - handle) return DragMode::TrimEnd;
   return DragMode::Move;
@@ -373,6 +417,53 @@ void TimelineView::scrub_to(double x) {
   if (on_scrub_) on_scrub_(playhead_);
 }
 
+void TimelineView::capture_neighbours() {
+  before_.reset();
+  after_.reset();
+  if (!drag_.has_value()) return;
+
+  const std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
+  for (std::size_t i = 0; i < blocks.size(); ++i) {
+    if (i == drag_->block) continue;
+    // Abutting only. A clip with a gap beside it has nothing to take the length
+    // out of, which is what the core says too — and if the view disagreed it
+    // would preview a slide the project then refused.
+    if (std::abs(blocks[i].end - origin_.start) < kAbutEps) {
+      before_ = Neighbour{.index = i, .origin = blocks[i]};
+    } else if (std::abs(origin_.end - blocks[i].start) < kAbutEps) {
+      after_ = Neighbour{.index = i, .origin = blocks[i]};
+    }
+  }
+}
+
+void TimelineView::slide_to(double moved, double frame) {
+  // Nothing abutting means nothing to slide against, which is what the core
+  // says too. Moving the clip anyway would preview an edit the project then
+  // refuses, and the view would visibly snap back on release.
+  if (!before_.has_value() && !after_.has_value()) return;
+
+  std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
+
+  // Bounded by what the neighbours can give up. The clip that grows has no
+  // limit here — the core knows how much source is left, and this does not —
+  // but the one that shrinks must keep a frame, or it disappears and there is
+  // nothing left to slide back into.
+  double lo = -origin_.start;
+  double hi = std::numeric_limits<double>::infinity();
+  if (before_.has_value()) lo = std::max(lo, frame - before_->origin.duration());
+  if (after_.has_value()) hi = std::min(hi, after_->origin.duration() - frame);
+  if (lo > hi) return;
+
+  const double delta = core::snap_to_frame(std::clamp(moved, lo, hi), model_.fps);
+
+  blocks[drag_->block].start = origin_.start + delta;
+  blocks[drag_->block].end = origin_.end + delta;
+  // The one before grows into the gap and the one after gives it up, so the
+  // three edges move together and the sequence keeps its length.
+  if (before_.has_value()) blocks[before_->index].end = before_->origin.end + delta;
+  if (after_.has_value()) blocks[after_->index].start = after_->origin.start + delta;
+}
+
 void TimelineView::drag_to(double x) {
   if (!drag_.has_value()) return;
   std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
@@ -426,8 +517,40 @@ void TimelineView::drag_to(double x) {
       break;
     }
 
+    // The rate stretches are the trims without the source as a limit: what
+    // changes is the speed, so the clip can be pulled longer than the footage
+    // it came from. Only the one-frame floor is left.
+    case DragMode::RateStart: {
+      double start = origin_.start + moved;
+      if (const auto snapped = nearest_snap(points, start, tolerance)) start = *snapped;
+      next.start = std::clamp(core::snap_to_frame(start, model_.fps), 0.0, origin_.end - frame);
+      break;
+    }
+
+    case DragMode::RateEnd: {
+      double end = origin_.end + moved;
+      if (const auto snapped = nearest_snap(points, end, tolerance)) end = *snapped;
+      next.end = std::max(origin_.start + frame, core::snap_to_frame(end, model_.fps));
+      break;
+    }
+
+    case DragMode::Slide:
+      // Three edges at once, so this writes them itself rather than going
+      // through the single-block path below.
+      slide_to(moved, frame);
+      refresh_bounds();
+      return;
+
+    case DragMode::Slip:
+      // Nothing moves. The clip stays exactly where it is — that is what a slip
+      // means — and the distance dragged is reported at the end. There is
+      // deliberately no preview here: the change is which frames the clip
+      // shows, and the timeline does not draw frames.
+      return;
+
     case DragMode::None:
     case DragMode::Scrub:
+    case DragMode::Razor:
       return;
   }
 
@@ -450,6 +573,21 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
   if (!tracks_area().contains(event.x, event.y)) return false;
 
   const std::optional<BlockRef> hit = block_at(event.x, event.y);
+
+  // The razor cuts and nothing else happens: no selection change, no drag. A
+  // cut that also selected would leave one of the two halves highlighted for no
+  // reason anybody asked for, and the tool exists to be used repeatedly.
+  if (hit.has_value() && tool_ == Tool::Razor) {
+    if (on_edit_) {
+      on_edit_(TimelineEdit{.block = *hit,
+                            .mode = DragMode::Razor,
+                            .result = model_.tracks[hit->track].blocks[hit->block],
+                            .at = scale_.to_time(event.x - time_area().x),
+                            .all_tracks = event.modifiers.shift});
+    }
+    return true;
+  }
+
   select(hit);
   if (on_select_) on_select_(hit);
 
@@ -459,6 +597,7 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
     origin_ = model_.tracks[hit->track].blocks[hit->block];
     press_x_ = event.x;
     moved_ = false;
+    if (mode_ == DragMode::Slide) capture_neighbours();
   }
   return true;
 }
@@ -489,11 +628,23 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
   // undo stack for one gesture.
   if (moved_ && drag_.has_value() && on_edit_) {
     const std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
-    if (drag_->block < blocks.size()) on_edit_(*drag_, mode_, blocks[drag_->block]);
+    if (drag_->block < blocks.size()) {
+      on_edit_(TimelineEdit{
+          .block = *drag_,
+          .mode = mode_,
+          .result = blocks[drag_->block],
+          // Frame-snapped, so a slip moves the source by whole frames like
+          // every other edit rather than by however many pixels the hand
+          // travelled.
+          .delta = core::snap_to_frame((event.x - press_x_) / scale_.pixels_per_second,
+                                       model_.fps)});
+    }
   }
 
   mode_ = DragMode::None;
   drag_.reset();
+  before_.reset();
+  after_.reset();
   moved_ = false;
   return true;
 }

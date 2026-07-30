@@ -177,12 +177,40 @@ than only the colours. The timeline edits, the sequence plays at rate against
 the audio clock, and export runs on its own thread with progress and cancel.
 Titles are made, typed and styled in the panel: `TextField` is the application's
 first editable control, with a caret, a selection, and the keyboard anyone would
-expect of one. 1452 tests, plus a headless check that lays every panel out in
-every theme — including the inspector with a clip selected, every effect on it,
-a title, and the colour picker open, which is the only way the controls a panel
-is made of get checked at all. Given a directory, that check writes each theme's
-frame out as a PNG, so a changed fingerprint can be looked at rather than
-guessed at.
+expect of one.
+
+The tool palette is in the timeline's toolbar, on Premiere's keys — V, C, R, Y,
+U. The tool is *state* rather than a held modifier, and that is what makes these
+edits reachable at all: slip and slide are two-handed gestures if a key has to be
+held down, and a razor that needs one cannot cut a dozen clips in a row. All four
+are a drag over the body of a clip, so without a tool to say which is meant they
+would every one of them be the same drag.
+
+- **Razor** cuts on the press, with shift to cut through every track. It does
+  not select what it cuts: the tool is used repeatedly, and leaving one of the
+  two halves highlighted after each cut is a running commentary nobody asked
+  for.
+- **Rate stretch** pulls an edge to change the clip's *speed*. The source in and
+  out stay put, so unlike a trim it can make a clip longer than the footage it
+  came from.
+- **Slip** moves which part of the source a clip shows. It is the one gesture
+  with nothing to watch on the timeline, and that is the point — the clip does
+  not move. Dragging right shows earlier footage: the clip is a window onto a
+  strip of film and the strip follows the hand.
+- **Slide** moves a clip into its neighbours. The one before grows, the one
+  after shrinks, and the sequence keeps its length — three edges at once, all
+  previewed live.
+
+Each of these was already a tested operation in the pure core and unreachable
+from the interface. What is new is the gesture, and where the interface's units
+become the model's: a slip is dragged in timeline seconds and stored in source
+seconds, and the two differ by the clip's speed.
+
+1485 tests, plus a headless check that lays every panel out in every theme —
+including the inspector with a clip selected, every effect on it, a title, and
+the colour picker open, which is the only way the controls a panel is made of
+get checked at all. Given a directory, that check writes each theme's frame out
+as a PNG, so a changed fingerprint can be looked at rather than guessed at.
 
 ## Building
 

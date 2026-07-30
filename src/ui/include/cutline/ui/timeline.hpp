@@ -20,6 +20,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -91,7 +92,29 @@ struct DropPoint {
   friend bool operator==(const DropPoint&, const DropPoint&) = default;
 };
 
-/// What a drag is doing.
+/// What a press on a clip means. Premiere's tool palette.
+///
+/// The tool is state rather than a held modifier, because that is what makes
+/// these edits reachable at all: slip and slide become two-handed gestures if a
+/// key has to be held, and a razor that needs one cannot cut a dozen clips in a
+/// row. All four are a drag over the body of a clip, so without a tool to say
+/// which is meant they would every one of them be the same drag.
+enum class Tool {
+  /// Move and trim. What every other tool is a variation on.
+  Selection,
+  /// A click cuts. The one tool whose gesture is not a drag.
+  Razor,
+  /// An edge changes the clip's speed instead of its source.
+  RateStretch,
+  /// The body moves the source without moving the clip.
+  Slip,
+  /// The body moves the clip, taking the length out of its neighbours.
+  Slide,
+};
+
+[[nodiscard]] std::string_view to_string(Tool tool) noexcept;
+
+/// What a gesture is doing.
 enum class DragMode {
   None,
   /// Moving the playhead.
@@ -101,6 +124,52 @@ enum class DragMode {
   /// Pulling one edge of a clip, leaving the other where it is.
   TrimStart,
   TrimEnd,
+  /// Pulling an edge to change the speed. The source in and out stay put, so
+  /// the clip can be dragged longer than the footage it came from.
+  RateStart,
+  RateEnd,
+  /// Moving which part of the source the clip shows. The clip itself does not
+  /// move, which makes this the one mode with nothing to watch on the timeline:
+  /// the change is inside the block, and staying put is what it means.
+  Slip,
+  /// Moving the clip into its neighbours: the one before grows, the one after
+  /// shrinks, and the sequence keeps its length.
+  Slide,
+  /// A cut. Not a drag at all — it happens on the press and there is nothing to
+  /// follow — but it is reported the same way, because "the timeline was used"
+  /// is better as one thing for a caller to handle than as two.
+  Razor,
+};
+
+/// Which edge a mode pulls, whichever tool is pulling it. Trim and rate stretch
+/// differ in what they do to the clip, not in which end is being held.
+[[nodiscard]] bool pulls_start(DragMode mode) noexcept;
+[[nodiscard]] bool pulls_end(DragMode mode) noexcept;
+
+/// One finished gesture, as the timeline saw it.
+///
+/// A struct rather than three arguments because the modes do not all have the
+/// same thing to report, and a signature that grew a parameter per mode would
+/// end up with every caller passing values it does not use.
+struct TimelineEdit {
+  BlockRef block;
+  DragMode mode = DragMode::None;
+
+  /// The block as it ended up. What `Move`, the trims, the rate stretches and
+  /// `Slide` are asking for. Left as it was for `Slip` and `Razor`, neither of
+  /// which changes where the clip is.
+  TimelineBlock result;
+
+  /// How far the gesture travelled, in seconds. `Slip` has nothing else to say:
+  /// what moved is the source, which the timeline does not model.
+  double delta = 0.0;
+
+  /// `Razor` only: where the cut goes.
+  double at = 0.0;
+  /// `Razor` only: cut every track at `at` rather than only the clip clicked.
+  bool all_tracks = false;
+
+  friend bool operator==(const TimelineEdit&, const TimelineEdit&) = default;
 };
 
 /// The times a dragged edge should stick to: the start, the playhead, and the
@@ -143,17 +212,24 @@ class TimelineView : public Widget {
   [[nodiscard]] std::optional<BlockRef> selection() const;
   void select(std::optional<BlockRef> block);
 
-  /// Called once, on release, with what the drag was doing and the clip as it
-  /// ended up. Not on every mouse move: the model is already updated live so
-  /// the drag can be seen, and an edit that fired continuously would put a
-  /// hundred entries in the undo stack for one gesture.
+  /// Called once, at the end of a gesture. Not on every mouse move: the model
+  /// is already updated live so the drag can be seen, and an edit that fired
+  /// continuously would put a hundred entries in the undo stack for one drag.
   ///
   /// The mode is passed rather than inferred from what changed, because moving
   /// a clip and trimming both its edges by the same amount are different edits
-  /// that leave the same numbers behind.
-  void set_on_edit(std::function<void(BlockRef, DragMode, TimelineBlock)> on_edit) {
+  /// that leave the same numbers behind — and because a slip changes no numbers
+  /// the timeline can see at all.
+  ///
+  /// A razor cut arrives here too, on the press, since it has no end to wait
+  /// for.
+  void set_on_edit(std::function<void(const TimelineEdit&)> on_edit) {
     on_edit_ = std::move(on_edit);
   }
+
+  /// Which tool a press over a clip is using.
+  [[nodiscard]] Tool tool() const noexcept { return tool_; }
+  void set_tool(Tool tool) noexcept { tool_ = tool; }
 
   [[nodiscard]] bool snapping() const noexcept { return snapping_; }
   void set_snapping(bool snapping) noexcept { snapping_ = snapping; }
@@ -161,9 +237,13 @@ class TimelineView : public Widget {
   [[nodiscard]] DragMode drag_mode() const noexcept { return mode_; }
   [[nodiscard]] std::optional<BlockRef> dragging() const noexcept { return drag_; }
 
-  /// What a drag starting at this point would do. The outer edges of a clip
-  /// trim it and the middle moves it, which is how every editor behaves and
-  /// what makes a trim reachable without a modifier.
+  /// What a gesture starting at this point would do, under the current tool.
+  ///
+  /// With the selection tool the outer edges of a clip trim it and the middle
+  /// moves it, which is how every editor behaves and what makes a trim
+  /// reachable without a modifier. The other tools each mean one thing
+  /// everywhere on a clip, apart from rate stretch, which takes whichever end
+  /// is nearer.
   [[nodiscard]] DragMode zone_at(double x, double y) const;
 
   // -------------------------------------------------------------- geometry --
@@ -222,12 +302,28 @@ class TimelineView : public Widget {
   void drag_to(double x);
   void refresh_bounds();
 
+  /// A clip's neighbour on the same track, as it was when a slide began.
+  ///
+  /// Kept because a slide moves three edges at once and every one of them has
+  /// to be computed from where it started, for the same reason the dragged clip
+  /// is. Absent when there is nothing abutting on that side, which is also what
+  /// bounds the slide.
+  struct Neighbour {
+    std::size_t index = 0;
+    TimelineBlock origin;
+  };
+
+  /// Where a slide's neighbours are, and the room they leave.
+  void capture_neighbours();
+  void slide_to(double moved, double frame);
+
   TimelineModel model_;
   TimeScale scale_;
   Viewport vertical_;
 
   double playhead_ = 0.0;
   bool snapping_ = true;
+  Tool tool_ = Tool::Selection;
 
   DragMode mode_ = DragMode::None;
   std::optional<BlockRef> drag_;
@@ -235,6 +331,8 @@ class TimelineView : public Widget {
   /// this rather than from the last one, so rounding cannot accumulate over a
   /// long drag and leave the clip a frame off where the pointer is.
   TimelineBlock origin_;
+  std::optional<Neighbour> before_;
+  std::optional<Neighbour> after_;
   double press_x_ = 0.0;
   /// Whether the pointer has moved far enough for this to be a drag at all.
   bool moved_ = false;
@@ -244,7 +342,7 @@ class TimelineView : public Widget {
 
   std::function<void(double)> on_scrub_;
   std::function<void(std::optional<BlockRef>)> on_select_;
-  std::function<void(BlockRef, DragMode, TimelineBlock)> on_edit_;
+  std::function<void(const TimelineEdit&)> on_edit_;
 };
 
 }  // namespace cutline::ui

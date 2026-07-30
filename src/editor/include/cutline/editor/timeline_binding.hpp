@@ -34,14 +34,23 @@ namespace cutline::editor {
 [[nodiscard]] std::string default_track_label(const core::Project& project,
                                               std::size_t index);
 
-/// Applies a drag the timeline reported.
+/// Applies a gesture the timeline reported.
+///
+/// One function for all of them. The alternative is the caller switching on the
+/// mode to decide which operation to call, which is the same switch one layer
+/// further away from the operations it chooses between.
+///
+/// This is where the interface's units become the model's. A slip is dragged in
+/// timeline seconds and stored in source seconds, and the two differ by the
+/// clip's speed; a rate stretch and a trim are the same gesture and different
+/// operations. Neither the timeline nor the core should have to know that.
 ///
 /// Returns the project unchanged when the edit cannot apply — clamped against
 /// a neighbour, or past the end of the source — which is what every core
 /// operation does and what lets the caller skip the undo entry.
 [[nodiscard]] core::Project apply_timeline_edit(core::Project project,
-                                                std::string_view clip_id, ui::DragMode mode,
-                                                double start, double end);
+                                                std::string_view clip_id,
+                                                const ui::TimelineEdit& edit);
 
 /// The clip a block refers to, or nothing when the model has moved on.
 [[nodiscard]] std::optional<std::string> block_clip_id(const ui::TimelineModel& model,
