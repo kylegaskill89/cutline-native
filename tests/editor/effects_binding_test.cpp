@@ -281,12 +281,14 @@ TEST(ClipEffects, AnAnimatedRowReadsItsValueAtTheGivenTime) {
   Project p = set_effect_parameter_animated(blurred(), "c1", 0, "amount", true, 0.0);
   p = set_effect_parameter(std::move(p), "c1", 0, "amount", 50.0, 4.0);
 
-  const EffectParamRow& at_start = clip_effects(p, "c1", 0.0).front().params.front();
+  // Held by value. A reference bound to a *member* of a temporary is not
+  // lifetime-extended, and this one read freed memory until it was noticed.
+  const EffectParamRow at_start = clip_effects(p, "c1", 0.0).front().params.front();
   EXPECT_DOUBLE_EQ(at_start.value, 0.0);
   EXPECT_TRUE(at_start.animated);
   EXPECT_TRUE(at_start.keyed_here);
 
-  const EffectParamRow& midway = clip_effects(p, "c1", 2.0).front().params.front();
+  const EffectParamRow midway = clip_effects(p, "c1", 2.0).front().params.front();
   EXPECT_DOUBLE_EQ(midway.value, 25.0);
   EXPECT_FALSE(midway.keyed_here) << "there is no keyframe at two seconds";
 }

@@ -33,6 +33,7 @@
 #include "cutline/editor/titles.hpp"
 #include "cutline/editor/workspace.hpp"
 #include "cutline/ui/browser.hpp"
+#include "cutline/ui/color_picker.hpp"
 #include "cutline/ui/controls.hpp"
 #include "cutline/ui/dock.hpp"
 #include "cutline/ui/dock_view.hpp"
@@ -66,7 +67,9 @@
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColor.h"
 #include "include/core/SkImageInfo.h"
+#include "include/core/SkStream.h"
 #include "include/core/SkSurface.h"
+#include "include/encode/SkPngEncoder.h"
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
@@ -96,6 +99,8 @@ using cutline::ui::Box;
 using cutline::ui::Button;
 using cutline::ui::CaptionButton;
 using cutline::ui::Checkbox;
+using cutline::ui::Color;
+using cutline::ui::ColorSwatch;
 using cutline::ui::DockLayout;
 using cutline::ui::Dropdown;
 using cutline::ui::Edges;
@@ -114,6 +119,7 @@ using cutline::ui::MonitorView;
 using cutline::ui::MouseButton;
 using cutline::ui::MouseEvent;
 using cutline::ui::Panel;
+using cutline::ui::parse_color;
 using cutline::ui::ProgressBar;
 using cutline::ui::PanelId;
 using cutline::ui::Rect;
@@ -125,6 +131,7 @@ using cutline::ui::Splitter;
 using cutline::ui::TextAlign;
 using cutline::ui::TextField;
 using cutline::ui::Theme;
+using cutline::ui::to_hex;
 using cutline::ui::TimelineView;
 using cutline::ui::TimeScale;
 using cutline::ui::TitleBar;
@@ -733,10 +740,23 @@ void build_effect_controls(App& app, const std::string& clip_id) {
     }
 
     for (const cutline::editor::EffectColorRow& color : row.colors) {
-      // Shown, not editable: there is no colour picker yet, and a hex nobody
-      // can change is still better than a key colour nobody can see.
-      auto& swatch = app.inspector->emplace<Label>(color.name + ": " + color.value);
-      swatch.set_small(true);
+      auto& colour_line = app.inspector->emplace<Box>(Axis::Horizontal);
+      colour_line.emplace<Label>(color.name).set_small(true);
+
+      auto& swatch = colour_line.emplace<ColorSwatch>(parse_color(color.value));
+      // No alpha strip. The only effect colour there is is the keyer's, which
+      // is matched on hue; a transparency the shader discards is worse than
+      // one that was never offered.
+      swatch.set_alpha_enabled(false);
+      swatch.set_on_commit(
+          [&app, clip_id, index = row.index, key = color.key](const Color& picked) {
+            app.session.apply(cutline::core::set_clip_effect_color(
+                app.session.project(), clip_id, index, key, to_hex(picked)));
+            invalidate_preview(app);
+            // Deliberately *not* marking the inspector stale. Rebuilding it
+            // would destroy the swatch, which closes the picker still open
+            // above it — and nothing else in the panel depends on this value.
+          });
     }
   }
 }
@@ -752,7 +772,12 @@ void build_title_controls(App& app, const std::string& clip_id,
 
   // Written to the document when the field is done with — Enter, or the
   // keyboard leaving. On every keystroke it would be one undo entry per letter.
-  const auto write = [&app, clip_id](cutline::core::TextSpec changed) {
+  //
+  // `rebuild_panel` is off for the colour swatches only. Rebuilding destroys
+  // the swatch, and a destroyed swatch closes the picker hanging open above it,
+  // so a colour could only ever be chosen once per opening.
+  const auto write = [&app, clip_id](cutline::core::TextSpec changed,
+                                     bool rebuild_panel = true) {
     const cutline::core::Clip* clip =
         cutline::core::find_clip(app.session.project(), clip_id);
     if (clip == nullptr) return;
@@ -761,7 +786,7 @@ void build_title_controls(App& app, const std::string& clip_id,
     refresh_browser(app);
     refresh_timeline(app);
     invalidate_preview(app);
-    app.inspector_stale = true;
+    if (rebuild_panel) app.inspector_stale = true;
   };
 
   auto& content = app.inspector->emplace<TextField>(spec.content);
@@ -784,13 +809,14 @@ void build_title_controls(App& app, const std::string& clip_id,
     write(std::move(changed));
   });
 
-  app.inspector->emplace<Label>("Colour").set_small(true);
-  auto& colour = app.inspector->emplace<TextField>(spec.color);
-  colour.set_placeholder("#ffffff");
-  colour.set_on_commit([write, spec](const std::string& text) {
+  auto& colour_row = app.inspector->emplace<Box>(Axis::Horizontal);
+  colour_row.emplace<Label>("Colour").set_small(true);
+  auto& colour =
+      colour_row.emplace<ColorSwatch>(parse_color(spec.color, Color{1.0f, 1.0f, 1.0f, 1.0f}));
+  colour.set_on_commit([write, spec](const Color& picked) {
     cutline::core::TextSpec changed = spec;
-    changed.color = text;
-    write(std::move(changed));
+    changed.color = to_hex(picked);
+    write(std::move(changed), false);
   });
 
   auto& style = app.inspector->emplace<Box>(Axis::Horizontal);
@@ -829,6 +855,20 @@ void build_title_controls(App& app, const std::string& clip_id,
     write(std::move(changed));
   });
   decoration.emplace<Spacer>();
+
+  // Only when there is an outline to colour. A swatch for a property that is
+  // switched off is a control that does nothing, which is worse than a control
+  // that is not there.
+  if (spec.stroke_color.has_value()) {
+    auto& stroke_row = app.inspector->emplace<Box>(Axis::Horizontal);
+    stroke_row.emplace<Label>("Outline colour").set_small(true);
+    auto& stroke = stroke_row.emplace<ColorSwatch>(parse_color(*spec.stroke_color));
+    stroke.set_on_commit([write, spec](const Color& picked) {
+      cutline::core::TextSpec changed = spec;
+      changed.stroke_color = to_hex(picked);
+      write(std::move(changed), false);
+    });
+  }
 
   auto& align_row = app.inspector->emplace<Box>(Axis::Horizontal);
   align_row.emplace<Label>("Align").set_small(true);
@@ -2975,14 +3015,18 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
   return DefWindowProcW(window, message, wparam, lparam);
 }
 
-/// The dock somewhere in a tree, for the headless check to drive.
-[[nodiscard]] DockView* find_dock(Widget& widget) {
-  if (auto* dock = dynamic_cast<DockView*>(&widget); dock != nullptr) return dock;
+/// The first widget of a kind somewhere in a tree, for the headless check to
+/// drive. The dock, to switch panels with; a swatch, to open a picker from.
+template <typename T>
+[[nodiscard]] T* find_widget(Widget& widget) {
+  if (auto* found = dynamic_cast<T*>(&widget); found != nullptr) return found;
   for (const std::unique_ptr<Widget>& child : widget.children()) {
-    if (DockView* found = find_dock(*child); found != nullptr) return found;
+    if (T* found = find_widget<T>(*child); found != nullptr) return found;
   }
   return nullptr;
 }
+
+[[nodiscard]] DockView* find_dock(Widget& widget) { return find_widget<DockView>(widget); }
 
 /// Times the frame, so "it feels sluggish" becomes a number.
 ///
@@ -3131,7 +3175,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
 /// exists or a container that hands out nothing would show up. Being able to
 /// run it without a display also means a crash in the paint path is a command
 /// away rather than something to notice by launching.
-[[nodiscard]] int self_check() {
+///
+/// Given a directory, each theme's last frame is written there as a PNG. The
+/// check otherwise reports counts and a fingerprint, and when a fingerprint
+/// changes there is no way to see *how* — which is the one question anybody
+/// actually has at that point.
+[[nodiscard]] int self_check(std::string_view shots = {}) {
   constexpr int kWidth = 1280;
   constexpr int kHeight = 800;
 
@@ -3256,6 +3305,19 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         app.main.host->paint(*painter, theme);
         walk(app.main.host->root());
       }
+
+      // And the colour picker, which lives on the popup layer and is therefore
+      // in no tree the walk above reaches. Nothing else would ever lay it out:
+      // it only exists while it is open.
+      if (ColorSwatch* swatch = find_widget<ColorSwatch>(*app.inspector); swatch != nullptr) {
+        swatch->open();
+        app.main.host->update_layout(context);
+        app.main.host->paint(*painter, theme);
+        if (Widget* picker = app.main.host->popup(); picker != nullptr) walk(*picker);
+      } else {
+        std::println("{}: a title's panel offered no colour to pick", theme.id);
+        ++failures;
+      }
     }
 
     // And the theme has to reach the pixels. Sampling a scatter of points
@@ -3271,6 +3333,15 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       }
     }
     fingerprints.push_back(fingerprint);
+
+    if (!shots.empty() && pixels.addr() != nullptr) {
+      const std::string path = std::format("{}/{}.png", shots, theme.id);
+      SkFILEWStream file(path.c_str());
+      if (!SkPngEncoder::Encode(&file, pixels, {})) {
+        std::println("{}: could not write {}", theme.id, path);
+        ++failures;
+      }
+    }
 
     std::println("{:<10} {:>3} widgets, {} empty, {} outside the window", theme.id, counted,
                  empty, escaped);
@@ -3292,7 +3363,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc > 1 && std::string_view(argv[1]) == "--check") return self_check();
+  // `--check [dir]`: the second argument, when there is one, is where each
+  // theme's frame is written so it can be looked at.
+  if (argc > 1 && std::string_view(argv[1]) == "--check") {
+    return self_check(argc > 2 ? argv[2] : "");
+  }
   // Both of these make windows now -- the benchmark a hidden one for its
   // swapchain -- so the class has to exist first.
   WNDCLASSEXW window_class{};

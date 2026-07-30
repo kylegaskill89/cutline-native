@@ -157,9 +157,17 @@ clip. A title is sized to its own text, which means the plan needs a font to ask
 whoever can draw text supplies one, and a caller that cannot gets a title that
 fills the canvas rather than nothing.
 
-Still to come: a colour picker, so the chroma keyer's colour can be changed
-rather than only read; dragging keyframes in time; and keeping hardware-decoded
-frames on the GPU instead of uploading them from system memory.
+Colours are picked rather than typed. A swatch shows the colour and its hex and
+opens a saturation/value square with a hue strip, an alpha strip and a hex field
+— which is how a title's colour and outline and the chroma keyer's key colour
+are now set. The picker holds its own HSV coordinates rather than reading them
+back from the colour, because hue and saturation are not recoverable from every
+colour: black is every hue at once and a grey has no saturation to read. A
+picker that re-derived them would swing back to red the moment the value reached
+zero and lose the hue somebody had just chosen.
+
+Still to come: dragging keyframes in time, and keeping hardware-decoded frames
+on the GPU instead of uploading them from system memory.
 
 **Phase 7 (interface) underway** — one window, drawn on the GPU with Skia,
 sharing the compositor's Direct3D device so a decoded frame reaches the screen
@@ -169,10 +177,12 @@ than only the colours. The timeline edits, the sequence plays at rate against
 the audio clock, and export runs on its own thread with progress and cancel.
 Titles are made, typed and styled in the panel: `TextField` is the application's
 first editable control, with a caret, a selection, and the keyboard anyone would
-expect of one. 1411 tests, plus a headless check that lays every panel out in
+expect of one. 1452 tests, plus a headless check that lays every panel out in
 every theme — including the inspector with a clip selected, every effect on it,
-and a title, which is the only way the controls a panel is made of get checked at
-all.
+a title, and the colour picker open, which is the only way the controls a panel
+is made of get checked at all. Given a directory, that check writes each theme's
+frame out as a PNG, so a changed fingerprint can be looked at rather than
+guessed at.
 
 ## Building
 
