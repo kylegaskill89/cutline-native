@@ -644,6 +644,391 @@ TEST(Dropdown, TheKeyboardStepsWithoutOpening) {
   EXPECT_EQ(test.box->selected(), 1u);
 }
 
+// -------------------------------------------------------------- text field --
+
+/// A field in a host, laid out and focused, which is the state every one of
+/// these starts from: a caret only means anything once the keyboard is there.
+struct Typed {
+  explicit Typed(std::string text = {}, bool multiline = false) {
+    auto owned = std::make_unique<TextField>(std::move(text));
+    field = owned.get();
+    field->set_multiline(multiline);
+    host = std::make_unique<WidgetHost>(std::move(owned));
+    host->resize(Rect{0.0, 0.0, 300.0, 80.0}, flat_context());
+    host->set_focus(field);
+  }
+
+  /// Types a run of characters, as the window would.
+  void type(std::string_view text) {
+    for (const char c : text) host->text(static_cast<char32_t>(c));
+  }
+
+  void press(Key key, Modifiers modifiers = {}) {
+    host->key_down(KeyEvent{.key = key, .modifiers = modifiers});
+  }
+
+  /// Lays out again, which is what the frame loop does before painting and what
+  /// rebuilds the offset table a click reads.
+  void settle() { host->update_layout(flat_context()); }
+
+  TextField* field = nullptr;
+  std::unique_ptr<WidgetHost> host;
+};
+
+TEST(TextField, TypingInsertsAtTheCaret) {
+  Typed test;
+  test.type("abc");
+  EXPECT_EQ(test.field->text(), "abc");
+  EXPECT_EQ(test.field->caret(), 3u);
+
+  test.press(Key::Left);
+  test.type("X");
+  EXPECT_EQ(test.field->text(), "abXc");
+}
+
+TEST(TextField, ControlCharactersAreNotText) {
+  // A tab and a newline arrive as keys. Taking them as text would put a
+  // control character into the string nobody could see or remove.
+  Typed test;
+  test.host->text(U'\t');
+  test.host->text(U'\n');
+  EXPECT_TRUE(test.field->text().empty());
+}
+
+TEST(TextField, BackspaceRemovesTheCharacterBeforeTheCaret) {
+  Typed test("abc");
+  test.press(Key::Backspace);
+  EXPECT_EQ(test.field->text(), "ab");
+  EXPECT_EQ(test.field->caret(), 2u);
+}
+
+TEST(TextField, DeleteRemovesTheCharacterAfterIt) {
+  Typed test("abc");
+  test.field->set_caret(0);
+  test.press(Key::Delete);
+  EXPECT_EQ(test.field->text(), "bc");
+  EXPECT_EQ(test.field->caret(), 0u);
+}
+
+TEST(TextField, BackspaceAtTheStartAndDeleteAtTheEndDoNothing) {
+  Typed test("ab");
+  test.field->set_caret(0);
+  test.press(Key::Backspace);
+  EXPECT_EQ(test.field->text(), "ab");
+
+  test.field->set_caret(2);
+  test.press(Key::Delete);
+  EXPECT_EQ(test.field->text(), "ab");
+}
+
+TEST(TextField, AMultiByteCharacterIsEditedWhole) {
+  // "é" is two bytes. A caret that moved by one would split it, and the field
+  // would hold a string no longer valid UTF-8.
+  Typed test;
+  test.host->text(U'é');
+  EXPECT_EQ(test.field->text().size(), 2u);
+  EXPECT_EQ(test.field->caret(), 2u);
+
+  test.press(Key::Left);
+  EXPECT_EQ(test.field->caret(), 0u) << "one press should clear the whole character";
+
+  test.press(Key::Delete);
+  EXPECT_TRUE(test.field->text().empty());
+}
+
+TEST(TextField, ShiftAndAnArrowExtendTheSelection) {
+  Typed test("abcd");
+  test.field->set_caret(4);
+  EXPECT_FALSE(test.field->has_selection());
+
+  test.press(Key::Left, Modifiers{.shift = true});
+  test.press(Key::Left, Modifiers{.shift = true});
+
+  EXPECT_TRUE(test.field->has_selection());
+  EXPECT_EQ(test.field->selection_begin(), 2u);
+  EXPECT_EQ(test.field->selection_end(), 4u);
+}
+
+TEST(TextField, TypingReplacesTheSelection) {
+  Typed test("abcd");
+  test.field->select_all();
+  test.type("X");
+  EXPECT_EQ(test.field->text(), "X");
+  EXPECT_FALSE(test.field->has_selection());
+}
+
+TEST(TextField, BackspaceDeletesTheSelectionRatherThanOneCharacter) {
+  Typed test("abcd");
+  test.field->select_all();
+  test.press(Key::Backspace);
+  EXPECT_TRUE(test.field->text().empty());
+}
+
+TEST(TextField, ControlAndASelectsEverything) {
+  Typed test("abcd");
+  test.press(Key::A, Modifiers{.control = true});
+  EXPECT_EQ(test.field->selection_begin(), 0u);
+  EXPECT_EQ(test.field->selection_end(), 4u);
+}
+
+TEST(TextField, AnArrowWithASelectionCollapsesItRatherThanMoving) {
+  Typed test("abcd");
+  test.field->select_all();
+  test.press(Key::Left);
+  EXPECT_FALSE(test.field->has_selection());
+  EXPECT_EQ(test.field->caret(), 0u) << "left should land at the start of the selection";
+
+  test.field->select_all();
+  test.press(Key::Right);
+  EXPECT_EQ(test.field->caret(), 4u) << "and right at its end";
+}
+
+TEST(TextField, HomeAndEndReachBothEnds) {
+  Typed test("abcd");
+  test.field->set_caret(2);
+  test.press(Key::Home);
+  EXPECT_EQ(test.field->caret(), 0u);
+  test.press(Key::End);
+  EXPECT_EQ(test.field->caret(), 4u);
+}
+
+TEST(TextField, ClickingPutsTheCaretUnderThePointer) {
+  Typed test("abcdefgh");
+  test.settle();
+
+  // Past the right-hand end of the text, which is the end of it.
+  const Rect area = test.field->bounds();
+  test.host->mouse_down(press(area.right() - 2.0, area.y + area.height * 0.5));
+  EXPECT_EQ(test.field->caret(), 8u);
+
+  test.host->mouse_down(press(area.x + 1.0, area.y + area.height * 0.5));
+  EXPECT_EQ(test.field->caret(), 0u);
+}
+
+TEST(TextField, DraggingSelects) {
+  Typed test("abcdefgh");
+  test.settle();
+
+  const Rect area = test.field->bounds();
+  const double y = area.y + area.height * 0.5;
+  test.host->mouse_down(press(area.x + 1.0, y));
+  test.host->mouse_move(MouseEvent{.x = area.right() - 2.0, .y = y});
+  test.host->mouse_up(press(area.right() - 2.0, y));
+
+  EXPECT_EQ(test.field->selection_begin(), 0u);
+  EXPECT_EQ(test.field->selection_end(), 8u);
+}
+
+TEST(TextField, ADoubleClickTakesTheWholeValue) {
+  Typed test("abcd");
+  test.settle();
+
+  const Rect area = test.field->bounds();
+  test.host->mouse_down(press(area.x + 2.0, area.y + area.height * 0.5, 2));
+  EXPECT_EQ(test.field->selection_begin(), 0u);
+  EXPECT_EQ(test.field->selection_end(), 4u);
+}
+
+TEST(TextField, ChangeFiresOnEveryEditAndCommitDoesNot) {
+  Typed test;
+  int changes = 0;
+  int commits = 0;
+  test.field->set_on_change([&](const std::string&) { ++changes; });
+  test.field->set_on_commit([&](const std::string&) { ++commits; });
+
+  test.type("abc");
+  EXPECT_EQ(changes, 3);
+  EXPECT_EQ(commits, 0) << "a document must not collect an undo entry per letter";
+
+  test.press(Key::Enter);
+  EXPECT_EQ(commits, 1);
+}
+
+TEST(TextField, TheKeyboardLeavingCommits) {
+  Typed test;
+  std::string committed;
+  test.field->set_on_commit([&](const std::string& value) { committed = value; });
+
+  test.type("done");
+  test.host->set_focus(nullptr);
+  EXPECT_EQ(committed, "done");
+}
+
+TEST(TextField, ClickingAwayFromAFieldCommitsIt) {
+  // A multiline field takes Enter as a line break, so clicking away is the only
+  // way to be done with one — and focus does not otherwise follow a press onto
+  // something that cannot take it.
+  auto root = std::make_unique<Box>(Axis::Vertical);
+  auto& field = root->emplace<TextField>();
+  field.set_multiline(true);
+  auto& elsewhere = root->emplace<Label>("not focusable");
+
+  WidgetHost host(std::move(root));
+  host.resize(Rect{0.0, 0.0, 200.0, 120.0}, flat_context());
+  host.set_focus(&field);
+
+  std::string committed;
+  field.set_on_commit([&](const std::string& value) { committed = value; });
+  host.text(U'h');
+  host.text(U'i');
+
+  const Rect away = elsewhere.bounds();
+  host.mouse_down(press(away.x + 2.0, away.y + away.height * 0.5));
+
+  EXPECT_EQ(committed, "hi");
+  EXPECT_EQ(host.focused(), nullptr);
+}
+
+TEST(TextField, CommittingTwiceWithoutAChangeReportsOnce) {
+  Typed test("same");
+  int commits = 0;
+  test.field->set_on_commit([&](const std::string&) { ++commits; });
+
+  test.press(Key::Enter);
+  test.press(Key::Enter);
+  EXPECT_EQ(commits, 0) << "nothing was edited";
+
+  test.type("r");
+  test.press(Key::Enter);
+  test.press(Key::Enter);
+  EXPECT_EQ(commits, 1);
+}
+
+TEST(TextField, EscapePutsBackWhatWasThere) {
+  Typed test("before");
+  test.host->set_focus(test.field);  // the value is remembered on focus
+  test.type("XYZ");
+  ASSERT_NE(test.field->text(), "before");
+
+  test.press(Key::Escape);
+  EXPECT_EQ(test.field->text(), "before");
+}
+
+TEST(TextField, EnterBreaksTheLineOnlyWhenAskedTo) {
+  Typed single("ab");
+  single.press(Key::Enter);
+  EXPECT_EQ(single.field->text(), "ab") << "a single-line field commits instead";
+
+  Typed many("ab", true);
+  many.press(Key::Enter);
+  many.type("cd");
+  EXPECT_EQ(many.field->text(), "ab\ncd");
+}
+
+TEST(TextField, UpAndDownMoveBetweenLinesKeepingTheColumn) {
+  Typed test("abcd\nefgh", true);
+  test.settle();
+
+  test.field->set_caret(2);  // between b and c on the first line
+  test.press(Key::Down);
+  EXPECT_EQ(test.field->caret(), 7u) << "the same column on the second line";
+
+  test.press(Key::Up);
+  EXPECT_EQ(test.field->caret(), 2u) << "and back again";
+}
+
+TEST(TextField, HomeAndEndAreTheLinesEndsWhenThereAreLines) {
+  Typed test("abcd\nefgh", true);
+  test.settle();
+
+  test.field->set_caret(7);
+  test.press(Key::Home);
+  EXPECT_EQ(test.field->caret(), 5u) << "the start of the second line, not of the text";
+  test.press(Key::End);
+  EXPECT_EQ(test.field->caret(), 9u);
+}
+
+TEST(TextField, ASingleLineFieldIgnoresTheLinesItWasGiven) {
+  // Setting a value with a break in it must not make a one-line field two
+  // lines tall, and Down must not wander into a line it does not draw.
+  Typed test("ab\ncd");
+  test.settle();
+  test.field->set_caret(1);
+  test.press(Key::Down);
+  EXPECT_EQ(test.field->caret(), 1u);
+}
+
+TEST(TextField, ClickingTheSecondLinePutsTheCaretThere) {
+  Typed test("abcd\nefgh", true);
+  test.field->set_min_lines(2);
+  test.host->resize(Rect{0.0, 0.0, 300.0, 80.0}, flat_context());
+  test.settle();
+
+  const Rect first = test.field->caret_rect(0);
+  const Rect second = test.field->caret_rect(6);
+  ASSERT_GT(second.y, first.y) << "the second line should be below the first";
+
+  const std::size_t index = test.field->index_at(test.field->bounds().x + 1.0, second.y + 2.0);
+  EXPECT_GE(index, 5u);
+  EXPECT_LE(index, 9u);
+}
+
+TEST(TextField, SettingTheTextKeepsTheCaretInsideIt) {
+  Typed test("a long value");
+  test.field->set_caret(10);
+  test.field->set_text("no");
+  EXPECT_LE(test.field->caret(), 2u);
+  EXPECT_FALSE(test.field->has_selection());
+}
+
+TEST(TextField, APlaceholderShowsOnlyWhileItIsEmpty) {
+  Typed test;
+  test.field->set_placeholder("Title text");
+  test.settle();
+
+  RecordingPainter empty;
+  test.field->paint(empty, default_theme());
+  EXPECT_EQ(empty.count(DrawCall::Kind::Text), 1u);
+
+  test.type("x");
+  test.settle();
+
+  RecordingPainter filled;
+  test.field->paint(filled, default_theme());
+  ASSERT_EQ(filled.count(DrawCall::Kind::Text), 1u);
+
+  // The last *text* call, not the last call: the caret is drawn after it.
+  const auto drawn = std::ranges::find_if(filled.calls(), [](const DrawCall& call) {
+    return call.kind == DrawCall::Kind::Text;
+  });
+  ASSERT_NE(drawn, filled.calls().end());
+  ASSERT_TRUE(drawn->run.has_value());
+  EXPECT_EQ(drawn->run->text, "x") << "the placeholder should be gone";
+}
+
+TEST(TextField, TheCaretIsDrawnOnlyWhenFocused) {
+  Typed test("ab");
+  test.settle();
+
+  RecordingPainter focused;
+  test.field->paint(focused, default_theme());
+  const std::size_t with_caret = focused.count(DrawCall::Kind::Fill);
+
+  test.host->set_focus(nullptr);
+  RecordingPainter blurred;
+  test.field->paint(blurred, default_theme());
+  EXPECT_LT(blurred.count(DrawCall::Kind::Fill), with_caret);
+}
+
+TEST(TextField, ASelectionIsDrawnBehindTheText) {
+  Typed test("abcd");
+  test.settle();
+  test.field->select_all();
+
+  RecordingPainter painter;
+  test.field->paint(painter, default_theme());
+
+  // The wash, the caret, and the field's own surface.
+  EXPECT_GE(painter.count(DrawCall::Kind::Fill), 2u);
+  bool text_after_wash = false;
+  bool seen_fill = false;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::Fill) seen_fill = true;
+    if (call.kind == DrawCall::Kind::Text && seen_fill) text_after_wash = true;
+  }
+  EXPECT_TRUE(text_after_wash) << "a selection must not be drawn over its own text";
+}
+
 // ------------------------------------------------------------ icon button --
 
 /// The lines an icon button drew.

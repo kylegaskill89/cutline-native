@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 
 namespace cutline::ui {
 namespace {
@@ -512,6 +514,425 @@ bool Dropdown::on_key_down(const KeyEvent& event) {
       return true;
     default:
       return false;
+  }
+}
+
+// -------------------------------------------------------------- text field --
+
+namespace {
+
+/// The same colour, thinner. What a selection wash and a dimmed placeholder are
+/// both made of.
+[[nodiscard]] Color thinned(const Color& color, float amount) noexcept {
+  return Color{color.r, color.g, color.b, color.a * amount};
+}
+
+/// Whether a byte is a UTF-8 continuation. Every caret movement lands where one
+/// is not, so a multi-byte character is never cut in half.
+[[nodiscard]] bool is_continuation(unsigned char byte) noexcept {
+  return (byte & 0xC0) == 0x80;
+}
+
+/// One code point, encoded. Anything outside Unicode becomes the replacement
+/// character rather than a broken sequence.
+[[nodiscard]] std::string encode_utf8(char32_t codepoint) {
+  auto value = static_cast<std::uint32_t>(codepoint);
+  if (value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF)) value = 0xFFFD;
+
+  std::string out;
+  if (value < 0x80) {
+    out.push_back(static_cast<char>(value));
+  } else if (value < 0x800) {
+    out.push_back(static_cast<char>(0xC0 | (value >> 6)));
+    out.push_back(static_cast<char>(0x80 | (value & 0x3F)));
+  } else if (value < 0x10000) {
+    out.push_back(static_cast<char>(0xE0 | (value >> 12)));
+    out.push_back(static_cast<char>(0x80 | ((value >> 6) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | (value & 0x3F)));
+  } else {
+    out.push_back(static_cast<char>(0xF0 | (value >> 18)));
+    out.push_back(static_cast<char>(0x80 | ((value >> 12) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | ((value >> 6) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | (value & 0x3F)));
+  }
+  return out;
+}
+
+}  // namespace
+
+TextField::TextField(std::string text) : text_(std::move(text)) {
+  set_focusable(true);
+  caret_ = text_.size();
+  anchor_ = caret_;
+}
+
+void TextField::set_text(std::string text) {
+  text_ = std::move(text);
+  caret_ = std::min(caret_, text_.size());
+  while (caret_ > 0 && caret_ < text_.size() &&
+         is_continuation(static_cast<unsigned char>(text_[caret_]))) {
+    --caret_;
+  }
+  anchor_ = caret_;
+  invalidate_layout();
+}
+
+void TextField::set_multiline(bool multiline) noexcept {
+  multiline_ = multiline;
+  invalidate_layout();
+}
+
+void TextField::set_caret(std::size_t index) noexcept {
+  caret_ = std::min(index, text_.size());
+  while (caret_ > 0 && caret_ < text_.size() &&
+         is_continuation(static_cast<unsigned char>(text_[caret_]))) {
+    --caret_;
+  }
+  anchor_ = caret_;
+  invalidate_layout();
+}
+
+void TextField::select_all() noexcept {
+  anchor_ = 0;
+  caret_ = text_.size();
+  invalidate_layout();
+}
+
+std::size_t TextField::next_boundary(std::size_t index) const noexcept {
+  if (index >= text_.size()) return text_.size();
+  ++index;
+  while (index < text_.size() && is_continuation(static_cast<unsigned char>(text_[index]))) {
+    ++index;
+  }
+  return index;
+}
+
+std::size_t TextField::previous_boundary(std::size_t index) const noexcept {
+  if (index == 0) return 0;
+  --index;
+  while (index > 0 && is_continuation(static_cast<unsigned char>(text_[index]))) --index;
+  return index;
+}
+
+std::size_t TextField::line_of(std::size_t index) const noexcept {
+  for (std::size_t i = 0; i < lines_.size(); ++i) {
+    // `end` is before the newline, so an index sitting on the break belongs to
+    // the line it ends.
+    if (index <= lines_[i].end) return i;
+  }
+  return lines_.empty() ? 0 : lines_.size() - 1;
+}
+
+LayoutItem TextField::sizing(Axis axis, const LayoutContext& context) const {
+  const Metrics& metrics = context.metrics();
+  if (axis == Axis::Horizontal) {
+    // Flexible: a field takes the width it is given. Its content decides
+    // nothing about how wide it should be, which is what keeps a row of them
+    // aligned.
+    return LayoutItem::flexible(1.0, metrics.control_height * 3.0);
+  }
+
+  if (!multiline_) return LayoutItem::fixed(metrics.control_height);
+
+  const auto rows = static_cast<double>(std::max<std::size_t>(
+      static_cast<std::size_t>(min_lines_), std::max<std::size_t>(lines_.size(), 1)));
+  return LayoutItem::fixed(rows * metrics.font_size * 1.4 + metrics.padding_y * 2.0);
+}
+
+void TextField::layout(const LayoutContext& context) {
+  const Metrics& metrics = context.metrics();
+  font_size_ = metrics.font_size;
+  line_height_ = metrics.font_size * 1.4;
+  padding_ = metrics.padding_y;
+
+  lines_.clear();
+  std::size_t begin = 0;
+  while (true) {
+    const std::size_t newline = multiline_ ? text_.find('\n', begin) : std::string::npos;
+    const std::size_t end = newline == std::string::npos ? text_.size() : newline;
+
+    Line line;
+    line.begin = begin;
+    line.end = end;
+    // One offset per boundary, including both ends, so a caret anywhere in the
+    // line has an x to be drawn at.
+    line.offsets.push_back(0.0);
+    for (std::size_t at = begin; at < end;) {
+      at = next_boundary(at);
+      line.offsets.push_back(context.text.measure(
+          std::string_view(text_).substr(begin, std::min(at, end) - begin), font_size_, false));
+    }
+    lines_.push_back(std::move(line));
+
+    if (newline == std::string::npos) break;
+    begin = newline + 1;
+  }
+}
+
+std::size_t TextField::index_at(double x, double y) const {
+  if (lines_.empty()) return 0;
+
+  const Rect area = bounds();
+  const auto row = static_cast<std::size_t>(
+      std::clamp((y - area.y - padding_) / std::max(1.0, line_height_), 0.0,
+                 static_cast<double>(lines_.size() - 1)));
+  const Line& line = lines_[row];
+
+  const double local = x - (area.x + padding_);
+  // The boundary nearest the pointer, not the one before it: clicking in the
+  // right half of a character puts the caret after it, which is what every
+  // other field does.
+  std::size_t best = 0;
+  double closest = std::numeric_limits<double>::max();
+  for (std::size_t i = 0; i < line.offsets.size(); ++i) {
+    const double distance = std::abs(line.offsets[i] - local);
+    if (distance < closest) {
+      closest = distance;
+      best = i;
+    }
+  }
+
+  std::size_t index = line.begin;
+  for (std::size_t step = 0; step < best && index < line.end; ++step) {
+    index = next_boundary(index);
+  }
+  return index;
+}
+
+Rect TextField::caret_rect(std::size_t index) const {
+  const Rect area = bounds();
+  if (lines_.empty()) {
+    return Rect{area.x + padding_, area.y + padding_, 1.0, line_height_};
+  }
+
+  const std::size_t row = line_of(index);
+  const Line& line = lines_[row];
+
+  std::size_t steps = 0;
+  for (std::size_t at = line.begin; at < index && at < line.end; at = next_boundary(at)) ++steps;
+  const double offset = steps < line.offsets.size() ? line.offsets[steps] : line.offsets.back();
+
+  return Rect{area.x + padding_ + offset, area.y + padding_ + static_cast<double>(row) * line_height_,
+              1.0, line_height_};
+}
+
+void TextField::replace_selection(std::string_view with) {
+  const std::size_t from = selection_begin();
+  const std::size_t to = selection_end();
+  text_.replace(from, to - from, with);
+  caret_ = from + with.size();
+  anchor_ = caret_;
+  changed();
+}
+
+void TextField::erase_before_caret() {
+  if (has_selection()) {
+    replace_selection({});
+    return;
+  }
+  if (caret_ == 0) return;
+  const std::size_t from = previous_boundary(caret_);
+  text_.erase(from, caret_ - from);
+  caret_ = from;
+  anchor_ = caret_;
+  changed();
+}
+
+void TextField::erase_after_caret() {
+  if (has_selection()) {
+    replace_selection({});
+    return;
+  }
+  if (caret_ >= text_.size()) return;
+  const std::size_t to = next_boundary(caret_);
+  text_.erase(caret_, to - caret_);
+  changed();
+}
+
+void TextField::move_caret(std::size_t to, bool extend) noexcept {
+  caret_ = std::min(to, text_.size());
+  if (!extend) anchor_ = caret_;
+  // Nothing has moved, but the caret has to be drawn where it now is.
+  invalidate_layout();
+}
+
+void TextField::changed() {
+  // The offset table is stale the moment the text is, and both painting and
+  // hit-testing read it.
+  invalidate_layout();
+  if (on_change_) on_change_(text_);
+}
+
+void TextField::commit() {
+  if (text_ == committed_) return;
+  committed_ = text_;
+  if (on_commit_) on_commit_(text_);
+}
+
+void TextField::on_focus_changed(bool focused) {
+  if (focused) {
+    committed_ = text_;
+    return;
+  }
+  // Leaving the field is a commit: it is the moment a value has settled, and
+  // writing on every keystroke would fill an undo history with single letters.
+  dragging_ = false;
+  commit();
+}
+
+bool TextField::on_mouse_down(const MouseEvent& event) {
+  if (event.button != MouseButton::Left) return false;
+
+  if (event.click_count >= 2) {
+    select_all();
+    dragging_ = false;
+    return true;
+  }
+
+  set_caret(index_at(event.x, event.y));
+  dragging_ = true;
+  return true;
+}
+
+bool TextField::on_mouse_move(const MouseEvent& event) {
+  if (!dragging_) return false;
+  move_caret(index_at(event.x, event.y), true);
+  return true;
+}
+
+bool TextField::on_mouse_up(const MouseEvent& event) {
+  if (!dragging_) return false;
+  move_caret(index_at(event.x, event.y), true);
+  dragging_ = false;
+  return true;
+}
+
+bool TextField::on_key_down(const KeyEvent& event) {
+  const bool extend = event.modifiers.shift;
+
+  if (event.modifiers.control) {
+    if (event.key == Key::A) {
+      select_all();
+      return true;
+    }
+    return false;
+  }
+
+  switch (event.key) {
+    case Key::Left:
+      move_caret(previous_boundary(has_selection() && !extend ? selection_begin() : caret_),
+                 extend);
+      return true;
+    case Key::Right:
+      move_caret(next_boundary(has_selection() && !extend ? selection_end() - 1 : caret_), extend);
+      return true;
+
+    case Key::Home:
+      move_caret(lines_.empty() ? 0 : lines_[line_of(caret_)].begin, extend);
+      return true;
+    case Key::End:
+      move_caret(lines_.empty() ? text_.size() : lines_[line_of(caret_)].end, extend);
+      return true;
+
+    case Key::Up:
+    case Key::Down: {
+      if (!multiline_ || lines_.size() < 2) return false;
+      const std::size_t row = line_of(caret_);
+      if (event.key == Key::Up && row == 0) return true;
+      if (event.key == Key::Down && row + 1 >= lines_.size()) return true;
+
+      // The column is kept in characters rather than in pixels, which is what
+      // makes moving down a line and back up again land where it started.
+      std::size_t column = 0;
+      for (std::size_t at = lines_[row].begin; at < caret_; at = next_boundary(at)) ++column;
+
+      const Line& target = lines_[event.key == Key::Up ? row - 1 : row + 1];
+      std::size_t index = target.begin;
+      for (std::size_t step = 0; step < column && index < target.end; ++step) {
+        index = next_boundary(index);
+      }
+      move_caret(index, extend);
+      return true;
+    }
+
+    case Key::Backspace:
+      erase_before_caret();
+      return true;
+    case Key::Delete:
+      erase_after_caret();
+      return true;
+
+    case Key::Enter:
+      if (multiline_) {
+        replace_selection("\n");
+      } else {
+        commit();
+      }
+      return true;
+
+    case Key::Escape:
+      // Back to what it was when the keyboard arrived, which is the only
+      // undo a field can offer on its own.
+      if (text_ != committed_) {
+        text_ = committed_;
+        caret_ = std::min(caret_, text_.size());
+        anchor_ = caret_;
+        invalidate_layout();
+        if (on_change_) on_change_(text_);
+      }
+      return true;
+
+    default:
+      return false;
+  }
+}
+
+bool TextField::on_text(char32_t codepoint) {
+  // Control characters are keys, not text. A newline arrives as Enter, which
+  // decides for itself whether this field takes one.
+  if (codepoint < 0x20 || codepoint == 0x7F) return false;
+  replace_selection(encode_utf8(codepoint));
+  return true;
+}
+
+void TextField::paint_content(Painter& painter, const Theme& theme) const {
+  const SurfaceStyle& style = theme.style(part(), state());
+  const Rect area = bounds();
+
+  if (text_.empty() && !placeholder_.empty()) {
+    const Rect where{area.x + padding_, area.y, area.width - padding_ * 2.0, area.height};
+    painter.text(text_run(where, placeholder_, style, font_size_, TextAlign::Left, false));
+  }
+
+  // The selection first, so the text sits on top of it.
+  if (has_selection() && focused()) {
+    const std::size_t from = selection_begin();
+    const std::size_t to = selection_end();
+    for (std::size_t row = 0; row < lines_.size(); ++row) {
+      const Line& line = lines_[row];
+      if (to < line.begin || from > line.end) continue;
+
+      const Rect start = caret_rect(std::max(from, line.begin));
+      const Rect stop = caret_rect(std::min(to, line.end));
+      const double width = std::max(1.0, stop.x - start.x);
+      painter.fill(Rect{start.x, start.y, width, line_height_}, 0.0,
+                   Fill::solid(thinned(theme.accent, 0.45f)));
+    }
+  }
+
+  for (std::size_t row = 0; row < lines_.size(); ++row) {
+    const Line& line = lines_[row];
+    if (line.end <= line.begin) continue;
+
+    const Rect where{area.x + padding_, area.y + padding_ + static_cast<double>(row) * line_height_,
+                     std::max(0.0, area.width - padding_ * 2.0), line_height_};
+    painter.text(text_run(where, text_.substr(line.begin, line.end - line.begin), style,
+                          font_size_, TextAlign::Left, false));
+  }
+
+  if (focused()) {
+    const Rect caret = caret_rect(caret_);
+    painter.fill(Rect{caret.x, caret.y, 1.0, caret.height}, 0.0, Fill::solid(style.text));
   }
 }
 

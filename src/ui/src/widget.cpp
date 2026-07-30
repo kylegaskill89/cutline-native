@@ -21,6 +21,14 @@ namespace {
   return names;
 }
 
+/// Whether `widget` is `ancestor` or sits somewhere inside it.
+[[nodiscard]] bool within(const Widget* widget, const Widget* ancestor) noexcept {
+  for (const Widget* node = widget; node != nullptr; node = node->parent()) {
+    if (node == ancestor) return true;
+  }
+  return false;
+}
+
 /// Whether a widget can be interacted with at all, which means it and every
 /// one of its ancestors is visible and enabled. A control inside a hidden panel
 /// is not reachable however it is flagged itself.
@@ -315,6 +323,14 @@ bool WidgetHost::mouse_down(const MouseEvent& event) {
 
   Widget* target = captured_ != nullptr ? captured_ : target_at(event.x, event.y);
   if (target == nullptr) return false;
+
+  // Typing is a mode, and a press outside the thing being typed into is how
+  // anyone leaves it. Decided on where the press *landed* rather than on what
+  // handled it: a label handles nothing, and clicking one still has to end an
+  // edit — nothing writes a field's value down until the keyboard goes.
+  if (focused_ != nullptr && focused_->wants_text() && !within(target, focused_)) {
+    set_focus(nullptr);
+  }
 
   Widget* handler = bubble(target, [&](Widget& widget) { return widget.on_mouse_down(event); });
   if (handler == nullptr) return false;

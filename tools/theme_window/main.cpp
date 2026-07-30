@@ -30,6 +30,7 @@
 #include "cutline/editor/inspector.hpp"
 #include "cutline/editor/session.hpp"
 #include "cutline/editor/timeline_binding.hpp"
+#include "cutline/editor/titles.hpp"
 #include "cutline/editor/workspace.hpp"
 #include "cutline/ui/browser.hpp"
 #include "cutline/ui/controls.hpp"
@@ -122,6 +123,7 @@ using cutline::ui::Slider;
 using cutline::ui::Spacer;
 using cutline::ui::Splitter;
 using cutline::ui::TextAlign;
+using cutline::ui::TextField;
 using cutline::ui::Theme;
 using cutline::ui::TimelineView;
 using cutline::ui::TimeScale;
@@ -494,6 +496,7 @@ void poll_export(App& app);
 void settle_export(App& app);
 void toggle_playback(App& app);
 void import_media(App& app);
+void add_title(App& app);
 void complain(HWND owner, const std::string& message);
 
 /// A heading inside the inspector, over the group of controls it names.
@@ -695,17 +698,17 @@ void build_effect_controls(App& app, const std::string& clip_id) {
         continue;
       }
 
-      const ParamRow line{.name = param.name,
-                          .suffix = param.suffix,
-                          .range = param.range,
-                          .value = param.value,
-                          .fallback = param.fallback,
-                          .animatable = true,
-                          .animated = param.animated,
-                          .keyed_here = param.keyed_here};
+      const ParamRow control{.name = param.name,
+                             .suffix = param.suffix,
+                             .range = param.range,
+                             .value = param.value,
+                             .fallback = param.fallback,
+                             .animatable = true,
+                             .animated = param.animated,
+                             .keyed_here = param.keyed_here};
 
       build_param_row(
-          app, line,
+          app, control,
           [&app, clip_id, index = row.index, key = param.key](double value) {
             app.session.apply(cutline::editor::set_effect_parameter(
                 app.session.project(), clip_id, index, key, value,
@@ -738,6 +741,110 @@ void build_effect_controls(App& app, const std::string& clip_id) {
   }
 }
 
+/// A title's own text and styling, when the selected clip is one.
+///
+/// Above Motion rather than below the effects: what a title *says* is the first
+/// thing anyone wants to change about it, and Premiere puts the same controls at
+/// the top of its own panel.
+void build_title_controls(App& app, const std::string& clip_id,
+                          const cutline::core::TextSpec& spec) {
+  inspector_heading(app, "Text");
+
+  // Written to the document when the field is done with — Enter, or the
+  // keyboard leaving. On every keystroke it would be one undo entry per letter.
+  const auto write = [&app, clip_id](cutline::core::TextSpec changed) {
+    const cutline::core::Clip* clip =
+        cutline::core::find_clip(app.session.project(), clip_id);
+    if (clip == nullptr) return;
+    app.session.apply(cutline::editor::set_title_spec(app.session.project(), clip->media_id,
+                                                      std::move(changed)));
+    refresh_browser(app);
+    refresh_timeline(app);
+    invalidate_preview(app);
+    app.inspector_stale = true;
+  };
+
+  auto& content = app.inspector->emplace<TextField>(spec.content);
+  content.set_multiline(true);
+  content.set_min_lines(2);
+  content.set_placeholder("Title text");
+  content.set_on_commit([write, spec](const std::string& text) {
+    cutline::core::TextSpec changed = spec;
+    changed.content = text;
+    write(std::move(changed));
+  });
+
+  app.inspector->emplace<Label>("Size").set_small(true);
+  auto& size = app.inspector->emplace<Slider>(ValueRange{.minimum = 8.0, .maximum = 400.0},
+                                              spec.font_size);
+  size.set_default_value(96.0);
+  size.set_on_commit([write, spec](double value) {
+    cutline::core::TextSpec changed = spec;
+    changed.font_size = value;
+    write(std::move(changed));
+  });
+
+  app.inspector->emplace<Label>("Colour").set_small(true);
+  auto& colour = app.inspector->emplace<TextField>(spec.color);
+  colour.set_placeholder("#ffffff");
+  colour.set_on_commit([write, spec](const std::string& text) {
+    cutline::core::TextSpec changed = spec;
+    changed.color = text;
+    write(std::move(changed));
+  });
+
+  auto& style = app.inspector->emplace<Box>(Axis::Horizontal);
+  auto& bold = style.emplace<Checkbox>("Bold", spec.bold);
+  bold.set_on_change([write, spec](bool on) {
+    cutline::core::TextSpec changed = spec;
+    changed.bold = on;
+    write(std::move(changed));
+  });
+  auto& italic = style.emplace<Checkbox>("Italic", spec.italic);
+  italic.set_on_change([write, spec](bool on) {
+    cutline::core::TextSpec changed = spec;
+    changed.italic = on;
+    write(std::move(changed));
+  });
+  style.emplace<Spacer>();
+
+  auto& decoration = app.inspector->emplace<Box>(Axis::Horizontal);
+  auto& shadow = decoration.emplace<Checkbox>("Shadow", spec.shadow);
+  shadow.set_on_change([write, spec](bool on) {
+    cutline::core::TextSpec changed = spec;
+    changed.shadow = on;
+    write(std::move(changed));
+  });
+  // An outline is a colour and a width, and either one alone does nothing. One
+  // checkbox turns both on, at a width that can be seen.
+  auto& outline = decoration.emplace<Checkbox>("Outline", spec.stroke_color.has_value());
+  outline.set_on_change([write, spec](bool on) {
+    cutline::core::TextSpec changed = spec;
+    if (on) {
+      changed.stroke_color = "#000000";
+      if (changed.stroke_width <= 0.0) changed.stroke_width = 3.0;
+    } else {
+      changed.stroke_color.reset();
+    }
+    write(std::move(changed));
+  });
+  decoration.emplace<Spacer>();
+
+  auto& align_row = app.inspector->emplace<Box>(Axis::Horizontal);
+  align_row.emplace<Label>("Align").set_small(true);
+  constexpr std::array kAligns{cutline::core::TextAlign::Left, cutline::core::TextAlign::Center,
+                               cutline::core::TextAlign::Right};
+  const auto found = std::ranges::find(kAligns, spec.align);
+  auto& align = align_row.emplace<Dropdown>(
+      std::vector<std::string>{"Left", "Centre", "Right"},
+      found == kAligns.end() ? 1u : static_cast<std::size_t>(found - kAligns.begin()));
+  align.set_on_change([write, spec](std::size_t index) {
+    cutline::core::TextSpec changed = spec;
+    changed.align = index < kAligns.size() ? kAligns[index] : cutline::core::TextAlign::Center;
+    write(std::move(changed));
+  });
+}
+
 /// Rebuilds the inspector for whatever is selected.
 ///
 /// A loop over `clip_parameters` rather than a hand-built form, so a property
@@ -763,6 +870,14 @@ void refresh_inspector(App& app) {
   const std::string clip_id{selection.front()};
   const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), clip_id);
   const bool visual = clip != nullptr && clip->kind == cutline::core::TrackKind::Video;
+
+  // A title's words come first: it is the thing anyone wants to change about a
+  // title, and everything below is the same for every clip.
+  if (const cutline::core::TextSpec* spec =
+          cutline::editor::clip_title_spec(app.session.project(), clip_id);
+      spec != nullptr) {
+    build_title_controls(app, clip_id, *spec);
+  }
 
   // Premiere's own heading for the built-in transform, and the honest one for
   // an audio clip, which has no geometry to move.
@@ -1199,6 +1314,21 @@ void import_media(App& app) {
 #endif
 }
 
+/// Makes a title, drops it at the playhead, and selects it.
+///
+/// Selected because the next thing anyone wants is to type: the inspector shows
+/// a title's own text and styling for whatever is selected, so creating one and
+/// leaving the selection elsewhere would mean making a card and then having to
+/// go and find it.
+void add_title(App& app) {
+  std::string clip_id;
+  app.session.apply(cutline::editor::add_title_at(app.session.project(),
+                                                  cutline::editor::default_title_spec(),
+                                                  app.session.playhead(), {}, &clip_id));
+  if (!clip_id.empty()) app.session.select_one(clip_id);
+  refresh_all(app);
+}
+
 /// The system's open or save dialog.
 [[nodiscard]] std::optional<std::filesystem::path> choose_file(HWND owner, bool saving) {
   std::array<wchar_t, MAX_PATH> buffer{};
@@ -1363,6 +1493,9 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   });
   tools.emplace<Button>("Remove", [app] {
     if (app != nullptr) remove_from_pool(*app);
+  });
+  tools.emplace<Button>("New Title", [app] {
+    if (app != nullptr) add_title(*app);
   });
   tools.emplace<Spacer>();
 
@@ -2710,8 +2843,42 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       return 0;
     }
 
+    // A typed character. Nothing delivered these until there was something to
+    // type into, which is why a field could be focused, show a caret, and take
+    // nothing but the arrow keys.
+    case WM_CHAR: {
+      const auto unit = static_cast<char16_t>(wparam);
+
+      // UTF-16 arrives a code unit at a time, so anything outside the basic
+      // plane comes as a surrogate pair across two messages. Holding the high
+      // half is what turns those back into one code point.
+      static char16_t pending_high = 0;
+      char32_t codepoint = unit;
+      if (unit >= 0xD800 && unit <= 0xDBFF) {
+        pending_high = unit;
+        return 0;
+      }
+      if (unit >= 0xDC00 && unit <= 0xDFFF) {
+        if (pending_high == 0) return 0;  // a low half on its own is nothing
+        codepoint = 0x10000 + ((static_cast<char32_t>(pending_high - 0xD800) << 10) |
+                               static_cast<char32_t>(unit - 0xDC00));
+        pending_high = 0;
+      } else {
+        pending_high = 0;
+      }
+
+      if (shell->host->text(codepoint)) mark_dirty(*app);
+      return 0;
+    }
+
     case WM_KEYDOWN: {
-      if (wparam >= '1' && wparam <= '9') {
+      // Everything a field could mean belongs to the field. A digit switches
+      // theme and a space plays the timeline — but not while someone is typing,
+      // where they are a digit and a space.
+      const Widget* typing = shell->host->focused();
+      const bool editing = typing != nullptr && typing->wants_text();
+
+      if (!editing && wparam >= '1' && wparam <= '9') {
         set_theme(*app, static_cast<std::size_t>(wparam - '1'));
         return 0;
       }
@@ -2741,13 +2908,22 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       }
       // Space, before the tree sees it, because a focused button would
       // otherwise take it as a press. Every editor in the world plays with it.
-      if (wparam == VK_SPACE && !held.control && !held.alt) {
+      if (!editing && wparam == VK_SPACE && !held.control && !held.alt) {
         toggle_playback(*app);
         return 0;
       }
       const KeyEvent event{.key = key_from_win32(wparam),
                            .modifiers = held,
                            .repeat = (lparam & (1 << 30)) != 0};
+
+      // While typing, the tree goes first. Ctrl+A means every clip normally and
+      // every character inside a field, and a shortcut that reaches past the
+      // keyboard focus to select the timeline instead is simply wrong there.
+      // Undo still works: a field does not handle Ctrl+Z, so it falls through.
+      if (editing && shell->host->key_down(event)) {
+        mark_dirty(*app);
+        return 0;
+      }
 
       // Before the tree: nothing should be able to swallow undo.
       if (run_binding(*app, kApplicationKeys, event.key, held)) return 0;
@@ -3065,6 +3241,21 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       app.main.host->update_layout(context);
       app.main.host->paint(*painter, theme);
       walk(app.main.host->root());
+
+      // And again for a title, whose panel has controls no other clip does —
+      // the text field among them, which nothing else in the interface uses yet
+      // and which would otherwise never be laid out in any theme.
+      std::string title_clip;
+      app.session.apply(cutline::editor::add_title_at(app.session.project(),
+                                                      cutline::editor::default_title_spec(), 0.0,
+                                                      {}, &title_clip));
+      if (!title_clip.empty()) {
+        app.session.select_one(title_clip);
+        refresh_inspector(app);
+        app.main.host->update_layout(context);
+        app.main.host->paint(*painter, theme);
+        walk(app.main.host->root());
+      }
     }
 
     // And the theme has to reach the pixels. Sampling a scatter of points

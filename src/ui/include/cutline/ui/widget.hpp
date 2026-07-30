@@ -184,6 +184,14 @@ class Widget {
   /// A typed character, already through the keyboard layout and any IME.
   virtual bool on_text(char32_t codepoint);
 
+  /// Whether this widget is being typed into.
+  ///
+  /// The window asks before spending a key on a shortcut: a digit means "switch
+  /// theme" and a space means "play" everywhere *except* inside something that
+  /// takes text, where they mean a digit and a space. Asking the widget beats
+  /// the window guessing from its type.
+  [[nodiscard]] virtual bool wants_text() const noexcept { return false; }
+
   virtual void on_mouse_enter();
   virtual void on_mouse_leave();
   virtual void on_focus_changed(bool focused);

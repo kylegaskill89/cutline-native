@@ -122,6 +122,127 @@ class Slider : public Widget {
   std::function<void(double)> on_commit_;
 };
 
+/// A field of editable text.
+///
+/// Caret, selection, and enough keyboard to be usable without a mouse. What a
+/// title's content is typed into, and what numeric entry will eventually be
+/// built on.
+///
+/// **Indices are byte offsets into UTF-8**, and every movement lands on a code
+/// point boundary. Bytes rather than code points because the string is what
+/// everything else wants, and a caret counted in code points would have to be
+/// converted at every edge.
+///
+/// Widths come from a table built at layout, where a text measurer is in hand.
+/// Painting and hit-testing both need it and neither has one, which is the same
+/// reason `MenuList` takes its row height there. A press arriving between a
+/// change and the next layout reads a table one edit out of date; since the
+/// change came from a keystroke and layout runs before the next frame is drawn,
+/// that window contains no input.
+class TextField : public Widget {
+ public:
+  explicit TextField(std::string text = {});
+
+  [[nodiscard]] const std::string& text() const noexcept { return text_; }
+  /// Replaces the contents. The caret and selection are clamped to fit, so a
+  /// field whose value is refreshed from elsewhere cannot end up pointing past
+  /// the end of it.
+  void set_text(std::string text);
+
+  /// Shown, dimmed, when the field is empty.
+  void set_placeholder(std::string text) { placeholder_ = std::move(text); }
+  [[nodiscard]] const std::string& placeholder() const noexcept { return placeholder_; }
+
+  /// Whether Enter inserts a line break instead of committing.
+  void set_multiline(bool multiline) noexcept;
+  [[nodiscard]] bool multiline() const noexcept { return multiline_; }
+
+  /// How many lines of room to ask for. Only meaningful for a multiline field.
+  void set_min_lines(int lines) noexcept { min_lines_ = std::max(1, lines); }
+
+  /// Every edit, as it happens.
+  void set_on_change(std::function<void(const std::string&)> on_change) {
+    on_change_ = std::move(on_change);
+  }
+  /// The moment to write the value somewhere: Enter on a single-line field, or
+  /// the keyboard leaving. Not every keystroke, so a document does not collect
+  /// one undo entry per character typed.
+  void set_on_commit(std::function<void(const std::string&)> on_commit) {
+    on_commit_ = std::move(on_commit);
+  }
+
+  [[nodiscard]] std::size_t caret() const noexcept { return caret_; }
+  /// Moves the caret and drops any selection. Clamped, and snapped to a code
+  /// point boundary.
+  void set_caret(std::size_t index) noexcept;
+
+  [[nodiscard]] std::size_t selection_begin() const noexcept { return std::min(anchor_, caret_); }
+  [[nodiscard]] std::size_t selection_end() const noexcept { return std::max(anchor_, caret_); }
+  [[nodiscard]] bool has_selection() const noexcept { return anchor_ != caret_; }
+  void select_all() noexcept;
+
+  /// The byte index nearest a point, for a click.
+  [[nodiscard]] std::size_t index_at(double x, double y) const;
+  /// Where the caret sits for an index, in window coordinates.
+  [[nodiscard]] Rect caret_rect(std::size_t index) const;
+
+  [[nodiscard]] Part part() const noexcept override { return Part::Input; }
+  [[nodiscard]] bool paints_surface() const noexcept override { return true; }
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  void layout(const LayoutContext& context) override;
+  void paint_content(Painter& painter, const Theme& theme) const override;
+
+  bool on_mouse_down(const MouseEvent& event) override;
+  bool on_mouse_move(const MouseEvent& event) override;
+  bool on_mouse_up(const MouseEvent& event) override;
+  bool on_key_down(const KeyEvent& event) override;
+  bool on_text(char32_t codepoint) override;
+  [[nodiscard]] bool wants_text() const noexcept override { return true; }
+  void on_focus_changed(bool focused) override;
+
+ private:
+  /// One line of the field, with the x offset of every code point boundary in
+  /// it — measured at layout, used by painting and by hit-testing.
+  struct Line {
+    std::size_t begin = 0;  ///< byte index of the first character
+    std::size_t end = 0;    ///< byte index one past the last, before any '\n'
+    std::vector<double> offsets;
+  };
+
+  void replace_selection(std::string_view with);
+  void erase_before_caret();
+  void erase_after_caret();
+  void move_caret(std::size_t to, bool extend) noexcept;
+  void changed();
+  void commit();
+
+  [[nodiscard]] std::size_t line_of(std::size_t index) const noexcept;
+  [[nodiscard]] std::size_t next_boundary(std::size_t index) const noexcept;
+  [[nodiscard]] std::size_t previous_boundary(std::size_t index) const noexcept;
+
+  std::string text_;
+  std::string placeholder_;
+  /// What the text was when the keyboard arrived, so Escape can put it back.
+  std::string committed_;
+
+  std::size_t caret_ = 0;
+  /// The other end of the selection. Equal to the caret means none.
+  std::size_t anchor_ = 0;
+
+  bool multiline_ = false;
+  int min_lines_ = 1;
+  bool dragging_ = false;
+
+  /// Rebuilt at layout.
+  std::vector<Line> lines_;
+  double font_size_ = 13.0;
+  double line_height_ = 18.0;
+  double padding_ = 6.0;
+
+  std::function<void(const std::string&)> on_change_;
+  std::function<void(const std::string&)> on_commit_;
+};
+
 /// A box that is either ticked or not, with a label beside it.
 class Checkbox : public Widget {
  public:
