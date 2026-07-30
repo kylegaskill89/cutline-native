@@ -3,6 +3,7 @@
 #include "cutline/core/time.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <utility>
@@ -41,6 +42,17 @@ constexpr double kTrimHandle = 8.0;
 /// neighbour and the core does not would preview a slide and then refuse it.
 constexpr double kAbutEps = 1e-3;
 
+/// One header switch, and the gap between them. Small, because there are up to
+/// three of them and a track header is a hundred and forty pixels wide with a
+/// name to fit as well.
+constexpr double kSwitchSize = 15.0;
+constexpr double kSwitchGap = 3.0;
+
+/// The switches each kind of track shows, in the order they are drawn.
+constexpr std::array<TrackControl, 3> kAudioControls{TrackControl::Mute, TrackControl::Solo,
+                                                     TrackControl::Lock};
+constexpr std::array<TrackControl, 2> kVideoControls{TrackControl::Hide, TrackControl::Lock};
+
 }  // namespace
 
 std::string_view to_string(Tool tool) noexcept {
@@ -52,6 +64,16 @@ std::string_view to_string(Tool tool) noexcept {
     case Tool::Slide: return "slide";
   }
   return "selection";
+}
+
+std::string_view to_string(TrackControl control) noexcept {
+  switch (control) {
+    case TrackControl::Mute: return "M";
+    case TrackControl::Solo: return "S";
+    case TrackControl::Lock: return "L";
+    case TrackControl::Hide: return "H";
+  }
+  return "?";
 }
 
 bool pulls_start(DragMode mode) noexcept {
@@ -187,6 +209,53 @@ Rect TimelineView::header_rect(std::size_t track) const {
   if (row.empty()) return {};
   const Rect headers = header_area();
   return Rect{headers.x, row.y, headers.width, row.height};
+}
+
+bool TimelineView::has_control(std::size_t track, TrackControl control) const {
+  if (track >= model_.tracks.size()) return false;
+  if (model_.tracks[track].audio) {
+    return std::ranges::find(kAudioControls, control) != kAudioControls.end();
+  }
+  return std::ranges::find(kVideoControls, control) != kVideoControls.end();
+}
+
+Rect TimelineView::control_rect(std::size_t track, TrackControl control) const {
+  if (!has_control(track, control)) return {};
+
+  const Rect header = header_rect(track);
+  if (header.empty()) return {};
+
+  const std::span<const TrackControl> controls =
+      model_.tracks[track].audio ? std::span<const TrackControl>(kAudioControls)
+                                 : std::span<const TrackControl>(kVideoControls);
+  const auto found = std::ranges::find(controls, control);
+  const auto index = static_cast<double>(std::distance(controls.begin(), found));
+
+  // A second row under the name, aligned to the bottom of the header. Under
+  // rather than beside, because a hundred and forty pixels is not enough for a
+  // readable label and three switches on one line.
+  const double x = header.x + metrics_.padding_x + index * (kSwitchSize + kSwitchGap);
+  const double y = header.bottom() - kSwitchSize - metrics_.padding_y;
+  const Rect box{x, y, kSwitchSize, kSwitchSize};
+
+  // Refused rather than clipped. A switch drawn half outside its own header, or
+  // overlapping the name, is worse than one that admits there is no room.
+  if (box.right() > header.right() - metrics_.padding_x * 0.5 || box.y < header.y) return {};
+  return box;
+}
+
+std::optional<TrackControlRef> TimelineView::control_at(double x, double y) const {
+  if (!header_area().contains(x, y)) return std::nullopt;
+
+  for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
+    for (const TrackControl control :
+         {TrackControl::Mute, TrackControl::Solo, TrackControl::Lock, TrackControl::Hide}) {
+      if (control_rect(track, control).contains(x, y)) {
+        return TrackControlRef{.track = track, .control = control};
+      }
+    }
+  }
+  return std::nullopt;
 }
 
 Rect TimelineView::block_rect(std::size_t track, std::size_t block) const {
@@ -389,9 +458,41 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
         theme.style(Part::TrackHeader, model_.tracks[track].muted ? State::Disabled
                                                                   : State::Normal);
     paint_surface(painter, box, style);
-    const Rect text = inset(box, Edges::symmetric(metrics_.padding_x, 0.0));
+
+    // The name on the first line rather than centred, so it does not collide
+    // with the row of switches beneath it.
+    const Rect text{box.x + metrics_.padding_x, box.y + metrics_.padding_y,
+                    std::max(0.0, box.width - 2.0 * metrics_.padding_x),
+                    metrics_.font_size * metrics_.line_height};
     painter.text(text_run(text, model_.tracks[track].name, style, metrics_.font_size,
                           TextAlign::Left, true));
+
+    const TrackSwitches& on = model_.tracks[track].switches;
+    for (const TrackControl control :
+         {TrackControl::Mute, TrackControl::Solo, TrackControl::Lock, TrackControl::Hide}) {
+      const Rect box_of = control_rect(track, control);
+      if (box_of.empty()) continue;
+
+      const bool lit = control == TrackControl::Mute   ? on.mute
+                       : control == TrackControl::Solo ? on.solo
+                       : control == TrackControl::Lock ? on.lock
+                                                      : on.hide;
+      const SurfaceStyle& switch_style =
+          theme.style(Part::ToolButton, lit ? State::Selected : State::Normal);
+      paint_surface(painter, box_of, switch_style);
+      if (!lit) {
+        // An outline of its own when it is off. A tool button's resting state is
+        // transparent in every theme — which is right in a toolbar, where the
+        // row itself frames the buttons, and wrong here, where it leaves three
+        // letters floating in a header looking like a label rather than three
+        // things to press.
+        Color edge = switch_style.text;
+        edge.a *= 0.35f;
+        painter.stroke(box_of, switch_style.corner_radius, edge, 1.0);
+      }
+      painter.text(text_run(box_of, std::string(to_string(control)), switch_style,
+                            metrics_.small_font_size, TextAlign::Center, true));
+    }
   }
   painter.pop_clip();
 
@@ -561,6 +662,22 @@ void TimelineView::drag_to(double x) {
 
 bool TimelineView::on_mouse_down(const MouseEvent& event) {
   if (event.button != MouseButton::Left) return false;
+
+  // A header switch, before anything else. Flipped here as well as reported, so
+  // the press is visible on the frame it happened rather than only once the
+  // document has come back round — the same reason a dragged clip moves in the
+  // view before the model has agreed to it.
+  if (const auto hit = control_at(event.x, event.y)) {
+    TrackSwitches& on = model_.tracks[hit->track].switches;
+    switch (hit->control) {
+      case TrackControl::Mute: on.mute = !on.mute; break;
+      case TrackControl::Solo: on.solo = !on.solo; break;
+      case TrackControl::Lock: on.lock = !on.lock; break;
+      case TrackControl::Hide: on.hide = !on.hide; break;
+    }
+    if (on_track_toggle_) on_track_toggle_(*hit);
+    return true;
+  }
 
   // Anywhere on the ruler scrubs, not just on the playhead itself. Hunting for
   // a one-pixel line is not an interaction.

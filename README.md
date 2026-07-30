@@ -206,7 +206,16 @@ from the interface. What is new is the gesture, and where the interface's units
 become the model's: a slip is dragged in timeline seconds and stored in source
 seconds, and the two differ by the clip's speed.
 
-1485 tests, plus a headless check that lays every panel out in every theme —
+Track headers carry their switches: mute and solo on audio tracks, hide on video
+ones, and lock on both. They are letters — M, S, L, H — because a padlock and an
+eye both need arcs the painter has no other use for, and at twelve pixels a drawn
+padlock is a grey smudge. What is lit is what the *project* holds rather than what
+takes effect: a track silenced because another is soloed is not muted, and
+lighting its M would leave somebody pressing a button that is already off. The
+mixer and the exporter have honoured all of this from the start; until now there
+was no way to press it.
+
+1501 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected, every effect on it, a title, and
 the colour picker open, which is the only way the controls a panel is made of
 get checked at all. Given a directory, that check writes each theme's frame out

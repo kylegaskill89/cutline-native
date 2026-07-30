@@ -849,6 +849,151 @@ TEST(Timeline, AMutedTrackHeaderLooksDisabled) {
   EXPECT_TRUE(found);
 }
 
+// --------------------------------------------------- the header switches --
+
+TEST(TrackSwitch, AudioAndVideoTracksOfferDifferentOnes) {
+  // A solo on a video track would mean nothing and a mute on one even less.
+  const Fixture fixture;
+
+  EXPECT_TRUE(fixture.view->has_control(0, TrackControl::Hide)) << "V2";
+  EXPECT_TRUE(fixture.view->has_control(0, TrackControl::Lock));
+  EXPECT_FALSE(fixture.view->has_control(0, TrackControl::Mute));
+  EXPECT_FALSE(fixture.view->has_control(0, TrackControl::Solo));
+
+  EXPECT_TRUE(fixture.view->has_control(2, TrackControl::Mute)) << "A1";
+  EXPECT_TRUE(fixture.view->has_control(2, TrackControl::Solo));
+  EXPECT_TRUE(fixture.view->has_control(2, TrackControl::Lock));
+  EXPECT_FALSE(fixture.view->has_control(2, TrackControl::Hide));
+}
+
+TEST(TrackSwitch, SitInTheirOwnHeaderAndNowhereElse) {
+  const Fixture fixture;
+  const Rect header = fixture.view->header_rect(2);
+
+  for (const TrackControl control :
+       {TrackControl::Mute, TrackControl::Solo, TrackControl::Lock}) {
+    const Rect box = fixture.view->control_rect(2, control);
+    ASSERT_FALSE(box.empty()) << to_string(control);
+    EXPECT_GE(box.x, header.x);
+    EXPECT_LE(box.right(), header.right());
+    EXPECT_GE(box.y, header.y);
+    EXPECT_LE(box.bottom(), header.bottom());
+  }
+}
+
+TEST(TrackSwitch, DoNotOverlapEachOther) {
+  const Fixture fixture;
+  const Rect mute = fixture.view->control_rect(2, TrackControl::Mute);
+  const Rect solo = fixture.view->control_rect(2, TrackControl::Solo);
+  const Rect lock = fixture.view->control_rect(2, TrackControl::Lock);
+
+  EXPECT_LE(mute.right(), solo.x);
+  EXPECT_LE(solo.right(), lock.x);
+}
+
+TEST(TrackSwitch, AreNotOfferedWhenThereIsNoRoomForThem) {
+  // Refused rather than clipped: a switch drawn half outside its own header, or
+  // over the track's name, is worse than one that admits there is no room.
+  Fixture fixture;
+  fixture.host->resize(Rect{0.0, 0.0, 30.0, 400.0}, flat_context());
+
+  EXPECT_TRUE(fixture.view->control_rect(2, TrackControl::Mute).empty());
+  EXPECT_FALSE(fixture.view->control_at(5.0, 100.0).has_value());
+}
+
+TEST(TrackSwitch, APressFlipsItAndSaysSo) {
+  Fixture fixture;
+  std::optional<TrackControlRef> toggled;
+  fixture.view->set_on_track_toggle([&](TrackControlRef which) { toggled = which; });
+
+  const Rect box = fixture.view->control_rect(2, TrackControl::Mute);
+  ASSERT_FALSE(box.empty());
+  fixture.host->mouse_down(press(box.x + 2.0, box.y + 2.0));
+
+  ASSERT_TRUE(toggled.has_value());
+  EXPECT_EQ(*toggled, (TrackControlRef{.track = 2, .control = TrackControl::Mute}));
+  // Flipped in the view as well, so the press shows on the frame it happened
+  // rather than only once the document has come back round.
+  EXPECT_TRUE(fixture.view->model().tracks[2].switches.mute);
+}
+
+TEST(TrackSwitch, APressOnOneDoesNotScrubOrSelect) {
+  Fixture fixture;
+  int scrubs = 0;
+  int selections = 0;
+  fixture.view->set_on_scrub([&](double) { ++scrubs; });
+  fixture.view->set_on_select([&](std::optional<BlockRef>) { ++selections; });
+
+  const Rect box = fixture.view->control_rect(2, TrackControl::Solo);
+  fixture.host->mouse_down(press(box.x + 2.0, box.y + 2.0));
+
+  EXPECT_EQ(scrubs, 0);
+  EXPECT_EQ(selections, 0);
+  EXPECT_EQ(fixture.view->drag_mode(), DragMode::None);
+}
+
+TEST(TrackSwitch, TheHeaderBesideThemStillDoesNothing) {
+  // Only the switches are live. A press on the name is not a mute.
+  Fixture fixture;
+  std::optional<TrackControlRef> toggled;
+  fixture.view->set_on_track_toggle([&](TrackControlRef which) { toggled = which; });
+
+  const Rect header = fixture.view->header_rect(2);
+  fixture.host->mouse_down(press(header.right() - 2.0, header.y + 2.0));
+  EXPECT_FALSE(toggled.has_value());
+}
+
+TEST(TrackSwitch, ALitSwitchLooksDifferentFromADarkOne) {
+  const auto fills = [](bool on) {
+    Fixture fixture;
+    TimelineModel model = sample_model();
+    model.tracks[2].switches.mute = on;
+    fixture.view->set_model(model);
+
+    RecordingPainter painter;
+    fixture.view->paint(painter, default_theme());
+    std::vector<Fill> found;
+    for (const DrawCall& call : painter.calls()) {
+      if (call.kind == DrawCall::Kind::Fill) found.push_back(call.fill);
+    }
+    return found;
+  };
+
+  EXPECT_NE(fills(true), fills(false));
+}
+
+TEST(TrackSwitch, IsDrawnAsALetterRatherThanAPictogram) {
+  // A padlock and an eye both need arcs the painter has no other use for, and
+  // at twelve pixels a drawn padlock is a grey smudge.
+  const Fixture fixture;
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+
+  std::vector<std::string> letters;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind != DrawCall::Kind::Text || !call.run.has_value()) continue;
+    if (call.run->text.size() == 1) letters.push_back(call.run->text);
+  }
+  EXPECT_NE(std::ranges::find(letters, "M"), letters.end());
+  EXPECT_NE(std::ranges::find(letters, "S"), letters.end());
+  EXPECT_NE(std::ranges::find(letters, "L"), letters.end());
+  EXPECT_NE(std::ranges::find(letters, "H"), letters.end());
+}
+
+TEST(TrackSwitch, WhatIsLitIsWhatTheProjectHoldsNotWhatTakesEffect) {
+  // The distinction the two fields exist for. A track silenced because another
+  // is soloed is not muted, and lighting its M would leave somebody pressing a
+  // button that is already off.
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.tracks[2].muted = true;              // not heard
+  model.tracks[2].switches.mute = false;     // but nobody muted it
+  fixture.view->set_model(model);
+
+  EXPECT_TRUE(fixture.view->model().tracks[2].muted);
+  EXPECT_FALSE(fixture.view->model().tracks[2].switches.mute);
+}
+
 // ------------------------------------------------------------- the tools --
 
 TEST(Tools, TheSelectionToolIsTheDefault) {

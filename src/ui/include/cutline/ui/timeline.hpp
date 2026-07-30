@@ -51,16 +51,55 @@ struct TimelineBlock {
   friend bool operator==(const TimelineBlock&, const TimelineBlock&) = default;
 };
 
+/// The switches in a track's header, as the project holds them.
+///
+/// Separate from `TimelineTrack::muted`, which is whether the track is
+/// contributing *now* — and those are not the same question. A track silenced
+/// because something else is soloed is not muted, and lighting its M would say
+/// it was, leaving somebody pressing a button that is already off.
+struct TrackSwitches {
+  bool mute = false;
+  bool solo = false;
+  bool lock = false;
+  bool hide = false;
+
+  friend bool operator==(const TrackSwitches&, const TrackSwitches&) = default;
+};
+
 struct TimelineTrack {
   /// Opaque, like a block's.
   std::string id;
   std::string name;
   /// Audio tracks are shorter, because the theme says so.
   bool audio = false;
+  /// Whether the track contributes nothing right now, however that came about.
+  /// Drawn as a disabled header. See `TrackSwitches` for the difference.
   bool muted = false;
+  TrackSwitches switches;
   std::vector<TimelineBlock> blocks;
 
   friend bool operator==(const TimelineTrack&, const TimelineTrack&) = default;
+};
+
+/// One switch in a track header.
+///
+/// Audio tracks show mute, solo and lock; video tracks show hide and lock. A
+/// solo on a video track would mean nothing, and a mute on one even less.
+enum class TrackControl { Mute, Solo, Lock, Hide };
+
+/// The letter a switch is drawn with.
+///
+/// Letters rather than pictograms, and deliberately: a padlock and an eye both
+/// need arcs the painter has no other use for, and at twelve pixels a drawn
+/// padlock is a grey smudge. M and S are what every mixer in the world uses
+/// anyway, and a letter that *is* the word needs no learning.
+[[nodiscard]] std::string_view to_string(TrackControl control) noexcept;
+
+struct TrackControlRef {
+  std::size_t track = 0;
+  TrackControl control = TrackControl::Mute;
+
+  friend bool operator==(const TrackControlRef&, const TrackControlRef&) = default;
 };
 
 struct TimelineModel {
@@ -231,6 +270,20 @@ class TimelineView : public Widget {
   [[nodiscard]] Tool tool() const noexcept { return tool_; }
   void set_tool(Tool tool) noexcept { tool_ = tool; }
 
+  /// Called when a header switch is pressed. The view flips it in its own model
+  /// so the press is visible at once; whoever handles this writes it down.
+  void set_on_track_toggle(std::function<void(TrackControlRef)> on_toggle) {
+    on_track_toggle_ = std::move(on_toggle);
+  }
+
+  /// Whether a track shows a given switch at all.
+  [[nodiscard]] bool has_control(std::size_t track, TrackControl control) const;
+  /// Where a switch is drawn. Empty when the track does not have one, or when
+  /// the header is too small for the row of them.
+  [[nodiscard]] Rect control_rect(std::size_t track, TrackControl control) const;
+  /// The switch under a point, if any.
+  [[nodiscard]] std::optional<TrackControlRef> control_at(double x, double y) const;
+
   [[nodiscard]] bool snapping() const noexcept { return snapping_; }
   void set_snapping(bool snapping) noexcept { snapping_ = snapping; }
 
@@ -343,6 +396,7 @@ class TimelineView : public Widget {
   std::function<void(double)> on_scrub_;
   std::function<void(std::optional<BlockRef>)> on_select_;
   std::function<void(const TimelineEdit&)> on_edit_;
+  std::function<void(TrackControlRef)> on_track_toggle_;
 };
 
 }  // namespace cutline::ui

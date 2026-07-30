@@ -3,6 +3,7 @@
 #include "cutline/core/edit.hpp"
 #include "cutline/core/effects.hpp"
 #include "cutline/core/keyframe.hpp"
+#include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 
 #include <algorithm>
@@ -101,6 +102,13 @@ ui::TimelineModel timeline_model(const core::Project& project,
     // Solo elsewhere in the project is what makes the audio case not simply
     // `track.muted`.
     row.muted = audio ? !core::is_track_audible(project, track) : track.hidden;
+    // The switches as the project holds them, which is not the same as the line
+    // above: a track silenced by somebody else's solo is not muted, and its M
+    // must not light up saying it is.
+    row.switches = ui::TrackSwitches{.mute = track.muted,
+                                     .solo = track.solo,
+                                     .lock = track.locked,
+                                     .hide = track.hidden};
 
     row.blocks.reserve(track.clips.size());
     for (const core::Clip& clip : track.clips) {
@@ -179,6 +187,23 @@ core::Project apply_timeline_edit(core::Project project, std::string_view clip_i
       break;
   }
   return project;
+}
+
+core::Project toggle_track_switch(core::Project project, std::string_view track_id,
+                                  ui::TrackControl control) {
+  const auto found = std::ranges::find(project.tracks, track_id, &core::Track::id);
+  if (found == project.tracks.end()) return project;
+
+  // Read then flip, so the interface never has to hold the current value and
+  // cannot get out of step with the document by holding a stale one.
+  core::TrackPropsPatch patch;
+  switch (control) {
+    case ui::TrackControl::Mute: patch.muted = !found->muted; break;
+    case ui::TrackControl::Solo: patch.solo = !found->solo; break;
+    case ui::TrackControl::Lock: patch.locked = !found->locked; break;
+    case ui::TrackControl::Hide: patch.hidden = !found->hidden; break;
+  }
+  return core::update_track(std::move(project), track_id, patch);
 }
 
 std::optional<std::string> block_clip_id(const ui::TimelineModel& model, ui::BlockRef ref) {

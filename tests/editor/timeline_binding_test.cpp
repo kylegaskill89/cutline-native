@@ -4,6 +4,12 @@
 /// agree: that a clip becomes a block in the right place, that a block dragged
 /// somewhere becomes the right edit, and that the numbering on the track
 /// headers is the one an editor expects.
+///
+/// **Hold what `timeline_model` returns by value.** It returns a model, and a
+/// reference bound to a *member* of a temporary is not lifetime-extended — so
+/// `const auto& x = timeline_model(p).tracks[0].something;` reads freed memory.
+/// It has caught three tests in this suite so far, each time passing until an
+/// unrelated change moved the heap under it.
 
 #include "cutline/editor/timeline_binding.hpp"
 
@@ -255,6 +261,70 @@ TEST(Binding, AnEditThatCannotApplyReturnsTheProjectUnchanged) {
   const Project after = drag(before, "c2", ui::DragMode::TrimStart,
                                             clip->start, core::clip_end(*clip));
   EXPECT_EQ(after, before);
+}
+
+// -------------------------------------------------- the header switches --
+
+TEST(Switches, ShowWhatTheProjectHoldsRatherThanWhatTakesEffect) {
+  // A track silenced by somebody else's solo is not muted, and its M must not
+  // light up saying it is.
+  Project project = sample_project();
+  Track quiet{.id = "a2", .kind = TrackKind::Audio, .solo = true};
+  project.tracks.push_back(std::move(quiet));
+
+  const ui::TimelineModel model = timeline_model(project);
+  EXPECT_TRUE(model.tracks[2].muted) << "a1 is not heard";
+  EXPECT_FALSE(model.tracks[2].switches.mute) << "but nobody muted it";
+  EXPECT_TRUE(model.tracks[3].switches.solo);
+}
+
+TEST(Switches, CarryEveryFlagAcross) {
+  Project project = sample_project();
+  project.tracks[0].hidden = true;
+  project.tracks[0].locked = true;
+
+  // By value. `timeline_model` returns a model, and a reference bound to a
+  // *member* of a temporary is not lifetime-extended — see the note at the top.
+  const ui::TrackSwitches on = timeline_model(project).tracks[0].switches;
+  EXPECT_TRUE(on.hide);
+  EXPECT_TRUE(on.lock);
+  EXPECT_FALSE(on.mute);
+}
+
+TEST(Switches, TogglingReadsTheCurrentValueOutOfTheProject) {
+  // The interface never holds the truth about a switch, so it cannot toggle
+  // from a stale copy of one.
+  const Project before = sample_project();
+  ASSERT_FALSE(before.tracks[0].hidden);
+
+  const Project on = toggle_track_switch(before, "v2", ui::TrackControl::Hide);
+  EXPECT_TRUE(on.tracks[0].hidden);
+
+  const Project off = toggle_track_switch(on, "v2", ui::TrackControl::Hide);
+  EXPECT_FALSE(off.tracks[0].hidden);
+}
+
+TEST(Switches, TogglingOneLeavesTheOthersAlone) {
+  Project before = sample_project();
+  before.tracks[0].locked = true;
+
+  const Project after = toggle_track_switch(before, "v2", ui::TrackControl::Hide);
+  EXPECT_TRUE(after.tracks[0].hidden);
+  EXPECT_TRUE(after.tracks[0].locked) << "the patch touches one field";
+}
+
+TEST(Switches, MuteAndSoloReachTheAudioTrack) {
+  const Project muted = toggle_track_switch(sample_project(), "a1", ui::TrackControl::Mute);
+  EXPECT_TRUE(muted.tracks[2].muted);
+  EXPECT_FALSE(core::is_track_audible(muted, muted.tracks[2]));
+
+  const Project soloed = toggle_track_switch(sample_project(), "a1", ui::TrackControl::Solo);
+  EXPECT_TRUE(soloed.tracks[2].solo);
+}
+
+TEST(Switches, AnUnknownTrackChangesNothing) {
+  const Project before = sample_project();
+  EXPECT_EQ(toggle_track_switch(before, "nowhere", ui::TrackControl::Mute), before);
 }
 
 // ------------------------------------------------------------ the tools --

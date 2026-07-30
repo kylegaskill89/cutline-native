@@ -1736,6 +1736,23 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   // The drag goes back through the model's own operations, so a move that a
   // neighbour would not allow is refused there rather than being allowed here
   // and looking different once the view is rebuilt.
+  tracks.set_on_track_toggle([app](cutline::ui::TrackControlRef which) {
+    if (app == nullptr || app->timeline == nullptr) return;
+    if (which.track >= app->timeline->model().tracks.size()) return;
+
+    app->session.apply(cutline::editor::toggle_track_switch(
+        app->session.project(), app->timeline->model().tracks[which.track].id, which.control));
+    // A mute silences the track; a solo silences every other one. Either way
+    // the headers no longer say what they should, so the whole view is rebuilt
+    // rather than the one switch that was pressed.
+    refresh_timeline(*app);
+    // Hiding a video track changes the picture. Muting does not, and asking for
+    // a frame that has not changed costs a comparison.
+    invalidate_preview(*app);
+    // The sound was decoded from a project that is not this one any more.
+    stop_playback(*app);
+  });
+
   tracks.set_on_edit([app](const cutline::ui::TimelineEdit& edit) {
     if (app == nullptr || app->timeline == nullptr) return;
     const auto id = cutline::editor::block_clip_id(app->timeline->model(), edit.block);
@@ -3265,6 +3282,13 @@ template <typename T>
 
   int failures = 0;
   std::vector<std::string> fingerprints;
+
+  // Made rather than demanded. Being told a directory does not exist, once per
+  // theme, by libpng, is not a useful way to learn that.
+  if (!shots.empty()) {
+    std::error_code ignored;
+    std::filesystem::create_directories(shots, ignored);
+  }
 
   for (const Theme& theme : built_in_themes()) {
     const sk_sp<SkSurface> surface =
