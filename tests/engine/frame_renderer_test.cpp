@@ -160,6 +160,131 @@ TEST_F(FrameRendererTest, AMalformedColourFallsBackRatherThanVanishing) {
   EXPECT_EQ(pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2).a, 255);
 }
 
+// ------------------------------------------------------------------ titles --
+
+Media titled(std::string id, core::TextSpec spec) {
+  Media m;
+  m.id = std::move(id);
+  m.is_text = true;
+  m.text = std::move(spec);
+  return m;
+}
+
+/// A title that fills a good part of a 64-pixel canvas.
+[[nodiscard]] core::TextSpec big_text(std::string content = "AB") {
+  core::TextSpec spec;
+  spec.content = std::move(content);
+  spec.font_size = 32.0;
+  spec.color = "#ffffff";
+  return spec;
+}
+
+/// How many pixels the render put anything into.
+[[nodiscard]] int covered(const gpu::Image& image) {
+  int count = 0;
+  for (std::size_t i = 3; i < image.pixels.size(); i += 4) {
+    if (image.pixels[i] > 8) ++count;
+  }
+  return count;
+}
+
+TEST_F(FrameRendererTest, ATitleDrawsItsText) {
+  Project p = canvas_project();
+  p.media = {titled("t", big_text())};
+  p.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+
+  const gpu::Image image = render(p, 1.0);
+  ASSERT_FALSE(image.empty());
+
+  const int drawn = covered(image);
+  EXPECT_GT(drawn, 0) << "the title drew nothing at all";
+  // And it is text rather than a filled rectangle: glyphs leave most of their
+  // own box empty, which is what tells a drawn title from a placeholder.
+  EXPECT_LT(drawn, kWidth * kHeight * 3 / 4) << "that looks like a solid block";
+}
+
+TEST_F(FrameRendererTest, ATitleIsTransparentAroundItsGlyphs) {
+  Project p = canvas_project();
+  // A single narrow letter in the middle: the corners of the canvas cannot be
+  // part of it.
+  p.media = {titled("t", big_text("l"))};
+  p.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+
+  const gpu::Image image = render(p, 1.0);
+  EXPECT_EQ(pixel_at(image, 1, 1).a, 0);
+  EXPECT_EQ(pixel_at(image, kWidth - 2, kHeight - 2).a, 0);
+}
+
+TEST_F(FrameRendererTest, ATitleWithABackgroundCoversItsBox) {
+  core::TextSpec spec = big_text();
+  spec.background = "#0000ff";
+
+  Project p = canvas_project();
+  p.media = {titled("t", spec)};
+  p.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+
+  const gpu::Image image = render(p, 1.0);
+  const Rgba centre = pixel_at(image, kWidth / 2, kHeight / 2);
+  EXPECT_EQ(centre.a, 255);
+}
+
+TEST_F(FrameRendererTest, ATitleIsSizedToItsTextRatherThanToTheCanvas) {
+  // Two titles of very different lengths at the same font size cover very
+  // different areas. If the quad were the canvas either way, the shorter one
+  // would simply be stretched and the coverage would match.
+  Project narrow = canvas_project();
+  narrow.media = {titled("t", big_text("l"))};
+  narrow.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+
+  Project wide = canvas_project();
+  wide.media = {titled("t", big_text("MMMM"))};
+  wide.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+
+  const int thin = covered(render(narrow, 1.0));
+  const int fat = covered(render(wide, 1.0));
+  EXPECT_GT(fat, thin * 2) << "both titles covered about the same area";
+}
+
+TEST_F(FrameRendererTest, AnEditedTitleIsRedrawnRatherThanCached) {
+  Project p = canvas_project();
+  p.media = {titled("t", big_text("l"))};
+  p.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+  const int before = covered(render(p, 1.0));
+
+  // Same media id, different text: a cache keyed on the id alone would show
+  // the old title forever.
+  p.media = {titled("t", big_text("MMMM"))};
+  const int after = covered(render(p, 1.0));
+
+  EXPECT_GT(after, before * 2);
+}
+
+TEST_F(FrameRendererTest, ATitleTakesTheEffectsOnItsClip) {
+  Project p = canvas_project();
+  core::TextSpec spec = big_text();
+  spec.background = "#ff0000";
+  p.media = {titled("t", spec)};
+
+  Clip c = clip("c", "t", 0.0, 5.0);
+  c.effects = {core::ClipEffect{.type = "grayscale", .params = {{"amount", 100.0}}}};
+  p.tracks = {video_track("v1", {c})};
+
+  const Rgba centre = pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2);
+  EXPECT_EQ(centre.r, centre.g) << "a title should be as effectable as a video clip";
+  EXPECT_EQ(centre.g, centre.b);
+  EXPECT_EQ(centre.a, 255);
+}
+
+TEST_F(FrameRendererTest, ATitleWithNoTextIsSkippedRatherThanFailingTheFrame) {
+  Project p = canvas_project();
+  p.media = {titled("t", big_text(""))};
+  p.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+
+  const gpu::Image image = render(p, 1.0);
+  ASSERT_FALSE(image.empty());
+  EXPECT_EQ(pixel_at(image, kWidth / 2, kHeight / 2).a, 0);
+}
+
 // -------------------------------------------------------------- draw order --
 
 TEST_F(FrameRendererTest, TheTopTrackDrawsOverTheBottomOne) {

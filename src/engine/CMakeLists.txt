@@ -17,6 +17,14 @@ target_link_libraries(cutline_engine
   PUBLIC cutline::core cutline::gpu cutline::media cutline::options
   PRIVATE cutline::audio cutline::render ole32 propsys)
 
+# Titles, when there is something to draw glyphs with. Without it the renderer
+# skips text layers, exactly as it did before there was a rasteriser at all: the
+# media preset carries no Skia and still exports everything else.
+if(TARGET cutline_text)
+  target_link_libraries(cutline_engine PRIVATE cutline::text)
+  target_compile_definitions(cutline_engine PRIVATE CUTLINE_HAVE_TEXT=1)
+endif()
+
 # Decoded frames are described for the compositor here, so this needs the libav
 # headers even though nothing above it does.
 find_package(FFMPEG REQUIRED)

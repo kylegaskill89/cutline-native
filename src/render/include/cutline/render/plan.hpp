@@ -55,6 +55,15 @@ struct PlannedLayer {
   int track_index = 0;
 };
 
+/// How big a title comes out.
+///
+/// The model stores what the text says, not how much room it takes — that
+/// depends on a font, which is not something a pure layer can know. A caller
+/// able to draw text supplies this and its titles are sized to their content; a
+/// caller that cannot leaves it empty, and a title falls back to filling the
+/// canvas rather than to nothing.
+using TextMeasurer = std::function<core::Size(const core::Media& media)>;
+
 /// The layers active at timeline time `t`, in the order they should be drawn:
 /// bottom track first, and within a track, earlier-starting segments first so a
 /// dissolve's incoming clip lands on top of the outgoing one.
@@ -64,11 +73,13 @@ struct PlannedLayer {
 /// for stills and generated media.
 [[nodiscard]] std::vector<PlannedLayer> plan_frame(
     const core::Project& project, double t,
-    const std::function<double(std::string_view media_id)>& media_duration_of);
+    const std::function<double(std::string_view media_id)>& media_duration_of,
+    const TextMeasurer& measure_text = {});
 
 /// As `plan_frame`, using the project's own media list for durations. This is
 /// what callers normally want; the callback form exists for tests and for
 /// sources whose real duration is not yet known.
-[[nodiscard]] std::vector<PlannedLayer> plan_frame(const core::Project& project, double t);
+[[nodiscard]] std::vector<PlannedLayer> plan_frame(const core::Project& project, double t,
+                                                   const TextMeasurer& measure_text = {});
 
 }  // namespace cutline::render

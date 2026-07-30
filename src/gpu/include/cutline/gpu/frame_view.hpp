@@ -13,6 +13,15 @@ namespace cutline::gpu {
 enum class PixelLayout {
   Nv12,     ///< Y plane plus interleaved UV at half resolution
   Yuv420p,  ///< separate Y, U, V planes
+  /// One plane of 8-bit RGBA, sRGB-coded, with **premultiplied** alpha. What a
+  /// rasteriser produces: titles, and anything else drawn rather than decoded.
+  ///
+  /// Premultiplied because it is filtered. Bilinear sampling of straight alpha
+  /// mixes the colour of fully transparent pixels into the edge of a glyph,
+  /// which is how text ends up with a dark halo around it. The shader divides
+  /// the alpha back out before the effects, since those are defined on plain
+  /// coded values.
+  Rgba8,
 };
 
 /// Which luma coefficients the encoder used.

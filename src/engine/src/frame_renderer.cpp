@@ -5,6 +5,10 @@
 #include "cutline/render/effects.hpp"
 #include "cutline/render/plan.hpp"
 
+#if CUTLINE_HAVE_TEXT
+#include "cutline/text/raster.hpp"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -180,9 +184,68 @@ struct FrameRenderer::Impl {
 
   DecodeStats stats;
 
+#if CUTLINE_HAVE_TEXT
+  /// Rasterised titles, keyed by media id.
+  ///
+  /// Drawing text costs about as much as decoding a frame and a title does not
+  /// change between frames, so it is drawn once and kept. The spec it was drawn
+  /// from is kept beside it: the only thing that can invalidate a title is an
+  /// edit to the text or its styling, and comparing the spec catches every one
+  /// of those without anyone having to remember to say so.
+  struct Title {
+    core::TextSpec spec;
+    text::Raster raster;
+  };
+  std::map<std::string, Title> titles;
+
+  /// The rasterised title for a media, drawing it if it is not in hand.
+  /// Null when it cannot be drawn at all.
+  [[nodiscard]] const text::Raster* title_for(const core::Media& media);
+#endif
+
+  /// How big a title comes out on the canvas. Empty when text cannot be drawn,
+  /// which is what makes a title fall back to filling the canvas.
+  [[nodiscard]] core::Size measure(const core::Media& media);
+
   /// Positions the source at `time` and returns its frame, or null.
   [[nodiscard]] const AVFrame* frame_at(const core::Media& media, double time);
 };
+
+#if CUTLINE_HAVE_TEXT
+
+const text::Raster* FrameRenderer::Impl::title_for(const core::Media& media) {
+  if (!media.text.has_value()) return nullptr;
+
+  const auto found = titles.find(media.id);
+  if (found != titles.end()) {
+    if (found->second.spec == *media.text) return &found->second.raster;
+    // Edited since it was drawn.
+    titles.erase(found);
+  }
+
+  auto drawn = text::rasterise(*media.text);
+  if (!drawn.has_value()) return nullptr;
+
+  const auto inserted =
+      titles.emplace(media.id, Title{.spec = *media.text, .raster = std::move(*drawn)});
+  return &inserted.first->second.raster;
+}
+
+core::Size FrameRenderer::Impl::measure(const core::Media& media) {
+  if (!media.text.has_value()) return {};
+  // Measured by drawing, not by a second code path that could disagree: the
+  // quad has to be exactly the size of the picture that fills it, or the text
+  // is stretched.
+  const text::Raster* raster = title_for(media);
+  if (raster == nullptr) return {};
+  return core::Size{static_cast<double>(raster->width), static_cast<double>(raster->height)};
+}
+
+#else
+
+core::Size FrameRenderer::Impl::measure(const core::Media&) { return {}; }
+
+#endif
 
 const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double time) {
   auto found = sources.find(media.id);
@@ -320,7 +383,10 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
     return std::unexpected(ok.error());
   }
 
-  const std::vector<render::PlannedLayer> planned = render::plan_frame(project, t);
+  // The measurer is what sizes a title's quad to its text; without it a title
+  // would be stretched to fill the canvas.
+  const std::vector<render::PlannedLayer> planned = render::plan_frame(
+      project, t, [&d](const core::Media& media) { return d.measure(media); });
 
   // Reserved up front: the layers hold pointers into this, so a reallocation
   // partway through would leave earlier layers pointing at freed memory.
@@ -367,11 +433,33 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
         break;
       }
 
-      case render::LayerContent::Text:
-        // Titles need a text rasteriser, which is not here yet. Skipped rather
-        // than drawn as a blank rectangle, so an unrendered title is visibly
-        // absent instead of quietly wrong.
+      case render::LayerContent::Text: {
+#if CUTLINE_HAVE_TEXT
+        if (source.media == nullptr) continue;
+        const text::Raster* raster = d.title_for(*source.media);
+        // Nothing drawable — no text, or no font at all. Skipped rather than
+        // drawn as a blank rectangle, so a title that failed is visibly absent
+        // instead of quietly wrong.
+        if (raster == nullptr || raster->empty()) continue;
+
+        gpu::FrameView view;
+        view.width = raster->width;
+        view.height = raster->height;
+        view.layout = gpu::PixelLayout::Rgba8;
+        // Not video: a rasteriser works in full-range sRGB, and treating it as
+        // studio-range would lift the blacks of every title.
+        view.full_range = true;
+        view.planes[0] = gpu::PlaneView{.data = raster->pixels.data(),
+                                        .stride = raster->stride()};
+
+        d.views.push_back(view);
+        layer.frame = &d.views.back();
+        break;
+#else
+        // Built without a text rasteriser, so there is nothing to draw with.
         continue;
+#endif
+      }
 
       case render::LayerContent::Still:
       case render::LayerContent::Video: {

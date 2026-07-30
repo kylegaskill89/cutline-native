@@ -19,6 +19,10 @@
 // Already-composited linear RGBA: the blurred copy of a layer, drawn back onto
 // the scene. Effects have been applied already, so this path skips them.
 #define LAYOUT_TEXTURE  2
+// Rasterised sRGB RGBA with premultiplied alpha — a title, or anything else
+// drawn rather than decoded. Effects do apply here: it is a source like any
+// other, not a finished picture.
+#define LAYOUT_RGBA     3
 
 // YUV-to-RGB matrices.
 #define SPACE_BT709  0
@@ -317,6 +321,21 @@ float4 sourceColor(float2 uv) {
     if (params.layout == LAYOUT_TEXTURE) return texture0.Sample(linearSampler, uv);
 
     if (!insideCrop(uv)) return float4(0.0, 0.0, 0.0, 0.0);
+
+    if (params.layout == LAYOUT_RGBA) {
+        const float4 texel = texture0.Sample(linearSampler, uv);
+        // Premultiplied on the way in, because that is what survives bilinear
+        // filtering; divided back out here, because every effect below is
+        // defined on plain coded values.
+        const float3 coded = texel.a > 0.0 ? saturate(texel.rgb / texel.a) : float3(0.0, 0.0, 0.0);
+
+        // The keyer reads the unmodified pixel, as it does for video: a colour
+        // correction earlier in the stack must not pull the key colour out from
+        // under it.
+        const float alpha = texel.a * chromaKeyAlpha(coded);
+        const float3 adjusted = applyColorEffects(coded);
+        return float4(linearizeSrgb(adjusted) * vignetteFactor(uv), alpha);
+    }
 
     if (params.layout == LAYOUT_SOLID) {
         // A linear gradient runs edge to edge through the quad's centre at the

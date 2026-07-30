@@ -62,6 +62,14 @@ if(CUTLINE_WITH_SKIA)
   # the one place that legitimately needs it, to make a surface to draw into.
   find_package(unofficial-skia CONFIG REQUIRED)
 
+  # Titles: drawn to a raster surface and read back, so no GPU and no window.
+  add_executable(cutline_text_tests text/raster_test.cpp)
+  target_link_libraries(cutline_text_tests PRIVATE
+    cutline::text
+    GTest::gtest
+    GTest::gtest_main)
+  gtest_discover_tests(cutline_text_tests)
+
   add_executable(cutline_ui_skia_tests ui/skia_painter_test.cpp)
   target_link_libraries(cutline_ui_skia_tests PRIVATE
     cutline::ui

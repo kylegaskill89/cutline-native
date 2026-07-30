@@ -69,6 +69,13 @@ add_subdirectory(src/ui)
 # widget. Pure like they are.
 add_subdirectory(src/editor)
 
+# Titles. Skia draws the glyphs and nothing else is needed, so this follows the
+# Skia option rather than the GPU one — and the engine composites titles only
+# when it is here, which keeps the media preset building without Skia.
+if(CUTLINE_WITH_SKIA)
+  add_subdirectory(src/text)
+endif()
+
 if(CUTLINE_WITH_MEDIA)
   add_subdirectory(src/media)
   add_subdirectory(tools/decode_bench)

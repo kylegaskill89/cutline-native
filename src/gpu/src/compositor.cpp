@@ -49,6 +49,11 @@ constexpr int kBlurTaps = 24;
   const UINT half_width = std::max(1u, (width + 1) / 2);
   const UINT half_height = std::max(1u, (height + 1) / 2);
 
+  // Drawn rather than decoded: one plane, four bytes, no chroma subsampling to
+  // undo.
+  if (frame.layout == PixelLayout::Rgba8) {
+    return {{width, height, 4, DXGI_FORMAT_R8G8B8A8_UNORM}};
+  }
   if (frame.layout == PixelLayout::Nv12) {
     return {
         {width, height, 1, DXGI_FORMAT_R8_UNORM},
@@ -70,7 +75,17 @@ constexpr int kBlurTaps = 24;
 
 [[nodiscard]] int shader_layout(const Layer& layer) noexcept {
   if (layer.frame == nullptr) return -1;  // LAYOUT_SOLID
-  return layer.frame->layout == PixelLayout::Nv12 ? 0 : 1;
+  switch (layer.frame->layout) {
+    case PixelLayout::Nv12:
+      return 0;
+    case PixelLayout::Yuv420p:
+      return 1;
+    case PixelLayout::Rgba8:
+      // 2 is the blur's own ping-pong texture, which is linear and opaque and
+      // means something different.
+      return 3;
+  }
+  return 1;
 }
 
 [[nodiscard]] int shader_space(ColorSpace space) noexcept {

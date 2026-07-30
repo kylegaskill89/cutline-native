@@ -31,7 +31,8 @@ struct Ordered {
 
 std::vector<PlannedLayer> plan_frame(
     const core::Project& project, double t,
-    const std::function<double(std::string_view media_id)>& media_duration_of) {
+    const std::function<double(std::string_view media_id)>& media_duration_of,
+    const TextMeasurer& measure_text) {
   std::vector<Ordered> active;
 
   // Video tracks are stored top-first, so the bottom one is drawn first.
@@ -78,7 +79,13 @@ std::vector<PlannedLayer> plan_frame(
     layer.media = media;
     layer.content = content_of(media);
     layer.track_index = entry.track_index;
-    layer.box = core::segment_box(seg, media, project.canvas_w, project.canvas_h, t);
+    // A title is as big as its text, which only something that can draw text
+    // knows. Without a measurer it keeps the fallback — the whole canvas —
+    // because a title of no size would simply not be there.
+    core::Size measured;
+    if (media != nullptr && media->is_text && measure_text) measured = measure_text(*media);
+    layer.box =
+        core::segment_box(seg, media, project.canvas_w, project.canvas_h, t, measured);
     layer.alpha = core::segment_alpha(seg, t);
     layer.blend = clip.blend;
 
@@ -96,17 +103,22 @@ std::vector<PlannedLayer> plan_frame(
   return layers;
 }
 
-std::vector<PlannedLayer> plan_frame(const core::Project& project, double t) {
-  return plan_frame(project, t, [&project](std::string_view media_id) {
-    for (const Media& media : project.media) {
-      if (media.id != media_id) continue;
-      // Stills and generated media have no source to run out of, so their
-      // handles are unlimited and a transition can borrow as much as it likes.
-      if (core::is_still_like(media)) return std::numeric_limits<double>::infinity();
-      return media.duration;
-    }
-    return 0.0;
-  });
+std::vector<PlannedLayer> plan_frame(const core::Project& project, double t,
+                                     const TextMeasurer& measure_text) {
+  return plan_frame(
+      project, t,
+      [&project](std::string_view media_id) {
+        for (const Media& media : project.media) {
+          if (media.id != media_id) continue;
+          // Stills and generated media have no source to run out of, so their
+          // handles are unlimited and a transition can borrow as much as it
+          // likes.
+          if (core::is_still_like(media)) return std::numeric_limits<double>::infinity();
+          return media.duration;
+        }
+        return 0.0;
+      },
+      measure_text);
 }
 
 }  // namespace cutline::render

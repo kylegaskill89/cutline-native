@@ -18,7 +18,9 @@
 // state may as well name it rather than write the number.
 #include <d3d12.h>
 
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -960,6 +962,70 @@ TEST_F(CompositorTest, TheTextureCanBeAskedForRepeatedly) {
   // The same target every time, so a caller may keep the handle across frames
   // and simply find newer pixels in it.
   EXPECT_EQ(first->resource, second->resource);
+}
+
+// ---------------------------------------------------------- rasterised RGBA --
+
+/// A 2x2 patch of premultiplied sRGB RGBA, which is what a rasteriser hands
+/// over: opaque red on the left, fully transparent on the right.
+struct RgbaPatch {
+  static constexpr int kSize = 2;
+  std::array<std::uint8_t, kSize * kSize * 4> pixels{
+      255, 0, 0, 255, 0, 0, 0, 0,  //
+      255, 0, 0, 255, 0, 0, 0, 0,
+  };
+
+  [[nodiscard]] FrameView view() const {
+    FrameView frame;
+    frame.width = kSize;
+    frame.height = kSize;
+    frame.layout = PixelLayout::Rgba8;
+    frame.full_range = true;
+    frame.planes[0] = PlaneView{.data = pixels.data(), .stride = kSize * 4};
+    return frame;
+  }
+};
+
+TEST_F(CompositorTest, ARasterisedLayerKeepsItsColourAndItsHoles) {
+  const RgbaPatch patch;
+  const FrameView frame = patch.view();
+
+  Layer layer;
+  layer.frame = &frame;
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  const std::array<Layer, 1> layers{layer};
+  const Image image = render(layers);
+  ASSERT_FALSE(image.empty());
+
+  // Well inside the opaque half, since a bilinear sampler mixes the two columns
+  // along the seam between them.
+  const Rgba solid = pixel_at(image, 4, kHeight / 2);
+  EXPECT_GT(solid.r, 250);
+  EXPECT_LT(solid.g, 5);
+  EXPECT_EQ(solid.a, 255);
+
+  // And the transparent half stays transparent rather than turning black: an
+  // alpha of zero has to survive the trip through the effects path.
+  EXPECT_EQ(pixel_at(image, kWidth - 4, kHeight / 2).a, 0);
+}
+
+TEST_F(CompositorTest, ARasterisedLayerTakesTheEffectsAppliedToIt) {
+  const RgbaPatch patch;
+  const FrameView frame = patch.view();
+
+  Layer layer;
+  layer.frame = &frame;
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  // A title is a source like any other: the effect stack has to reach it the
+  // same way it reaches a video frame.
+  layer.effects.saturation = 0.0f;
+
+  const std::array<Layer, 1> layers{layer};
+  const Rgba grey = pixel_at(render(layers), 4, kHeight / 2);
+  EXPECT_EQ(grey.r, grey.g);
+  EXPECT_EQ(grey.g, grey.b);
+  EXPECT_GT(grey.a, 250) << "desaturating must not touch the alpha";
 }
 
 TEST_F(CompositorTest, ResizingGivesATextureOfTheNewSize) {
