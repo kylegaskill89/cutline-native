@@ -16,6 +16,9 @@ agree by construction rather than by careful maintenance.
 
 ## Design
 
+- [`docs/handoff.md`](docs/handoff.md) — **start here if you are picking this
+  up**: how to build it, the rules it is written to, what works, what is left,
+  and the traps that have already cost a day each.
 - [`docs/architecture.md`](docs/architecture.md) — the native architecture and
   the decisions behind it.
 - [`docs/spec.md`](docs/spec.md) — the product specification: data model,
