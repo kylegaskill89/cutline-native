@@ -384,6 +384,42 @@ struct App {
   Button* link_button = nullptr;
   Button* unlink_button = nullptr;
 
+  /// Whether an edge being dragged jumps to the things near it. A property of
+  /// the view rather than the document — undoing a snap setting is not a thing
+  /// anybody wants — but held here, because the view is rebuilt by a
+  /// rearrangement and a setting that resets when a panel moves is one nobody
+  /// can rely on.
+  bool snapping = true;
+  Button* snap_button = nullptr;
+
+  /// Whether playback returns to the start of the marked range instead of
+  /// stopping at the end of it. A view setting like snapping: it says how to
+  /// watch the sequence, not what the sequence is.
+  bool looping = false;
+  Button* loop_button = nullptr;
+
+  /// Shuttle speed, as a multiple of real time. Zero is not shuttling.
+  ///
+  /// A rate of exactly 1 is ordinary playback, with sound, driven by the audio
+  /// clock. Anything else is a silent shuttle: the sound card can only play at
+  /// its own rate, and pitching a mix up to run at 4x — or backwards — is not
+  /// what J and L are for. What they are for is finding a moment by eye, and
+  /// the picture is what does that.
+  double shuttle = 0.0;
+  /// When the shuttle last moved the playhead, so it advances by elapsed time
+  /// rather than by however often the loop happened to turn.
+  std::chrono::steady_clock::time_point shuttled_at{};
+  /// Where the shuttle has got to, in seconds, before the playhead quantises it.
+  ///
+  /// Held separately because `Session::set_playhead` snaps to the frame grid:
+  /// reading it back and adding a couple of milliseconds rounds to the frame it
+  /// was already on, so a shuttle that used the playhead as its own position
+  /// could never leave the frame it started on. It moved at 4x and not at all
+  /// at 1x, which looked like the rate being ignored rather than like rounding.
+  double shuttle_at = 0.0;
+
+  [[nodiscard]] bool shuttling() const noexcept { return shuttle != 0.0; }
+
   /// The named arrangements, one of which is on screen. Where the panels are
   /// lives in the active one, so a rearrangement is remembered against the
   /// workspace it was made in rather than against the application.
@@ -642,6 +678,8 @@ void choose_scope(App& app, cutline::ui::ScopeKind kind);
 void show_master_gain(App& app, double gain);
 void refresh_meter(App& app);
 void refresh_handles(App& app);
+void show_snapping(App& app);
+void toggle_snapping(App& app);
 [[nodiscard]] std::string preview_scale_name(double scale);
 [[nodiscard]] double next_preview_scale(double scale) noexcept;
 void choose_preview_scale(App& app, double scale);
@@ -650,6 +688,9 @@ void open_export_dialog(App& app);
 void poll_export(App& app);
 void settle_export(App& app);
 void toggle_playback(App& app);
+void toggle_looping(App& app);
+void set_shuttle(App& app, double rate);
+void advance_shuttle(App& app);
 void import_media(App& app);
 void add_title(App& app);
 void add_matte(App& app);
@@ -1955,8 +1996,117 @@ void invalidate_playback(App& app) {
 #endif
 }
 
+void toggle_looping(App& app) {
+  app.looping = !app.looping;
+  if (app.loop_button != nullptr) app.loop_button->set_selected(app.looping);
+  mark_dirty(app);
+}
+
+/// The speeds J and L step through, in each direction.
+///
+/// Premiere's: press again and it goes up. Four is as fast as a picture is
+/// still worth looking at — past that the frames a decoder can produce are so
+/// far apart that scrubbing the ruler is quicker.
+constexpr std::array kShuttleRates{1.0, 2.0, 4.0};
+
+/// The next speed in `direction` from whatever is running now.
+///
+/// Changing direction starts again at 1 rather than counting down through the
+/// speeds: pressing J while running forwards means "go back", not "go forwards
+/// a bit less".
+[[nodiscard]] double next_shuttle(double current, double direction) noexcept {
+  if (current == 0.0 || (current > 0.0) != (direction > 0.0)) return direction;
+  const double speed = std::abs(current);
+  for (const double step : kShuttleRates) {
+    if (step > speed + 1e-9) return direction * step;
+  }
+  return current;
+}
+
+void set_shuttle(App& app, double rate) {
+#if CUTLINE_HAVE_PREVIEW
+  // Ordinary playback is a shuttle of exactly one: it is the only rate the
+  // sound card can play, so it is the only one that gets sound. Everything
+  // else moves the picture and stays silent — which is what J and L are for,
+  // since what they are used for is finding a moment by eye.
+  if (rate == 1.0) {
+    app.shuttle = 0.0;
+    if (!app.playing()) toggle_playback(app);
+    return;
+  }
+
+  if (app.playing()) stop_playback(app);
+  app.shuttle = rate;
+  app.shuttled_at = std::chrono::steady_clock::now();
+  app.shuttle_at = app.session.playhead();
+  // So the first turn draws rather than deciding it is on the frame already
+  // showing and sleeping instead.
+  app.shown_frame = -1;
+  if (app.play_button != nullptr) {
+    app.play_button->set_text(app.shuttling() ? "Stop" : "Play");
+  }
+  mark_dirty(app);
+#else
+  (void)app;
+  (void)rate;
+#endif
+}
+
+/// One turn of a shuttle: moves the playhead by however much time has really
+/// passed, times the rate.
+///
+/// By elapsed time rather than a fixed step per turn, because the loop's turn
+/// rate depends on how long a frame took to decode — and a shuttle that ran
+/// slower on heavy footage would be a shuttle nobody could aim with.
+void advance_shuttle(App& app) {
+  if (!app.shuttling()) return;
+
+  const auto now = std::chrono::steady_clock::now();
+  const double elapsed = std::chrono::duration<double>(now - app.shuttled_at).count();
+  app.shuttled_at = now;
+
+  const double duration = cutline::core::timeline_duration(app.session.project());
+  app.shuttle_at += elapsed * app.shuttle;
+
+  // Stopping at the ends rather than wrapping, unless looping is on — the same
+  // rule playback follows, and the same answer to "what does the end mean".
+  const bool past_the_end = app.shuttle_at <= 0.0 ||
+                            (duration > 0.0 && app.shuttle_at >= duration);
+  if (past_the_end && app.looping) {
+    app.shuttle_at = app.shuttle > 0.0 ? 0.0 : std::max(0.0, duration);
+  }
+  app.shuttle_at = std::clamp(app.shuttle_at, 0.0, std::max(0.0, duration));
+  app.session.set_playhead(app.shuttle_at);
+  if (past_the_end && !app.looping) set_shuttle(app, 0.0);
+
+  // Once per frame of the sequence, the same rule playback follows: the
+  // playhead moves continuously and the picture does not have to. Without this
+  // a shuttle rebuilt the timeline and asked for a render as fast as the loop
+  // could turn, which is a busy core for pictures nobody sees.
+  const double fps = app.session.project().fps > 0.0 ? app.session.project().fps : 30.0;
+  const auto frame = static_cast<long long>(app.session.playhead() * fps);
+  if (frame == app.shown_frame) {
+    Sleep(1);
+    return;
+  }
+  app.shown_frame = frame;
+
+  if (app.readout != nullptr) {
+    app.readout->set_text(cutline::core::seconds_to_timecode(app.session.playhead(),
+                                                             app.session.project().fps));
+  }
+  follow_playhead(app);
+  refresh_timeline(app);
+  invalidate_preview(app);
+}
+
 void toggle_playback(App& app) {
 #if CUTLINE_HAVE_PREVIEW
+  // A shuttle is playback of a sort, so the space bar stops it.
+  if (app.shuttling()) {
+    set_shuttle(app, 0.0);
+    return;
+  }
   if (app.playing()) {
     stop_playback(app);
     return;
@@ -2054,11 +2204,41 @@ void advance_playback(App& app) {
 
   const double at = app.player->position();
   if (app.player->finished()) {
+    // Round again from the start of whatever is marked, rather than stopping.
+    // The marked range and not the whole sequence, because marking a passage
+    // and looping it is one gesture: it is how a cut gets watched twenty times
+    // while a level is set against it.
+    if (app.looping) {
+      const double from = cutline::core::marked_span(app.session.project()).start;
+      app.session.set_playhead(from);
+      app.player->seek(from);
+      app.player->play();
+      app.shown_frame = -1;
+      refresh_timeline(app);
+      invalidate_preview(app);
+      return;
+    }
     app.session.set_playhead(at);
     refresh_timeline(app);
     invalidate_preview(app);
     stop_playback(app);
     return;
+  }
+
+  // The end of the marked range is the loop's end. The player only knows where
+  // the *sequence* stops, so this is the one place that can notice.
+  if (app.looping) {
+    const cutline::core::MarkedSpan span =
+        cutline::core::marked_span(app.session.project());
+    const double end = span.start + span.duration;
+    if (span.duration > 0.0 && at >= end) {
+      app.session.set_playhead(span.start);
+      app.player->seek(span.start);
+      app.shown_frame = -1;
+      refresh_timeline(app);
+      invalidate_preview(app);
+      return;
+    }
   }
 
   // Once per frame of the sequence, not once per turn of the loop. Rendering
@@ -2442,6 +2622,23 @@ constexpr std::array kTools{
     ToolEntry{cutline::ui::Tool::Slide, IconButton::Icon::Slide, Key::U},
 };
 
+/// Pushes the snap setting into the view and lights the button for it.
+///
+/// The setting lives on the application rather than on the view, because the
+/// view is destroyed and rebuilt by a rearrangement or a theme change — and
+/// snapping turning itself back on when a panel moved would be a setting
+/// nobody could rely on.
+void show_snapping(App& app) {
+  if (app.timeline != nullptr) app.timeline->set_snapping(app.snapping);
+  if (app.snap_button != nullptr) app.snap_button->set_selected(app.snapping);
+  mark_dirty(app);
+}
+
+void toggle_snapping(App& app) {
+  app.snapping = !app.snapping;
+  show_snapping(app);
+}
+
 /// Picks a tool, from the palette or from a key.
 ///
 /// The buttons are lit here rather than rebuilt, so the one that was just
@@ -2649,6 +2846,14 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   if (app != nullptr) app->preview_scale_button = &quality;
 
   transport.emplace<Spacer>();
+  auto& loop = transport.emplace<Button>("Loop", [app] {
+    if (app != nullptr) toggle_looping(*app);
+  });
+  if (app != nullptr) {
+    app->loop_button = &loop;
+    loop.set_selected(app->looping);
+  }
+
   auto& play = transport.emplace<Button>("Play", [app] {
     if (app != nullptr) toggle_playback(*app);
   });
@@ -2735,6 +2940,20 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     app->main.host->open_popup(std::move(list), control->bounds());
   });
 
+  // Snapping, and the zoom that fits the whole sequence. Both are properties of
+  // the *view* rather than of the document, which is why neither goes through
+  // the command table: undoing a zoom is not a thing anybody wants.
+  auto& snap = tools.emplace<Button>("Snap", [app] {
+    if (app != nullptr) toggle_snapping(*app);
+  });
+  if (app != nullptr) app->snap_button = &snap;
+
+  tools.emplace<Button>("Fit", [app] {
+    if (app == nullptr || app->timeline == nullptr) return;
+    app->timeline->zoom_to_fit();
+    mark_dirty(*app);
+  });
+
   tools.emplace<Spacer>();
   auto& readout = tools.emplace<Label>("00:00:00:00");
   readout.set_align(cutline::ui::TextAlign::Right);
@@ -2744,9 +2963,11 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   tracks.set_scale(TimeScale{.pixels_per_second = 60.0});
   if (app != nullptr) {
     app->timeline = &tracks;
-    // The panel is new; the tool is not. A rearrangement or a theme change must
-    // not quietly put the selection tool back.
+    // The panel is new; the tool and the snap setting are not. A rearrangement
+    // or a theme change must not quietly put the selection tool back, or turn
+    // snapping on again after somebody deliberately turned it off.
     tracks.set_tool(app->tool);
+    show_snapping(*app);
   }
 
   tracks.set_on_scrub([app](double at) {
@@ -4219,6 +4440,32 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
           choose_tool(*app, tool->tool);
           return 0;
         }
+        // Premiere's S. Here with the tools rather than in the command table
+        // because it changes the view and not the document, so there is nothing
+        // for `run` to report and nothing for undo to put back.
+        if (pressed == Key::S) {
+          toggle_snapping(*app);
+          return 0;
+        }
+
+        // J, K and L: back, stop, forward, pressing again to go faster. The
+        // same reasoning as the tool keys — these are muscle memory from every
+        // editor there has ever been, and one that only worked when nothing
+        // happened to be focused would be one nobody trusted.
+        if (pressed == Key::J) {
+          set_shuttle(*app, next_shuttle(app->shuttle, -1.0));
+          return 0;
+        }
+        if (pressed == Key::K) {
+          set_shuttle(*app, 0.0);
+          if (app->playing()) stop_playback(*app);
+          return 0;
+        }
+        if (pressed == Key::L) {
+          set_shuttle(*app, app->playing() ? next_shuttle(1.0, 1.0)
+                                           : next_shuttle(app->shuttle, 1.0));
+          return 0;
+        }
       }
       if (held.control && wparam == 'O') {
         open_project(*app);
@@ -4961,7 +5208,8 @@ int main(int argc, char** argv) {
     // watching only the first would go back to blocking with a thread still to
     // join and a bar stopped short of the end — which worked, whenever the
     // timing happened to fall the right way.
-    if (app.playing() || app.exporting() || app.export_job.finished.load()) {
+    if (app.playing() || app.shuttling() || app.exporting() ||
+        app.export_job.finished.load()) {
       while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
         if (message.message == WM_QUIT) {
           running = false;
@@ -4972,10 +5220,11 @@ int main(int argc, char** argv) {
       }
       if (running) {
         advance_playback(app);
+        advance_shuttle(app);
         poll_export(app);
         // Nothing is due this instant when only the export is running, and the
         // encoder wants the core far more than this loop does.
-        if (!app.playing()) Sleep(8);
+        if (!app.playing() && !app.shuttling()) Sleep(8);
       }
     } else if (GetMessageW(&message, nullptr, 0, 0) > 0) {
       TranslateMessage(&message);
