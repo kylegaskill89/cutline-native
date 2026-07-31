@@ -506,7 +506,7 @@ bool TimelineView::over_gain_band(double x, double y) const {
   // Where the line actually is at this moment, which on an automated band is
   // whatever the points evaluate to rather than the stored level.
   const double t = (x - area.x) / scale_.pixels_per_second;
-  const double at = gain_value_at(*band, t);
+  const double at = gain_at(*band, t);
   return std::abs(y - gain_to_y(hit->track, hit->block, at)) <= kGainBandReach;
 }
 
@@ -1128,7 +1128,7 @@ void TimelineView::slide_to(double moved, double frame) {
   if (after_.has_value()) blocks[after_->index].start = after_->origin.start + delta;
 }
 
-double TimelineView::gain_value_at(const GainBand& band, double t) const noexcept {
+double gain_at(const GainBand& band, double t) noexcept {
   if (band.points.empty()) return band.level;
   if (t <= band.points.front().t) return band.points.front().v;
   if (t >= band.points.back().t) return band.points.back().v;
@@ -1144,28 +1144,42 @@ double TimelineView::gain_value_at(const GainBand& band, double t) const noexcep
   return band.points.back().v;
 }
 
-void TimelineView::ensure_gain_anchors(BlockRef block) {
+void TimelineView::ensure_gain_anchors(BlockRef block,
+                                       const std::vector<std::size_t>& segment) {
   gain_anchors_.clear();
-  if (block.track >= model_.tracks.size()) return;
+  if (block.track >= model_.tracks.size() || segment.empty()) return;
   std::vector<TimelineBlock>& blocks = model_.tracks[block.track].blocks;
   if (block.block >= blocks.size() || !blocks[block.block].gain.has_value()) return;
 
   GainBand& band = *blocks[block.block].gain;
   if (band.points.empty()) return;
 
+  const std::size_t first = segment.front();
+  const std::size_t last = segment.back();
+  if (first >= band.points.size() || last >= band.points.size()) return;
+
+  // Only where there is something outside the stretch to protect. A run held by
+  // a single end is the head or the tail of the clip, and dragging it is meant
+  // to move that end.
+  const bool guard_before = segment.size() > 1 || last + 1 == band.points.size();
+  const bool guard_after = segment.size() > 1 || first == 0;
+
+  const double frame = core::frame_duration(model_.fps);
   const double duration = blocks[block.block].duration();
 
   // Both values read before either point is added. `gain_value_at` walks the
-  // list in time order, so pushing the head anchor first and only then asking
-  // about the tail reads an unsorted band and answers with whatever happens to
-  // be last in it — which is the head anchor.
+  // list in time order, so adding one anchor and only then asking about the
+  // other reads an unsorted band and answers with whatever is last in it.
   std::vector<GainPoint> wanted;
-  for (const double edge : {0.0, duration}) {
+  const auto want = [&](double at) {
+    if (at < 0.0 || at > duration) return;
     const bool there = std::ranges::any_of(band.points, [&](const GainPoint& point) {
-      return std::abs(point.t - edge) <= core::kKeyframeMatchEps;
+      return std::abs(point.t - at) <= core::kKeyframeMatchEps;
     });
-    if (!there) wanted.push_back(GainPoint{edge, gain_value_at(band, edge)});
-  }
+    if (!there) wanted.push_back(GainPoint{at, gain_at(band, at)});
+  };
+  if (guard_before) want(band.points[first].t - frame);
+  if (guard_after) want(band.points[last].t + frame);
 
   for (const GainPoint& anchor : wanted) {
     band.points.push_back(anchor);
@@ -1196,7 +1210,7 @@ std::optional<std::size_t> TimelineView::add_gain_point(BlockRef block, double x
     if (std::abs(point.t - t) <= core::kKeyframeMatchEps) return std::nullopt;
   }
 
-  const GainPoint added{t, gain_value_at(band, t)};
+  const GainPoint added{t, gain_at(band, t)};
   band.points.push_back(added);
   std::ranges::sort(band.points, {}, &GainPoint::t);
   for (std::size_t i = 0; i < band.points.size(); ++i) {
@@ -1638,12 +1652,31 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
     // anchoring adds points and indices found beforehand would name the wrong
     // ones.
     if (mode_ == DragMode::GainSegment && gain_segment_.empty() && drag_.has_value()) {
-      ensure_gain_anchors(*drag_);
-      gain_segment_ = gain_segment_at(drag_->track, drag_->block, press_x_);
-      const std::vector<GainPoint>& points =
+      // Which points the stretch is held by, on the band as it stands. The
+      // anchors go just outside *those*, so they have to be known first.
+      const std::vector<std::size_t> grabbed =
+          gain_segment_at(drag_->track, drag_->block, press_x_);
+      const std::vector<GainPoint>& before =
           model_.tracks[drag_->track].blocks[drag_->block].gain->points;
-      for (const std::size_t at : gain_segment_) {
-        if (at < points.size()) gain_segment_origin_.push_back(points[at].v);
+
+      // Held by time rather than by index: anchoring inserts points, and every
+      // index after an insertion means a different point afterwards.
+      std::vector<double> times;
+      for (const std::size_t at : grabbed) {
+        if (at < before.size()) times.push_back(before[at].t);
+      }
+
+      ensure_gain_anchors(*drag_, grabbed);
+
+      const std::vector<GainPoint>& after =
+          model_.tracks[drag_->track].blocks[drag_->block].gain->points;
+      for (const double when : times) {
+        for (std::size_t i = 0; i < after.size(); ++i) {
+          if (std::abs(after[i].t - when) > core::kKeyframeMatchEps) continue;
+          gain_segment_.push_back(i);
+          gain_segment_origin_.push_back(after[i].v);
+          break;
+        }
       }
     }
     gain_to(event.x, event.y);

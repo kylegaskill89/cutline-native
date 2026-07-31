@@ -131,6 +131,14 @@ struct GainBand {
   friend bool operator==(const GainBand&, const GainBand&) = default;
 };
 
+/// What a band is worth at a clip-local time, points and all.
+///
+/// The same clamp-and-interpolate the core evaluates a keyframe list with, in
+/// the one shape the timeline needs it: linearly, because that is what the line
+/// drawn between two points says is happening. A free function because it needs
+/// nothing but the band.
+[[nodiscard]] double gain_at(const GainBand& band, double t) noexcept;
+
 /// The band's floor, in decibels. Below this a clip is drawn, and set, silent.
 ///
 /// A band has to be in decibels or it is unusable: gain is stored as a linear
@@ -762,27 +770,31 @@ class TimelineView : public Widget {
   /// Nothing when the block has no band, or when a point is already there.
   [[nodiscard]] std::optional<std::size_t> add_gain_point(BlockRef block, double x);
 
-  /// What the band is worth at a clip-local time, points and all. The same
-  /// clamp-and-interpolate the core evaluates a keyframe list with, in the one
-  /// shape the timeline needs it: linearly, because that is what the line it
-  /// draws between two points says is happening.
-  [[nodiscard]] double gain_value_at(const GainBand& band, double t) const noexcept;
-
-  /// Puts a point at each end of the clip, at the level the band already has
-  /// there, unless one is there already.
+  /// Pins the automation immediately outside the stretch about to be dragged.
   ///
-  /// Called when a stretch drag begins, and it is what makes the ends hold.
-  /// Outside the outermost points a band is flat because those points define it,
-  /// so with only two of them dragging the middle moved everything — the ends
-  /// had nothing else holding them up. Anchoring them turns the clip's own edges
-  /// into the points they always looked like they were.
+  /// A point one frame beyond each end of it, holding the level the band
+  /// already has there, so that dragging the stretch changes the stretch and
+  /// nothing else. Without it the neighbouring runs are defined *by* the points
+  /// being dragged, and moving them drags the rest of the clip along: two points
+  /// in the middle and a pull downwards turned the whole band into a long V,
+  /// which is not what grabbing a section looks like it will do.
+  ///
+  /// One frame out rather than at the clip's edges, which was the first attempt.
+  /// The edges hold the very ends but leave everything between them ramping, so
+  /// the dip still reached the whole clip. A frame is the project's own quantum
+  /// and the band's times are already snapped to it, so the ramp into the dip is
+  /// the shortest one the model can represent.
+  ///
+  /// Only on sides that have something to protect. The run before the first
+  /// point *is* the head of the clip, so dragging it is meant to move the head
+  /// and there is nothing outside it to hold.
   ///
   /// The anchors take the value the band already had, so materialising them
   /// changes nothing about what plays — the same bargain adding any other point
   /// makes. They are ordinary points afterwards, visible and draggable, because
   /// a control that holds the band but cannot be seen or moved would be worse
   /// than the problem.
-  void ensure_gain_anchors(BlockRef block);
+  void ensure_gain_anchors(BlockRef block, const std::vector<std::size_t>& segment);
 
   TimelineModel model_;
   TimeScale scale_;
