@@ -55,7 +55,9 @@ namespace cutline::core {
 [[nodiscard]] Project move_clip_effect(Project p, std::string_view clip_id, std::size_t index,
                                        int direction);
 
-/// Appends copies of `effects` to the clip's stack, which is how paste works.
+/// Appends copies of `effects` to the clip's stack. With `clear_clip_effects`
+/// in front of it, this is paste; on its own it is what merging two stacks
+/// would be, which nothing offers yet.
 [[nodiscard]] Project append_clip_effects(Project p, std::string_view clip_id,
                                           std::span<const ClipEffect> effects);
 
@@ -106,5 +108,12 @@ namespace cutline::core {
 
 [[nodiscard]] Project set_audio_effect_param(Project p, std::string_view clip_id,
                                              std::size_t index, std::string key, double value);
+
+/// The audio counterparts of `append_clip_effects` and `clear_clip_effects`.
+/// Both stacks are pasted by one gesture, so both need the same pair.
+[[nodiscard]] Project append_audio_effects(Project p, std::string_view clip_id,
+                                           std::span<const AudioClipEffect> effects);
+
+[[nodiscard]] Project clear_audio_effects(Project p, std::string_view clip_id);
 
 }  // namespace cutline::core

@@ -23,6 +23,7 @@
 #include "cutline/ui/controls.hpp"
 
 #include <cstddef>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -180,5 +181,57 @@ struct EffectChoice {
 /// somebody moves a slider.
 [[nodiscard]] core::Project add_audio_effect(core::Project project, std::string_view clip_id,
                                              std::string_view type);
+
+// ------------------------------------------------------------- copy/paste --
+
+/// One clip's effects, taken off it and held.
+///
+/// Values, not references: a clipboard that pointed into the project would go
+/// stale the moment the clip it came from was trimmed, and undo would make it
+/// dangle.
+///
+/// It remembers what it came *from*, and that is the part that matters. An A/V
+/// pair is two linked clips in this model, so selecting a shot selects both,
+/// and a paste that treated the two the same would wipe an audio clip's filters
+/// every time somebody copied a video look. A clipboard taken off a video clip
+/// lands on video clips and passes over the rest.
+struct EffectClipboard {
+  core::TrackKind kind = core::TrackKind::Video;
+  std::vector<core::ClipEffect> video;
+  std::vector<core::AudioClipEffect> audio;
+
+  /// True once something has been copied, whether or not it had any effects on
+  /// it. "Nothing copied yet" and "copied a clip with a clean stack" are
+  /// different: the second is how a stack gets cleared, and the first is a
+  /// Paste button that should be greyed out.
+  bool filled = false;
+
+  [[nodiscard]] bool empty() const noexcept { return !filled; }
+  /// How many effects are held, for a caller that wants to say so.
+  [[nodiscard]] std::size_t size() const noexcept { return video.size() + audio.size(); }
+
+  friend bool operator==(const EffectClipboard&, const EffectClipboard&) = default;
+};
+
+/// Takes a copy of what is on `clip_id`, keyframes and all.
+///
+/// A clip with nothing on it gives a *filled* clipboard holding nothing, which
+/// is deliberate: copying a clean clip and pasting is how a stack is cleared,
+/// and it is the first thing anybody tries.
+[[nodiscard]] EffectClipboard copy_effects(const core::Project& project,
+                                           std::string_view clip_id);
+
+/// Puts the clipboard on every clip of its own kind among those named,
+/// **replacing** what each already had.
+///
+/// Replacing rather than appending because of what the gesture means: "make
+/// this clip look like that one". Appending makes pasting twice apply
+/// everything twice, which is a stack nobody asked for and a fiddle to undo one
+/// effect at a time.
+///
+/// Returns the project unchanged when nothing would alter.
+[[nodiscard]] core::Project paste_effects(core::Project project,
+                                          std::span<const std::string> clip_ids,
+                                          const EffectClipboard& clipboard);
 
 }  // namespace cutline::editor

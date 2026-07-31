@@ -399,6 +399,12 @@ struct App {
   /// The readings are held here rather than only in the widget because the
   /// panel is rebuilt by a rearrangement or a theme change, and measuring again
   /// would mean rendering a frame again — which is the expensive half.
+  /// The last stack copied, held across selections and documents. Not part of
+  /// the project: a clipboard is a property of the session in front of you, and
+  /// saving one would put a copy of somebody's effects in every file that had
+  /// ever had Copy pressed in it.
+  cutline::editor::EffectClipboard effect_clipboard;
+
   cutline::ui::ScopesView* scopes = nullptr;
   cutline::ui::ScopeKind scope_kind = cutline::ui::ScopeKind::Histogram;
   std::shared_ptr<const cutline::ui::ScopeReadings> scope_readings;
@@ -817,6 +823,41 @@ void build_effect_header(App& app, const cutline::editor::EffectRow& row, std::s
 
 /// The effect stack: a header per effect, its parameters beneath it.
 ///
+/// Copy and paste a whole stack, above whichever stack the clip has.
+///
+/// One row for both stacks rather than a pair of buttons on each heading. A
+/// clipboard holds a *clip's* effects, video and audio together, because an A/V
+/// pair is two linked clips in this model — so copying the video half and
+/// pasting onto a selection that includes the audio half has to do the right
+/// thing with each, and one control is what says that is what happens.
+void build_effect_clipboard_row(App& app, const std::string& clip_id) {
+  auto& row = app.inspector->emplace<Box>(Axis::Horizontal);
+  row.emplace<Label>("Effects").set_bold(true);
+  row.emplace<Spacer>();
+
+  row.emplace<Button>("Copy", [&app, clip_id] {
+    app.effect_clipboard = cutline::editor::copy_effects(app.session.project(), clip_id);
+    // Rebuilt so Paste stops being greyed out. Marked rather than done, since
+    // this handler belongs to a button the rebuild destroys.
+    app.inspector_stale = true;
+  });
+
+  auto& paste = row.emplace<Button>("Paste", [&app] {
+    // Onto everything selected, not only the clip the inspector is showing:
+    // matching a look across several shots is the reason anybody copies a
+    // stack, and doing them one at a time is the thing to avoid.
+    const auto selection = app.session.selection();
+    app.session.apply(cutline::editor::paste_effects(app.session.project(), selection,
+                                                     app.effect_clipboard));
+    refresh_timeline(app);
+    invalidate_preview(app);
+    app.inspector_stale = true;
+  });
+  // Nothing has been copied yet. A button that silently does nothing is worse
+  // than one that says it cannot.
+  paste.set_enabled(!app.effect_clipboard.empty());
+}
+
 /// The order of the rows is the order the effects apply in, which is why moving
 /// one is an edit rather than a view preference — a blur before a crop and a
 /// blur after it are different pictures.
@@ -1376,6 +1417,8 @@ void refresh_inspector(App& app) {
   // than to the clip, and grouping it with the effect stack would suggest it
   // stacks with them.
   if (visual) build_transition_controls(app, clip_id);
+
+  build_effect_clipboard_row(app, clip_id);
 
   // One stack or the other, never both: a clip is video or audio, and offering
   // a blur on a waveform would be a control with nothing behind it.

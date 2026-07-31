@@ -274,4 +274,37 @@ core::Project add_audio_effect(core::Project project, std::string_view clip_id,
                                 std::move(params));
 }
 
+// ------------------------------------------------------------- copy/paste --
+
+EffectClipboard copy_effects(const core::Project& project, std::string_view clip_id) {
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr) return {};
+  return EffectClipboard{.kind = clip->kind,
+                         .video = clip->effects,
+                         .audio = clip->audio_effects,
+                         .filled = true};
+}
+
+core::Project paste_effects(core::Project project, std::span<const std::string> clip_ids,
+                            const EffectClipboard& clipboard) {
+  if (!clipboard.filled) return project;
+
+  for (const std::string& clip_id : clip_ids) {
+    const core::Clip* clip = core::find_clip(project, clip_id);
+    // Its own kind only. Selecting a shot selects both halves of an A/V pair,
+    // and a video look pasted over the pair must not take the audio's filters
+    // with it.
+    if (clip == nullptr || clip->kind != clipboard.kind) continue;
+
+    if (clipboard.kind == core::TrackKind::Video) {
+      project = core::clear_clip_effects(std::move(project), clip_id);
+      project = core::append_clip_effects(std::move(project), clip_id, clipboard.video);
+    } else {
+      project = core::clear_audio_effects(std::move(project), clip_id);
+      project = core::append_audio_effects(std::move(project), clip_id, clipboard.audio);
+    }
+  }
+  return project;
+}
+
 }  // namespace cutline::editor

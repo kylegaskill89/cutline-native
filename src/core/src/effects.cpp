@@ -240,4 +240,20 @@ Project set_audio_effect_param(Project p, std::string_view clip_id, std::size_t 
   return p;
 }
 
+Project append_audio_effects(Project p, std::string_view clip_id,
+                             std::span<const AudioClipEffect> effects) {
+  if (effects.empty()) return p;
+  Clip* c = find_clip(p, clip_id);
+  if (c == nullptr) return p;
+  c->audio_effects.insert(c->audio_effects.end(), effects.begin(), effects.end());
+  return p;
+}
+
+Project clear_audio_effects(Project p, std::string_view clip_id) {
+  Clip* c = find_clip(p, clip_id);
+  if (c == nullptr) return p;
+  c->audio_effects.clear();
+  return p;
+}
+
 }  // namespace cutline::core

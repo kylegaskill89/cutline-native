@@ -3,6 +3,7 @@
 #include "cutline/editor/effects_binding.hpp"
 
 #include "cutline/core/effects.hpp"
+#include "cutline/core/query.hpp"
 
 #include <gtest/gtest.h>
 
@@ -465,6 +466,204 @@ TEST(AudioEffects, AnEffectThisBuildDoesNotKnowStillShowsUp) {
 TEST(AudioEffects, AClipWithNoneHasNoRows) {
   EXPECT_TRUE(clip_audio_effects(one_clip(), "c1").empty());
   EXPECT_TRUE(clip_audio_effects(one_clip(), "ghost").empty());
+}
+
+// ------------------------------------------------------------- copy/paste --
+
+/// One video clip and one audio clip, which is the shape an A/V pair has here:
+/// two linked clips, so a stack copied off one and pasted across both has to do
+/// something sensible with each.
+[[nodiscard]] Project a_pair() {
+  Clip video;
+  video.id = "v-clip";
+  video.media_id = "m1";
+  video.kind = TrackKind::Video;
+  video.source_out = 5.0;
+
+  Clip audio;
+  audio.id = "a-clip";
+  audio.media_id = "m1";
+  audio.kind = TrackKind::Audio;
+  audio.source_out = 5.0;
+
+  Track vt{.id = "v1", .kind = TrackKind::Video};
+  vt.clips = {std::move(video)};
+  Track at{.id = "a1", .kind = TrackKind::Audio};
+  at.clips = {std::move(audio)};
+
+  Project p;
+  p.tracks = {std::move(vt), std::move(at)};
+  return p;
+}
+
+[[nodiscard]] const Clip& clip_named(const Project& p, std::string_view id) {
+  return *core::find_clip(p, id);
+}
+
+[[nodiscard]] Project with_a_blur(Project p, std::string_view clip_id, double amount) {
+  return core::add_clip_effect(std::move(p), clip_id, "blur", {{"amount", amount}});
+}
+
+TEST(EffectClipboard, AFreshOneIsEmpty) {
+  const EffectClipboard clipboard;
+  EXPECT_TRUE(clipboard.empty());
+  EXPECT_EQ(clipboard.size(), 0u);
+}
+
+TEST(EffectClipboard, CopyingRemembersWhatItCameFrom) {
+  Project p = a_pair();
+  p = with_a_blur(std::move(p), "v-clip", 12.0);
+  p = core::add_audio_effect(std::move(p), "a-clip", "gain", {{"gain", 3.0}});
+
+  const EffectClipboard look = copy_effects(p, "v-clip");
+  EXPECT_EQ(look.kind, TrackKind::Video);
+  ASSERT_EQ(look.video.size(), 1u);
+  EXPECT_EQ(look.video[0].type, "blur");
+  EXPECT_FALSE(look.empty());
+
+  const EffectClipboard filters = copy_effects(p, "a-clip");
+  EXPECT_EQ(filters.kind, TrackKind::Audio);
+  ASSERT_EQ(filters.audio.size(), 1u);
+  EXPECT_EQ(filters.audio[0].type, "gain");
+}
+
+TEST(EffectClipboard, CopyingTakesTheKeyframesToo) {
+  Project p = with_a_blur(a_pair(), "v-clip", 0.0);
+  p = core::set_effect_keyframe(std::move(p), "v-clip", 0, "amount", 1.0, 20.0);
+
+  const EffectClipboard clipboard = copy_effects(p, "v-clip");
+  ASSERT_EQ(clipboard.video.size(), 1u);
+  const auto keyed = clipboard.video[0].keyframes.find("amount");
+  ASSERT_NE(keyed, clipboard.video[0].keyframes.end());
+  EXPECT_EQ(keyed->second.size(), 1u);
+}
+
+// A clipboard that pointed into the project would go stale the moment the clip
+// it came from was trimmed, and undo would make it dangle.
+TEST(EffectClipboard, WhatIsCopiedSurvivesTheClipItCameFrom) {
+  Project p = with_a_blur(a_pair(), "v-clip", 12.0);
+  const EffectClipboard clipboard = copy_effects(p, "v-clip");
+
+  p = core::clear_clip_effects(std::move(p), "v-clip");
+  ASSERT_TRUE(clip_named(p, "v-clip").effects.empty());
+  EXPECT_EQ(clipboard.video.size(), 1u);
+}
+
+TEST(EffectClipboard, CopyingAClipThatIsNotThereGivesNothing) {
+  EXPECT_TRUE(copy_effects(a_pair(), "nope").empty());
+}
+
+// Copying a clip with nothing on it and pasting is a way of clearing a stack,
+// and it is the one anybody would try.
+TEST(EffectClipboard, CopyingACleanClipIsHowAStackGetsCleared) {
+  Project p = a_pair();
+  p.tracks[0].clips.push_back(Clip{.id = "v-clean",
+                                   .media_id = "m1",
+                                   .kind = TrackKind::Video,
+                                   .source_out = 5.0,
+                                   .start = 10.0});
+  p = with_a_blur(std::move(p), "v-clip", 12.0);
+
+  // Filled, holding nothing: that is different from nothing having been copied,
+  // and it is the difference between clearing a stack and a Paste that is
+  // greyed out.
+  const EffectClipboard blank = copy_effects(p, "v-clean");
+  ASSERT_FALSE(blank.empty());
+  ASSERT_EQ(blank.size(), 0u);
+
+  const std::vector<std::string> onto{"v-clip"};
+  p = paste_effects(std::move(p), onto, blank);
+  EXPECT_TRUE(clip_named(p, "v-clip").effects.empty());
+}
+
+TEST(EffectClipboard, PastingBeforeAnythingHasBeenCopiedChangesNothing) {
+  const Project p = with_a_blur(a_pair(), "v-clip", 12.0);
+  const std::vector<std::string> onto{"v-clip"};
+  EXPECT_EQ(paste_effects(p, onto, EffectClipboard{}), p);
+}
+
+TEST(EffectClipboard, PastingReplacesTheStackRatherThanAddingToIt) {
+  Project p = with_a_blur(a_pair(), "v-clip", 12.0);
+  const EffectClipboard clipboard = copy_effects(p, "v-clip");
+
+  const std::vector<std::string> onto{"v-clip"};
+  p = paste_effects(std::move(p), onto, clipboard);
+  p = paste_effects(std::move(p), onto, clipboard);
+
+  // Twice pasted is still one blur. Appending would give three.
+  EXPECT_EQ(clip_named(p, "v-clip").effects.size(), 1u);
+}
+
+TEST(EffectClipboard, PastingReachesEveryClipNamed) {
+  Project p = a_pair();
+  p.tracks[0].clips.push_back(Clip{.id = "v-other",
+                                   .media_id = "m1",
+                                   .kind = TrackKind::Video,
+                                   .source_out = 5.0,
+                                   .start = 10.0});
+  p = with_a_blur(std::move(p), "v-clip", 12.0);
+
+  const EffectClipboard clipboard = copy_effects(p, "v-clip");
+  const std::vector<std::string> onto{"v-clip", "v-other"};
+  p = paste_effects(std::move(p), onto, clipboard);
+
+  EXPECT_EQ(clip_named(p, "v-other").effects.size(), 1u);
+  EXPECT_EQ(clip_named(p, "v-other").effects[0].type, "blur");
+}
+
+// Which stack a clip gets is decided by the track it is on. Pasting a video
+// look onto a selection that includes the linked audio must leave the audio's
+// filters alone rather than emptying them.
+TEST(EffectClipboard, AVideoStackPastedAcrossAPairLeavesTheAudioAlone) {
+  Project p = with_a_blur(a_pair(), "v-clip", 12.0);
+  p = core::add_audio_effect(std::move(p), "a-clip", "gain", {{"gain", 3.0}});
+
+  const EffectClipboard clipboard = copy_effects(p, "v-clip");
+  ASSERT_EQ(clipboard.kind, TrackKind::Video);
+
+  const std::vector<std::string> onto{"v-clip", "a-clip"};
+  p = paste_effects(std::move(p), onto, clipboard);
+
+  EXPECT_EQ(clip_named(p, "v-clip").effects.size(), 1u);
+  EXPECT_EQ(clip_named(p, "a-clip").audio_effects.size(), 1u)
+      << "the audio clip was cleared by a video paste";
+}
+
+TEST(EffectClipboard, AnAudioStackPastedOntoAnAudioClipArrives) {
+  Project p = a_pair();
+  p.tracks[1].clips.push_back(Clip{.id = "a-other",
+                                   .media_id = "m1",
+                                   .kind = TrackKind::Audio,
+                                   .source_out = 5.0,
+                                   .start = 10.0});
+  p = core::add_audio_effect(std::move(p), "a-other", "highpass", {{"frequency", 200.0}});
+
+  const EffectClipboard clipboard = copy_effects(p, "a-other");
+  const std::vector<std::string> onto{"a-clip"};
+  p = paste_effects(std::move(p), onto, clipboard);
+
+  ASSERT_EQ(clip_named(p, "a-clip").audio_effects.size(), 1u);
+  EXPECT_EQ(clip_named(p, "a-clip").audio_effects[0].type, "highpass");
+}
+
+TEST(EffectClipboard, PastingOntoNothingChangesNothing) {
+  const Project p = with_a_blur(a_pair(), "v-clip", 12.0);
+  const EffectClipboard clipboard = copy_effects(p, "v-clip");
+
+  EXPECT_EQ(paste_effects(p, {}, clipboard), p);
+
+  const std::vector<std::string> missing{"nope"};
+  EXPECT_EQ(paste_effects(p, missing, clipboard), p);
+}
+
+// Every edit returns the project unchanged when it cannot apply, which is what
+// lets the session skip the undo entry.
+TEST(EffectClipboard, PastingWhatIsAlreadyThereChangesNothing) {
+  const Project p = with_a_blur(a_pair(), "v-clip", 12.0);
+  const EffectClipboard clipboard = copy_effects(p, "v-clip");
+
+  const std::vector<std::string> onto{"v-clip"};
+  EXPECT_EQ(paste_effects(p, onto, clipboard), p);
 }
 
 }  // namespace
