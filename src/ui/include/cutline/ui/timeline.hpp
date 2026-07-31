@@ -38,6 +38,57 @@ struct BlockTransition {
   friend bool operator==(const BlockTransition&, const BlockTransition&) = default;
 };
 
+/// One point on a clip's volume rubber band.
+///
+/// A gain keyframe, in the terms the timeline works in: seconds from the
+/// block's own start, and a linear multiplier. The band converts to decibels
+/// only to decide how high up the clip to draw it.
+struct GainPoint {
+  double t = 0.0;
+  double v = 1.0;
+
+  friend bool operator==(const GainPoint&, const GainPoint&) = default;
+};
+
+/// A clip's volume, as a line across its block.
+///
+/// Flat at `level` until there are points, at which point `level` stops being
+/// what plays — automation overrides a constant gain — and the line runs
+/// through the points instead. Both are carried because that is what the model
+/// holds, and because clearing the automation has to reveal something.
+struct GainBand {
+  double level = 1.0;
+  std::vector<GainPoint> points;
+
+  friend bool operator==(const GainBand&, const GainBand&) = default;
+};
+
+/// The band's floor, in decibels. Below this a clip is drawn, and set, silent.
+///
+/// A band has to be in decibels or it is unusable: gain is stored as a linear
+/// multiplier, and on a linear scale every trim anyone actually makes — the
+/// couple of decibels either side of unity that is most of mixing — lands
+/// within a few pixels of the top of a forty-pixel clip, while the bottom half
+/// of the band spans -6 dB to silence and is worth nothing.
+///
+/// The floor is where the useful range stops rather than where audio does.
+/// Thirty-six decibels of travel holds both a fine trim and ducking a bed under
+/// a voice, which is what the band is for; anything quieter is a fade or a mute,
+/// and both have their own control.
+inline constexpr double kGainFloorDb = -36.0;
+
+/// Where a gain sits in the band: 0 at the foot, 1 at the top.
+///
+/// `maximum` is what the top means, so the band reaches exactly the loudest
+/// gain the model allows rather than stopping just short of it at a round
+/// number of decibels.
+[[nodiscard]] double gain_to_band(double gain, double maximum) noexcept;
+
+/// And back. The foot of the band is silence rather than the floor: a band that
+/// bottomed out at -36 dB could not silence a clip by dragging, and one that
+/// ran to true -infinity has no bottom to draw.
+[[nodiscard]] double band_to_gain(double fraction, double maximum) noexcept;
+
 /// One clip, as far as drawing is concerned.
 struct TimelineBlock {
   /// Opaque to the timeline, which never looks inside it. Whoever built the
@@ -59,6 +110,11 @@ struct TimelineBlock {
   std::vector<double> keyframes;
 
   BlockTransition transition;
+
+  /// The volume rubber band, on audio clips only. A video clip has no gain to
+  /// draw, and an empty optional is what says so — rather than a band at unity
+  /// that would look like a control and answer no drag.
+  std::optional<GainBand> gain;
 
   [[nodiscard]] double duration() const noexcept { return end - start; }
 
@@ -137,6 +193,10 @@ struct TimelineModel {
   double duration = 0.0;
   double fps = 30.0;
 
+  /// What the top of a volume band means. The model's ceiling, carried here so
+  /// the timeline does not have to know the model to draw one.
+  double max_gain = 2.0;
+
   /// The marked span, drawn as a bar along the ruler. Either may be set alone,
   /// and a missing one reaches to that end of the sequence.
   std::optional<double> in_point;
@@ -154,6 +214,14 @@ struct BlockRef {
   std::size_t block = 0;
 
   friend bool operator==(const BlockRef&, const BlockRef&) = default;
+};
+
+/// Which point of which block's volume band a press landed on.
+struct GainPointRef {
+  BlockRef block;
+  std::size_t point = 0;
+
+  friend bool operator==(const GainPointRef&, const GainPointRef&) = default;
 };
 
 /// Where something dragged from elsewhere would land.
@@ -211,6 +279,20 @@ enum class DragMode {
   /// follow — but it is reported the same way, because "the timeline was used"
   /// is better as one thing for a caller to handle than as two.
   Razor,
+  /// Moving a clip's whole volume band, which sets its constant gain. Only
+  /// reachable while it has no automation: once there are points, the line runs
+  /// through them and there is no single level left to drag.
+  GainLevel,
+  /// Moving one point of the automation, in time as well as level. Adding a
+  /// point is this mode too — it is created under the pointer on the press and
+  /// dragged from there, so nothing has to distinguish a new point from an old
+  /// one afterwards.
+  GainPointDrag,
+  /// Taking a point off again. Like the razor it happens on the press and has
+  /// no drag to follow, and like the markers it is the *same* gesture that adds
+  /// one: alt where there is no point puts one there, alt where there is one
+  /// takes it away. Nothing then exists only to undo something else.
+  GainPointRemove,
 };
 
 /// Which edge a mode pulls, whichever tool is pulling it. Trim and rate stretch
@@ -240,6 +322,19 @@ struct TimelineEdit {
   double at = 0.0;
   /// `Razor` only: cut every track at `at` rather than only the clip clicked.
   bool all_tracks = false;
+
+  /// `GainLevel` only: the level the band was dragged to, as a linear
+  /// multiplier.
+  double gain = 1.0;
+
+  /// `GainPointDrag` only: where the point started and where it ended up.
+  ///
+  /// Both, because a point moves in time as well as in level, and moving one is
+  /// not the upsert that setting one is: the keyframe at the old time has to go
+  /// or the drag leaves a copy behind. A point that was just created reports the
+  /// same value in each, which makes adding one and moving one the same edit.
+  GainPoint gain_from;
+  GainPoint gain_to;
 
   friend bool operator==(const TimelineEdit&, const TimelineEdit&) = default;
 };
@@ -357,6 +452,31 @@ class TimelineView : public Widget {
   /// side. Empty when it has none.
   [[nodiscard]] Rect transition_rect(std::size_t track, std::size_t block) const;
 
+  /// The strip of a block the volume band lives in. Empty for a clip with no
+  /// gain to draw.
+  ///
+  /// Inset from the block's own edges so the loudest and quietest settings are
+  /// still a line on a clip rather than one merged into its border, and so a
+  /// point at either extreme has room to be drawn round.
+  [[nodiscard]] Rect gain_area(std::size_t track, std::size_t block) const;
+
+  /// Where a gain is drawn inside that strip, and what a height in it means.
+  /// Each is the other's inverse within the strip; outside it they clamp.
+  [[nodiscard]] double gain_to_y(std::size_t track, std::size_t block, double gain) const;
+  [[nodiscard]] double gain_at_y(std::size_t track, std::size_t block, double y) const;
+
+  /// Where an automation point is drawn. Empty when there is no such point.
+  [[nodiscard]] Rect gain_point_rect(std::size_t track, std::size_t block,
+                                     std::size_t point) const;
+
+  /// The automation point under a pointer, if any.
+  [[nodiscard]] std::optional<GainPointRef> gain_point_at(double x, double y) const;
+
+  /// Whether a press here would take hold of a clip's volume band — the line
+  /// itself, not one of its points. False once the clip is automated, since
+  /// there is no single level to move.
+  [[nodiscard]] bool over_gain_band(double x, double y) const;
+
   [[nodiscard]] double playhead_x() const;
 
   /// The bar along the ruler showing what is marked. Empty when neither mark is
@@ -417,6 +537,27 @@ class TimelineView : public Widget {
   void capture_neighbours();
   void slide_to(double moved, double frame);
 
+  /// The volume gestures, which move a line rather than a block and so need
+  /// the pointer's height as well as its position along the track.
+  void gain_to(double x, double y);
+
+  /// Puts a point on a band at the time under `x`, taking the value the band
+  /// already has there, and answers where it went in the list.
+  ///
+  /// The value it already has, so that adding a point changes nothing about what
+  /// plays — the same bargain the inspector's stopwatch makes. A point that
+  /// arrived at unity, or at the pointer's height, would mean every attempt to
+  /// automate a clip started by altering it.
+  ///
+  /// Nothing when the block has no band, or when a point is already there.
+  [[nodiscard]] std::optional<std::size_t> add_gain_point(BlockRef block, double x);
+
+  /// What the band is worth at a clip-local time, points and all. The same
+  /// clamp-and-interpolate the core evaluates a keyframe list with, in the one
+  /// shape the timeline needs it: linearly, because that is what the line it
+  /// draws between two points says is happening.
+  [[nodiscard]] double gain_value_at(const GainBand& band, double t) const noexcept;
+
   TimelineModel model_;
   TimeScale scale_;
   Viewport vertical_;
@@ -434,8 +575,22 @@ class TimelineView : public Widget {
   std::optional<Neighbour> before_;
   std::optional<Neighbour> after_;
   double press_x_ = 0.0;
+  /// Where the press was vertically. Only the volume gestures need it, and they
+  /// need it for the threshold as much as the position: a band dragged straight
+  /// down travels no distance in x, and a drag measured along one axis would
+  /// never start.
+  double press_y_ = 0.0;
   /// Whether the pointer has moved far enough for this to be a drag at all.
   bool moved_ = false;
+
+  /// Which automation point is being dragged, and where it was when the drag
+  /// began. Kept for the same reason `origin_` is: every position is worked out
+  /// from the press rather than from the last move, so a long drag cannot
+  /// accumulate rounding.
+  std::size_t gain_point_ = 0;
+  GainPoint gain_origin_;
+  /// The level the band was at when a `GainLevel` drag started.
+  double gain_level_origin_ = 1.0;
 
   /// Taken from the theme at layout, because input arrives without one.
   Metrics metrics_;

@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1594** under the `ui` preset; 1354 of them need no GPU, no window, no FFmpeg |
+| Tests | **1627** under the `ui` preset; 1387 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1354 of the 1594 tests.
+binding between them — 1387 of the 1627 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -120,7 +120,7 @@ tools    executables.
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1354 tests run with
+place that knows both, and it is pure too. That is what makes 1387 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -260,7 +260,6 @@ here.**
 
 | | Exists | Missing |
 |---|---|---|
-| **Gain automation** | rubber-band model, mixer honours it | no way to add or drag a point |
 | **Waveforms, thumbnails** | `compute_peaks`, `extract_thumbnails` | the timeline draws neither |
 | **Link/unlink, add/remove/rename track** | all in core | no button, no shortcut, no command |
 | **Snapshot to PNG** | the whole path (`render_frame` does it) | no button |
@@ -286,17 +285,16 @@ here.**
 
 ### Suggested order
 
-1. **Gain automation** — the rubber band. Bigger than it sounds: it needs a new
-   gesture on the timeline rather than a new panel.
-2. **Waveforms and thumbnails on clips.** The media layer computes both; the
+1. **Waveforms and thumbnails on clips.** The media layer computes both; the
    timeline draws neither. Watch the cost — a peak list per clip per zoom is the
-   sort of thing that quietly makes scrolling expensive.
-3. **Link/unlink and the track operations** — all in core, none of them bound to
+   sort of thing that quietly makes scrolling expensive. It also has to share the
+   audio clip with the volume band, which is drawn over the same pixels.
+2. **Link/unlink and the track operations** — all in core, none of them bound to
    anything. Small, and the command table is where they go.
-4. Anything in B, by appetite. Scopes and the VU meter are the two that need new
+3. Anything in B, by appetite. Scopes and the VU meter are the two that need new
    machinery rather than new wiring.
 
-Six are already done and are worth reading as the pattern for the rest:
+Seven are already done and are worth reading as the pattern for the rest:
 
 - **In and out points** — marked from the buttons or from I and O, drawn along
   the foot of the ruler, saved with the project, offered to export as "only the
@@ -326,6 +324,13 @@ Six are already done and are worth reading as the pattern for the rest:
   "contributes picture" and is what `place_media` checks; an adjustment layer
   contributes a filter rather than a picture and still needs the flag, which is
   exactly the sort of thing that gets set honestly and breaks.
+- **The volume rubber band** — `GainBand` in `ui/timeline.hpp`. The whole of it
+  was drawing and gesture: `move_gain_keyframe` and `set_clip_gain` had been in
+  the core, tested, since phase 1. **Check the core before assuming a feature
+  needs one** — this is the second time an "unreachable" item turned out to be
+  wiring only. The part worth reading is the scale: gain is a linear multiplier
+  and the band is decibels, because on a linear scale every trim anyone makes
+  lands in the top few pixels of a forty-pixel clip.
 
 ---
 
@@ -386,6 +391,17 @@ it is very often a button inside the popup running its own click handler.
 midpoint. Effects run on coded values, where FFmpeg's filters are defined and
 where the spec specifies them. Each operation happens in the space it was defined
 in. Do not "fix" either one.
+
+**A drag threshold measured along one axis stops a vertical gesture starting.**
+The timeline's drags were all horizontal until the volume band, so `moved_` was
+`abs(x - press_x)`. A band pulled straight down travels no distance in x, and the
+gesture sat there refusing to begin. The volume modes measure both axes.
+
+**A reference into a vector you are about to sort is not the element any more.**
+Dragging a rubber-band point past its neighbour re-sorts the list, so the point
+is held by value across the sort and found again afterwards. Every reader of a
+keyframe list — the drawing, the core's evaluator — assumes it is in order, and
+this is the one gesture that can break that.
 
 **HSV is a lossy view of a colour.** Black is every hue at once and a grey has no
 saturation to read back, so `ColorPicker` holds its coordinates rather than

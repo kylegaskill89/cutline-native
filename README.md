@@ -278,7 +278,31 @@ removed without a third control that exists only to undo the other two. The two
 can never cross: setting one past the other clears that other, so an inverted
 pair is unrepresentable rather than something every reader has to check for.
 
-1594 tests, plus a headless check that lays every panel out in every theme —
+A clip's volume is a line across its block, on every audio clip rather than only
+the selected one — which clips have been ridden is what somebody reading a mix
+wants to see without clicking through them. Dragging the line sets the clip's
+gain; alt puts a point on it, and alt on a point takes it away, the same toggle
+the markers and the in and out points use. A point moves in time as well as in
+level, so an automation can be shaped rather than only levelled.
+
+The scale is decibels, and that is the whole of the design. Gain is stored as a
+linear multiplier, and on a linear scale the couple of decibels either side of
+unity that is most of mixing lands within a few pixels of the top of a
+forty-pixel clip, while the bottom half of the band spans -6 dB to silence and is
+worth nothing. In decibels each 6 dB step is the same distance. The band's floor
+is where the useful range stops rather than where audio does — thirty-six
+decibels holds both a fine trim and ducking a bed under a voice — and below it a
+clip is silent, because the one thing a volume control at its bottom stop is
+expected to do is nothing at all.
+
+Adding a point takes the value the band already had there, so automating a clip
+never starts by altering it — the same bargain the inspector's stopwatch makes.
+Nothing needed writing in the model: `move_gain_keyframe` and `set_clip_gain`
+had been there, tested, since the first phase, and the mixer and the exporter
+have honoured automation from the start. This is the second feature in a row
+whose work was entirely the gesture.
+
+1627 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a matte, an adjustment layer, a title, and the
 colour picker open, which is the only way the controls a panel is made of get

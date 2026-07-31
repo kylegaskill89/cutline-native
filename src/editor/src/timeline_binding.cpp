@@ -1,5 +1,6 @@
 #include "cutline/editor/timeline_binding.hpp"
 
+#include "cutline/core/animate.hpp"
 #include "cutline/core/edit.hpp"
 #include "cutline/core/effects.hpp"
 #include "cutline/core/keyframe.hpp"
@@ -37,7 +38,12 @@ namespace {
 /// One list rather than one per property: the block is a few pixels tall, and
 /// what it can usefully say is "something happens here", not which of eleven
 /// parameters it was. The panel is where a keyframe is identified.
-[[nodiscard]] std::vector<double> keyframe_times(const core::Clip& clip) {
+///
+/// `banded` leaves the gain keyframes out, for a clip whose volume is drawn as
+/// a rubber band instead. The band says where the automation is and what it is
+/// doing, which is strictly more than a diamond says; drawing both puts two
+/// marks on one clip for one keyframe.
+[[nodiscard]] std::vector<double> keyframe_times(const core::Clip& clip, bool banded) {
   std::vector<double> times = core::effect_keyframe_times(clip);
 
   for (const core::AnimProp prop : core::kAnimProps) {
@@ -45,7 +51,9 @@ namespace {
       times.push_back(frame.t);
     }
   }
-  for (const core::Keyframe& frame : clip.gain_keyframes) times.push_back(frame.t);
+  if (!banded) {
+    for (const core::Keyframe& frame : clip.gain_keyframes) times.push_back(frame.t);
+  }
 
   std::ranges::sort(times);
   // Two properties keyed at the same instant are one mark, not two drawn on
@@ -90,6 +98,10 @@ ui::TimelineModel timeline_model(const core::Project& project,
   model.duration = core::timeline_duration(project);
   model.in_point = project.in_point;
   model.out_point = project.out_point;
+  // Taken from the model rather than left at the timeline's own default, so the
+  // top of a volume band is the loudest gain the core will actually store. A
+  // band that reached higher would refuse the last part of its own travel.
+  model.max_gain = core::kMaxGain;
 
   model.markers.reserve(project.markers.size());
   for (const core::Marker& marker : project.markers) {
@@ -132,14 +144,29 @@ ui::TimelineModel timeline_model(const core::Project& project,
         transition.label = std::string(transition_name(at_join.kind));
       }
 
+      // The volume band, on audio clips only. A video clip's gain is not what
+      // anybody means by its volume — the audio it was linked to has its own
+      // clip, on its own track, and that is the one carrying the level.
+      std::optional<ui::GainBand> band;
+      if (audio) {
+        ui::GainBand gain;
+        gain.level = clip.gain;
+        gain.points.reserve(clip.gain_keyframes.size());
+        for (const core::Keyframe& frame : clip.gain_keyframes) {
+          gain.points.push_back(ui::GainPoint{.t = frame.t, .v = frame.v});
+        }
+        band = std::move(gain);
+      }
+
       row.blocks.push_back(ui::TimelineBlock{
           .id = clip.id,
           .start = clip.start,
           .end = core::clip_end(clip),
           .label = label_for(project, clip),
           .selected = std::ranges::find(selection, clip.id) != selection.end(),
-          .keyframes = keyframe_times(clip),
+          .keyframes = keyframe_times(clip, audio),
           .transition = std::move(transition),
+          .gain = std::move(band),
       });
     }
     model.tracks.push_back(std::move(row));
@@ -202,6 +229,21 @@ core::Project apply_timeline_edit(core::Project project, std::string_view clip_i
       }
       return core::split_at(std::move(project), edit.at, every);
     }
+
+    case ui::DragMode::GainLevel:
+      return core::set_clip_gain(std::move(project), clip_id, edit.gain);
+
+    case ui::DragMode::GainPointDrag:
+      // One operation for both adding a point and moving one. A point that was
+      // just created reports the same time in `gain_from` and `gain_to`, so the
+      // remove half finds the keyframe it is about to replace and the set half
+      // puts it back — which is the same answer as adding it outright, without
+      // the caller having to know which happened.
+      return core::move_gain_keyframe(std::move(project), clip_id, edit.gain_from.t,
+                                      edit.gain_to.t, edit.gain_to.v);
+
+    case ui::DragMode::GainPointRemove:
+      return core::remove_gain_keyframe_at(std::move(project), clip_id, edit.gain_from.t);
 
     case ui::DragMode::None:
     case ui::DragMode::Scrub:

@@ -467,5 +467,141 @@ TEST(Binding, WhatIsDrawnAfterAnEditIsWhatWasAskedFor) {
   EXPECT_EQ(redrawn.tracks[0].blocks[0].id, *id);
 }
 
+// ------------------------------------------------------- the volume band --
+
+TEST(Binding, OnlyAnAudioClipCarriesAVolumeBand) {
+  const ui::TimelineModel model = timeline_model(sample_project());
+
+  EXPECT_FALSE(model.tracks[0].blocks[0].gain.has_value());
+  EXPECT_FALSE(model.tracks[1].blocks[0].gain.has_value());
+  ASSERT_TRUE(model.tracks[2].blocks[0].gain.has_value());
+}
+
+TEST(Binding, TheBandStartsAtTheClipsOwnGain) {
+  Project project = core::set_clip_gain(sample_project(), "a", 0.4);
+  const ui::TimelineModel model = timeline_model(project);
+
+  ASSERT_TRUE(model.tracks[2].blocks[0].gain.has_value());
+  EXPECT_DOUBLE_EQ(model.tracks[2].blocks[0].gain->level, 0.4);
+  EXPECT_TRUE(model.tracks[2].blocks[0].gain->points.empty());
+}
+
+TEST(Binding, TheBandsPointsAreTheClipsGainKeyframes) {
+  Project project = sample_project();
+  project = core::set_gain_keyframe(std::move(project), "a", 1.0, 0.25);
+  project = core::set_gain_keyframe(std::move(project), "a", 4.0, 1.0);
+
+  const ui::TimelineModel model = timeline_model(project);
+  const std::vector<ui::GainPoint>& points = model.tracks[2].blocks[0].gain->points;
+
+  ASSERT_EQ(points.size(), 2u);
+  EXPECT_DOUBLE_EQ(points[0].t, 1.0);
+  EXPECT_DOUBLE_EQ(points[0].v, 0.25);
+  EXPECT_DOUBLE_EQ(points[1].t, 4.0);
+  EXPECT_DOUBLE_EQ(points[1].v, 1.0);
+}
+
+// The band says where the automation is *and* what it does, which is strictly
+// more than a diamond says. Both would be two marks on one clip for one
+// keyframe.
+TEST(Binding, AGainKeyframeIsNotAlsoDrawnAsADiamond) {
+  Project project = core::set_gain_keyframe(sample_project(), "a", 2.0, 0.5);
+  const ui::TimelineModel model = timeline_model(project);
+
+  EXPECT_TRUE(model.tracks[2].blocks[0].keyframes.empty());
+  EXPECT_EQ(model.tracks[2].blocks[0].gain->points.size(), 1u);
+}
+
+// A video clip has no band, so its gain keyframes have nowhere else to show.
+TEST(Binding, AVideoClipsGainKeyframeIsStillADiamond) {
+  Project project = core::set_gain_keyframe(sample_project(), "c1", 2.0, 0.5);
+  const ui::TimelineModel model = timeline_model(project);
+
+  EXPECT_EQ(model.tracks[1].blocks[0].keyframes.size(), 1u);
+}
+
+TEST(Binding, TheTopOfTheBandIsTheGainTheModelWillStore) {
+  // Or the last part of the band's travel would be refused by the clamp in the
+  // core, and dragging to the top would quietly land somewhere else.
+  EXPECT_DOUBLE_EQ(timeline_model(sample_project()).max_gain, core::kMaxGain);
+}
+
+TEST(Binding, DraggingTheBandSetsTheClipsGain) {
+  const Project after = apply_timeline_edit(
+      sample_project(), "a", ui::TimelineEdit{.mode = ui::DragMode::GainLevel, .gain = 0.3});
+
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "a")->gain, 0.3);
+}
+
+TEST(Binding, MovingAPointRelocatesTheKeyframe) {
+  Project project = core::set_gain_keyframe(sample_project(), "a", 2.0, 0.5);
+  project = apply_timeline_edit(std::move(project), "a",
+                                ui::TimelineEdit{.mode = ui::DragMode::GainPointDrag,
+                                                 .gain_from = {2.0, 0.5},
+                                                 .gain_to = {5.0, 0.8}});
+
+  const std::vector<core::Keyframe>& kfs = core::find_clip(project, "a")->gain_keyframes;
+  ASSERT_EQ(kfs.size(), 1u);
+  EXPECT_DOUBLE_EQ(kfs[0].t, 5.0);
+  EXPECT_DOUBLE_EQ(kfs[0].v, 0.8);
+}
+
+// A point that was just created reports the same place in both, and the one
+// operation has to cope: the remove half finds the keyframe it is replacing and
+// the set half puts it back.
+TEST(Binding, AddingAPointIsTheSameEditAsMovingOne) {
+  const Project after =
+      apply_timeline_edit(sample_project(), "a",
+                          ui::TimelineEdit{.mode = ui::DragMode::GainPointDrag,
+                                           .gain_from = {3.0, 0.6},
+                                           .gain_to = {3.0, 0.6}});
+
+  const std::vector<core::Keyframe>& kfs = core::find_clip(after, "a")->gain_keyframes;
+  ASSERT_EQ(kfs.size(), 1u);
+  EXPECT_DOUBLE_EQ(kfs[0].t, 3.0);
+  EXPECT_DOUBLE_EQ(kfs[0].v, 0.6);
+}
+
+TEST(Binding, RemovingAPointTakesTheKeyframeAway) {
+  Project project = core::set_gain_keyframe(sample_project(), "a", 2.0, 0.5);
+  project = core::set_gain_keyframe(std::move(project), "a", 6.0, 1.0);
+  project = apply_timeline_edit(std::move(project), "a",
+                                ui::TimelineEdit{.mode = ui::DragMode::GainPointRemove,
+                                                 .gain_from = {2.0, 0.5},
+                                                 .gain_to = {2.0, 0.5}});
+
+  const std::vector<core::Keyframe>& kfs = core::find_clip(project, "a")->gain_keyframes;
+  ASSERT_EQ(kfs.size(), 1u);
+  EXPECT_DOUBLE_EQ(kfs[0].t, 6.0);
+}
+
+TEST(Binding, AVolumeEditOnAMissingClipIsANoOp) {
+  const Project before = sample_project();
+  EXPECT_EQ(apply_timeline_edit(before, "nope",
+                                ui::TimelineEdit{.mode = ui::DragMode::GainLevel, .gain = 0.1}),
+            before);
+  EXPECT_EQ(apply_timeline_edit(before, "nope",
+                               ui::TimelineEdit{.mode = ui::DragMode::GainPointDrag,
+                                                .gain_to = {1.0, 0.5}}),
+            before);
+}
+
+TEST(Binding, WhatIsDrawnAfterAVolumeEditIsWhatWasAskedFor) {
+  Project project = apply_timeline_edit(
+      sample_project(), "a",
+      ui::TimelineEdit{
+          .mode = ui::DragMode::GainPointDrag, .gain_from = {2.0, 0.5}, .gain_to = {2.0, 0.5}});
+  project = apply_timeline_edit(std::move(project), "a",
+                                ui::TimelineEdit{.mode = ui::DragMode::GainPointDrag,
+                                                 .gain_from = {2.0, 0.5},
+                                                 .gain_to = {4.0, 0.9}});
+
+  const ui::TimelineModel model = timeline_model(project);
+  const std::vector<ui::GainPoint>& points = model.tracks[2].blocks[0].gain->points;
+  ASSERT_EQ(points.size(), 1u);
+  EXPECT_DOUBLE_EQ(points[0].t, 4.0);
+  EXPECT_DOUBLE_EQ(points[0].v, 0.9);
+}
+
 }  // namespace
 }  // namespace cutline::editor

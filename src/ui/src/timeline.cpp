@@ -1,5 +1,6 @@
 #include "cutline/ui/timeline.hpp"
 
+#include "cutline/core/keyframe.hpp"
 #include "cutline/core/time.hpp"
 
 #include <algorithm>
@@ -52,6 +53,16 @@ constexpr double kSwitchGap = 3.0;
 /// marker is a point in time, so its width says nothing and a one-pixel one
 /// could not be seen.
 constexpr double kMarkerWidth = 9.0;
+
+/// How far in from a block's edges the volume band runs, and how big a grab a
+/// point on it gets. The reach is generous against the six pixels a point is
+/// drawn at: it is a small target on a short clip, and a band that has to be
+/// hit exactly is one nobody uses twice.
+constexpr double kGainInset = 5.0;
+constexpr double kGainPointRadius = 3.0;
+constexpr double kGainPointReach = 6.0;
+/// How near the line itself a press has to be to take hold of it.
+constexpr double kGainBandReach = 5.0;
 
 /// The switches each kind of track shows, in the order they are drawn.
 constexpr std::array<TrackControl, 3> kAudioControls{TrackControl::Mute, TrackControl::Solo,
@@ -123,6 +134,31 @@ std::optional<double> nearest_snap(std::span<const double> points, double time,
     }
   }
   return best;
+}
+
+double gain_to_band(double gain, double maximum) noexcept {
+  if (!(maximum > 0.0)) return 0.0;
+  // Silence has no logarithm, and everything below the floor is silence as far
+  // as the band is concerned, so both land on the foot of it.
+  if (!(gain > 0.0)) return 0.0;
+
+  const double top_db = 20.0 * std::log10(maximum);
+  const double db = 20.0 * std::log10(gain);
+  if (db <= kGainFloorDb) return 0.0;
+  return std::clamp((db - kGainFloorDb) / (top_db - kGainFloorDb), 0.0, 1.0);
+}
+
+double band_to_gain(double fraction, double maximum) noexcept {
+  if (!(maximum > 0.0)) return 0.0;
+  // The foot of the band is silence rather than the floor. Otherwise a clip
+  // could be dragged very quiet and never actually off, and the one thing a
+  // volume control at its bottom stop is expected to do is nothing at all.
+  if (fraction <= 0.0) return 0.0;
+  if (fraction >= 1.0) return maximum;
+
+  const double top_db = 20.0 * std::log10(maximum);
+  const double db = kGainFloorDb + fraction * (top_db - kGainFloorDb);
+  return std::clamp(std::pow(10.0, db / 20.0), 0.0, maximum);
 }
 
 double TimelineModel::content_duration() const noexcept {
@@ -295,6 +331,87 @@ Rect TimelineView::transition_rect(std::size_t track, std::size_t block) const {
   return Rect{centre - half, row.y, half * 2.0, row.height};
 }
 
+Rect TimelineView::gain_area(std::size_t track, std::size_t block) const {
+  if (track >= model_.tracks.size()) return {};
+  const std::vector<TimelineBlock>& blocks = model_.tracks[track].blocks;
+  if (block >= blocks.size() || !blocks[block].gain.has_value()) return {};
+
+  const Rect box = block_rect(track, block);
+  // Too short to hold a band and still be a clip. Below this the line would be
+  // the whole block and there would be nothing left to see it against.
+  if (box.height < kGainInset * 2.0 + 4.0) return {};
+  return Rect{box.x, box.y + kGainInset, box.width,
+              std::max(0.0, box.height - kGainInset * 2.0)};
+}
+
+double TimelineView::gain_to_y(std::size_t track, std::size_t block, double gain) const {
+  const Rect area = gain_area(track, block);
+  if (area.empty()) return 0.0;
+  // Loud is up, which is the one thing about a fader nobody has to be told.
+  return area.bottom() - gain_to_band(gain, model_.max_gain) * area.height;
+}
+
+double TimelineView::gain_at_y(std::size_t track, std::size_t block, double y) const {
+  const Rect area = gain_area(track, block);
+  if (area.empty() || area.height <= 0.0) return 0.0;
+  return band_to_gain((area.bottom() - y) / area.height, model_.max_gain);
+}
+
+Rect TimelineView::gain_point_rect(std::size_t track, std::size_t block,
+                                   std::size_t point) const {
+  const Rect area = gain_area(track, block);
+  if (area.empty()) return {};
+
+  const GainBand& band = *model_.tracks[track].blocks[block].gain;
+  if (point >= band.points.size()) return {};
+
+  const GainPoint& at = band.points[point];
+  const double x = area.x + at.t * scale_.pixels_per_second;
+  const double y = gain_to_y(track, block, at.v);
+  return Rect{x - kGainPointRadius, y - kGainPointRadius, kGainPointRadius * 2.0,
+              kGainPointRadius * 2.0};
+}
+
+std::optional<GainPointRef> TimelineView::gain_point_at(double x, double y) const {
+  const std::optional<BlockRef> hit = block_at(x, y);
+  if (!hit.has_value()) return std::nullopt;
+
+  const std::optional<GainBand>& band = model_.tracks[hit->track].blocks[hit->block].gain;
+  if (!band.has_value()) return std::nullopt;
+
+  // Nearest rather than first, so two points dragged close together can still
+  // be told apart by which one the pointer is actually over.
+  std::optional<GainPointRef> best;
+  double closest = kGainPointReach;
+  for (std::size_t i = 0; i < band->points.size(); ++i) {
+    const Rect box = gain_point_rect(hit->track, hit->block, i);
+    if (box.empty()) continue;
+    const double dx = x - (box.x + box.width * 0.5);
+    const double dy = y - (box.y + box.height * 0.5);
+    const double distance = std::hypot(dx, dy);
+    if (distance < closest) {
+      closest = distance;
+      best = GainPointRef{*hit, i};
+    }
+  }
+  return best;
+}
+
+bool TimelineView::over_gain_band(double x, double y) const {
+  const std::optional<BlockRef> hit = block_at(x, y);
+  if (!hit.has_value()) return false;
+
+  const std::optional<GainBand>& band = model_.tracks[hit->track].blocks[hit->block].gain;
+  // Only while it is flat. Once there are points the line runs through them and
+  // there is no one level left for a drag to set — moving the whole shape is a
+  // different gesture, and offering it here would silently rewrite every point.
+  if (!band.has_value() || !band->points.empty()) return false;
+
+  const Rect area = gain_area(hit->track, hit->block);
+  if (area.empty()) return false;
+  return std::abs(y - gain_to_y(hit->track, hit->block, band->level)) <= kGainBandReach;
+}
+
 double TimelineView::playhead_x() const {
   return time_area().x + scale_.to_x(playhead_);
 }
@@ -373,6 +490,15 @@ DragMode TimelineView::zone_at(double x, double y) const {
   if (!hit.has_value()) return DragMode::None;
 
   const Rect box = block_rect(hit->track, hit->block);
+
+  // The volume band comes first, and only under the selection tool. It sits on
+  // top of the clip body, so a press that found it would otherwise be a move —
+  // and the other tools each mean one specific thing everywhere on a clip,
+  // which is what makes them usable without hunting for a zone.
+  if (tool_ == Tool::Selection) {
+    if (gain_point_at(x, y).has_value()) return DragMode::GainPointDrag;
+    if (over_gain_band(x, y)) return DragMode::GainLevel;
+  }
 
   switch (tool_) {
     case Tool::Razor:
@@ -456,6 +582,56 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
         const Rect text = inset(box, Edges::symmetric(metrics_.padding_y * 1.5, 0.0));
         painter.text(text_run(text, clip.label, style, metrics_.small_font_size,
                               TextAlign::Left, false));
+        painter.pop_clip();
+      }
+
+      // The volume band, over the clip body and under its keyframe marks.
+      //
+      // Drawn on every audio clip rather than only the selected one: a line
+      // that appears when a clip is clicked says nothing while the sequence is
+      // being read, and which clips have been rewritten is exactly what somebody
+      // scanning a mix wants to see.
+      if (const Rect band_area = gain_area(track, i); !band_area.empty()) {
+        const GainBand& band = *clip.gain;
+        painter.push_clip(box, style.corner_radius);
+
+        const Color line = style.text;
+        const std::vector<GainPoint>& points = band.points;
+
+        if (points.empty()) {
+          const double y = gain_to_y(track, i, band.level);
+          painter.line(band_area.x, y, band_area.right(), y, line, 1.5);
+        } else {
+          // Flat out to the first point and out from the last, because that is
+          // how the value is evaluated: outside the keyframes it holds. Drawing
+          // the segments only would leave the ends of the clip looking
+          // unautomated when they are the parts that never change.
+          const double first_x = band_area.x + points.front().t * scale_.pixels_per_second;
+          const double first_y = gain_to_y(track, i, points.front().v);
+          if (first_x > band_area.x) {
+            painter.line(band_area.x, first_y, first_x, first_y, line, 1.5);
+          }
+
+          for (std::size_t p = 0; p + 1 < points.size(); ++p) {
+            const double x0 = band_area.x + points[p].t * scale_.pixels_per_second;
+            const double x1 = band_area.x + points[p + 1].t * scale_.pixels_per_second;
+            if (x1 < band_area.x || x0 > band_area.right()) continue;
+            painter.line(x0, gain_to_y(track, i, points[p].v), x1,
+                         gain_to_y(track, i, points[p + 1].v), line, 1.5);
+          }
+
+          const double last_x = band_area.x + points.back().t * scale_.pixels_per_second;
+          const double last_y = gain_to_y(track, i, points.back().v);
+          if (last_x < band_area.right()) {
+            painter.line(last_x, last_y, band_area.right(), last_y, line, 1.5);
+          }
+
+          for (std::size_t p = 0; p < points.size(); ++p) {
+            const Rect dot = gain_point_rect(track, i, p);
+            if (dot.empty() || dot.right() < box.x || dot.x > box.right()) continue;
+            painter.fill(dot, kGainPointRadius, Fill::solid(line));
+          }
+        }
         painter.pop_clip();
       }
 
@@ -673,6 +849,93 @@ void TimelineView::slide_to(double moved, double frame) {
   if (after_.has_value()) blocks[after_->index].start = after_->origin.start + delta;
 }
 
+double TimelineView::gain_value_at(const GainBand& band, double t) const noexcept {
+  if (band.points.empty()) return band.level;
+  if (t <= band.points.front().t) return band.points.front().v;
+  if (t >= band.points.back().t) return band.points.back().v;
+
+  for (std::size_t i = 0; i + 1 < band.points.size(); ++i) {
+    const GainPoint& a = band.points[i];
+    const GainPoint& b = band.points[i + 1];
+    if (t < a.t || t > b.t) continue;
+    const double span = b.t - a.t;
+    if (!(span > 0.0)) return b.v;
+    return a.v + (b.v - a.v) * ((t - a.t) / span);
+  }
+  return band.points.back().v;
+}
+
+std::optional<std::size_t> TimelineView::add_gain_point(BlockRef block, double x) {
+  if (block.track >= model_.tracks.size()) return std::nullopt;
+  std::vector<TimelineBlock>& blocks = model_.tracks[block.track].blocks;
+  if (block.block >= blocks.size() || !blocks[block.block].gain.has_value()) {
+    return std::nullopt;
+  }
+
+  const Rect area = gain_area(block.track, block.block);
+  if (area.empty()) return std::nullopt;
+
+  GainBand& band = *blocks[block.block].gain;
+  const double t = std::clamp(
+      core::snap_to_frame((x - area.x) / scale_.pixels_per_second, model_.fps), 0.0,
+      blocks[block.block].duration());
+
+  // One already here. Adding a second at the same instant would give the
+  // evaluator two answers for one moment, and the drag that follows would pick
+  // between them by iteration order.
+  for (const GainPoint& point : band.points) {
+    if (std::abs(point.t - t) <= core::kKeyframeMatchEps) return std::nullopt;
+  }
+
+  const GainPoint added{t, gain_value_at(band, t)};
+  band.points.push_back(added);
+  std::ranges::sort(band.points, {}, &GainPoint::t);
+  for (std::size_t i = 0; i < band.points.size(); ++i) {
+    if (band.points[i] == added) return i;
+  }
+  return std::nullopt;
+}
+
+void TimelineView::gain_to(double x, double y) {
+  if (!drag_.has_value()) return;
+  std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
+  if (drag_->block >= blocks.size() || !blocks[drag_->block].gain.has_value()) return;
+
+  GainBand& band = *blocks[drag_->block].gain;
+
+  if (mode_ == DragMode::GainLevel) {
+    band.level = gain_at_y(drag_->track, drag_->block, y);
+    return;
+  }
+
+  if (gain_point_ >= band.points.size()) return;
+
+  // In time as well as in level. A point that could only move up and down would
+  // have to be deleted and re-added to be a moment earlier, which is the sort of
+  // thing that makes people leave the automation alone.
+  const Rect area = gain_area(drag_->track, drag_->block);
+  const double t = core::snap_to_frame((x - area.x) / scale_.pixels_per_second, model_.fps);
+
+  GainPoint moved = band.points[gain_point_];
+  moved.v = gain_at_y(drag_->track, drag_->block, y);
+  // Never off its own clip: a keyframe outside the clip's length is one the
+  // evaluator clamps to and nothing can reach again.
+  moved.t = std::clamp(t, 0.0, blocks[drag_->block].duration());
+  band.points[gain_point_] = moved;
+
+  // Kept in order, because everything that reads a keyframe list — the drawing
+  // above, the evaluator in the core — assumes it is sorted, and dragging one
+  // point past another is the one gesture that can break that. Held by value
+  // across the sort, since the slot it was in is not the slot it ends up in.
+  std::ranges::sort(band.points, {}, &GainPoint::t);
+  for (std::size_t i = 0; i < band.points.size(); ++i) {
+    if (band.points[i] == moved) {
+      gain_point_ = i;
+      break;
+    }
+  }
+}
+
 void TimelineView::drag_to(double x) {
   if (!drag_.has_value()) return;
   std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
@@ -821,7 +1084,58 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
     drag_ = hit;
     origin_ = model_.tracks[hit->track].blocks[hit->block];
     press_x_ = event.x;
+    press_y_ = event.y;
     moved_ = false;
+
+    // Alt over an audio clip adds a point where the band already is and drags
+    // it from there, so a new point and an old one are the same gesture from
+    // here on. Anywhere on the clip, not only on the line: the band is a couple
+    // of pixels tall and asking someone to hit it before they can put a point on
+    // it is asking twice.
+    if (event.modifiers.alt && tool_ == Tool::Selection) {
+      // Alt on a point that is already there takes it away instead. The same
+      // key both ways, so nothing exists only to undo the other.
+      if (const auto point = gain_point_at(event.x, event.y)) {
+        std::vector<GainPoint>& points =
+            model_.tracks[hit->track].blocks[hit->block].gain->points;
+        const GainPoint removed = points[point->point];
+        points.erase(points.begin() + static_cast<std::ptrdiff_t>(point->point));
+
+        if (on_edit_) {
+          on_edit_(TimelineEdit{.block = *hit,
+                                .mode = DragMode::GainPointRemove,
+                                .result = model_.tracks[hit->track].blocks[hit->block],
+                                .gain_from = removed,
+                                .gain_to = removed});
+        }
+        mode_ = DragMode::None;
+        drag_.reset();
+        return true;
+      }
+
+      if (const auto added = add_gain_point(*hit, event.x)) {
+        mode_ = DragMode::GainPointDrag;
+        gain_point_ = *added;
+        gain_origin_ = model_.tracks[hit->track].blocks[hit->block].gain->points[*added];
+        // A point that is only clicked is still a point. Without this, adding
+        // one and letting go without moving would leave it in the view and
+        // never report it, and it would vanish at the next rebuild.
+        moved_ = true;
+        return true;
+      }
+    }
+
+    if (mode_ == DragMode::GainPointDrag) {
+      const auto point = gain_point_at(event.x, event.y);
+      if (point.has_value()) {
+        gain_point_ = point->point;
+        gain_origin_ =
+            model_.tracks[hit->track].blocks[hit->block].gain->points[point->point];
+      }
+    } else if (mode_ == DragMode::GainLevel) {
+      gain_level_origin_ = model_.tracks[hit->track].blocks[hit->block].gain->level;
+    }
+
     if (mode_ == DragMode::Slide) capture_neighbours();
   }
   return true;
@@ -836,10 +1150,23 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
   }
   if (!drag_.has_value()) return false;
 
+  const bool volume = mode_ == DragMode::GainLevel || mode_ == DragMode::GainPointDrag;
+
   // A press that has not travelled yet is still a click. Without this,
   // selecting a clip nudges it by however much the hand wobbled.
-  if (!moved_ && std::abs(event.x - press_x_) < kDragThreshold) return true;
+  //
+  // The volume gestures are measured across both axes: a band pulled straight
+  // down covers no distance in x at all, and a threshold on x alone would sit
+  // there refusing to start.
+  const double travelled = volume ? std::hypot(event.x - press_x_, event.y - press_y_)
+                                  : std::abs(event.x - press_x_);
+  if (!moved_ && travelled < kDragThreshold) return true;
   moved_ = true;
+
+  if (volume) {
+    gain_to(event.x, event.y);
+    return true;
+  }
 
   drag_to(event.x);
   return true;
@@ -851,6 +1178,27 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
   // Reported once, at the end. The model has been updated all along so the
   // drag can be seen; firing on every move would put a hundred entries in the
   // undo stack for one gesture.
+  if (moved_ && drag_.has_value() && on_edit_ &&
+      (mode_ == DragMode::GainLevel || mode_ == DragMode::GainPointDrag)) {
+    const std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
+    if (drag_->block < blocks.size() && blocks[drag_->block].gain.has_value()) {
+      const GainBand& band = *blocks[drag_->block].gain;
+      TimelineEdit edit{.block = *drag_, .mode = mode_, .result = blocks[drag_->block]};
+      if (mode_ == DragMode::GainLevel) {
+        edit.gain = band.level;
+      } else if (gain_point_ < band.points.size()) {
+        edit.gain_from = gain_origin_;
+        edit.gain_to = band.points[gain_point_];
+      }
+      on_edit_(edit);
+    }
+
+    mode_ = DragMode::None;
+    drag_.reset();
+    moved_ = false;
+    return true;
+  }
+
   if (moved_ && drag_.has_value() && on_edit_) {
     const std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
     if (drag_->block < blocks.size()) {

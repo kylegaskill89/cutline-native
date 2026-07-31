@@ -1605,5 +1605,330 @@ TEST(Slide, ReportsWhereTheClipEndedUp) {
   EXPECT_NEAR(last->result.start, 6.0, 0.02);
 }
 
+// ------------------------------------------------------ the volume band --
+//
+// A clip's gain, as a line across its block. The arithmetic is the interesting
+// half: gain is stored as a linear multiplier and drawn on a decibel scale,
+// because a linear one puts every trim anybody actually makes within a few
+// pixels of the top of a forty-pixel clip.
+
+[[nodiscard]] MouseEvent alt_press(double x, double y) {
+  return MouseEvent{.x = x, .y = y, .button = MouseButton::Left, .modifiers = {.alt = true}};
+}
+
+/// A model whose one audio clip carries a band. Deliberately separate from
+/// `sample_model`, whose audio block has none: the band sits over the top of a
+/// clip and takes presses that would otherwise move it, so the tests for moving
+/// a clip must keep a clip with nothing on it.
+[[nodiscard]] TimelineModel banded_model(GainBand band = {}) {
+  TimelineModel model;
+  model.fps = kFps;
+  model.max_gain = 2.0;
+  model.tracks = {
+      TimelineTrack{.name = "V1",
+                    .blocks = {TimelineBlock{.start = 0.0, .end = 8.0, .label = "wide"}}},
+      TimelineTrack{.name = "A1",
+                    .audio = true,
+                    .blocks = {TimelineBlock{
+                        .start = 0.0, .end = 8.0, .label = "dialogue", .gain = std::move(band)}}},
+  };
+  return model;
+}
+
+struct BandFixture {
+  explicit BandFixture(GainBand band = {}) {
+    host = std::make_unique<WidgetHost>(std::make_unique<TimelineView>());
+    view = static_cast<TimelineView*>(&host->root());
+    view->set_model(banded_model(std::move(band)));
+    view->set_scale(TimeScale{.pixels_per_second = 100.0, .start = 0.0});
+    view->set_snapping(false);
+    host->resize(Rect{0.0, 0.0, 1000.0, 400.0}, flat_context());
+  }
+
+  /// The audio track's only block.
+  [[nodiscard]] const TimelineBlock& block() const { return view->model().tracks[1].blocks[0]; }
+  [[nodiscard]] const GainBand& band() const { return *block().gain; }
+
+  std::unique_ptr<WidgetHost> host;
+  TimelineView* view = nullptr;
+};
+
+TEST(GainBand, SilenceIsTheFootAndTheCeilingIsTheTop) {
+  EXPECT_DOUBLE_EQ(gain_to_band(0.0, 2.0), 0.0);
+  EXPECT_DOUBLE_EQ(gain_to_band(2.0, 2.0), 1.0);
+  EXPECT_DOUBLE_EQ(band_to_gain(0.0, 2.0), 0.0);
+  EXPECT_DOUBLE_EQ(band_to_gain(1.0, 2.0), 2.0);
+}
+
+// The whole reason the scale is decibels. On a linear scale these three steps
+// would be 0.5, 0.25 and 0.125 of the height; here they are the same distance,
+// which is what makes a trim near unity draggable at all.
+TEST(GainBand, EqualDecibelStepsAreEqualDistances) {
+  const double unity = gain_to_band(1.0, 2.0);
+  const double down6 = gain_to_band(0.5, 2.0);
+  const double down12 = gain_to_band(0.25, 2.0);
+  const double down18 = gain_to_band(0.125, 2.0);
+
+  EXPECT_NEAR(unity - down6, down6 - down12, 1e-9);
+  EXPECT_NEAR(down6 - down12, down12 - down18, 1e-9);
+  EXPECT_GT(unity - down6, 0.1);  // and each is worth a real part of the clip
+}
+
+TEST(GainBand, UnitySitsHighBecauseThereIsLittleRoomAboveIt) {
+  // Six decibels of headroom against thirty-six below, so a clip at unity draws
+  // its line near the top. That is the shape of the thing, not an accident: the
+  // model allows twice unity and no more.
+  const double unity = gain_to_band(1.0, 2.0);
+  EXPECT_GT(unity, 0.8);
+  EXPECT_LT(unity, 0.95);
+}
+
+TEST(GainBand, EverythingBelowTheFloorIsSilence) {
+  EXPECT_DOUBLE_EQ(gain_to_band(std::pow(10.0, kGainFloorDb / 20.0) * 0.5, 2.0), 0.0);
+  EXPECT_DOUBLE_EQ(gain_to_band(1e-9, 2.0), 0.0);
+}
+
+TEST(GainBand, AHeightMeansTheGainThatWouldBeDrawnThere) {
+  for (const double gain : {0.05, 0.25, 0.5, 1.0, 1.5, 2.0}) {
+    EXPECT_NEAR(band_to_gain(gain_to_band(gain, 2.0), 2.0), gain, 1e-9)
+        << "round trip through the band at gain " << gain;
+  }
+}
+
+TEST(GainBand, AVideoClipHasNoBand) {
+  const BandFixture fixture;
+  EXPECT_TRUE(fixture.view->gain_area(0, 0).empty());
+
+  const Rect box = fixture.view->block_rect(0, 0);
+  EXPECT_FALSE(fixture.view->over_gain_band(box.x + 100.0, box.y + box.height * 0.5));
+}
+
+TEST(GainBand, TheBandIsDrawnOnEveryAudioClipRatherThanTheSelectedOne) {
+  BandFixture fixture;
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+
+  // Nothing is selected, and the line is there anyway: which clips carry a
+  // level is what somebody reading a mix wants to see without clicking through
+  // them one at a time.
+  EXPECT_FALSE(fixture.view->selection().has_value());
+
+  // A line's endpoints are its bounds' origin and that origin plus its extents.
+  const double y = fixture.view->gain_to_y(1, 0, 1.0);
+  const bool drew_the_band = std::ranges::any_of(painter.calls(), [&](const DrawCall& call) {
+    return call.kind == DrawCall::Kind::Line && std::abs(call.bounds.y - y) < 0.51 &&
+           std::abs(call.bounds.height) < 0.51 && call.bounds.width > 100.0;
+  });
+  EXPECT_TRUE(drew_the_band);
+}
+
+TEST(GainBand, LoudIsUp) {
+  const BandFixture fixture;
+  EXPECT_LT(fixture.view->gain_to_y(1, 0, 2.0), fixture.view->gain_to_y(1, 0, 1.0));
+  EXPECT_LT(fixture.view->gain_to_y(1, 0, 1.0), fixture.view->gain_to_y(1, 0, 0.25));
+}
+
+TEST(GainBand, DraggingTheBandSetsTheLevel) {
+  BandFixture fixture;
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  const double y = fixture.view->gain_to_y(1, 0, 1.0);
+  fixture.host->mouse_down(press(box.x + 200.0, y));
+  fixture.host->mouse_move(press(box.x + 200.0, y + 10.0));
+  fixture.host->mouse_up(press(box.x + 200.0, y + 10.0));
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::GainLevel);
+  EXPECT_LT(last->gain, 1.0);
+  EXPECT_GT(last->gain, 0.0);
+  // And the view shows it, so the drag can be seen while it happens.
+  EXPECT_DOUBLE_EQ(fixture.band().level, last->gain);
+}
+
+// A band pulled straight down travels no distance in x at all. A drag threshold
+// measured along one axis would sit there refusing to start, which is exactly
+// the gesture this control is for.
+TEST(GainBand, AStraightDownDragStartsAtAll) {
+  BandFixture fixture;
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  const double x = box.x + 200.0;
+  const double y = fixture.view->gain_to_y(1, 0, 1.0);
+  fixture.host->mouse_down(press(x, y));
+  fixture.host->mouse_move(press(x, y + 12.0));
+  fixture.host->mouse_up(press(x, y + 12.0));
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::GainLevel);
+}
+
+TEST(GainBand, APressBelowTheBandStillMovesTheClip) {
+  const BandFixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+  // Well under the line, which at unity sits near the top of the block.
+  EXPECT_EQ(fixture.view->zone_at(box.x + 200.0, box.bottom() - 4.0), DragMode::Move);
+}
+
+TEST(GainBand, AnAutomatedClipHasNoSingleLevelToDrag) {
+  const BandFixture fixture{GainBand{.level = 1.0, .points = {{2.0, 0.5}, {5.0, 1.0}}}};
+  const Rect box = fixture.view->block_rect(1, 0);
+
+  // The line runs through the points now, so there is nothing a level drag
+  // could mean that would not silently rewrite every one of them.
+  for (const double at : {50.0, 200.0, 400.0, 700.0}) {
+    for (double dy = 2.0; dy < box.height - 2.0; dy += 3.0) {
+      EXPECT_FALSE(fixture.view->over_gain_band(box.x + at, box.y + dy));
+    }
+  }
+}
+
+TEST(GainBand, AltPutsAPointWhereTheBandAlreadyIs) {
+  BandFixture fixture{GainBand{.level = 0.5}};
+  const Rect box = fixture.view->block_rect(1, 0);
+
+  // Deliberately nowhere near the line: alt anywhere on the clip puts a point
+  // on the band, because a two-pixel line is not something to be asked to hit
+  // before you are allowed to automate anything.
+  fixture.host->mouse_down(alt_press(box.x + 300.0, box.bottom() - 3.0));
+
+  ASSERT_EQ(fixture.band().points.size(), 1u);
+  // At the level the band already had, so adding a point changes nothing about
+  // what plays — the same bargain the inspector's stopwatch makes.
+  EXPECT_DOUBLE_EQ(fixture.band().points[0].v, 0.5);
+  EXPECT_NEAR(fixture.band().points[0].t, 3.0, 1.0 / kFps);
+}
+
+TEST(GainBand, APointAddedOnAnAutomatedClipTakesTheValueTheBandWasAt) {
+  BandFixture fixture{GainBand{.points = {{0.0, 0.0}, {4.0, 1.0}}}};
+  const Rect box = fixture.view->block_rect(1, 0);
+
+  // Halfway along a ramp from silence to unity.
+  fixture.host->mouse_down(alt_press(box.x + 200.0, box.y + 5.0));
+
+  ASSERT_EQ(fixture.band().points.size(), 3u);
+  EXPECT_NEAR(fixture.band().points[1].t, 2.0, 1.0 / kFps);
+  EXPECT_NEAR(fixture.band().points[1].v, 0.5, 0.02);
+}
+
+TEST(GainBand, AddingAPointAndMovingOneAreTheSameEdit) {
+  BandFixture fixture{GainBand{.level = 0.5}};
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(alt_press(box.x + 300.0, box.bottom() - 3.0));
+  fixture.host->mouse_up(press(box.x + 300.0, box.bottom() - 3.0));
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::GainPointDrag);
+  // A point that was just created reports the same place in each, so whoever
+  // applies it does not have to know whether it is new.
+  EXPECT_EQ(last->gain_from, last->gain_to);
+}
+
+TEST(GainBand, AltOnAPointTakesItAway) {
+  BandFixture fixture{GainBand{.points = {{2.0, 0.5}, {5.0, 1.0}}}};
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect dot = fixture.view->gain_point_rect(1, 0, 0);
+  fixture.host->mouse_down(
+      alt_press(dot.x + dot.width * 0.5, dot.y + dot.height * 0.5));
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::GainPointRemove);
+  EXPECT_DOUBLE_EQ(last->gain_from.t, 2.0);
+  // Gone from the view too, so the press is visible on the frame it happened.
+  ASSERT_EQ(fixture.band().points.size(), 1u);
+  EXPECT_DOUBLE_EQ(fixture.band().points[0].t, 5.0);
+}
+
+TEST(GainBand, APointIsDraggedInTimeAsWellAsLevel) {
+  BandFixture fixture{GainBand{.points = {{2.0, 1.0}}}};
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect dot = fixture.view->gain_point_rect(1, 0, 0);
+  const double x = dot.x + dot.width * 0.5;
+  const double y = dot.y + dot.height * 0.5;
+  fixture.host->mouse_down(press(x, y));
+  fixture.host->mouse_move(press(x + 100.0, y + 8.0));
+  fixture.host->mouse_up(press(x + 100.0, y + 8.0));
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::GainPointDrag);
+  EXPECT_DOUBLE_EQ(last->gain_from.t, 2.0);
+  EXPECT_NEAR(last->gain_to.t, 3.0, 1.0 / kFps);
+  EXPECT_LT(last->gain_to.v, 1.0);
+}
+
+TEST(GainBand, APointNeverLeavesItsOwnClip) {
+  BandFixture fixture{GainBand{.points = {{2.0, 1.0}}}};
+  const Rect dot = fixture.view->gain_point_rect(1, 0, 0);
+  const double y = dot.y + dot.height * 0.5;
+
+  fixture.host->mouse_down(press(dot.x + dot.width * 0.5, y));
+  // Far past the end of an eight-second clip.
+  fixture.host->mouse_move(press(dot.x + 2000.0, y));
+
+  EXPECT_LE(fixture.band().points[0].t, 8.0);
+
+  fixture.host->mouse_move(press(dot.x - 2000.0, y));
+  EXPECT_GE(fixture.band().points[0].t, 0.0);
+}
+
+// Everything that reads a keyframe list assumes it is sorted — the drawing
+// here, the evaluator in the core — and dragging one point past another is the
+// one gesture that can break that.
+TEST(GainBand, APointDraggedPastAnotherKeepsTheListInOrder) {
+  BandFixture fixture{GainBand{.points = {{1.0, 0.25}, {4.0, 1.0}}}};
+
+  const Rect dot = fixture.view->gain_point_rect(1, 0, 0);
+  const double y = dot.y + dot.height * 0.5;
+  fixture.host->mouse_down(press(dot.x + dot.width * 0.5, y));
+  fixture.host->mouse_move(press(dot.x + 600.0, y));  // past the one at 4s
+  fixture.host->mouse_up(press(dot.x + 600.0, y));
+
+  const std::vector<GainPoint>& points = fixture.band().points;
+  ASSERT_EQ(points.size(), 2u);
+  EXPECT_TRUE(std::ranges::is_sorted(points, {}, &GainPoint::t));
+  // And the one that moved is still the one that moved, at its new time. Its
+  // level is near rather than equal because a drag reads it back off the
+  // pointer's height, which is a whole number of pixels.
+  EXPECT_DOUBLE_EQ(points[0].t, 4.0);
+  EXPECT_NEAR(points[1].t, 7.0, 1.0 / kFps);
+  EXPECT_NEAR(points[1].v, 0.25, 0.01);
+}
+
+TEST(GainBand, TwoPointsAreNeverPutAtTheSameInstant) {
+  BandFixture fixture{GainBand{.points = {{3.0, 0.5}}}};
+  const Rect dot = fixture.view->gain_point_rect(1, 0, 0);
+
+  // Alt just off the point, close enough to round to the same frame. A second
+  // keyframe there would give the evaluator two answers for one moment.
+  fixture.host->mouse_down(alt_press(dot.x + dot.width * 0.5, dot.y - 20.0));
+  EXPECT_EQ(fixture.band().points.size(), 1u);
+}
+
+// The band belongs to the selection tool. The other four each mean one thing
+// everywhere on a clip, which is what makes them usable without hunting.
+TEST(GainBand, TheOtherToolsKeepTheWholeClip) {
+  const BandFixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+  const double y = fixture.view->gain_to_y(1, 0, 1.0);
+
+  for (const auto [tool, mode] : {std::pair{Tool::Razor, DragMode::Razor},
+                                  std::pair{Tool::Slip, DragMode::Slip},
+                                  std::pair{Tool::Slide, DragMode::Slide}}) {
+    BandFixture other;
+    other.view->set_tool(tool);
+    EXPECT_EQ(other.view->zone_at(box.x + 200.0, y), mode);
+  }
+}
+
 }  // namespace
 }  // namespace cutline::ui
