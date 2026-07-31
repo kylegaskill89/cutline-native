@@ -218,6 +218,21 @@ lighting its M would leave somebody pressing a button that is already off. The
 mixer and the exporter have honoured all of this from the start; until now there
 was no way to press it.
 
+Markers are dropped on the ruler with M, walked with shift and control, and
+thrown away with Ctrl+Alt+M — the awkward chord being the point, since that one
+clears the lot. Dropping one where one already sits takes it away, which is the
+same toggle the in and out points use and the reason neither needs a second
+control that exists only to undo it. Each wears its own colour when it has one,
+because that is what a marker's colour is for.
+
+Every animated parameter now carries the curve it moves along: a chip beside the
+stopwatch reading Linear, Hold or Ease, cycling rather than dropping down —
+three is short enough to walk round. It is one setting per property rather than
+per keyframe. The model stores the mode on each breakpoint and the reference
+exposed one setting for the whole property, which is the right call: a panel
+offering a different curve out of every keyframe is a control nobody has asked
+for.
+
 The eight audio effects are reachable too, from the same panel and through the
 same rows. An audio clip gets its own stack — add, remove, reorder, disable,
 adjust — with the registry's ranges, steps and units in the labels, so a cutoff
@@ -255,7 +270,7 @@ removed without a third control that exists only to undo the other two. The two
 can never cross: setting one past the other clears that other, so an inverted
 pair is unrepresentable rather than something every reader has to check for.
 
-1557 tests, plus a headless check that lays every panel out in every theme —
+1578 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a title, and the colour picker open, which is
 the only way the controls a panel is made of get checked at all. Given a directory, that check writes each theme's frame out

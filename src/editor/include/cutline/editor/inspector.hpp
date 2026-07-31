@@ -59,9 +59,22 @@ struct ParamSpec {
   bool animated = false;
   /// Animated, with a keyframe at the time asked about.
   bool keyed_here = false;
+  /// How the animation gets from one keyframe to the next.
+  ///
+  /// One mode per property rather than per keyframe. The model stores it on
+  /// each breakpoint, and the reference exposed one setting for the whole
+  /// property — a panel offering a different curve out of every keyframe is a
+  /// control nobody has asked for. Meaningless unless `animated`.
+  core::Interp interp = core::Interp::Linear;
 
   friend bool operator==(const ParamSpec&, const ParamSpec&) = default;
 };
+
+/// The three curves, as a person reads them. Premiere's chip is the same three.
+[[nodiscard]] std::string_view interp_name(core::Interp mode) noexcept;
+
+/// The next one round, for a chip that cycles rather than a dropdown of three.
+[[nodiscard]] core::Interp next_interp(core::Interp mode) noexcept;
 
 /// The parameters worth showing for a clip, in the order they should appear,
 /// as they stand at clip-local time `local_t`.
@@ -95,6 +108,12 @@ struct ParamSpec {
                                                         std::string_view clip_id,
                                                         ClipParam param, bool animated,
                                                         double local_t);
+
+/// Sets the curve the whole property animates along. Does nothing when the
+/// parameter is not animated: there are no keyframes to set it on.
+[[nodiscard]] core::Project set_clip_parameter_interp(core::Project project,
+                                                      std::string_view clip_id, ClipParam param,
+                                                      core::Interp mode);
 
 /// Adds a keyframe at `local_t` holding the current value, or removes the one
 /// already there. Does nothing when the parameter is not animated: the first

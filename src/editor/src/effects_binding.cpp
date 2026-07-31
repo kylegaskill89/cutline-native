@@ -83,7 +83,8 @@ std::vector<EffectRow> clip_effects(const core::Project& project, std::string_vi
           .suffix = std::string(param.suffix),
           .toggle = param.toggle,
           .animated = animated,
-          .keyed_here = animated && keyed_at(effect, param.key, local_t)});
+          .keyed_here = animated && keyed_at(effect, param.key, local_t),
+          .interp = core::effect_keyframe_interp_of(effect, param.key)});
     }
 
     for (const render::EffectColorSpec& color : spec->colors) {
@@ -184,6 +185,16 @@ core::Project toggle_effect_keyframe(core::Project project, std::string_view cli
   }
   return core::set_effect_keyframe(std::move(project), clip_id, index, std::string(key), local_t,
                                    core::effect_param_at(*effect, key, local_t));
+}
+
+core::Project set_effect_parameter_interp(core::Project project, std::string_view clip_id,
+                                          std::size_t index, std::string_view key,
+                                          core::Interp mode) {
+  const core::ClipEffect* effect = effect_at(project, clip_id, index);
+  // Nothing to set it on. A curve without keyframes would be silently
+  // discarded the moment the stopwatch was pressed.
+  if (effect == nullptr || !core::is_effect_param_animated(*effect, key)) return project;
+  return core::set_effect_keyframe_interp(std::move(project), clip_id, index, key, mode);
 }
 
 // ------------------------------------------------------------ audio stack --

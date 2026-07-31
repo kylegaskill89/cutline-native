@@ -19,6 +19,7 @@
 #include <cmath>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -1039,6 +1040,91 @@ TEST(MarkedSpan, IsDrawnInsideTheRulersClip) {
     if (call.kind == DrawCall::Kind::PushClip) ++depth;
     if (call.kind == DrawCall::Kind::PopClip) --depth;
     if (call.kind == DrawCall::Kind::Fill && call.bounds == fixture.view->marked_bar()) {
+      inside = depth > 0;
+    }
+  }
+  EXPECT_TRUE(inside);
+}
+
+// ---------------------------------------------------------------- markers --
+
+TEST(Markers, SitOnTheRulerAtTheirTime) {
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.markers = {TimelineMarker{.time = 3.0, .label = "cue"}};
+  fixture.view->set_model(model);
+
+  const Rect tab = fixture.view->marker_rect(0);
+  const Rect ruler = fixture.view->ruler_area();
+  ASSERT_FALSE(tab.empty());
+
+  EXPECT_NEAR(tab.x + tab.width * 0.5, ruler.x + 300.0, 1e-9);
+  EXPECT_GE(tab.y, ruler.y);
+  EXPECT_LE(tab.bottom(), ruler.bottom());
+}
+
+TEST(Markers, DoNotOverlapTheMarkedSpanAlongTheFoot) {
+  // Both live on the ruler and both say where something is; they must not fight
+  // for the same pixels.
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.markers = {TimelineMarker{.time = 3.0}};
+  model.in_point = 1.0;
+  model.out_point = 6.0;
+  fixture.view->set_model(model);
+
+  EXPECT_LE(fixture.view->marker_rect(0).bottom(), fixture.view->marked_bar().y);
+}
+
+TEST(Markers, ScrolledOutOfSightAreNotDrawn) {
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.markers = {TimelineMarker{.time = 500.0}};
+  fixture.view->set_model(model);
+
+  EXPECT_TRUE(fixture.view->marker_rect(0).empty());
+  EXPECT_TRUE(fixture.view->marker_rect(9).empty()) << "and neither is one that is not there";
+}
+
+TEST(Markers, WearTheirOwnColourWhenTheyHaveOne) {
+  // What a marker's colour is for: somebody has said this one means something
+  // the others do not.
+  const auto fill_at = [](std::string color) {
+    Fixture fixture;
+    TimelineModel model = sample_model();
+    model.markers = {TimelineMarker{.time = 3.0, .color = std::move(color)}};
+    fixture.view->set_model(model);
+
+    RecordingPainter painter;
+    fixture.view->paint(painter, default_theme());
+    for (const DrawCall& call : painter.calls()) {
+      if (call.kind == DrawCall::Kind::Fill && call.bounds == fixture.view->marker_rect(0)) {
+        return call.fill.color;
+      }
+    }
+    return Color{};
+  };
+
+  EXPECT_EQ(fill_at("#ff0000"), (Color{1.0f, 0.0f, 0.0f, 1.0f}));
+  EXPECT_NE(fill_at(""), (Color{1.0f, 0.0f, 0.0f, 1.0f})) << "and the theme's when it has none";
+}
+
+TEST(Markers, AreDrawnInsideTheRulersClip) {
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.markers = {TimelineMarker{.time = 3.0}};
+  fixture.view->set_model(model);
+
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+  EXPECT_TRUE(painter.clips_balanced());
+
+  int depth = 0;
+  bool inside = false;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::PushClip) ++depth;
+    if (call.kind == DrawCall::Kind::PopClip) --depth;
+    if (call.kind == DrawCall::Kind::Fill && call.bounds == fixture.view->marker_rect(0)) {
       inside = depth > 0;
     }
   }

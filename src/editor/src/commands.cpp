@@ -81,6 +81,10 @@ std::string_view to_string(Command command) noexcept {
     case Command::MarkIn: return "mark_in";
     case Command::MarkOut: return "mark_out";
     case Command::ClearMarks: return "clear_marks";
+    case Command::AddMarker: return "add_marker";
+    case Command::ClearMarkers: return "clear_markers";
+    case Command::NextMarker: return "next_marker";
+    case Command::PreviousMarker: return "previous_marker";
     case Command::SelectAll: return "select_all";
     case Command::SelectNone: return "select_none";
     case Command::GoToStart: return "go_to_start";
@@ -112,6 +116,18 @@ bool can_run(const Session& session, Command command) {
 
     case Command::ClearMarks:
       return core::has_marks(session.project());
+
+    case Command::AddMarker:
+      // The same rule as the in and out points: something to mark, or a marker
+      // to take away — dropping one where one already sits removes it.
+      return core::timeline_duration(session.project()) > 0.0 ||
+             !session.project().markers.empty();
+    case Command::ClearMarkers:
+      return !session.project().markers.empty();
+    case Command::NextMarker:
+      return core::next_marker(session.project(), session.playhead()) != nullptr;
+    case Command::PreviousMarker:
+      return core::previous_marker(session.project(), session.playhead()) != nullptr;
 
     case Command::SelectAll:
       return !every_clip(session.project()).empty();
@@ -173,6 +189,36 @@ bool run(Session& session, Command command) {
 
     case Command::ClearMarks:
       return session.apply(core::clear_marks(project));
+
+    case Command::AddMarker: {
+      if (core::timeline_duration(project) <= 0.0 && project.markers.empty()) return false;
+      // Within half a frame, like the in and out points: both times came from
+      // frame-snapped values, so they agree to within rounding and nothing else.
+      if (const core::Marker* here =
+              core::marker_near(project, session.playhead(), frame * 0.5);
+          here != nullptr) {
+        return session.apply(core::remove_marker(project, here->id));
+      }
+      return session.apply(core::add_marker(project, session.playhead()));
+    }
+
+    case Command::ClearMarkers:
+      if (project.markers.empty()) return false;
+      return session.apply(core::clear_markers(project));
+
+    case Command::NextMarker: {
+      const core::Marker* next = core::next_marker(project, session.playhead());
+      if (next == nullptr) return false;
+      session.set_playhead(next->time);
+      return true;
+    }
+
+    case Command::PreviousMarker: {
+      const core::Marker* previous = core::previous_marker(project, session.playhead());
+      if (previous == nullptr) return false;
+      session.set_playhead(previous->time);
+      return true;
+    }
 
     case Command::SelectAll: {
       std::vector<std::string> all = every_clip(project);

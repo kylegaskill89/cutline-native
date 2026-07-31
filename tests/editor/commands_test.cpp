@@ -50,10 +50,13 @@ constexpr double kFps = 30.0;
 }
 
 constexpr std::array kAllCommands{
-    Command::Split,         Command::Delete,     Command::RippleDelete, Command::NudgeLeft,
-    Command::NudgeRight,    Command::MarkIn,     Command::MarkOut,      Command::ClearMarks,
-    Command::SelectAll,     Command::SelectNone, Command::GoToStart,    Command::GoToEnd,
-    Command::PreviousFrame, Command::NextFrame,  Command::Undo,         Command::Redo,
+    Command::Split,         Command::Delete,        Command::RippleDelete,
+    Command::NudgeLeft,     Command::NudgeRight,    Command::MarkIn,
+    Command::MarkOut,       Command::ClearMarks,    Command::AddMarker,
+    Command::ClearMarkers,  Command::NextMarker,    Command::PreviousMarker,
+    Command::SelectAll,     Command::SelectNone,    Command::GoToStart,
+    Command::GoToEnd,       Command::PreviousFrame, Command::NextFrame,
+    Command::Undo,          Command::Redo,
 };
 
 // ----------------------------------------------------------- the contract --
@@ -361,6 +364,105 @@ TEST(Marks, AMarkCanStillBeRemovedFromASequenceWithNothingLeftInIt) {
 
   EXPECT_TRUE(can_run(session, Command::MarkIn));
   EXPECT_FALSE(can_run(session, Command::MarkOut)) << "there was never an out";
+}
+
+// --------------------------------------------------------------- markers --
+
+TEST(Markers, AreDroppedAtThePlayhead) {
+  Session session(sample_project());
+  session.set_playhead(3.0);
+
+  ASSERT_TRUE(run(session, Command::AddMarker));
+  ASSERT_EQ(session.project().markers.size(), 1u);
+  EXPECT_DOUBLE_EQ(session.project().markers.front().time, 3.0);
+}
+
+TEST(Markers, DroppingOneWhereOneAlreadyIsTakesItAway) {
+  // The same toggle as the in and out points, and for the same reason: one
+  // key, and no second control that exists only to undo it.
+  Session session(sample_project());
+  session.set_playhead(3.0);
+  ASSERT_TRUE(run(session, Command::AddMarker));
+
+  ASSERT_TRUE(run(session, Command::AddMarker));
+  EXPECT_TRUE(session.project().markers.empty());
+}
+
+TEST(Markers, AreNotConfusedWithOneAFrameAway) {
+  Session session(sample_project());
+  session.set_playhead(3.0);
+  ASSERT_TRUE(run(session, Command::AddMarker));
+
+  session.set_playhead(3.0 + 1.0 / kFps);
+  ASSERT_TRUE(run(session, Command::AddMarker));
+  EXPECT_EQ(session.project().markers.size(), 2u) << "a frame apart is two markers";
+}
+
+TEST(Markers, KeepTheirOrderWhateverOrderTheyWereMadeIn) {
+  Session session(sample_project());
+  for (const double at : {6.0, 2.0, 4.0}) {
+    session.set_playhead(at);
+    ASSERT_TRUE(run(session, Command::AddMarker));
+  }
+
+  ASSERT_EQ(session.project().markers.size(), 3u);
+  EXPECT_DOUBLE_EQ(session.project().markers[0].time, 2.0);
+  EXPECT_DOUBLE_EQ(session.project().markers[1].time, 4.0);
+  EXPECT_DOUBLE_EQ(session.project().markers[2].time, 6.0);
+}
+
+TEST(Markers, TheJumpsWalkFromWhereThePlayheadIs) {
+  Session session(sample_project());
+  for (const double at : {2.0, 4.0, 6.0}) {
+    session.set_playhead(at);
+    ASSERT_TRUE(run(session, Command::AddMarker));
+  }
+
+  session.set_playhead(0.0);
+  ASSERT_TRUE(run(session, Command::NextMarker));
+  EXPECT_DOUBLE_EQ(session.playhead(), 2.0);
+  ASSERT_TRUE(run(session, Command::NextMarker));
+  EXPECT_DOUBLE_EQ(session.playhead(), 4.0);
+
+  ASSERT_TRUE(run(session, Command::PreviousMarker));
+  EXPECT_DOUBLE_EQ(session.playhead(), 2.0);
+}
+
+TEST(Markers, TheJumpsStopAtTheEnds) {
+  Session session(sample_project());
+  session.set_playhead(2.0);
+  ASSERT_TRUE(run(session, Command::AddMarker));
+
+  EXPECT_FALSE(can_run(session, Command::NextMarker)) << "sitting on the last one";
+  EXPECT_FALSE(run(session, Command::NextMarker));
+
+  session.set_playhead(0.0);
+  EXPECT_FALSE(can_run(session, Command::PreviousMarker));
+}
+
+TEST(Markers, ClearingIsOnlyOfferedWhenThereAreSome) {
+  Session session(sample_project());
+  EXPECT_FALSE(can_run(session, Command::ClearMarkers));
+
+  session.set_playhead(2.0);
+  ASSERT_TRUE(run(session, Command::AddMarker));
+  EXPECT_TRUE(can_run(session, Command::ClearMarkers));
+
+  ASSERT_TRUE(run(session, Command::ClearMarkers));
+  EXPECT_TRUE(session.project().markers.empty());
+}
+
+TEST(Markers, AJumpIsNotAnEditAndDoesNotGoOnTheUndoStack) {
+  // Moving the playhead changes nothing about the document. An undo entry per
+  // jump would bury the edit somebody actually wants back.
+  Session session(sample_project());
+  session.set_playhead(2.0);
+  ASSERT_TRUE(run(session, Command::AddMarker));
+
+  const Project before = session.project();
+  session.set_playhead(0.0);
+  ASSERT_TRUE(run(session, Command::NextMarker));
+  EXPECT_EQ(session.project(), before);
 }
 
 }  // namespace

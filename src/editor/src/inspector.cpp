@@ -72,6 +72,7 @@ void fill_animation(ParamSpec& row, const core::Clip& clip, double local_t) {
     if (row.animated) {
       row.value = core::gain_at(clip, local_t) * kPercent;
       row.keyed_here = keyed_at(clip.gain_keyframes, local_t);
+      row.interp = core::gain_keyframe_interp_of(clip);
     }
     return;
   }
@@ -87,6 +88,7 @@ void fill_animation(ParamSpec& row, const core::Clip& clip, double local_t) {
     // screen that nothing is using.
     row.value = core::animated_value(clip, *prop, local_t) * display_scale(row.param);
     row.keyed_here = keyed_at(clip.keyframes[core::anim_prop_index(*prop)], local_t);
+    row.interp = core::keyframe_interp_of(clip, *prop);
   }
 }
 
@@ -308,6 +310,41 @@ core::Project toggle_clip_parameter_keyframe(core::Project project, std::string_
   }
   return core::set_keyframe(std::move(project), clip_id, *prop, local_t,
                             core::animated_value(*clip, *prop, local_t));
+}
+
+std::string_view interp_name(core::Interp mode) noexcept {
+  switch (mode) {
+    case core::Interp::Linear: return "Linear";
+    case core::Interp::Hold: return "Hold";
+    case core::Interp::Ease: return "Ease";
+  }
+  return "Linear";
+}
+
+core::Interp next_interp(core::Interp mode) noexcept {
+  switch (mode) {
+    case core::Interp::Linear: return core::Interp::Hold;
+    case core::Interp::Hold: return core::Interp::Ease;
+    case core::Interp::Ease: return core::Interp::Linear;
+  }
+  return core::Interp::Linear;
+}
+
+core::Project set_clip_parameter_interp(core::Project project, std::string_view clip_id,
+                                        ClipParam param, core::Interp mode) {
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr) return project;
+
+  if (param == ClipParam::Gain) {
+    // Nothing to set it on. A curve without keyframes is a setting that would
+    // be silently discarded the moment the stopwatch was pressed.
+    if (!core::is_gain_animated(*clip)) return project;
+    return core::set_gain_keyframe_interp(std::move(project), clip_id, mode);
+  }
+
+  const std::optional<core::AnimProp> prop = anim_prop_of(param);
+  if (!prop.has_value() || !core::is_animated(*clip, *prop)) return project;
+  return core::set_keyframe_interp(std::move(project), clip_id, *prop, mode);
 }
 
 }  // namespace cutline::editor

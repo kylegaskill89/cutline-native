@@ -47,6 +47,10 @@ struct EffectParamRow {
   /// Animated, and one of the keyframes is at the time asked about. What the
   /// keyframe marker draws as filled rather than hollow.
   bool keyed_here = false;
+  /// The curve the whole parameter animates along. One per parameter rather
+  /// than one per keyframe, as the reference had it. Meaningless unless
+  /// `animated`.
+  core::Interp interp = core::Interp::Linear;
 
   friend bool operator==(const EffectParamRow&, const EffectParamRow&) = default;
 };
@@ -142,6 +146,13 @@ struct EffectChoice {
 [[nodiscard]] core::Project toggle_effect_keyframe(core::Project project,
                                                    std::string_view clip_id, std::size_t index,
                                                    std::string_view key, double local_t);
+
+/// Sets the curve the whole parameter animates along. Does nothing when it is
+/// not animated: there are no keyframes to set it on.
+[[nodiscard]] core::Project set_effect_parameter_interp(core::Project project,
+                                                        std::string_view clip_id,
+                                                        std::size_t index, std::string_view key,
+                                                        core::Interp mode);
 
 // ------------------------------------------------------------ audio stack --
 //

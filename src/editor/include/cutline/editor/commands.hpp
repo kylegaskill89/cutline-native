@@ -37,6 +37,16 @@ enum class Command {
   MarkOut,
   ClearMarks,
 
+  // -- markers
+  /// Drops a marker at the playhead, or takes away the one already there. The
+  /// same toggle as the in and out points, for the same reason: one key, and no
+  /// second control that exists only to undo it.
+  AddMarker,
+  ClearMarkers,
+  /// Moves the playhead to the marker after or before it.
+  NextMarker,
+  PreviousMarker,
+
   // -- selection
   SelectAll,
   SelectNone,

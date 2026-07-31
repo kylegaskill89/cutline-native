@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1557** under the `ui` preset; 1319 of them need no GPU, no window, no FFmpeg |
+| Tests | **1578** under the `ui` preset; 1338 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1319 of the 1557 tests.
+binding between them — 1338 of the 1578 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -257,8 +257,6 @@ here.**
 
 | | Exists | Missing |
 |---|---|---|
-| **Markers** | add/remove/clear/nearest/next/previous in core | nothing draws them on the ruler |
-| **Keyframe interpolation** | the model stores Linear/Hold/Ease and animation honours it | no chip in the panel, so everything is linear in practice |
 | **Colour mattes, adjustment layers** | the compositor renders adjustment layers; the browser has icons for both kinds | nothing creates one |
 | **Gain automation** | rubber-band model, mixer honours it | no way to add or drag a point |
 | **Waveforms, thumbnails** | `compute_peaks`, `extract_thumbnails` | the timeline draws neither |
@@ -286,13 +284,18 @@ here.**
 
 ### Suggested order
 
-1. **Markers**, then **interpolation chips** — both small and both visible.
+1. **Colour mattes and adjustment layers.** Small: two buttons beside New Title,
+   and `editor/titles.hpp` is the shape to copy — a generated media the editor
+   creates rather than imports.
 2. **Gain automation** — the rubber band. Bigger than it sounds: it needs a new
    gesture on the timeline rather than a new panel.
-3. Anything in B, by appetite. Scopes and the VU meter are the two that need new
+3. **Waveforms and thumbnails on clips.** The media layer computes both; the
+   timeline draws neither. Watch the cost — a peak list per clip per zoom is the
+   sort of thing that quietly makes scrolling expensive.
+4. Anything in B, by appetite. Scopes and the VU meter are the two that need new
    machinery rather than new wiring.
 
-Three are already done and are worth reading as the pattern for the rest:
+Five are already done and are worth reading as the pattern for the rest:
 
 - **In and out points** — marked from the buttons or from I and O, drawn along
   the foot of the ruler, saved with the project, offered to export as "only the
@@ -312,6 +315,11 @@ Three are already done and are worth reading as the pattern for the rest:
   panel is the same loop the video stack already had. **Look for the registry
   before writing one.** An earlier draft of this document said the eight audio
   effects "need a catalogue of their own first"; they did not.
+- **Markers** and **interpolation chips** — both small. The marker keys reuse
+  the toggle idiom the in and out points established: pressing the key where the
+  thing already is takes it away, so no control exists only to undo another.
+  The chip is one setting per property rather than per keyframe, which is what
+  the reference exposed and what anybody actually wants.
 
 ---
 

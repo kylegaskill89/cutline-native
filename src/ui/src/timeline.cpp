@@ -48,6 +48,11 @@ constexpr double kAbutEps = 1e-3;
 constexpr double kSwitchSize = 15.0;
 constexpr double kSwitchGap = 3.0;
 
+/// How wide a marker's tab is drawn. Fixed rather than scaled with the zoom: a
+/// marker is a point in time, so its width says nothing and a one-pixel one
+/// could not be seen.
+constexpr double kMarkerWidth = 9.0;
+
 /// The switches each kind of track shows, in the order they are drawn.
 constexpr std::array<TrackControl, 3> kAudioControls{TrackControl::Mute, TrackControl::Solo,
                                                      TrackControl::Lock};
@@ -294,6 +299,21 @@ double TimelineView::playhead_x() const {
   return time_area().x + scale_.to_x(playhead_);
 }
 
+Rect TimelineView::marker_rect(std::size_t index) const {
+  if (index >= model_.markers.size()) return {};
+
+  const Rect ruler = ruler_area();
+  const double x = ruler.x + scale_.to_x(model_.markers[index].time);
+  // In the middle band, between the timecode labels above and the marked span
+  // along the foot. The first attempt put it at the top and it sat squarely on
+  // a label — over the ticks is fine, since one tick is much like another, but
+  // over a number is not.
+  const double height = std::max(4.0, ruler.height * 0.3);
+  const Rect tab{x - kMarkerWidth * 0.5, ruler.y + ruler.height * 0.45, kMarkerWidth, height};
+  if (tab.right() < ruler.x || tab.x > ruler.right()) return {};
+  return tab;
+}
+
 Rect TimelineView::marked_bar() const {
   if (!model_.in_point.has_value() && !model_.out_point.has_value()) return {};
 
@@ -517,6 +537,22 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
     // The playhead's colour: this is the other thing on the ruler that says
     // where something is, and a second accent would be one too many.
     painter.fill(marked, 1.0, theme.style(Part::Playhead, State::Normal).fill);
+  }
+
+  for (std::size_t i = 0; i < model_.markers.size(); ++i) {
+    const Rect tab = marker_rect(i);
+    if (tab.empty()) continue;
+
+    // Its own colour when it has one. That is what a marker's colour is for —
+    // somebody has said this one means something the others do not.
+    const Color color = model_.markers[i].color.empty()
+                            ? ruler_style.text
+                            : parse_color(model_.markers[i].color, ruler_style.text);
+    painter.fill(tab, 2.0, Fill::solid(color));
+    // A stem down to the ticks, so a marker can be lined up against a time
+    // rather than only noticed.
+    const double centre = tab.x + tab.width * 0.5;
+    painter.line(centre, tab.bottom(), centre, ruler.bottom(), fade(color, 0.6f), 1.0);
   }
   painter.pop_clip();
 

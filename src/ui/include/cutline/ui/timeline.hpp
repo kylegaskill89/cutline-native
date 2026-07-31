@@ -116,8 +116,22 @@ struct TrackControlRef {
   friend bool operator==(const TrackControlRef&, const TrackControlRef&) = default;
 };
 
+/// A named point on the ruler.
+///
+/// Carries its own colour rather than taking the theme's, because that is what
+/// a marker's colour is *for*: somebody has said this one means something
+/// different from that one. Empty falls back to the theme.
+struct TimelineMarker {
+  double time = 0.0;
+  std::string label;
+  std::string color;
+
+  friend bool operator==(const TimelineMarker&, const TimelineMarker&) = default;
+};
+
 struct TimelineModel {
   std::vector<TimelineTrack> tracks;
+  std::vector<TimelineMarker> markers;
   /// How long the project is, which is what bounds scrolling. Zero means it is
   /// worked out from the blocks.
   double duration = 0.0;
@@ -349,6 +363,10 @@ class TimelineView : public Widget {
   /// set — an unmarked sequence is the whole sequence, and drawing a bar across
   /// all of it would say something was chosen when nothing was.
   [[nodiscard]] Rect marked_bar() const;
+
+  /// Where a marker's tab is drawn on the ruler. Empty when there is no such
+  /// marker, or when it is scrolled out of sight.
+  [[nodiscard]] Rect marker_rect(std::size_t index) const;
 
   [[nodiscard]] std::optional<BlockRef> block_at(double x, double y) const;
 

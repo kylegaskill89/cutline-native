@@ -90,6 +90,12 @@ ui::TimelineModel timeline_model(const core::Project& project,
   model.duration = core::timeline_duration(project);
   model.in_point = project.in_point;
   model.out_point = project.out_point;
+
+  model.markers.reserve(project.markers.size());
+  for (const core::Marker& marker : project.markers) {
+    model.markers.push_back(ui::TimelineMarker{
+        .time = marker.time, .label = marker.label, .color = marker.color});
+  }
   model.tracks.reserve(project.tracks.size());
 
   for (std::size_t i = 0; i < project.tracks.size(); ++i) {

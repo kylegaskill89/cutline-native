@@ -328,5 +328,57 @@ TEST(Inspector, EveryParameterHasAName) {
   }
 }
 
+// ---------------------------------------------------------- interpolation --
+
+TEST(Interp, EveryModeIsNamed) {
+  EXPECT_EQ(interp_name(core::Interp::Linear), "Linear");
+  EXPECT_EQ(interp_name(core::Interp::Hold), "Hold");
+  EXPECT_EQ(interp_name(core::Interp::Ease), "Ease");
+}
+
+TEST(Interp, CyclingWalksAllThreeAndComesBack) {
+  // What a chip that cycles needs, and the whole of that claim: three is short
+  // enough to walk round rather than pick from.
+  core::Interp mode = core::Interp::Linear;
+  mode = next_interp(mode);
+  EXPECT_EQ(mode, core::Interp::Hold);
+  mode = next_interp(mode);
+  EXPECT_EQ(mode, core::Interp::Ease);
+  mode = next_interp(mode);
+  EXPECT_EQ(mode, core::Interp::Linear);
+}
+
+TEST(Interp, AnAnimatedRowReportsItsCurve) {
+  Project p = set_clip_parameter_animated(sample_project(), "c1", ClipParam::Opacity, true, 0.0);
+  p = set_clip_parameter_interp(std::move(p), "c1", ClipParam::Opacity, core::Interp::Ease);
+
+  const std::vector<ParamSpec> rows = clip_parameters(p, "c1");
+  const auto opacity = std::ranges::find(rows, ClipParam::Opacity, &ParamSpec::param);
+  ASSERT_NE(opacity, rows.end());
+  EXPECT_TRUE(opacity->animated);
+  EXPECT_EQ(opacity->interp, core::Interp::Ease);
+}
+
+TEST(Interp, SettingItOnSomethingNotAnimatedDoesNothing) {
+  // There are no keyframes to set it on, and storing it anyway would be a
+  // setting silently discarded the moment the stopwatch was pressed.
+  const Project before = sample_project();
+  EXPECT_EQ(set_clip_parameter_interp(before, "c1", ClipParam::Opacity, core::Interp::Hold),
+            before);
+  EXPECT_EQ(set_clip_parameter_interp(before, "c1", ClipParam::Speed, core::Interp::Hold),
+            before)
+      << "and speed cannot animate at all";
+}
+
+TEST(Interp, GainCarriesItsOwn) {
+  Project p = set_clip_parameter_animated(sample_project(), "a1c", ClipParam::Gain, true, 0.0);
+  p = set_clip_parameter_interp(std::move(p), "a1c", ClipParam::Gain, core::Interp::Hold);
+
+  const std::vector<ParamSpec> rows = clip_parameters(p, "a1c");
+  const auto gain = std::ranges::find(rows, ClipParam::Gain, &ParamSpec::param);
+  ASSERT_NE(gain, rows.end());
+  EXPECT_EQ(gain->interp, core::Interp::Hold);
+}
+
 }  // namespace
 }  // namespace cutline::editor

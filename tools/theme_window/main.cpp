@@ -574,14 +574,16 @@ struct ParamRow {
   bool animatable = false;
   bool animated = false;
   bool keyed_here = false;
+  cutline::core::Interp interp = cutline::core::Interp::Linear;
 };
 
 /// The animation handlers default to nothing, for a row that is not animatable.
 /// A parameter with nowhere to keep a keyframe — an audio effect's — builds no
-/// stopwatch and no marker, so neither is ever called.
+/// stopwatch, no marker and no chip, so none of them is ever called.
 void build_param_row(App& app, const ParamRow& row, std::function<void(double)> on_commit,
                      std::function<void(bool)> on_animate = {},
-                     std::function<void()> on_keyframe = {}) {
+                     std::function<void()> on_keyframe = {},
+                     std::function<void(cutline::core::Interp)> on_interp = {}) {
   auto& head = app.inspector->emplace<Box>(Axis::Horizontal);
 
   if (row.animatable) {
@@ -601,6 +603,15 @@ void build_param_row(App& app, const ParamRow& row, std::function<void(double)> 
   // Only once animation is on. Before that there is no list to add to, and a
   // marker that silently started one would mean the same as the stopwatch.
   if (row.animated) {
+    // Premiere's interpolation chip, as a button that cycles rather than a
+    // dropdown of three. Three is short enough to walk round, and a dropdown
+    // beside a stopwatch and a diamond on a narrow row is a lot of chrome for
+    // a setting with three values.
+    head.emplace<Button>(std::string(cutline::editor::interp_name(row.interp)),
+                         [interp = std::move(on_interp), mode = row.interp] {
+                           if (interp) interp(cutline::editor::next_interp(mode));
+                         });
+
     auto& mark = head.emplace<IconButton>(IconButton::Icon::Diamond, std::move(on_keyframe));
     mark.set_selected(row.keyed_here);
   }
@@ -748,7 +759,8 @@ void build_effect_controls(App& app, const std::string& clip_id) {
                              .fallback = param.fallback,
                              .animatable = true,
                              .animated = param.animated,
-                             .keyed_here = param.keyed_here};
+                             .keyed_here = param.keyed_here,
+                             .interp = param.interp};
 
       build_param_row(
           app, control,
@@ -770,6 +782,12 @@ void build_effect_controls(App& app, const std::string& clip_id) {
             app.session.apply(cutline::editor::toggle_effect_keyframe(
                 app.session.project(), clip_id, index, key, local_playhead(app, clip_id)));
             refresh_timeline(app);
+            invalidate_preview(app);
+            app.inspector_stale = true;
+          },
+          [&app, clip_id, index = row.index, key = param.key](cutline::core::Interp mode) {
+            app.session.apply(cutline::editor::set_effect_parameter_interp(
+                app.session.project(), clip_id, index, key, mode));
             invalidate_preview(app);
             app.inspector_stale = true;
           });
@@ -1119,7 +1137,8 @@ void refresh_inspector(App& app) {
                         .fallback = spec.fallback,
                         .animatable = spec.animatable,
                         .animated = spec.animated,
-                        .keyed_here = spec.keyed_here};
+                        .keyed_here = spec.keyed_here,
+                        .interp = spec.interp};
 
     build_param_row(
         app, line,
@@ -1145,6 +1164,12 @@ void refresh_inspector(App& app) {
           app.session.apply(cutline::editor::toggle_clip_parameter_keyframe(
               app.session.project(), clip_id, param, local_playhead(app, clip_id)));
           refresh_timeline(app);
+          invalidate_preview(app);
+          app.inspector_stale = true;
+        },
+        [&app, clip_id, param = spec.param](cutline::core::Interp mode) {
+          app.session.apply(cutline::editor::set_clip_parameter_interp(app.session.project(),
+                                                                       clip_id, param, mode));
           invalidate_preview(app);
           app.inspector_stale = true;
         });
@@ -1660,6 +1685,11 @@ struct Binding {
   bool control = false;
   bool shift = false;
   cutline::editor::Command command;
+  /// Rarely set, and last so the common bindings stay readable. What it is for
+  /// is the destructive twin of a harmless key: M drops a marker and
+  /// Ctrl+Alt+M throws every one of them away, which is Premiere's arrangement
+  /// and a good one — the awkward chord is the point.
+  bool alt = false;
 };
 
 /// Taken before the widget tree sees them. Nothing should be able to swallow
@@ -1682,6 +1712,12 @@ constexpr std::array kTransportKeys{
     Binding{Key::I, false, false, cutline::editor::Command::MarkIn},
     Binding{Key::O, false, false, cutline::editor::Command::MarkOut},
     Binding{Key::X, true, true, cutline::editor::Command::ClearMarks},
+    // And Premiere's markers: M drops one, shift walks to the next, control
+    // and shift together walk back.
+    Binding{Key::M, false, false, cutline::editor::Command::AddMarker},
+    Binding{Key::M, false, true, cutline::editor::Command::NextMarker},
+    Binding{Key::M, true, true, cutline::editor::Command::PreviousMarker},
+    Binding{Key::M, true, false, cutline::editor::Command::ClearMarkers, true},
     Binding{Key::Left, false, false, cutline::editor::Command::PreviousFrame},
     Binding{Key::Right, false, false, cutline::editor::Command::NextFrame},
     Binding{Key::Home, false, false, cutline::editor::Command::GoToStart},
@@ -1736,6 +1772,16 @@ void run_command(App& app, cutline::editor::Command command) {
     refresh_title(app);
     invalidate_preview(app);
     app.inspector_stale = true;
+
+    // The playhead may have moved: every transport command moves it, and so do
+    // the jumps to the next and previous marker. Here rather than in each of
+    // them — which is also why the timecode used to sit still while the arrow
+    // keys walked the playhead along.
+    if (app.readout != nullptr) {
+      app.readout->set_text(cutline::core::seconds_to_timecode(
+          app.session.playhead(), app.session.project().fps));
+    }
+    follow_playhead(app);
   }
   mark_dirty(app);
 }
@@ -1745,7 +1791,10 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
                  const Modifiers& modifiers) {
   for (const Binding& binding : bindings) {
     if (binding.key != key) continue;
-    if (binding.control != modifiers.control || binding.shift != modifiers.shift) continue;
+    if (binding.control != modifiers.control || binding.shift != modifiers.shift ||
+        binding.alt != modifiers.alt) {
+      continue;
+    }
     run_command(app, binding.command);
     return true;
   }
@@ -3579,6 +3628,11 @@ template <typename T>
       // theme has never otherwise been asked about.
       app.session.apply(cutline::core::set_in_point(app.session.project(), 1.0));
       app.session.apply(cutline::core::set_out_point(app.session.project(), 6.0));
+      // And two markers, one of them coloured: a marker wearing the theme's
+      // text colour and one wearing its own are drawn from different places.
+      app.session.apply(cutline::core::add_marker(app.session.project(), 2.5, "cue"));
+      app.session.apply(
+          cutline::core::add_marker(app.session.project(), 8.0, "end", "#ffa000"));
       app.main.host = std::make_unique<WidgetHost>(build_interface(&app));
 
       // Shown, not merely present. Only the active panel in a group is built,

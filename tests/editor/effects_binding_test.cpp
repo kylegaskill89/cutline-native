@@ -323,6 +323,34 @@ TEST(AddableEffects, EachOneIsNamedAndFiled) {
   }
 }
 
+// ---------------------------------------------------------- interpolation --
+
+TEST(EffectInterp, AnAnimatedParameterReportsItsCurve) {
+  Project p = set_effect_parameter_animated(blurred(), "c1", 0, "amount", true, 0.0);
+  p = set_effect_parameter_interp(std::move(p), "c1", 0, "amount", core::Interp::Ease);
+
+  const std::vector<EffectRow> rows = clip_effects(p, "c1");
+  ASSERT_EQ(rows.front().params.size(), 1u);
+  EXPECT_EQ(rows.front().params.front().interp, core::Interp::Ease);
+}
+
+TEST(EffectInterp, SettingItOnSomethingNotAnimatedDoesNothing) {
+  const Project before = blurred();
+  EXPECT_EQ(set_effect_parameter_interp(before, "c1", 0, "amount", core::Interp::Hold),
+            before);
+}
+
+TEST(EffectInterp, TurningAnimationOffAndOnAgainDoesNotKeepTheOldCurve) {
+  // Nowhere to keep it: switching off drops every keyframe, and the mode lives
+  // on them. A fresh animation is linear, which is what the model says.
+  Project p = set_effect_parameter_animated(blurred(), "c1", 0, "amount", true, 0.0);
+  p = set_effect_parameter_interp(std::move(p), "c1", 0, "amount", core::Interp::Hold);
+  p = set_effect_parameter_animated(std::move(p), "c1", 0, "amount", false, 0.0);
+  p = set_effect_parameter_animated(std::move(p), "c1", 0, "amount", true, 0.0);
+
+  EXPECT_EQ(clip_effects(p, "c1").front().params.front().interp, core::Interp::Linear);
+}
+
 // ------------------------------------------------------------ audio stack --
 
 TEST(AudioEffects, EveryOneInTheRegistryCanBeAdded) {
