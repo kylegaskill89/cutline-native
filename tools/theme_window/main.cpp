@@ -32,6 +32,7 @@
 #include "cutline/editor/session.hpp"
 #include "cutline/editor/timeline_binding.hpp"
 #include "cutline/editor/titles.hpp"
+#include "cutline/editor/transitions.hpp"
 #include "cutline/editor/workspace.hpp"
 #include "cutline/ui/browser.hpp"
 #include "cutline/ui/color_picker.hpp"
@@ -775,6 +776,87 @@ void build_effect_controls(App& app, const std::string& clip_id) {
   }
 }
 
+/// The four the model renders, in the order the dropdown offers them.
+constexpr std::array kTransitionKinds{
+    cutline::core::TransitionKind::Dissolve, cutline::core::TransitionKind::DipBlack,
+    cutline::core::TransitionKind::Push, cutline::core::TransitionKind::Slide};
+
+/// The transition at a clip's out-edge, when there is a cut for one to sit on.
+///
+/// Only shown when another clip abuts this one. The model would happily keep a
+/// transition at the end of a track and the renderer would ignore it, so
+/// offering the control there would be a control that does nothing.
+void build_transition_controls(App& app, const std::string& clip_id) {
+  const cutline::editor::TransitionRow row =
+      cutline::editor::clip_transition(app.session.project(), clip_id);
+  if (!row.joins) return;
+
+  inspector_heading(app, "Transition");
+
+  // "None" first, so removing one is the same control as choosing one rather
+  // than a separate button to take it away.
+  std::vector<std::string> names{"None"};
+  for (const cutline::core::TransitionKind kind : kTransitionKinds) {
+    std::string name{cutline::editor::transition_name(kind)};
+    // Said out loud rather than left to be discovered. A dissolve overlaps the
+    // two clips, and a clip trimmed to the last frame of its footage has
+    // nothing to lend — the slider would move and the picture would not.
+    if (row.handles_exhausted && kind != cutline::core::TransitionKind::DipBlack) {
+      name += " (no handles)";
+    }
+    names.push_back(std::move(name));
+  }
+
+  std::size_t selected = 0;
+  if (row.present) {
+    const auto found = std::ranges::find(kTransitionKinds, row.kind);
+    if (found != kTransitionKinds.end()) {
+      selected = static_cast<std::size_t>(found - kTransitionKinds.begin()) + 1;
+    }
+  }
+
+  auto& kind_row = app.inspector->emplace<Box>(Axis::Horizontal);
+  kind_row.emplace<Label>("Kind").set_small(true);
+  auto& choice = kind_row.emplace<Dropdown>(std::move(names), selected);
+  choice.set_on_change([&app, clip_id](std::size_t index) {
+    const std::optional<cutline::core::TransitionKind> kind =
+        index == 0 || index > kTransitionKinds.size()
+            ? std::nullopt
+            : std::optional(kTransitionKinds[index - 1]);
+    // A length of its own when one is first added, and the length it already
+    // had when the kind is only being changed.
+    const cutline::editor::TransitionRow was =
+        cutline::editor::clip_transition(app.session.project(), clip_id);
+    const double length =
+        was.present && kind.has_value()
+            ? was.duration
+            : (kind.has_value() ? cutline::editor::default_transition_length(
+                                      app.session.project(), clip_id, *kind)
+                                : 0.0);
+
+    app.session.apply(
+        cutline::editor::set_transition(app.session.project(), clip_id, kind, length));
+    refresh_timeline(app);
+    invalidate_preview(app);
+    app.inspector_stale = true;
+  });
+
+  if (!row.present || row.longest <= 0.0) return;
+
+  app.inspector->emplace<Label>("Duration").set_small(true);
+  auto& length = app.inspector->emplace<Slider>(
+      ValueRange{.minimum = 0.0, .maximum = row.longest}, row.duration);
+  length.set_on_commit([&app, clip_id, kind = row.kind](double value) {
+    app.session.apply(
+        cutline::editor::set_transition(app.session.project(), clip_id, kind, value));
+    refresh_timeline(app);
+    invalidate_preview(app);
+    // The model may have clamped it, and dragging to zero removes the
+    // transition entirely — which changes what the rest of this section shows.
+    app.inspector_stale = true;
+  });
+}
+
 /// A title's own text and styling, when the selected clip is one.
 ///
 /// Above Motion rather than below the effects: what a title *says* is the first
@@ -979,6 +1061,11 @@ void refresh_inspector(App& app) {
           app.inspector_stale = true;
         });
   }
+
+  // Below Motion and above the effects: a transition belongs to the cut rather
+  // than to the clip, and grouping it with the effect stack would suggest it
+  // stacks with them.
+  if (visual) build_transition_controls(app, clip_id);
 
   // Visual effects only, since that is the stack the compositor draws. An
   // audio clip has its own, and it belongs here too — but it needs the audio
@@ -3413,15 +3500,31 @@ template <typename T>
       }
       app.main.host->resize(client, context);
 
+      // The first video clip with another abutting it, so the transition
+      // controls are among the ones laid out. The topmost track's clip is on
+      // its own, and a clip with no join has no transition to configure.
       std::string clip_id;
       for (const auto& track : app.session.project().tracks) {
-        if (track.kind != cutline::core::TrackKind::Video || track.clips.empty()) continue;
-        clip_id = track.clips.front().id;
-        break;
+        if (track.kind != cutline::core::TrackKind::Video) continue;
+        for (const auto& clip : track.clips) {
+          if (clip_id.empty()) clip_id = clip.id;
+          if (cutline::editor::clip_transition(app.session.project(), clip.id).joins) {
+            clip_id = clip.id;
+            break;
+          }
+        }
+        if (!clip_id.empty() &&
+            cutline::editor::clip_transition(app.session.project(), clip_id).joins) {
+          break;
+        }
       }
 
       if (!clip_id.empty()) {
         app.session.select_one(clip_id);
+        // A transition on the join, so the timeline draws one and the panel
+        // builds the controls for it. Nothing else in the check would.
+        app.session.apply(cutline::editor::set_transition(
+            app.session.project(), clip_id, cutline::core::TransitionKind::Dissolve, 1.0));
         for (const cutline::editor::EffectChoice& choice : cutline::editor::addable_effects()) {
           app.session.apply(
               cutline::editor::add_effect(app.session.project(), clip_id, choice.type));
@@ -3435,6 +3538,10 @@ template <typename T>
             app.session.project(), clip_id, 0, "amount", true, 0.0));
       }
 
+      // The panel was built before any of those edits, so the timeline is still
+      // holding the model it started with — the transition and the marks would
+      // never be drawn without this.
+      refresh_timeline(app);
       refresh_inspector(app);
       if (app.inspector == nullptr || app.inspector->children().empty()) {
         std::println("{}: the inspector built nothing for a selected clip", theme.id);

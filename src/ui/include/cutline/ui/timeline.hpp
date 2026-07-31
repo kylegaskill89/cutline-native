@@ -26,6 +26,18 @@
 
 namespace cutline::ui {
 
+/// A transition at a block's out-edge, straddling the cut into the next one.
+///
+/// Only the length and a name, because that is all a timeline can usefully say
+/// about one — which kind it is shows in the picture, not in a few pixels of
+/// track. Zero duration means there is none.
+struct BlockTransition {
+  double duration = 0.0;
+  std::string label;
+
+  friend bool operator==(const BlockTransition&, const BlockTransition&) = default;
+};
+
 /// One clip, as far as drawing is concerned.
 struct TimelineBlock {
   /// Opaque to the timeline, which never looks inside it. Whoever built the
@@ -45,6 +57,8 @@ struct TimelineBlock {
   /// the inspector, one parameter at a time, which makes an animation
   /// something to be remembered rather than something that can be seen.
   std::vector<double> keyframes;
+
+  BlockTransition transition;
 
   [[nodiscard]] double duration() const noexcept { return end - start; }
 
@@ -324,6 +338,11 @@ class TimelineView : public Widget {
   [[nodiscard]] Rect track_rect(std::size_t track) const;
   [[nodiscard]] Rect header_rect(std::size_t track) const;
   [[nodiscard]] Rect block_rect(std::size_t track, std::size_t block) const;
+
+  /// Where a block's transition is drawn: centred on its out-edge, half either
+  /// side. Empty when it has none.
+  [[nodiscard]] Rect transition_rect(std::size_t track, std::size_t block) const;
+
   [[nodiscard]] double playhead_x() const;
 
   /// The bar along the ruler showing what is marked. Empty when neither mark is

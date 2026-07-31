@@ -34,6 +34,28 @@ namespace cutline::core {
 
 [[nodiscard]] double clip_end(const Clip& c) noexcept;
 
+/// How much unused source lies past each end of a clip — its trim handles —
+/// measured in timeline seconds.
+///
+/// What a transition borrows. A clip trimmed to the very end of its footage has
+/// no tail to lend, and a cross-dissolve there has nothing to dissolve with;
+/// this is how anything offering one finds that out beforehand rather than
+/// leaving somebody to wonder why nothing happened.
+struct Handles {
+  double head = 0.0;
+  double tail = 0.0;
+
+  friend bool operator==(const Handles&, const Handles&) = default;
+};
+
+/// The clip's handles, given how long its media is. Reverse swaps which
+/// physical handle feeds the head and which the tail.
+[[nodiscard]] Handles source_handles(const Clip& c, double media_duration) noexcept;
+
+/// The same, looking the media up in the project. Still-like media have no
+/// source to run out of, so their handles are unbounded.
+[[nodiscard]] Handles source_handles(const Project& p, const Clip& c) noexcept;
+
 /// The source-media time playing at timeline time `t`, which must lie within
 /// the clip. Accounts for speed and reverse.
 [[nodiscard]] double source_time_at(const Clip& c, double t) noexcept;

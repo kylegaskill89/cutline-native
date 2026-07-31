@@ -218,6 +218,22 @@ lighting its M would leave somebody pressing a button that is already off. The
 mixer and the exporter have honoured all of this from the start; until now there
 was no way to press it.
 
+Transitions are reachable at last. All four — cross dissolve, dip to black, push
+and slide — have rendered since the segment resolver was written and none of them
+could be asked for. The panel offers them at a clip's out-edge, but only where
+another clip abuts it: the model would keep a transition at the end of a track
+and the renderer would ignore it.
+
+The part worth a layer of its own is **whether a transition would do anything**.
+A dissolve, push or slide overlaps the two clips, and overlapping means borrowing
+unused source from each side — a clip trimmed to the last frame of its footage
+has none to lend, and the resolver skips it in silence. So the panel asks first,
+says "no handles" beside the kinds that cannot work, and bounds the duration
+slider by what the join can actually manage. Dip to black is the exception and
+the useful fallback: it fades out and then in, sequentially, and never needs a
+handle. On the timeline a transition is a box straddling the cut with a diagonal
+through it, named when the name fits.
+
 In and out points mark the span the sequence is cut for. They are set from the
 buttons or from I and O, drawn along the foot of the ruler, saved with the
 project, and offered to export as "only the marked range" with the timecodes it
@@ -226,7 +242,7 @@ removed without a third control that exists only to undo the other two. The two
 can never cross: setting one past the other clears that other, so an inverted
 pair is unrepresentable rather than something every reader has to check for.
 
-1523 tests, plus a headless check that lays every panel out in every theme —
+1547 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected, every effect on it, a title, and
 the colour picker open, which is the only way the controls a panel is made of
 get checked at all. Given a directory, that check writes each theme's frame out

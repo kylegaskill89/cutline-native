@@ -7,25 +7,6 @@
 #include <cstddef>
 
 namespace cutline::core {
-namespace {
-
-/// How much unused source lies past each end of a clip — its trim handles —
-/// measured in timeline seconds.
-struct Handles {
-  double head = 0.0;
-  double tail = 0.0;
-};
-
-[[nodiscard]] Handles source_handles(const Clip& c, double media_duration) noexcept {
-  const double speed = clip_speed(c);
-  const double before_in = c.source_in / speed;
-  const double after_out = (media_duration - c.source_out) / speed;
-  // Reverse swaps which physical handle feeds the head versus the tail edge.
-  if (c.reverse) return {.head = after_out, .tail = before_in};
-  return {.head = before_in, .tail = after_out};
-}
-
-}  // namespace
 
 double seg_slide_offset_x(const VideoSeg& seg, double t) noexcept {
   if (!seg.slide_kind.has_value() || !seg.slide_win.has_value()) return 0.0;

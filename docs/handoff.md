@@ -28,8 +28,8 @@ measurements and the one correction they forced.
 | Local | `d:\Videos\cutline-native` |
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
-| Size | ~31k lines of source, ~21k of tests |
-| Tests | **1523** under the `ui` preset; 1283 of them need no GPU, no window, no FFmpeg |
+| Size | ~32k lines of source, ~22k of tests |
+| Tests | **1547** under the `ui` preset; 1307 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1283 of the 1523 tests.
+binding between them — 1307 of the 1547 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -257,7 +257,6 @@ here.**
 
 | | Exists | Missing |
 |---|---|---|
-| **Transitions** | `set_clip_transition`; the segment resolver and plan already render dissolve, dip-to-black, push and slide | any UI at all |
 | **Audio effects** | eight, our own DSP, honoured by the mixer and by export; `AudioClipEffect` on the model | no catalogue entry, no panel — the effects UI is video-only |
 | **Markers** | add/remove/clear/nearest/next/previous in core | nothing draws them on the ruler |
 | **Keyframe interpolation** | the model stores Linear/Hold/Ease and animation honours it | no chip in the panel, so everything is linear in practice |
@@ -288,16 +287,27 @@ here.**
 
 ### Suggested order
 
-1. **Transitions.** The biggest parity item that is pure UI work — the render
-   side is finished and completely unreachable, which is the worst combination.
-2. **Audio effects panel.** Same shape, probably more panel work.
-3. **Markers**, then **interpolation chips** — both small and both visible.
-4. Anything in B, by appetite. Scopes and the VU meter are the two that need new
+1. **Audio effects panel.** The largest of these left, and the same shape as the
+   video one — `effect_catalog.hpp` beside the resolver, `effects_binding.hpp`
+   turning a stack into rows, a loop in the panel. The eight audio effects need
+   a catalogue of their own first.
+2. **Markers**, then **interpolation chips** — both small and both visible.
+3. Anything in B, by appetite. Scopes and the VU meter are the two that need new
    machinery rather than new wiring.
 
-*(In and out points were the first of these and are done: marked from the
-buttons or from I and O, drawn along the foot of the ruler, saved with the
-project, and offered to export as "only the marked range".)*
+Two are already done and are worth reading as the pattern for the rest:
+
+- **In and out points** — marked from the buttons or from I and O, drawn along
+  the foot of the ruler, saved with the project, offered to export as "only the
+  marked range".
+- **Transitions** — `editor/transitions.hpp`. The interesting part is not
+  setting one, it is knowing whether one *would do anything*: an overlapping
+  kind borrows unused source from each side of the cut, and a clip trimmed to
+  the last frame of its footage has none to lend. The resolver skips such a
+  transition in silence, so the panel asks first and says "no handles" rather
+  than offering a slider that changes no pixels. **Expect the same shape
+  elsewhere** — the model will happily store things the renderer ignores, and
+  the binding layer is where that gets caught.
 
 ---
 
@@ -321,6 +331,17 @@ rather than a crop, and it is pinned by `ASmallerCanvasIsTheSamePictureSmaller`.
 
 **`Media::has_video` means "contributes picture"**, not "came from a video file".
 `place_media` checks it, and a title with it false is silently refused.
+
+**The model stores things the renderer then ignores.** A transition at the end of
+a track, a transition with no handles to borrow, a mark past the end of the
+sequence — all storable, all silently skipped. Whenever you expose something new,
+check what the *resolver* does with the edge cases before deciding what the panel
+offers, and put the answer in the binding layer where both can see it.
+
+**Measure text before you centre it.** A label centred in a box too small for it
+overflows both ends, and what survives the clip is a word missing its first and
+last letters sitting on top of whatever is behind. `Painter` is a `TextMeasurer`,
+so `paint_content` can always ask.
 
 **A `can_run` that says no must mean a `run` that does nothing.** There is a test
 that walks every command and asserts the two agree; adding a command whose `run`

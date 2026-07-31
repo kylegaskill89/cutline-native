@@ -19,6 +19,7 @@
 #include <cmath>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace cutline::ui {
@@ -847,6 +848,131 @@ TEST(Timeline, AMutedTrackHeaderLooksDisabled) {
     }
   }
   EXPECT_TRUE(found);
+}
+
+// -------------------------------------------------------- transitions --
+
+TEST(Transitions, AreNotDrawnWhenThereAreNone) {
+  const Fixture fixture;
+  EXPECT_TRUE(fixture.view->transition_rect(1, 0).empty());
+}
+
+TEST(Transitions, StraddleTheCutTheySitOn) {
+  // Half either side, which is where the model puts one.
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].transition = BlockTransition{.duration = 2.0, .label = "Dissolve"};
+  fixture.view->set_model(model);
+
+  const Rect box = fixture.view->transition_rect(1, 0);
+  const Rect outgoing = fixture.view->block_rect(1, 0);
+  ASSERT_FALSE(box.empty());
+
+  EXPECT_DOUBLE_EQ(box.x, outgoing.right() - 100.0) << "one second before the cut";
+  EXPECT_DOUBLE_EQ(box.right(), outgoing.right() + 100.0) << "and one after";
+  EXPECT_DOUBLE_EQ(box.y, outgoing.y);
+  EXPECT_DOUBLE_EQ(box.height, outgoing.height);
+}
+
+TEST(Transitions, AreDrawnOverBothClipsTheyJoin) {
+  // Drawn after every block on the track, so the incoming half is not painted
+  // over by the clip it reaches into.
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].transition = BlockTransition{.duration = 2.0};
+  fixture.view->set_model(model);
+
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+
+  const Rect box = fixture.view->transition_rect(1, 0);
+  int last_block = -1;
+  int the_transition = -1;
+  for (int i = 0; i < static_cast<int>(painter.calls().size()); ++i) {
+    const DrawCall& call = painter.calls()[static_cast<std::size_t>(i)];
+    if (call.kind != DrawCall::Kind::Fill) continue;
+    if (call.bounds == fixture.view->block_rect(1, 1).inset(1.0)) last_block = i;
+    if (call.bounds == box.inset(1.0)) the_transition = i;
+  }
+  ASSERT_GE(last_block, 0);
+  ASSERT_GE(the_transition, 0);
+  EXPECT_GT(the_transition, last_block);
+}
+
+TEST(Transitions, CarryADiagonal) {
+  // What every editor draws a transition as: it says "one becomes the other
+  // across here" in a way no colour does.
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].transition = BlockTransition{.duration = 2.0};
+  fixture.view->set_model(model);
+
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+
+  const Rect box = fixture.view->transition_rect(1, 0);
+  bool found = false;
+  for (const DrawCall& call : painter.calls()) {
+    // A line is stored as its first point plus an offset to the second, so a
+    // diagonal has extent in both directions and rises as it goes right.
+    if (call.kind != DrawCall::Kind::Line) continue;
+    if (call.bounds.width > 0.0 && call.bounds.height < 0.0 &&
+        std::abs(call.bounds.width - (box.width - 2.0)) < 1e-9) {
+      found = true;
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
+/// Whether a transition's name was drawn anywhere.
+[[nodiscard]] bool names_the_transition(const TimelineView& view, std::string_view label) {
+  RecordingPainter painter;
+  view.paint(painter, default_theme());
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::Text && call.run.has_value() && call.run->text == label) {
+      return true;
+    }
+  }
+  return false;
+}
+
+TEST(Transitions, ShowTheirNameWhenThereIsRoom) {
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].transition = BlockTransition{.duration = 4.0, .label = "Push"};
+  fixture.view->set_model(model);
+
+  EXPECT_TRUE(names_the_transition(*fixture.view, "Push"));
+
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+  EXPECT_TRUE(painter.clips_balanced());
+}
+
+TEST(Transitions, AreSilentWhenTheNameWouldNotFit) {
+  // Measured rather than guessed at. A name centred in a box too small for it
+  // overflows both ends, and what survives the clip is a word missing its first
+  // and last letters sitting on top of the clip's own label.
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].transition =
+      BlockTransition{.duration = 0.4, .label = "Cross Dissolve"};
+  fixture.view->set_model(model);
+
+  EXPECT_FALSE(names_the_transition(*fixture.view, "Cross Dissolve"));
+  EXPECT_FALSE(fixture.view->transition_rect(1, 0).empty()) << "still drawn, just not named";
+}
+
+TEST(Transitions, TheSameNameFitsOnceThereIsRoomForIt) {
+  // The pair that makes the one above about the measurement rather than about
+  // the string.
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].transition =
+      BlockTransition{.duration = 4.0, .label = "Cross Dissolve"};
+  fixture.view->set_model(model);
+
+  EXPECT_TRUE(names_the_transition(*fixture.view, "Cross Dissolve"));
 }
 
 // ------------------------------------------------------- the marked span --

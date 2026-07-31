@@ -5,6 +5,7 @@
 #include "cutline/core/keyframe.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
+#include "cutline/editor/transitions.hpp"
 
 #include <algorithm>
 #include <array>
@@ -114,6 +115,17 @@ ui::TimelineModel timeline_model(const core::Project& project,
 
     row.blocks.reserve(track.clips.size());
     for (const core::Clip& clip : track.clips) {
+      ui::BlockTransition transition;
+      // Only when the renderer would honour it. A transition stored on the last
+      // clip of a track, or on one with a gap after it, resolves to nothing —
+      // and drawing it would be the timeline claiming something the picture
+      // does not do.
+      if (const TransitionRow at_join = clip_transition(project, clip.id);
+          at_join.joins && at_join.present) {
+        transition.duration = at_join.duration;
+        transition.label = std::string(transition_name(at_join.kind));
+      }
+
       row.blocks.push_back(ui::TimelineBlock{
           .id = clip.id,
           .start = clip.start,
@@ -121,6 +133,7 @@ ui::TimelineModel timeline_model(const core::Project& project,
           .label = label_for(project, clip),
           .selected = std::ranges::find(selection, clip.id) != selection.end(),
           .keyframes = keyframe_times(clip),
+          .transition = std::move(transition),
       });
     }
     model.tracks.push_back(std::move(row));

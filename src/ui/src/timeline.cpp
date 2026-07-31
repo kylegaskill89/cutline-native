@@ -272,6 +272,24 @@ Rect TimelineView::block_rect(std::size_t track, std::size_t block) const {
   return Rect{x, area.y, width, area.height};
 }
 
+Rect TimelineView::transition_rect(std::size_t track, std::size_t block) const {
+  if (track >= model_.tracks.size()) return {};
+  const std::vector<TimelineBlock>& blocks = model_.tracks[track].blocks;
+  if (block >= blocks.size()) return {};
+
+  const double duration = blocks[block].transition.duration;
+  if (duration <= 0.0) return {};
+
+  const Rect row = track_rect(track);
+  if (row.empty()) return {};
+
+  // Centred on the cut, which is where the model puts it: half the transition
+  // plays before the join and half after.
+  const double centre = row.x + scale_.to_x(blocks[block].end);
+  const double half = scale_.width_of(duration) * 0.5;
+  return Rect{centre - half, row.y, half * 2.0, row.height};
+}
+
 double TimelineView::playhead_x() const {
   return time_area().x + scale_.to_x(playhead_);
 }
@@ -438,6 +456,35 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
           painter.line(x - reach, y, x, y - reach, style.text, 1.0);
         }
         painter.pop_clip();
+      }
+    }
+
+    // Transitions last on this track, so one always draws over both the clips
+    // it joins rather than half of it disappearing under the next block.
+    for (std::size_t i = 0; i < model_.tracks[track].blocks.size(); ++i) {
+      const Rect box = transition_rect(track, i);
+      if (box.empty() || box.right() < tracks.x || box.x > tracks.right()) continue;
+
+      const SurfaceStyle& style = theme.style(Part::Clip, State::Selected);
+      Fill wash = style.fill;
+      wash.color.a *= 0.75f;
+      painter.fill(box.inset(1.0), style.corner_radius, wash);
+      // A diagonal, which is what every editor draws a transition as: it says
+      // "one becomes the other across here" in a way no colour does.
+      painter.line(box.x + 1.0, box.bottom() - 1.0, box.right() - 1.0, box.y + 1.0,
+                   style.text, 1.0);
+      painter.stroke(box.inset(1.0), style.corner_radius, style.text, 1.0);
+
+      // Measured rather than guessed at. A name centred in a box too small for
+      // it overflows both ends, and what is left after clipping is a word with
+      // its first and last letters missing sitting on top of the clip's own
+      // label. Nothing at all reads better than that.
+      const TimelineBlock& clip = model_.tracks[track].blocks[i];
+      if (!clip.transition.label.empty() &&
+          painter.measure(clip.transition.label, metrics_.small_font_size, false) <=
+              box.width - 4.0) {
+        painter.text(text_run(box, clip.transition.label, style, metrics_.small_font_size,
+                              TextAlign::Center, false));
       }
     }
   }

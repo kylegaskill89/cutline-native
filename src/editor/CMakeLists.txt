@@ -16,6 +16,7 @@ add_library(cutline_editor
   src/session.cpp
   src/timeline_binding.cpp
   src/titles.cpp
+  src/transitions.cpp
   src/workspace.cpp)
 add_library(cutline::editor ALIAS cutline_editor)
 

@@ -1,6 +1,7 @@
 #include "cutline/core/query.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace cutline::core {
@@ -20,6 +21,27 @@ double source_span(const Clip& c) noexcept { return c.source_out - c.source_in; 
 double clip_duration(const Clip& c) noexcept { return source_span(c) / clip_speed(c); }
 
 double clip_end(const Clip& c) noexcept { return c.start + clip_duration(c); }
+
+Handles source_handles(const Clip& c, double media_duration) noexcept {
+  const double speed = clip_speed(c);
+  const double before_in = c.source_in / speed;
+  const double after_out = (media_duration - c.source_out) / speed;
+  // Reverse swaps which physical handle feeds the head versus the tail edge.
+  if (c.reverse) return {.head = after_out, .tail = before_in};
+  return {.head = before_in, .tail = after_out};
+}
+
+Handles source_handles(const Project& p, const Clip& c) noexcept {
+  const auto media = std::ranges::find(p.media, c.media_id, &Media::id);
+  if (media == p.media.end()) return {};
+  // A still has no source to run out of, so it can lend whatever is asked for.
+  // Reporting zero would refuse a dissolve onto a title.
+  if (is_still_like(*media)) {
+    constexpr double unbounded = std::numeric_limits<double>::infinity();
+    return Handles{.head = unbounded, .tail = unbounded};
+  }
+  return source_handles(c, media->duration);
+}
 
 double source_time_at(const Clip& c, double t) noexcept {
   const double local = (t - c.start) * clip_speed(c);
