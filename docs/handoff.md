@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1650** under the `ui` preset; 1402 of them need no GPU, no window, no FFmpeg |
+| Tests | **1653** under the `ui` preset; 1405 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1402 of the 1650 tests.
+binding between them — 1405 of the 1653 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -121,7 +121,7 @@ tools    executables.
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1402 tests run with
+place that knows both, and it is pure too. That is what makes 1405 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and

@@ -8,6 +8,8 @@
 
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
+// The volume row's floor is the timeline rubber band's, and the two must agree.
+#include "cutline/ui/timeline.hpp"
 
 #include <gtest/gtest.h>
 
@@ -166,20 +168,75 @@ TEST(Inspector, ReadingBackWhatWasWrittenGivesTheSameNumber) {
   }
 }
 
+// Volume is the one row that is not its stored value scaled. It was a
+// percentage, which made the slider unusable: half its travel covered +0 to
+// +6 dB and everything from a gentle trim down to silence was squeezed into the
+// last tenth of it.
+TEST(Inspector, VolumeIsShownInDecibels) {
+  const std::optional<ParamSpec> spec =
+      find(clip_parameters(sample_project(), "a1c"), ClipParam::Gain);
+  ASSERT_TRUE(spec.has_value());
+
+  EXPECT_EQ(spec->suffix, "dB");
+  // Unity is nought decibels, and it is where a double-click puts it back to.
+  EXPECT_NEAR(spec->value, 0.0, 1e-9);
+  EXPECT_DOUBLE_EQ(spec->fallback, 0.0);
+}
+
 TEST(Inspector, VolumeRoundTripsToo) {
   Project project = sample_project();
-  project = set_clip_parameter(std::move(project), "a1c", ClipParam::Gain, 150.0);
+  project = set_clip_parameter(std::move(project), "a1c", ClipParam::Gain, -6.0);
 
-  EXPECT_DOUBLE_EQ(core::find_clip(project, "a1c")->gain, 1.5);
+  EXPECT_NEAR(core::find_clip(project, "a1c")->gain, 0.5011872336, 1e-9);
   const std::optional<ParamSpec> spec = find(clip_parameters(project, "a1c"), ClipParam::Gain);
   ASSERT_TRUE(spec.has_value());
-  EXPECT_DOUBLE_EQ(spec->value, 150.0);
+  EXPECT_NEAR(spec->value, -6.0, 1e-9);
+}
+
+// The point of the scale: equal steps in the row are equal steps in loudness,
+// so the useful range is not squeezed into one end of the control.
+TEST(Inspector, HalvingTheVolumeTwiceIsTwoEqualSteps) {
+  const auto shown = [](double gain) {
+    Project project = sample_project();
+    project.tracks[1].clips[0].gain = gain;
+    return find(clip_parameters(project, "a1c"), ClipParam::Gain)->value;
+  };
+
+  EXPECT_NEAR(shown(1.0) - shown(0.5), shown(0.5) - shown(0.25), 1e-9);
 }
 
 TEST(Inspector, TheVolumeRangeMatchesWhatTheModelAllows) {
-  const std::optional<ParamSpec> spec = find(clip_parameters(sample_project(), "a1c"), ClipParam::Gain);
+  const std::optional<ParamSpec> spec =
+      find(clip_parameters(sample_project(), "a1c"), ClipParam::Gain);
   ASSERT_TRUE(spec.has_value());
-  EXPECT_DOUBLE_EQ(spec->range.maximum, core::kMaxGain * 100.0);
+
+  // The top is the loudest gain the model will store rather than a round number
+  // of decibels, or the last of the slider's travel would be refused by the
+  // clamp in the core.
+  const Project loud =
+      set_clip_parameter(sample_project(), "a1c", ClipParam::Gain, spec->range.maximum);
+  EXPECT_DOUBLE_EQ(core::find_clip(loud, "a1c")->gain, core::kMaxGain);
+}
+
+// The slider and the timeline's rubber band are two views of one number, and
+// both have to agree that the bottom of the range is silence rather than merely
+// very quiet — or a clip dragged off on one reads as audible on the other.
+TEST(Inspector, TheBottomOfTheVolumeRangeIsSilence) {
+  const std::optional<ParamSpec> spec =
+      find(clip_parameters(sample_project(), "a1c"), ClipParam::Gain);
+  ASSERT_TRUE(spec.has_value());
+  EXPECT_DOUBLE_EQ(spec->range.minimum, ui::kGainFloorDb);
+
+  const Project silent =
+      set_clip_parameter(sample_project(), "a1c", ClipParam::Gain, spec->range.minimum);
+  EXPECT_DOUBLE_EQ(core::find_clip(silent, "a1c")->gain, 0.0);
+
+  // And a silent clip reads back at the foot rather than at minus infinity,
+  // which is not a number a slider can be put at.
+  Project quiet = sample_project();
+  quiet.tracks[1].clips[0].gain = 0.0;
+  EXPECT_DOUBLE_EQ(find(clip_parameters(quiet, "a1c"), ClipParam::Gain)->value,
+                   ui::kGainFloorDb);
 }
 
 TEST(Inspector, SpeedIsShownAsAMultiplier) {

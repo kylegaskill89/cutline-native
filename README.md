@@ -316,12 +316,19 @@ expected to do is nothing at all.
 
 Adding a point takes the value the band already had there, so automating a clip
 never starts by altering it — the same bargain the inspector's stopwatch makes.
+
+The inspector's Volume row is in decibels for the same reason and against the
+same floor. It was a percentage of unity, which put half the slider's travel
+between +0 and +6 dB and squeezed everything from a gentle trim down to silence
+into the last tenth of it — so a clip pulled down on the rubber band read as
+pinned to the left whatever it had been set to. The two controls are now two
+views of one number that cannot disagree about where silence is.
 Nothing needed writing in the model: `move_gain_keyframe` and `set_clip_gain`
 had been there, tested, since the first phase, and the mixer and the exporter
 have honoured automation from the start. This is the second feature in a row
 whose work was entirely the gesture.
 
-1650 tests, plus a headless check that lays every panel out in every theme —
+1653 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a matte, an adjustment layer, a title, and the
 colour picker open, which is the only way the controls a panel is made of get

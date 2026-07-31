@@ -1,9 +1,14 @@
 #include "cutline/editor/inspector.hpp"
 
+#include "cutline/audio/biquad.hpp"
 #include "cutline/core/animate.hpp"
 #include "cutline/core/keyframe.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
+// For `kGainFloorDb`: the timeline's rubber band and this slider are two views
+// of one number, and a floor that differed between them would mean a clip
+// dragged to silence on one reading as audible on the other.
+#include "cutline/ui/timeline.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -44,6 +49,9 @@ constexpr double kSliderMaxSpeed = 4.0;
 }
 
 /// The factor between what is stored and what is shown.
+///
+/// Gain is deliberately absent: it is the one parameter whose display is not a
+/// scale of what is stored. See `gain_shown` below.
 [[nodiscard]] double display_scale(ClipParam param) noexcept {
   switch (param) {
     case ClipParam::Opacity:
@@ -51,12 +59,38 @@ constexpr double kSliderMaxSpeed = 4.0;
     case ClipParam::Y:
     case ClipParam::ScaleX:
     case ClipParam::ScaleY:
-    case ClipParam::Gain:
       return kPercent;
     default:
       return 1.0;
   }
 }
+
+/// Volume, shown in decibels rather than as a percentage of unity.
+///
+/// Gain is stored as a linear multiplier and every other row here shows its
+/// stored value scaled, which is why this one was a percentage. It made the
+/// slider unusable: half its travel covers +0 to +6 dB, and everything from a
+/// gentle -20 dB trim down to silence is squeezed into the last tenth, so a
+/// clip pulled down on the timeline's rubber band read as pinned to the left
+/// whatever it had actually been set to.
+///
+/// The two controls agree exactly, by construction: the same floor, the same
+/// ceiling, and the same rule that the bottom of the range is silence rather
+/// than merely very quiet.
+[[nodiscard]] double gain_shown(double stored) noexcept {
+  if (!(stored > 0.0)) return ui::kGainFloorDb;
+  return std::max(audio::linear_to_db(stored), ui::kGainFloorDb);
+}
+
+[[nodiscard]] double gain_stored(double shown) noexcept {
+  if (shown <= ui::kGainFloorDb) return 0.0;
+  return std::clamp(audio::db_to_linear(shown), 0.0, core::kMaxGain);
+}
+
+/// The loudest the model will hold, in the units the row is in. Taken from the
+/// model rather than written as a round number of decibels, so the top of the
+/// slider is a gain that can actually be stored.
+[[nodiscard]] double gain_ceiling_db() noexcept { return audio::linear_to_db(core::kMaxGain); }
 
 [[nodiscard]] bool keyed_at(std::span<const core::Keyframe> frames, double local_t) noexcept {
   return std::ranges::any_of(frames, [local_t](const core::Keyframe& frame) {
@@ -70,7 +104,7 @@ void fill_animation(ParamSpec& row, const core::Clip& clip, double local_t) {
     row.animatable = true;
     row.animated = core::is_gain_animated(clip);
     if (row.animated) {
-      row.value = core::gain_at(clip, local_t) * kPercent;
+      row.value = gain_shown(core::gain_at(clip, local_t));
       row.keyed_here = keyed_at(clip.gain_keyframes, local_t);
       row.interp = core::gain_keyframe_interp_of(clip);
     }
@@ -164,10 +198,11 @@ std::vector<ParamSpec> clip_parameters(const core::Project& project, std::string
   } else {
     out.push_back(ParamSpec{.param = ClipParam::Gain,
                             .name = "Volume",
-                            .range = {.minimum = 0.0, .maximum = core::kMaxGain * kPercent},
-                            .value = clip->gain * kPercent,
-                            .fallback = 100.0,
-                            .suffix = "%"});
+                            .range = {.minimum = ui::kGainFloorDb, .maximum = gain_ceiling_db()},
+                            .value = gain_shown(clip->gain),
+                            // Unity, which is where a volume control resets to.
+                            .fallback = 0.0,
+                            .suffix = "dB"});
   }
 
   out.push_back(ParamSpec{.param = ClipParam::Speed,
@@ -204,7 +239,7 @@ core::Project set_clip_parameter(core::Project project, std::string_view clip_id
   // An animated property ignores its stored value, so writing one would look
   // like nothing happened. The keyframe at the playhead is the edit.
   if (param == ClipParam::Gain && core::is_gain_animated(*clip)) {
-    return core::set_gain_keyframe(std::move(project), clip_id, local_t, value / kPercent);
+    return core::set_gain_keyframe(std::move(project), clip_id, local_t, gain_stored(value));
   }
   if (const std::optional<core::AnimProp> prop = anim_prop_of(param);
       prop.has_value() && core::is_animated(*clip, *prop)) {
@@ -241,7 +276,7 @@ core::Project set_clip_parameter(core::Project project, std::string_view clip_id
       return core::set_clip_speed(std::move(project), clip_id, value);
 
     case ClipParam::Gain:
-      return core::set_clip_gain(std::move(project), clip_id, value / kPercent);
+      return core::set_clip_gain(std::move(project), clip_id, gain_stored(value));
 
     case ClipParam::FadeIn:
       return core::set_clip_fade(std::move(project), clip_id, core::ClipEdge::In, value);
@@ -267,13 +302,13 @@ core::Project set_clip_parameter_animated(core::Project project, std::string_vie
   // property already had, and switching it off has to keep the one the
   // keyframes were producing. Either way nothing about the picture changes at
   // this instant, which is the whole point of the control.
-  const double current = gain ? core::gain_at(*clip, local_t) * kPercent
+  const double current = gain ? gain_shown(core::gain_at(*clip, local_t))
                               : core::animated_value(*clip, *prop, local_t) *
                                     display_scale(param);
 
   if (animated) {
     return gain ? core::set_gain_keyframe(std::move(project), clip_id, local_t,
-                                          current / kPercent)
+                                          gain_stored(current))
                 : core::set_keyframe(std::move(project), clip_id, *prop, local_t,
                                      current / display_scale(param));
   }
