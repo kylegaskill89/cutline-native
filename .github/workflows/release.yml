@@ -1,0 +1,145 @@
+name: Release
+
+# Everything between a tag and something somebody else can install: the whole
+# tree built, tested, packaged into an installer, and published with the
+# manifest the editor's update check reads.
+#
+# Tag-driven rather than manual, so what was released is always a commit that
+# can be pointed at. The tag is the version -- there is a step below that
+# refuses to go on if it disagrees with the one compiled into the binary,
+# because a mismatch there means an editor that offers an update to a version it
+# already is, for ever.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (must already exist)"
+        required: true
+
+jobs:
+  release:
+    name: Build, package and publish (Windows)
+    runs-on: windows-latest
+    # FFmpeg and Skia from source together are comfortably over an hour on a
+    # cold cache. The nightly build usually leaves a warm one, but a release cut
+    # after a dependency bump will not have it.
+    timeout-minutes: 240
+
+    permissions:
+      # To create the release and upload the assets to it. Nothing else.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # Split restore and save, so a failure later still leaves the dependency
+      # build cached. The same reasoning as the nightly job, and the same key,
+      # so a release cut after a nightly starts warm.
+      - name: Restore vcpkg binaries
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/AppData/Local/vcpkg/archives
+          key: vcpkg-full-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-full-${{ runner.os }}-
+
+      - name: Point CMake at the preinstalled vcpkg
+        run: echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+
+      - name: Install NSIS
+        run: choco install nsis --no-progress -y
+
+      - name: Configure
+        run: cmake --preset ui -DCUTLINE_WARNINGS_AS_ERRORS=ON
+
+      - name: Save vcpkg binaries
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/AppData/Local/vcpkg/archives
+          key: vcpkg-full-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
+      # The tag against what CMake will compile in. A release whose manifest
+      # says 0.3.0 while the binary reports 0.2.0 is an editor that offers the
+      # same update every time it is asked, and installs it to no effect.
+      - name: Check the tag matches the project version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          $declared = (Select-String -Path CMakeLists.txt -Pattern '^\s*VERSION\s+(\S+)' |
+                       Select-Object -First 1).Matches.Groups[1].Value
+          "tag: $version, CMakeLists: $declared"
+          if ($version -ne $declared) {
+            throw "The tag says $version and CMakeLists.txt says $declared. Bump one of them."
+          }
+          echo "CUTLINE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Build
+        run: cmake --build --preset ui
+
+      - name: Test
+        run: ctest --test-dir build/ui -C Release --output-on-failure
+
+      # The whole interface laid out and painted in every theme. A release that
+      # ships a control nobody can reach is worse than a release that does not
+      # happen, and this is the only thing that would notice.
+      - name: Paint every theme headlessly
+        run: ./build/ui/tools/cutline/Release/cutline.exe --check
+
+      - name: Package
+        working-directory: build/ui
+        run: cpack -G NSIS -C Release
+
+      # The manifest the editor reads. Written here rather than by hand,
+      # because the digest has to be of the file that was actually uploaded --
+      # one computed from anything else is a check that passes for the wrong
+      # reasons or fails for no reason.
+      - name: Write the update manifest
+        shell: pwsh
+        run: |
+          $version = $env:CUTLINE_VERSION
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $installer = "build/ui/Cutline-$version-Setup.exe"
+          if (-not (Test-Path $installer)) { throw "cpack produced no installer at $installer" }
+
+          $digest = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
+          $url = "https://github.com/${{ github.repository }}/releases/download/$tag/Cutline-$version-Setup.exe"
+
+          # The release notes double as the update's notes, so whatever is
+          # written on the release is what the editor shows before downloading.
+          $notes = "Cutline $version"
+          @{
+            version   = $version
+            installer = $url
+            sha256    = $digest
+            notes     = $notes
+          } | ConvertTo-Json | Set-Content -Path build/ui/latest.json -Encoding utf8
+
+          Get-Content build/ui/latest.json
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = $env:CUTLINE_VERSION
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+
+          # `--clobber` so re-running a release replaces the assets rather than
+          # failing halfway and leaving a release with an installer and no
+          # manifest -- which is the state that makes every editor's update
+          # check answer 404.
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag "build/ui/Cutline-$version-Setup.exe" build/ui/latest.json --clobber
+          } else {
+            gh release create $tag `
+              "build/ui/Cutline-$version-Setup.exe" `
+              build/ui/latest.json `
+              --title "Cutline $version" `
+              --generate-notes
+          }

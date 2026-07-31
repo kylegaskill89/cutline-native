@@ -150,6 +150,43 @@ TEST(ReleaseManifest, AReleaseWithNoNotesIsStillARelease) {
   EXPECT_TRUE(release->notes.empty());
 }
 
+
+// ------------------------------------------------- what the workflow writes --
+
+// The exact shape the release workflow produces, key order and spacing
+// included. This is the contract between a YAML file nobody compiles and a
+// parser nobody runs by hand, and there is otherwise nothing joining them: a
+// field renamed on either side would be found by somebody's editor answering
+// "could not check for updates" a week after the release went out.
+TEST(ReleaseManifest, ReadsWhatTheReleaseWorkflowWrites) {
+  constexpr std::string_view written = R"({
+    "installer":  "https://github.com/kylegaskill89/cutline-native/releases/download/v0.0.1/Cutline-0.0.1-Setup.exe",
+    "sha256":  "99cfba05156868a2b7b8cb58c297ff4a0949b247a15be4db8ab7e4eecd86d5ef",
+    "version":  "0.0.1",
+    "notes":  "Cutline 0.0.1"
+})";
+
+  const auto release = parse_release_manifest(written);
+  ASSERT_TRUE(release.has_value()) << release.error();
+  EXPECT_EQ(release->version, (Version{0, 0, 1}));
+  EXPECT_EQ(release->notes, "Cutline 0.0.1");
+  EXPECT_TRUE(release->installer.ends_with("Cutline-0.0.1-Setup.exe"));
+}
+
+// Windows PowerShell writes UTF-8 *with* a byte order mark, and a workflow step
+// run under it rather than under pwsh would produce one. Three bytes at the
+// front of a file are not a reason for an editor to stop updating.
+TEST(ReleaseManifest, ReadsOneWithAByteOrderMarkInFrontOfIt) {
+  const std::string with_bom =
+      "\xEF\xBB\xBF" +
+      std::string(R"({"version":"1.0.0","installer":"https://example.com/x.exe",
+        "sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"})");
+
+  const auto release = parse_release_manifest(with_bom);
+  ASSERT_TRUE(release.has_value()) << release.error();
+  EXPECT_EQ(release->version, (Version{1, 0, 0}));
+}
+
 // ----------------------------------------------------------------- digests --
 
 // The published vectors. If these pass, the digest is the one the rest of the

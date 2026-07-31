@@ -108,3 +108,6 @@ if(CUTLINE_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
 endif()
+
+# Last of all, because it packages whatever the rest of this decided to build.
+include(Packaging)
