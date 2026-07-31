@@ -68,6 +68,12 @@ Project set_clip_gain(Project p, std::string_view clip_id, double gain) {
   return p;
 }
 
+Project set_canvas(Project p, int width, int height) {
+  p.canvas_w = std::clamp(width, kMinCanvas, kMaxCanvas);
+  p.canvas_h = std::clamp(height, kMinCanvas, kMaxCanvas);
+  return p;
+}
+
 Project set_master_gain(Project p, double gain) {
   p.master_gain = std::clamp(gain, 0.0, kMaxMasterGain);
   return p;

@@ -64,7 +64,33 @@ TEST(ClipProperties, GainIsClamped) {
   EXPECT_DOUBLE_EQ(set_clip_gain(p, "c1", 0.5).tracks[0].clips[0].gain, 0.5);
 }
 
+TEST(CanvasProperties, TheSequenceCanBeResized) {
+  const Project p;
+  const Project wide = set_canvas(p, 3840, 2160);
+  EXPECT_EQ(wide.canvas_w, 3840);
+  EXPECT_EQ(wide.canvas_h, 2160);
+}
+
+TEST(CanvasProperties, ASizeOutsideTheRangeIsClampedRatherThanRefused) {
+  const Project p;
+  EXPECT_EQ(set_canvas(p, 0, 0).canvas_w, kMinCanvas);
+  EXPECT_EQ(set_canvas(p, -100, -100).canvas_h, kMinCanvas);
+  EXPECT_EQ(set_canvas(p, 999999, 999999).canvas_w, kMaxCanvas);
+}
+
+// Transforms are canvas fractions, so a resize is the same picture at a
+// different size. Nothing about the clips changes, and a resize that quietly
+// rewrote them would make the operation impossible to undo cleanly.
+TEST(CanvasProperties, ResizingLeavesTheClipsAlone) {
+  Project p = one_clip_project();
+  p.tracks[0].clips[0].transform = {.x = 0.25, .y = 0.75, .scale_x = 0.5};
+
+  const Project resized = set_canvas(p, 1080, 1920);
+  EXPECT_EQ(resized.tracks, p.tracks);
+}
+
 TEST(MasterProperties, MasterGainIsClamped) {
+
   const Project p;
   EXPECT_DOUBLE_EQ(set_master_gain(p, -1.0).master_gain, 0.0);
   EXPECT_DOUBLE_EQ(set_master_gain(p, 99.0).master_gain, kMaxMasterGain);

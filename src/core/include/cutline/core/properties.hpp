@@ -50,6 +50,22 @@ namespace cutline::core {
 
 [[nodiscard]] Project set_clip_transform(Project p, std::string_view clip_id, Transform transform);
 
+// ------------------------------------------------------------------ canvas --
+
+/// The smallest and largest sequence this will hold. The floor is where a
+/// picture stops being one; the ceiling is well past 8K, and is there to stop a
+/// typed digit too many asking the compositor for a target it cannot make.
+inline constexpr int kMinCanvas = 16;
+inline constexpr int kMaxCanvas = 16384;
+
+/// Resizes the sequence, clamped to the allowed range.
+///
+/// Nothing else moves. Transforms are canvas fractions, so a resize is the same
+/// picture at a different size — and a change of *shape* reframes everything,
+/// which is what changing the shape of a sequence means and what anybody doing
+/// it is asking for.
+[[nodiscard]] Project set_canvas(Project p, int width, int height);
+
 // ------------------------------------------------------------------ master --
 
 /// Sets the gain applied to the whole mix, clamped to the allowed range.

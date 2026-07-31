@@ -86,6 +86,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -510,6 +511,10 @@ struct App {
   double preview_scale = 1.0;
   Button* preview_scale_button = nullptr;
 
+  /// Shows the sequence's size and opens the presets. Held so it can be
+  /// relabelled without rebuilding the row it is in.
+  Button* canvas_button = nullptr;
+
   /// Set when the picture has changed and the measurements no longer describe
   /// it. Deferred like the preview is, so scrubbing across ten frames measures
   /// the one that is finally shown rather than all ten.
@@ -687,6 +692,7 @@ void choose_scope(App& app, cutline::ui::ScopeKind kind);
 void show_master_gain(App& app, double gain);
 void refresh_meter(App& app);
 void refresh_handles(App& app);
+void refresh_title(App& app);
 void show_snapping(App& app);
 void toggle_snapping(App& app);
 [[nodiscard]] std::string preview_scale_name(double scale);
@@ -1855,6 +1861,36 @@ void take_snapshot([[maybe_unused]] App& app) {
 /// finer than a pixel of graph.
 constexpr int kScopeWidth = 320;
 
+/// The sequence sizes offered, from the specification's list.
+///
+/// Named by what they are for rather than only by their numbers, because
+/// "1080x1920" is a size and "Vertical" is a decision — and the decision is
+/// what somebody is making when they open this.
+struct CanvasPreset {
+  std::string_view name;
+  int width;
+  int height;
+};
+
+constexpr std::array kCanvasPresets{
+    CanvasPreset{"1080p", 1920, 1080},        CanvasPreset{"1440p", 2560, 1440},
+    CanvasPreset{"4K UHD", 3840, 2160},       CanvasPreset{"Ultrawide 1440", 3440, 1440},
+    CanvasPreset{"Ultrawide 1080", 2560, 1080}, CanvasPreset{"Vertical", 1080, 1920},
+    CanvasPreset{"Square", 1080, 1080},
+};
+
+/// What the button says: the preset's name when the sequence is one of them,
+/// and the plain numbers when it is not. A sequence somebody typed a size into
+/// should show that size rather than the word "Custom", which says nothing.
+[[nodiscard]] std::string canvas_label(const cutline::core::Project& project) {
+  for (const CanvasPreset& preset : kCanvasPresets) {
+    if (preset.width == project.canvas_w && preset.height == project.canvas_h) {
+      return std::string(preset.name);
+    }
+  }
+  return std::to_string(project.canvas_w) + "x" + std::to_string(project.canvas_h);
+}
+
 /// The resolutions the preview offers, and what each is called.
 ///
 /// Three, doubling: full, half, quarter. A quarter is a sixteenth of the work,
@@ -1880,6 +1916,73 @@ constexpr std::array<std::pair<double, std::string_view>, 3> kPreviewScales{{
   if (at == kPreviewScales.end()) return kPreviewScales.front().first;
   const auto index = static_cast<std::size_t>(at - kPreviewScales.begin());
   return kPreviewScales[(index + 1) % kPreviewScales.size()].first;
+}
+
+/// Resizes the sequence and brings everything that depends on its size along.
+///
+/// The preview's renderer is sized from the project on every frame, so it
+/// follows without being told; what does not is the monitor's letterbox while
+/// there is no picture yet, and the export dialog's "same as sequence", which
+/// is showing a number that has just changed.
+void apply_canvas(App& app, int width, int height) {
+  if (!app.session.apply(cutline::core::set_canvas(app.session.project(), width, height))) {
+    return;
+  }
+  if (app.monitor != nullptr) {
+    const cutline::core::Project& project = app.session.project();
+    app.monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
+  }
+  if (app.canvas_button != nullptr) {
+    app.canvas_button->set_text(canvas_label(app.session.project()));
+  }
+  refresh_title(app);
+  invalidate_preview(app);
+  app.inspector_stale = true;
+}
+
+/// The popup behind the canvas button: the presets, and two fields for a size
+/// that is not one of them.
+///
+/// A popup rather than a dialog window because that is all it needs to be —
+/// `open_popup` takes any widget, and a second real window would bring its own
+/// message loop, its own close path and its own way of being left open behind
+/// the editor.
+[[nodiscard]] std::unique_ptr<Widget> build_canvas_popup(App& app) {
+  auto panel = std::make_unique<Panel>();
+
+  for (const CanvasPreset& preset : kCanvasPresets) {
+    auto& row = panel->emplace<Button>(
+        std::string(preset.name) + "  " + std::to_string(preset.width) + "x" +
+            std::to_string(preset.height),
+        [&app, preset] {
+          if (app.main.host != nullptr) app.main.host->close_popup();
+          apply_canvas(app, preset.width, preset.height);
+        });
+    row.set_selected(preset.width == app.session.project().canvas_w &&
+                     preset.height == app.session.project().canvas_h);
+  }
+
+  auto& custom = panel->emplace<Box>(Axis::Horizontal);
+  auto& width = custom.emplace<TextField>(std::to_string(app.session.project().canvas_w));
+  custom.emplace<Label>("x").set_small(true);
+  auto& height = custom.emplace<TextField>(std::to_string(app.session.project().canvas_h));
+  custom.emplace<Button>("Set", [&app, w = &width, h = &height] {
+    // Anything that is not a number leaves the sequence alone rather than
+    // becoming zero, which the clamp would turn into the smallest canvas there
+    // is — a silent, baffling answer to a typing mistake.
+    int wide = 0;
+    int tall = 0;
+    if (std::from_chars(w->text().data(), w->text().data() + w->text().size(), wide).ec !=
+            std::errc{} ||
+        std::from_chars(h->text().data(), h->text().data() + h->text().size(), tall).ec !=
+            std::errc{}) {
+      return;
+    }
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    apply_canvas(app, wide, tall);
+  });
+
+  return panel;
 }
 
 void choose_preview_scale(App& app, double scale) {
@@ -2896,6 +2999,17 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   transport.emplace<Button>("Snapshot", [app] {
     if (app != nullptr) take_snapshot(*app);
   });
+
+  // The sequence's own size, which is not the same thing as the export's — the
+  // export dialog scales *from* this. Beside the preview resolution because the
+  // two are the pair of numbers anybody comparing them wants together.
+  auto& canvas = transport.emplace<Button>(
+      app == nullptr ? std::string("1080p") : canvas_label(app->session.project()));
+  canvas.set_on_click([app, control = &canvas] {
+    if (app == nullptr || app->main.host == nullptr) return;
+    app->main.host->open_popup(build_canvas_popup(*app), control->bounds());
+  });
+  if (app != nullptr) app->canvas_button = &canvas;
 
   // One button that cycles rather than three, which is the idiom the scope tabs
   // and the sort order already use for a short list in a crowded row.
