@@ -323,6 +323,14 @@ Rect TimelineView::control_rect(std::size_t track, TrackControl control) const {
   return box;
 }
 
+std::optional<std::size_t> TimelineView::header_at(double x, double y) const {
+  if (!header_area().contains(x, y)) return std::nullopt;
+  for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
+    if (header_rect(track).contains(x, y)) return track;
+  }
+  return std::nullopt;
+}
+
 std::optional<TrackControlRef> TimelineView::control_at(double x, double y) const {
   if (!header_area().contains(x, y)) return std::nullopt;
 
@@ -1443,6 +1451,16 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
     }
     if (on_track_toggle_) on_track_toggle_(*hit);
     return true;
+  }
+
+  // A double-click anywhere else on a header renames the track. After the
+  // switches, so double-clicking mute twice is two mutes rather than a rename
+  // — which is what it looks like it should be.
+  if (event.click_count >= 2) {
+    if (const auto track = header_at(event.x, event.y)) {
+      if (on_track_rename_) on_track_rename_(*track);
+      return true;
+    }
   }
 
   // Anywhere on the ruler scrubs, not just on the playhead itself. Hunting for

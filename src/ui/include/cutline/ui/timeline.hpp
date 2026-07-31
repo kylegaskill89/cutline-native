@@ -582,6 +582,20 @@ class TimelineView : public Widget {
     on_track_toggle_ = std::move(on_toggle);
   }
 
+  /// Called when a header is double-clicked anywhere but on a switch, which is
+  /// how a track gets renamed.
+  ///
+  /// Reported rather than handled: renaming needs somewhere to type, and the
+  /// timeline draws its headers rather than building widgets in them. Whoever
+  /// handles this owns the field.
+  void set_on_track_rename(std::function<void(std::size_t)> on_rename) {
+    on_track_rename_ = std::move(on_rename);
+  }
+
+  /// Which track's header a point is in, if any. `header_rect` says where that
+  /// header is, which is what a rename field hangs under.
+  [[nodiscard]] std::optional<std::size_t> header_at(double x, double y) const;
+
   /// Whether a track shows a given switch at all.
   [[nodiscard]] bool has_control(std::size_t track, TrackControl control) const;
   /// Where a switch is drawn. Empty when the track does not have one, or when
@@ -870,6 +884,7 @@ class TimelineView : public Widget {
   std::function<void(std::span<const BlockRef>)> on_select_;
   std::function<void(const TimelineEdit&)> on_edit_;
   std::function<void(TrackControlRef)> on_track_toggle_;
+  std::function<void(std::size_t)> on_track_rename_;
 };
 
 }  // namespace cutline::ui

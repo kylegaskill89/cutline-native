@@ -7,6 +7,8 @@
 
 #include "cutline/ui/widgets.hpp"
 
+#include "cutline/ui/controls.hpp"
+
 #include "cutline/ui/recording_painter.hpp"
 #include "cutline/ui/theme.hpp"
 #include "cutline/ui/widget.hpp"
@@ -369,6 +371,100 @@ TEST(ScrollView, WithNoContentItIsHarmless) {
 
   EXPECT_FALSE(host.wheel(WheelEvent{.x = 50.0, .y = 50.0, .delta_y = 1.0}));
   EXPECT_TRUE(host.root().bounds().contains(50.0, 50.0));
+}
+
+
+// ------------------------------------------------------------------ popups --
+
+// A popup is where the canvas presets and the track-rename field live, and both
+// want the keyboard the moment they open. Focus has to be settable straight
+// away, before the layout that places the popup has run — that layout happens a
+// frame later, and a field nobody can type into until they click it is not a
+// field that opened for typing.
+TEST(Popup, AFieldInsideOneCanBeFocusedBeforeItIsLaidOut) {
+  WidgetHost host(std::make_unique<Box>(Axis::Vertical));
+  host.resize(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());
+
+  auto content = std::make_unique<Box>(Axis::Horizontal);
+  auto& field = content->emplace<TextField>("V1");
+  host.open_popup(std::move(content), Rect{10.0, 10.0, 100.0, 20.0});
+
+  EXPECT_TRUE(host.set_focus(&field));
+  EXPECT_EQ(host.focused(), &field);
+  EXPECT_TRUE(host.focused()->wants_text());
+}
+
+TEST(Popup, FocusSurvivesTheLayoutThatPlacesIt) {
+  WidgetHost host(std::make_unique<Box>(Axis::Vertical));
+  host.resize(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());
+
+  auto content = std::make_unique<Box>(Axis::Horizontal);
+  auto& field = content->emplace<TextField>("V1");
+  host.open_popup(std::move(content), Rect{10.0, 10.0, 100.0, 20.0});
+  ASSERT_TRUE(host.set_focus(&field));
+
+  host.update_layout(flat_context());
+  EXPECT_EQ(host.focused(), &field) << "the layout took the focus away again";
+}
+
+TEST(Popup, ClosingOneTakesTheFocusWithIt) {
+  WidgetHost host(std::make_unique<Box>(Axis::Vertical));
+  host.resize(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());
+
+  auto content = std::make_unique<Box>(Axis::Horizontal);
+  auto& field = content->emplace<TextField>("V1");
+  host.open_popup(std::move(content), Rect{10.0, 10.0, 100.0, 20.0});
+  ASSERT_TRUE(host.set_focus(&field));
+
+  host.close_popup();
+  host.update_layout(flat_context());
+  EXPECT_EQ(host.focused(), nullptr) << "focus was left pointing at a freed widget";
+}
+
+
+/// A widget that opens a popup with a field in it and focuses the field, which
+/// is what a double-click on a track header does.
+class OpensAField : public Widget {
+ public:
+  bool on_mouse_down(const MouseEvent&) override {
+    auto content = std::make_unique<Box>(Axis::Horizontal);
+    field = &content->emplace<TextField>("V1");
+    host()->open_popup(std::move(content), Rect{0.0, 0.0, 100.0, 20.0});
+    host()->set_focus(field);
+    return true;
+  }
+
+  TextField* field = nullptr;
+};
+
+// A press that moved the focus itself has said where the keyboard should go.
+// Without this the host walks up from the widget that was pressed and takes it
+// straight back, and the field opens with no caret in it.
+TEST(Popup, APressThatFocusesSomethingKeepsIt) {
+  auto opener = std::make_unique<OpensAField>();
+  opener->set_focusable(true);
+  auto* raw = opener.get();
+
+  WidgetHost host(std::move(opener));
+  host.resize(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());
+
+  host.mouse_down(MouseEvent{.x = 10.0, .y = 10.0});
+  ASSERT_NE(raw->field, nullptr);
+  EXPECT_EQ(host.focused(), raw->field);
+}
+
+// And an ordinary press still moves the focus onto what was pressed, or the
+// keyboard would be left wherever it happened to be last.
+TEST(Popup, APressThatTouchesNothingStillMovesTheFocus) {
+  WidgetHost host(std::make_unique<Box>(Axis::Vertical));
+  auto& field = static_cast<Box&>(host.root()).emplace<TextField>("one");
+  auto& other = static_cast<Box&>(host.root()).emplace<TextField>("two");
+  host.resize(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());
+
+  ASSERT_TRUE(host.set_focus(&field));
+  const Rect box = other.bounds();
+  host.mouse_down(MouseEvent{.x = box.x + 2.0, .y = box.y + 2.0});
+  EXPECT_EQ(host.focused(), &other);
 }
 
 }  // namespace

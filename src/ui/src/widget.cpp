@@ -332,6 +332,10 @@ bool WidgetHost::mouse_down(const MouseEvent& event) {
     set_focus(nullptr);
   }
 
+  // Noted before the handler runs, so the focus-follows-press below can tell
+  // "nobody said" from "the handler said".
+  Widget* const focus_before = focused_;
+
   Widget* handler = bubble(target, [&](Widget& widget) { return widget.on_mouse_down(event); });
   if (handler == nullptr) return false;
 
@@ -346,10 +350,18 @@ bool WidgetHost::mouse_down(const MouseEvent& event) {
   // Focus follows a press only onto something that can take it. Clearing it
   // otherwise would mean clicking a toolbar button leaves the keyboard
   // nowhere, and the transport shortcuts stop working until you click back.
-  for (Widget* node = handler; node != nullptr; node = node->parent_) {
-    if (node->focusable_ && interactive(node)) {
-      set_focus(node);
-      break;
+  //
+  // And not at all when the handler moved it itself. A press that opens a
+  // popup with a field in it and focuses that field has said where the keyboard
+  // should go; walking up from the widget that was pressed would take it
+  // straight back, which is how renaming a track from a double-click on its
+  // header came out as a field nobody could type into until they clicked it.
+  if (focused_ == focus_before) {
+    for (Widget* node = handler; node != nullptr; node = node->parent_) {
+      if (node->focusable_ && interactive(node)) {
+        set_focus(node);
+        break;
+      }
     }
   }
   return true;

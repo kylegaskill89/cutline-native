@@ -1226,6 +1226,73 @@ TEST(TrackSwitch, TheHeaderBesideThemStillDoesNothing) {
   EXPECT_FALSE(toggled.has_value());
 }
 
+// ---------------------------------------------------------- renaming a track --
+
+TEST(TrackRename, ADoubleClickOnAHeaderAsksForOne) {
+  Fixture fixture;
+  std::optional<std::size_t> asked;
+  fixture.view->set_on_track_rename([&](std::size_t track) { asked = track; });
+
+  const Rect header = fixture.view->header_rect(2);
+  MouseEvent event = press(header.x + 4.0, header.y + 4.0);
+  event.click_count = 2;
+  fixture.host->mouse_down(event);
+
+  ASSERT_TRUE(asked.has_value());
+  EXPECT_EQ(*asked, 2u);
+}
+
+TEST(TrackRename, OneClickIsNotARename) {
+  Fixture fixture;
+  bool asked = false;
+  fixture.view->set_on_track_rename([&](std::size_t) { asked = true; });
+
+  const Rect header = fixture.view->header_rect(2);
+  fixture.host->mouse_down(press(header.x + 4.0, header.y + 4.0));
+  EXPECT_FALSE(asked);
+}
+
+// The switches come first, so double-clicking mute is two mutes rather than a
+// rename -- which is what it looks like it should be.
+TEST(TrackRename, ADoubleClickOnASwitchIsASwitch) {
+  Fixture fixture;
+  bool asked = false;
+  int toggles = 0;
+  fixture.view->set_on_track_rename([&](std::size_t) { asked = true; });
+  fixture.view->set_on_track_toggle([&](TrackControlRef) { ++toggles; });
+
+  const Rect box = fixture.view->control_rect(2, TrackControl::Mute);
+  ASSERT_FALSE(box.empty());
+  MouseEvent event = press(box.x + 2.0, box.y + 2.0);
+  event.click_count = 2;
+  fixture.host->mouse_down(event);
+
+  EXPECT_FALSE(asked);
+  EXPECT_EQ(toggles, 1);
+}
+
+TEST(TrackRename, ADoubleClickAwayFromTheHeadersIsNotOne) {
+  Fixture fixture;
+  bool asked = false;
+  fixture.view->set_on_track_rename([&](std::size_t) { asked = true; });
+
+  const Rect row = fixture.view->track_rect(2);
+  MouseEvent event = press(row.x + 200.0, row.y + 4.0);
+  event.click_count = 2;
+  fixture.host->mouse_down(event);
+  EXPECT_FALSE(asked);
+}
+
+TEST(TrackRename, TheHeaderUnderAPointIsTheOneItIsIn) {
+  const Fixture fixture;
+  const Rect header = fixture.view->header_rect(1);
+  ASSERT_FALSE(header.empty());
+
+  EXPECT_EQ(fixture.view->header_at(header.x + 2.0, header.y + 2.0), std::optional<std::size_t>(1));
+  // Outside the header column entirely.
+  EXPECT_FALSE(fixture.view->header_at(header.right() + 50.0, header.y + 2.0).has_value());
+}
+
 TEST(TrackSwitch, ALitSwitchLooksDifferentFromADarkOne) {
   const auto fills = [](bool on) {
     Fixture fixture;

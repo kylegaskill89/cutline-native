@@ -713,6 +713,8 @@ void add_adjustment(App& app);
 void complain(HWND owner, const std::string& message);
 [[nodiscard]] std::optional<std::filesystem::path> choose_image_file(HWND owner);
 void take_snapshot(App& app);
+[[nodiscard]] bool confirm_discard(App& app);
+bool save_project(App& app, bool ask_where);
 
 /// The scale axis tied to this one by the aspect lock, if it is a scale at all.
 [[nodiscard]] std::optional<cutline::editor::ClipParam> other_scale_axis(
@@ -2653,6 +2655,10 @@ void clear_autosave(App& app, const std::filesystem::path& document) {
 }
 
 void open_project(App& app) {
+  // Before the file dialog, so somebody who decides to save first is not asked
+  // to pick a file twice.
+  if (!confirm_discard(app)) return;
+
   const auto path = choose_file(app.main.window, false);
   if (!path.has_value()) return;
 
@@ -2701,7 +2707,34 @@ bool save_project(App& app, bool ask_where) {
   return true;
 }
 
+/// Asks what to do about unsaved work, and reports whether to carry on.
+///
+/// Three answers, not two. "Are you sure?" with only Yes and No makes
+/// cancelling and discarding the same button, and one of those throws away an
+/// afternoon — so Save writes and continues, Discard continues, and Cancel does
+/// not. A save that is cancelled at the file dialog cancels the whole thing,
+/// which is the only reading of it that cannot lose anything.
+[[nodiscard]] bool confirm_discard(App& app) {
+  if (!app.session.modified()) return true;
+
+  // The file's own name, not `document_title` — that one carries the asterisk
+  // that *means* unsaved, and "unsaved changes to Untitled *" says it twice and
+  // reads like a filename with a typo in it.
+  const std::string name = app.session.path().empty()
+                               ? std::string("this project")
+                               : app.session.path().filename().string();
+  const int answer = MessageBoxA(
+      app.main.window,
+      ("There are unsaved changes to " + name + ".\n\nSave them before closing?").c_str(),
+      "Cutline", MB_YESNOCANCEL | MB_ICONWARNING);
+
+  if (answer == IDCANCEL) return false;
+  if (answer == IDYES) return save_project(app, false);
+  return true;
+}
+
 void new_project(App& app) {
+  if (!confirm_discard(app)) return;
   clear_autosave(app, app.session.path());
   app.session.reset(sample_project());
   refresh_all(app);
@@ -3217,6 +3250,35 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     invalidate_preview(*app);
     // The sound was decoded from a project that is not this one any more.
     stop_playback(*app);
+  });
+
+  // Renaming, from a double-click on a header. A popup with a field in it,
+  // rather than a field the timeline holds: the view draws its headers and
+  // builds no widgets in them, and giving it one for this alone would mean it
+  // owning focus, a caret and a commit rule it has no other use for.
+  tracks.set_on_track_rename([app](std::size_t track) {
+    if (app == nullptr || app->timeline == nullptr || app->main.host == nullptr) return;
+    const auto& tracks_now = app->timeline->model().tracks;
+    if (track >= tracks_now.size()) return;
+
+    const std::string id = tracks_now[track].id;
+    auto popup = std::make_unique<Panel>();
+    auto& row = popup->emplace<Box>(Axis::Horizontal);
+    auto& field = row.emplace<TextField>(tracks_now[track].name);
+
+    const auto commit = [app, id, control = &field] {
+      if (app->main.host != nullptr) app->main.host->close_popup();
+      app->session.apply(
+          cutline::core::set_track_label(app->session.project(), id, control->text()));
+      refresh_timeline(*app);
+    };
+    // Both, because a field is finished either by pressing the button or by
+    // pressing return, and somebody who typed a name expects both to work.
+    field.set_on_commit([commit](const std::string&) { commit(); });
+    row.emplace<Button>("Rename", commit);
+
+    app->main.host->open_popup(std::move(popup), app->timeline->header_rect(track));
+    app->main.host->set_focus(&field);
   });
 
   tracks.set_on_edit([app](const cutline::ui::TimelineEdit& edit) {
@@ -4736,6 +4798,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         return_panels_home(*app, shell->floating_id);
         return 0;
       }
+      // The editor itself, with something unsaved. Three answers rather than
+      // two, because "are you sure" with only yes and no makes cancelling and
+      // discarding the same button — and one of those loses an afternoon.
+      if (app->session.modified() && !confirm_discard(*app)) return 0;
       break;
 
     case WM_DESTROY:
@@ -5418,12 +5484,11 @@ int main(int argc, char** argv) {
 
   KillTimer(window, kAutosaveTimer);
 
-  // Only when there is nothing unsaved. Closing with unsaved work is the case a
-  // recovery copy exists for — this application does not stop you and ask, so
-  // keeping it is the difference between "you chose to discard that" and "you
-  // lost it". What is left in the recovery directory is exactly what was never
-  // saved and never recovered.
-  if (!app.session.modified()) clear_autosave(app, app.session.path());
+  // Closing now asks about unsaved work, so anything still unsaved here was
+  // deliberately discarded — and the recovery copy goes with it. What is left
+  // in the recovery directory is exactly what was never saved and never
+  // answered for, which is to say: what a crash took.
+  clear_autosave(app, app.session.path());
 
   // Before the windows go, so neither the audio thread nor the export thread is
   // still reading things that are being torn down.
