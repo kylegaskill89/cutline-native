@@ -235,7 +235,9 @@ terminal.
 
 ## 6. Status
 
-Phases 1, 2, 3 and 6 are complete; 4, 5 and 7 are underway. Concretely:
+Phases 1 to 7 are complete and phase 8 — packaging — has not started. The
+parity checklist in `docs/spec.md` §21 is done apart from the optional updater.
+Concretely:
 
 **Works end to end.** Import, place, move, trim, split, ripple, undo/redo. Eleven
 video effects as shaders, stackable, reorderable, keyframeable. Titles, drawn
@@ -244,6 +246,11 @@ audio clock (57 fps, 95%, on a 4K60 project). Export with hardware encode, chose
 at runtime — NVENC, QSV, AMF, then x264/x265 — with progress and cancel. Project
 save/load. Four themes, dockable panels that tear out into their own windows and
 remember where they were.
+
+Scopes, a master fader with a metered bus, transform handles on the picture
+with snapping and guides, a preview that renders at a half or a quarter for
+speed, effect stacks copied from one clip to another, and a recovery copy of
+anything unsaved.
 
 **The interface** is one window drawn on the GPU with Skia, sharing the
 compositor's Direct3D device so a decoded frame reaches the screen without a copy
@@ -256,7 +263,10 @@ track header switches all work.
 ## 7. What is left
 
 Checked against `docs/spec.md` §21 (the parity checklist) and §18 (the UI spec).
-It splits sharply.
+
+**§21 is done**, apart from the one item it calls optional: auto-update. Every
+feature the parity checklist names is built, reachable and verified on screen.
+What follows is §18 and the things a release needs that no checklist mentions.
 
 ### A. Built and tested in the model or engine, unreachable from the interface
 
@@ -270,7 +280,7 @@ here.**
 ### B. Not built anywhere
 
 - **Loop playback**.
-- **J/K/L shuttle**, I/O keys, marker keys, S for snap.
+- **J/K/L shuttle** and **S for snap**. The I/O and marker keys are done.
 - **Aspect lock on scale** as a setting, rather than shift while dragging.
 - **Canvas presets / sequence settings** — the export dialog can resize, but the
   project's own canvas cannot be changed.
@@ -283,10 +293,17 @@ here.**
   GPU** instead of uploading them from system memory (the decoder can already
   produce D3D12 textures; nothing samples them yet).
 
+### C. Not a feature, and the thing actually between here and a release
+
+**Phase 8: packaging.** There is no installer, no signed binary, no release
+workflow and no auto-update. Everything above is polish on an editor that
+works; this is the difference between an editor that works and one somebody
+else can run.
+
 ### Suggested order
 
-1. Anything in B, by appetite. Most of what is left is wiring; the packaging in
-   phase 8 is the one that is not.
+1. **Packaging**, because nothing else makes the rest of it usable by anyone.
+2. Then A and B by appetite. Most of what is left there is wiring.
 
 And one thing worth doing whatever comes next: **nothing in the test suite ever
 resizes a real window.** The pixel tests draw on a fixed CPU raster surface and

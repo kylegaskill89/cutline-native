@@ -402,6 +402,44 @@ had been there, tested, since the first phase, and the mixer and the exporter
 have honoured automation from the start. This is the second feature in a row
 whose work was entirely the gesture.
 
+**The parity checklist is done.** `docs/spec.md` §21 is the list this rewrite
+was measured against, and the last five items off it were these.
+
+A **master fader with a metered bus**. The two are one feature: a fader is set
+by ear against a meter, and either alone is half a control. The meter reads
+peak, RMS over a third of a second, and a peak-hold mark, because no one of
+them answers the question — speech peaks ten decibels above its own average and
+music twenty, so a peak meter alone reads as far hotter than anything sounds.
+It taps the mix *between* the fader and the limiter, so "over" means the limiter
+is having to work; a meter after it could never read above the ceiling and would
+go quiet at about the moment a mix got into trouble. The master is also the one
+edit playback survives, because a fader that could only be set against silence
+would be no use.
+
+**Transform handles on the picture** — drag to move, corners and edges to
+scale, a handle above to turn, shift to keep the shape or snap the angle,
+control to escape a snap. What it lines up with is the frame's centre and
+edges, drawn as a guide only while it is actually held there. The conversion
+either side of it is the part that needed care: the model stores a scale
+relative to the media's aspect-fit size, the overlay works in canvas fractions,
+and the two look alike enough that getting them the wrong way round produces a
+picture that is only wrong when the footage is not the shape of the sequence.
+
+**A preview that renders smaller than the sequence** — full, a half, a quarter.
+Compositing costs per pixel, so a quarter is a sixteenth of the work. Almost
+all of the model is already resolution-independent; what is not are the few
+things measured in pixels, and scaling a title's type and a blur's radius with
+the canvas is the entire content of it.
+
+**Effect stacks copied from one clip to another**, replacing rather than
+appending, and landing only on clips of the same kind as the one they came
+from — an A/V pair is two linked clips here, so a video look pasted across a
+selection must not take the audio's filters with it.
+
+**A recovery copy of anything unsaved**, written beside the application's own
+settings rather than over the file the user saved. An autosave that wrote the
+real file would turn a crash into a silently overwritten afternoon.
+
 1858 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a matte, an adjustment layer, a title, and the
