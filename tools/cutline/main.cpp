@@ -50,6 +50,7 @@
 
 #if CUTLINE_HAVE_PREVIEW
 #include "cutline/app/preview.hpp"
+#include "cutline/app/waveforms.hpp"
 #include "cutline/engine/exporter.hpp"
 #include "cutline/engine/player.hpp"
 #endif
@@ -267,6 +268,13 @@ struct App;
 /// layout, all of it — and the only thing that differs is which dock they show.
 constexpr const wchar_t* kWindowClass = L"CutlineWindow";
 
+/// Posted by the waveform worker when an envelope is ready.
+///
+/// A message rather than a flag the loop polls, because the loop blocks on its
+/// queue whenever nothing is playing — an envelope would otherwise appear at
+/// the next mouse move rather than when it was decoded.
+constexpr UINT kWaveformReady = WM_APP + 1;
+
 /// One real window: its widgets, its pixels, and where the two meet.
 ///
 /// The main window is one of these and every torn-out panel is another. Kept as
@@ -321,6 +329,14 @@ struct App {
   /// it, and everything a drag does goes back through it.
   cutline::editor::Session session{sample_project()};
   TimelineView* timeline = nullptr;
+
+  /// Where the timeline's audio envelopes come from.
+  ///
+  /// A function rather than the cache itself, and that is what keeps
+  /// `refresh_timeline` free of `#if`s: under a build with no media layer it is
+  /// simply unset and clips are drawn without waveforms, and the self-check
+  /// points it at a fabricated envelope so every theme paints one.
+  cutline::editor::WaveformSource waveform_source;
   Label* readout = nullptr;
   /// The media pool down the left, and the button that cycles its order.
   MediaBrowser* browser = nullptr;
@@ -360,6 +376,13 @@ struct App {
   TestPattern pattern;
 
 #if CUTLINE_HAVE_PREVIEW
+  /// The audio envelopes the timeline draws, filled in on a worker.
+  ///
+  /// Above the device deliberately: it needs no GPU and no preview, only a
+  /// decoder, and it is the one piece of media work that happens whether or not
+  /// anything is being rendered.
+  cutline::app::WaveformCache waveforms;
+
   /// The one Direct3D device: the compositor renders on it and the windows
   /// draw on it.
   ///
@@ -1281,10 +1304,33 @@ void refresh_inspector(App& app) {
 /// Everything goes through here rather than being patched in place, which is
 /// what keeps the view from drifting out of step with the document — an undo
 /// changes the project in ways no incremental update could follow.
+/// Asks for any audio envelope the project needs and does not have.
+///
+/// Here rather than in the importer because that is not the only way a source
+/// arrives: an undo, a paste, and a project opened from disk all bring media
+/// that never went past it. Requests already known or already queued cost
+/// nothing, which is what makes calling this on every rebuild reasonable.
+void request_waveforms([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  const cutline::core::Project& project = app.session.project();
+  for (const cutline::core::Track& track : project.tracks) {
+    if (track.kind != cutline::core::TrackKind::Audio) continue;
+    for (const cutline::core::Clip& clip : track.clips) {
+      const auto media =
+          std::ranges::find(project.media, clip.media_id, &cutline::core::Media::id);
+      if (media == project.media.end()) continue;
+      app.waveforms.request(media->id, media->path, clip.audio_stream);
+    }
+  }
+#endif
+}
+
 void refresh_timeline(App& app) {
   if (app.timeline == nullptr) return;
-  app.timeline->set_model(
-      cutline::editor::timeline_model(app.session.project(), app.session.selection()));
+
+  request_waveforms(app);
+  app.timeline->set_model(cutline::editor::timeline_model(
+      app.session.project(), app.session.selection(), app.waveform_source));
   app.timeline->set_playhead(app.session.playhead());
   mark_dirty(app);
 }
@@ -3472,6 +3518,15 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     case WM_ERASEBKGND:
       return 1;  // every pixel is painted, so erasing only causes a flash
 
+#if CUTLINE_HAVE_PREVIEW
+    case kWaveformReady:
+      // Rebuilt rather than patched: the envelope arrives against a source, and
+      // which blocks show it is the binding's answer, not this one's. Guarded
+      // by the flag so a burst of arrivals is one rebuild rather than one each.
+      if (app->waveforms.take_arrival()) refresh_timeline(*app);
+      return 0;
+#endif
+
     case WM_CLOSE:
 #if CUTLINE_HAVE_PREVIEW
       // A dialog holds nothing but itself, so it simply goes.
@@ -3825,6 +3880,27 @@ template <typename T>
             app.session.project(), clip_id, 0, "amount", true, 0.0));
       }
 
+      // A fabricated envelope on every source, so the check paints waveforms.
+      //
+      // Nothing in the sample project has a file behind it, so nothing would
+      // ever be decoded and this drawing — a column per pixel across every
+      // audio clip, in four themes — would be the one part of the timeline no
+      // check ever looked at. Built here rather than taken from the cache so it
+      // works under the skia preset too, which is the one the nightly runs and
+      // which has no decoder at all.
+      auto envelope = std::make_shared<cutline::ui::Waveform>();
+      envelope->buckets_per_second = 20.0;
+      for (int i = 0; i < 20 * 120; ++i) {
+        // Something with shape to it, so a flat line would be visibly wrong
+        // rather than merely different.
+        const double at = i / 20.0;
+        const auto level = static_cast<float>(0.25 + 0.7 * std::abs(std::sin(at * 0.7)) *
+                                                         std::abs(std::cos(at * 0.11)));
+        envelope->minimum.push_back(-level);
+        envelope->maximum.push_back(level);
+      }
+      app.waveform_source = [envelope](std::string_view, int) { return envelope; };
+
       // The panel was built before any of those edits, so the timeline is still
       // holding the model it started with — the transition and the marks would
       // never be drawn without this.
@@ -4010,6 +4086,16 @@ int main(int argc, char** argv) {
   // which window it is, and every one of them finds its app through this.
   SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&app.main));
   refresh_title(app);
+
+#if CUTLINE_HAVE_PREVIEW
+  app.waveform_source = [&app](std::string_view media_id, int stream) {
+    return app.waveforms.find(media_id, stream);
+  };
+  // Set once the window exists, since posting to one that does not is the
+  // message going nowhere. Runs on the worker's thread, so it does the one
+  // thing that is safe from there and leaves the rest to the message handler.
+  app.waveforms.set_on_arrival([window] { PostMessageW(window, kWaveformReady, 0, 0); });
+#endif
 
   // One pixel of frame handed back to the compositor, which is enough to keep
   // the drop shadow and the rounded corners the system draws around a window.

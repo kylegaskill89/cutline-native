@@ -1930,5 +1930,165 @@ TEST(GainBand, TheOtherToolsKeepTheWholeClip) {
   }
 }
 
+// ---------------------------------------------------------- the waveform --
+//
+// The envelope describes a *source*; where a block sits in it is on the block.
+// That is what lets one envelope serve a source used a dozen times over, and
+// what makes a trimmed, retimed or reversed clip draw the audio it actually
+// plays.
+
+/// An envelope whose buckets say what second they came from, so a test can
+/// tell which part of a source ended up drawn.
+[[nodiscard]] std::shared_ptr<const Waveform> ramp_waveform(double seconds) {
+  auto wave = std::make_shared<Waveform>();
+  wave->buckets_per_second = 10.0;
+  const auto buckets = static_cast<std::size_t>(seconds * wave->buckets_per_second);
+  for (std::size_t i = 0; i < buckets; ++i) {
+    const auto level = static_cast<float>(i) / static_cast<float>(buckets);
+    wave->minimum.push_back(-level);
+    wave->maximum.push_back(level);
+  }
+  return wave;
+}
+
+[[nodiscard]] TimelineModel waved_model(TimelineBlock block) {
+  TimelineModel model;
+  model.fps = kFps;
+  model.tracks = {TimelineTrack{.name = "A1", .audio = true, .blocks = {std::move(block)}}};
+  return model;
+}
+
+struct WaveFixture {
+  explicit WaveFixture(TimelineBlock block) {
+    host = std::make_unique<WidgetHost>(std::make_unique<TimelineView>());
+    view = static_cast<TimelineView*>(&host->root());
+    view->set_model(waved_model(std::move(block)));
+    view->set_scale(TimeScale{.pixels_per_second = 100.0, .start = 0.0});
+    host->resize(Rect{0.0, 0.0, 1000.0, 400.0}, flat_context());
+  }
+
+  std::unique_ptr<WidgetHost> host;
+  TimelineView* view = nullptr;
+};
+
+TEST(Waveform, ABlockWithNoEnvelopeYetHasNowhereToDrawOne) {
+  // What every audio clip looks like for the moment after it is imported,
+  // while the source is still being decoded on a worker.
+  const WaveFixture fixture{TimelineBlock{.start = 0.0, .end = 4.0}};
+  EXPECT_TRUE(fixture.view->waveform_area(0, 0).empty());
+}
+
+TEST(Waveform, AnUntrimmedBlockReadsItsSourceFromTheStart) {
+  const TimelineBlock block{.start = 0.0, .end = 4.0, .waveform = ramp_waveform(10.0)};
+  EXPECT_DOUBLE_EQ(source_time_of(block, 0.0), 0.0);
+  EXPECT_DOUBLE_EQ(source_time_of(block, 2.5), 2.5);
+}
+
+TEST(Waveform, ATrimmedBlockReadsFromWhereItWasTrimmedTo) {
+  const TimelineBlock block{
+      .start = 0.0, .end = 4.0, .waveform = ramp_waveform(10.0), .source_in = 6.0};
+  EXPECT_DOUBLE_EQ(source_time_of(block, 0.0), 6.0);
+  EXPECT_DOUBLE_EQ(source_time_of(block, 2.0), 8.0);
+}
+
+// A clip at 2x covers twice as much source in the same distance. Drawing the
+// envelope at 1:1 would show footage the clip does not play, which is the sort
+// of thing that looks right until the one clip somebody retimed.
+TEST(Waveform, ARetimedBlockCoversItsSourceFaster) {
+  const TimelineBlock block{
+      .start = 0.0, .end = 4.0, .waveform = ramp_waveform(20.0), .speed = 2.0};
+  EXPECT_DOUBLE_EQ(source_time_of(block, 0.0), 0.0);
+  EXPECT_DOUBLE_EQ(source_time_of(block, 2.0), 4.0);
+  EXPECT_DOUBLE_EQ(source_time_of(block, 4.0), 8.0);
+}
+
+TEST(Waveform, AReversedBlockStartsAtItsSourcesEnd) {
+  const TimelineBlock block{
+      .start = 0.0, .end = 4.0, .waveform = ramp_waveform(10.0), .source_in = 2.0,
+      .reverse = true};
+  // Four seconds of clip at speed 1 spans source 2 to 6, played backwards.
+  EXPECT_DOUBLE_EQ(source_time_of(block, 0.0), 6.0);
+  EXPECT_DOUBLE_EQ(source_time_of(block, 4.0), 2.0);
+}
+
+TEST(Waveform, TheEnvelopeIsDrawnAcrossTheBlock) {
+  const WaveFixture plain{TimelineBlock{.start = 0.0, .end = 4.0}};
+  RecordingPainter before;
+  plain.view->paint(before, default_theme());
+
+  const WaveFixture waved{
+      TimelineBlock{.start = 0.0, .end = 4.0, .waveform = ramp_waveform(10.0)}};
+  RecordingPainter after;
+  waved.view->paint(after, default_theme());
+
+  // A column per pixel across four seconds at a hundred pixels a second, so
+  // several hundred more lines than an empty clip draws.
+  EXPECT_GT(after.count(DrawCall::Kind::Line), before.count(DrawCall::Kind::Line) + 300);
+}
+
+// The cost is what is on screen, not how long the clip is. A ten-minute source
+// zoomed out to a few pixels draws a few columns.
+TEST(Waveform, ALongClipCostsWhatIsVisibleRatherThanWhatItHolds) {
+  WaveFixture fixture{
+      TimelineBlock{.start = 0.0, .end = 600.0, .waveform = ramp_waveform(600.0)}};
+  fixture.view->set_scale(TimeScale{.pixels_per_second = 0.5, .start = 0.0});
+
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+  // Six hundred seconds at half a pixel each is three hundred columns, not the
+  // six thousand buckets the envelope holds.
+  EXPECT_LT(painter.count(DrawCall::Kind::Line), 500u);
+}
+
+TEST(Waveform, ASilentSourceStillDrawsAClipRatherThanAGap) {
+  auto silent = std::make_shared<Waveform>();
+  silent->buckets_per_second = 10.0;
+  silent->minimum.assign(40, 0.0f);
+  silent->maximum.assign(40, 0.0f);
+
+  const WaveFixture fixture{
+      TimelineBlock{.start = 0.0, .end = 4.0, .waveform = std::move(silent)}};
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+
+  // A centre line rather than nothing: a hole where the audio is quiet reads as
+  // a hole in the clip.
+  EXPECT_GT(painter.count(DrawCall::Kind::Line), 300u);
+}
+
+// The envelope goes down before the label and the volume band, so both read
+// over the top of it rather than being buried.
+TEST(Waveform, TheEnvelopeIsDrawnUnderTheVolumeBand) {
+  TimelineBlock block{.start = 0.0, .end = 4.0};
+  block.gain = GainBand{};
+  block.waveform = ramp_waveform(10.0);
+
+  const WaveFixture fixture{std::move(block)};
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+
+  // A column is a vertical line inside the envelope's own strip. Identified by
+  // where it is rather than only by its shape, because the playhead is a
+  // vertical line too and it is drawn last of everything.
+  const Rect strip = fixture.view->waveform_area(0, 0);
+  ASSERT_FALSE(strip.empty());
+
+  const std::vector<DrawCall>& calls = painter.calls();
+  std::size_t last_column = 0;
+  std::size_t band = 0;
+  for (std::size_t i = 0; i < calls.size(); ++i) {
+    if (calls[i].kind != DrawCall::Kind::Line) continue;
+    const Rect& at = calls[i].bounds;
+    const bool vertical = std::abs(at.width) < 0.01;
+    if (vertical && at.y >= strip.y - 0.5 && at.y + std::abs(at.height) <= strip.bottom() + 0.5) {
+      last_column = i;
+    }
+    if (at.width > 100.0 && std::abs(at.height) < 0.51) band = i;
+  }
+  EXPECT_GT(band, 0u);
+  EXPECT_GT(last_column, 0u);
+  EXPECT_LT(last_column, band);
+}
+
 }  // namespace
 }  // namespace cutline::ui

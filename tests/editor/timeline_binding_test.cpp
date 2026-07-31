@@ -603,5 +603,86 @@ TEST(Binding, WhatIsDrawnAfterAVolumeEditIsWhatWasAskedFor) {
   EXPECT_DOUBLE_EQ(points[0].v, 0.9);
 }
 
+// ---------------------------------------------------------- the waveform --
+
+[[nodiscard]] std::shared_ptr<const ui::Waveform> some_waveform() {
+  auto wave = std::make_shared<ui::Waveform>();
+  wave->buckets_per_second = 10.0;
+  wave->minimum.assign(100, -0.5f);
+  wave->maximum.assign(100, 0.5f);
+  return wave;
+}
+
+TEST(Binding, AnAudioClipTakesTheEnvelopeOfItsOwnSourceAndStream) {
+  std::vector<std::pair<std::string, int>> asked;
+  const WaveformSource source = [&](std::string_view media_id, int stream) {
+    asked.emplace_back(std::string(media_id), stream);
+    return some_waveform();
+  };
+
+  const ui::TimelineModel model = timeline_model(sample_project(), {}, source);
+
+  ASSERT_EQ(asked.size(), 1u);
+  EXPECT_EQ(asked[0].first, "m2");
+  EXPECT_EQ(asked[0].second, 0);
+  EXPECT_NE(model.tracks[2].blocks[0].waveform, nullptr);
+}
+
+// A video clip draws its picture, not its sound. The audio it was linked to is
+// a clip of its own, on its own track, and that is the one with the envelope.
+TEST(Binding, AVideoClipIsNotAskedForAnEnvelope) {
+  const ui::TimelineModel model =
+      timeline_model(sample_project(), {}, [](std::string_view, int) { return some_waveform(); });
+
+  EXPECT_EQ(model.tracks[0].blocks[0].waveform, nullptr);
+  EXPECT_EQ(model.tracks[1].blocks[0].waveform, nullptr);
+}
+
+TEST(Binding, NoSourceOfEnvelopesIsSimplyAClipWithoutOne) {
+  // What the timeline looks like while the decoding is still happening, and
+  // under a build with no media layer at all.
+  const ui::TimelineModel model = timeline_model(sample_project());
+  EXPECT_EQ(model.tracks[2].blocks[0].waveform, nullptr);
+}
+
+TEST(Binding, ABlockCarriesWhatMapsItOntoItsSource) {
+  Project project = sample_project();
+  project.tracks[2].clips[0].source_in = 4.0;
+  project.tracks[2].clips[0].speed = 2.0;
+  project.tracks[2].clips[0].reverse = true;
+
+  const ui::TimelineModel model = timeline_model(project);
+  const ui::TimelineBlock& block = model.tracks[2].blocks[0];
+
+  EXPECT_DOUBLE_EQ(block.source_in, 4.0);
+  EXPECT_DOUBLE_EQ(block.speed, 2.0);
+  EXPECT_TRUE(block.reverse);
+}
+
+// A clip with no speed set must read as 1, not 0, or every block would map its
+// whole length onto a single instant of its source.
+TEST(Binding, AClipWithNoSpeedSetRunsAtOne) {
+  const ui::TimelineModel model = timeline_model(sample_project());
+  EXPECT_DOUBLE_EQ(model.tracks[2].blocks[0].speed, 1.0);
+}
+
+// One envelope, however many clips of the source there are: it describes the
+// file, and cutting a clip in half does not give it two shapes.
+TEST(Binding, EveryClipOfASourceSharesOneEnvelope) {
+  Project project = sample_project();
+  project.tracks[2].clips.push_back(Clip{.id = "a2",
+                                         .media_id = "m2",
+                                         .kind = TrackKind::Audio,
+                                         .source_in = 20.0,
+                                         .source_out = 30.0,
+                                         .start = 20.0});
+
+  const std::shared_ptr<const ui::Waveform> shared = some_waveform();
+  const ui::TimelineModel model =
+      timeline_model(project, {}, [&](std::string_view, int) { return shared; });
+
+  EXPECT_EQ(model.tracks[2].blocks[0].waveform, model.tracks[2].blocks[1].waveform);
+}
+
 }  // namespace
 }  // namespace cutline::editor

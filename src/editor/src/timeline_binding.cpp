@@ -92,7 +92,8 @@ std::string default_track_label(const core::Project& project, std::size_t index)
 }
 
 ui::TimelineModel timeline_model(const core::Project& project,
-                                 std::span<const std::string> selection) {
+                                 std::span<const std::string> selection,
+                                 const WaveformSource& waveforms) {
   ui::TimelineModel model;
   model.fps = project.fps;
   model.duration = core::timeline_duration(project);
@@ -158,6 +159,11 @@ ui::TimelineModel timeline_model(const core::Project& project,
         band = std::move(gain);
       }
 
+      // The envelope, on audio clips only — a video clip draws its picture, not
+      // its sound, and the audio it was linked to is a clip of its own.
+      std::shared_ptr<const ui::Waveform> waveform;
+      if (audio && waveforms) waveform = waveforms(clip.media_id, clip.audio_stream);
+
       row.blocks.push_back(ui::TimelineBlock{
           .id = clip.id,
           .start = clip.start,
@@ -167,6 +173,13 @@ ui::TimelineModel timeline_model(const core::Project& project,
           .keyframes = keyframe_times(clip, audio),
           .transition = std::move(transition),
           .gain = std::move(band),
+          .waveform = std::move(waveform),
+          // What turns a position along the block into a position in the
+          // source's envelope. Taken through the core's accessors so a clip
+          // with no explicit speed reads as 1 rather than 0.
+          .source_in = clip.source_in,
+          .speed = core::clip_speed(clip),
+          .reverse = clip.reverse,
       });
     }
     model.tracks.push_back(std::move(row));

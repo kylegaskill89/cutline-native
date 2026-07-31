@@ -11,6 +11,8 @@
 #include "cutline/core/model.hpp"
 #include "cutline/ui/timeline.hpp"
 
+#include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -18,13 +20,28 @@
 
 namespace cutline::editor {
 
+/// Where a source's audio envelope comes from, asked per media and stream.
+///
+/// A lookup rather than a container of them, and this layer stays pure because
+/// of it: computing an envelope means decoding a file, which belongs to the
+/// media layer and to a thread that is not the one painting. Whoever has one
+/// answers; anything else returns null and the clip is simply drawn without a
+/// waveform, which is also what it looks like while one is still being decoded.
+///
+/// It returns a shared pointer because the answer is the same for every clip of
+/// a source and the model is rebuilt on every gesture. Copying a pointer per
+/// rebuild is what keeps a drag free.
+using WaveformSource =
+    std::function<std::shared_ptr<const ui::Waveform>(std::string_view media_id, int stream)>;
+
 /// What the timeline should draw for this project.
 ///
 /// Track order follows the project's, which is video first and topmost first —
 /// the same order the timeline stacks rows in, so V2 sits above V1 the way it
 /// does everywhere else.
 [[nodiscard]] ui::TimelineModel timeline_model(const core::Project& project,
-                                               std::span<const std::string> selection = {});
+                                               std::span<const std::string> selection = {},
+                                               const WaveformSource& waveforms = {});
 
 /// The name a track shows when it has not been given one.
 ///

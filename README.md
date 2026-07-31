@@ -278,6 +278,25 @@ removed without a third control that exists only to undo the other two. The two
 can never cross: setting one past the other clears that other, so an inverted
 pair is unrepresentable rather than something every reader has to check for.
 
+Audio clips show their waveform. The envelope is min and max per bucket rather
+than an average, so a transient is visible instead of averaged away, and it is
+drawn a column per pixel — what it costs is what is on screen, not how long the
+clip is, so a ten-minute source zoomed out to a centimetre draws a centimetre's
+worth.
+
+The envelope belongs to the *source*, not to any clip of it: trimming a clip does
+not change the shape of the file behind it, so a source cut into twenty pieces is
+decoded once and every piece shares one envelope by pointer. Where a block sits in
+it is three numbers on the block — where it starts in the source, how fast it runs
+through it, and whether it runs backwards — which is what makes a retimed clip
+draw the audio it actually plays rather than the audio at the same offset.
+
+Decoding a stream to get one costs seconds and hundreds of megabytes, so it
+happens on a worker and the clip is simply drawn without until the answer lands.
+The worker posts a window message rather than setting a flag: the frame loop
+blocks on its queue whenever nothing is playing, and a polled flag would show the
+waveform at the next mouse move instead of when it was ready.
+
 A clip's volume is a line across its block, on every audio clip rather than only
 the selected one — which clips have been ridden is what somebody reading a mix
 wants to see without clicking through them. Dragging the line sets the clip's
@@ -302,7 +321,7 @@ had been there, tested, since the first phase, and the mixer and the exporter
 have honoured automation from the start. This is the second feature in a row
 whose work was entirely the gesture.
 
-1627 tests, plus a headless check that lays every panel out in every theme —
+1650 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a matte, an adjustment layer, a title, and the
 colour picker open, which is the only way the controls a panel is made of get

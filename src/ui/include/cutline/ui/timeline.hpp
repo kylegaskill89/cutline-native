@@ -15,8 +15,10 @@
 #include "cutline/ui/timescale.hpp"
 #include "cutline/ui/widget.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -36,6 +38,32 @@ struct BlockTransition {
   std::string label;
 
   friend bool operator==(const BlockTransition&, const BlockTransition&) = default;
+};
+
+/// The min/max envelope of a source's audio, in buckets of equal time.
+///
+/// Both bounds rather than an average, which is what makes a transient visible
+/// instead of averaging it away. Values are the sample range, so -1 to 1.
+///
+/// This describes a *source*, not a clip of one: the envelope of a file does
+/// not change when somebody trims a clip that shows part of it. Where a clip
+/// sits in it is on the block, which is what lets one envelope serve a source
+/// used a dozen times over.
+struct Waveform {
+  double buckets_per_second = 100.0;
+  std::vector<float> minimum;
+  std::vector<float> maximum;
+
+  [[nodiscard]] bool empty() const noexcept { return minimum.empty(); }
+  [[nodiscard]] std::size_t size() const noexcept {
+    return std::min(minimum.size(), maximum.size());
+  }
+  /// How much of the source this covers, in seconds.
+  [[nodiscard]] double duration() const noexcept {
+    return buckets_per_second > 0.0 ? static_cast<double>(size()) / buckets_per_second : 0.0;
+  }
+
+  friend bool operator==(const Waveform&, const Waveform&) = default;
 };
 
 /// One point on a clip's volume rubber band.
@@ -116,10 +144,39 @@ struct TimelineBlock {
   /// that would look like a control and answer no drag.
   std::optional<GainBand> gain;
 
+  /// The source's audio envelope, if it has been computed yet.
+  ///
+  /// Shared rather than held: the model is rebuilt after every gesture, and a
+  /// ten-minute source's envelope is half a megabyte. Copying a pointer per
+  /// rebuild is the difference between dragging a clip being free and being
+  /// something you can feel.
+  ///
+  /// Null while it is still being decoded, which is what an audio clip looks
+  /// like for the first moment after it is imported.
+  std::shared_ptr<const Waveform> waveform;
+
+  /// Where this block starts in its source, and how fast it runs through it.
+  ///
+  /// The envelope is the whole source, so drawing needs to know which part of
+  /// it this block shows. These are also what make a retimed or reversed clip
+  /// draw the footage it actually plays rather than the footage at the same
+  /// offset — which is the sort of thing that looks right until the one clip
+  /// somebody slowed down.
+  double source_in = 0.0;
+  double speed = 1.0;
+  bool reverse = false;
+
   [[nodiscard]] double duration() const noexcept { return end - start; }
 
   friend bool operator==(const TimelineBlock&, const TimelineBlock&) = default;
 };
+
+/// The source time a block reads from at `local_t` seconds along itself.
+///
+/// The same mapping the core does for a clip, over the three numbers the
+/// timeline carries rather than over a project. Reverse runs from the far end,
+/// so a reversed clip's first pixel is its source's last.
+[[nodiscard]] double source_time_of(const TimelineBlock& block, double local_t) noexcept;
 
 /// The switches in a track's header, as the project holds them.
 ///
@@ -451,6 +508,14 @@ class TimelineView : public Widget {
   /// Where a block's transition is drawn: centred on its out-edge, half either
   /// side. Empty when it has none.
   [[nodiscard]] Rect transition_rect(std::size_t track, std::size_t block) const;
+
+  /// The strip of a block its waveform is drawn in. Empty when the block has
+  /// no envelope yet, or is too short to hold one.
+  ///
+  /// The whole body rather than a lane of its own: the envelope is the clip's
+  /// picture, the way thumbnails are a video clip's, and the volume band and
+  /// the label sit over the top of it.
+  [[nodiscard]] Rect waveform_area(std::size_t track, std::size_t block) const;
 
   /// The strip of a block the volume band lives in. Empty for a clip with no
   /// gain to draw.

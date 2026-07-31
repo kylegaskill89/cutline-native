@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1627** under the `ui` preset; 1387 of them need no GPU, no window, no FFmpeg |
+| Tests | **1650** under the `ui` preset; 1402 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1387 of the 1627 tests.
+binding between them — 1402 of the 1650 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -114,13 +114,14 @@ ui       widgets, layout, themes, painters. Depends on core (for time) only.
 editor   bindings: turns a project into what a panel shows, and a gesture into
          an operation. Depends on core and ui. Pure.
 engine   frame renderer, exporter, player. Joins render + media + gpu.
-app      preview: the whole stack, project in, texture out.
+app      preview and the waveform cache: the whole stack, and the work the
+         interface waits on without doing it.
 tools    executables.
 ```
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1387 tests run with
+place that knows both, and it is pure too. That is what makes 1402 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -137,6 +138,8 @@ break would be silly.
 - *What a panel shows* → `editor/*_binding.hpp`, as plain data.
 - *Wiring* → `tools/cutline/main.cpp`. It is large; that is fine, it is the
   composition root.
+- *Something the interface needs but must not wait for* → `app`, as a cache with
+  a worker behind it. `WaveformCache` is the one to copy.
 
 ---
 
@@ -260,7 +263,7 @@ here.**
 
 | | Exists | Missing |
 |---|---|---|
-| **Waveforms, thumbnails** | `compute_peaks`, `extract_thumbnails` | the timeline draws neither |
+| **Thumbnails** | `extract_thumbnails`, and `app::WaveformCache` as the pattern | the timeline draws none |
 | **Link/unlink, add/remove/rename track** | all in core | no button, no shortcut, no command |
 | **Snapshot to PNG** | the whole path (`render_frame` does it) | no button |
 | **Fade handles** | fades work, through inspector sliders | not draggable on the clip |
@@ -285,16 +288,19 @@ here.**
 
 ### Suggested order
 
-1. **Waveforms and thumbnails on clips.** The media layer computes both; the
-   timeline draws neither. Watch the cost — a peak list per clip per zoom is the
-   sort of thing that quietly makes scrolling expensive. It also has to share the
-   audio clip with the volume band, which is drawn over the same pixels.
+1. **Thumbnails on video clips.** `extract_thumbnails` has been there since phase
+   2 and nothing draws them. **Follow `app::WaveformCache`** — the shape is
+   already right: ask on the paint thread, decode on a worker, wake the message
+   loop when an answer lands, key the cache by source rather than by clip. What
+   differs is that a filmstrip is pixels rather than numbers, so it is far bigger
+   and wants a bound on how many are held, and `extract_thumbnails` seeks per
+   frame where the waveform decodes straight through.
 2. **Link/unlink and the track operations** — all in core, none of them bound to
    anything. Small, and the command table is where they go.
 3. Anything in B, by appetite. Scopes and the VU meter are the two that need new
    machinery rather than new wiring.
 
-Seven are already done and are worth reading as the pattern for the rest:
+Eight are already done and are worth reading as the pattern for the rest:
 
 - **In and out points** — marked from the buttons or from I and O, drawn along
   the foot of the ruler, saved with the project, offered to export as "only the
@@ -324,6 +330,16 @@ Seven are already done and are worth reading as the pattern for the rest:
   "contributes picture" and is what `place_media` checks; an adjustment layer
   contributes a filter rather than a picture and still needs the flag, which is
   exactly the sort of thing that gets set honestly and breaks.
+- **Waveforms** — `app::WaveformCache` and the drawing in `ui/timeline.cpp`. The
+  first thing in the interface that waits on work it did not do, and the shape it
+  settled on is the one thumbnails should copy. Three parts of it are load
+  bearing: the envelope is shared by pointer, because the model is rebuilt after
+  every gesture and a ten-minute source's peaks are half a megabyte; it describes
+  the *source*, with the clip's `source_in`, `speed` and `reverse` on the block
+  doing the mapping, so trimming or retiming costs nothing; and the worker posts
+  a window message rather than setting a flag, because the loop blocks on its
+  queue when nothing is playing and a polled flag would show the waveform at the
+  next mouse move.
 - **The volume rubber band** — `GainBand` in `ui/timeline.hpp`. The whole of it
   was drawing and gesture: `move_gain_keyframe` and `set_clip_gain` had been in
   the core, tested, since phase 1. **Check the core before assuming a feature
@@ -391,6 +407,17 @@ it is very often a button inside the popup running its own click handler.
 midpoint. Effects run on coded values, where FFmpeg's filters are defined and
 where the spec specifies them. Each operation happens in the space it was defined
 in. Do not "fix" either one.
+
+**The frame loop blocks on its message queue whenever nothing is playing.**
+Anything finishing on a worker has to *post* rather than set a flag for the loop
+to notice, or it appears at the next mouse move instead of when it was ready.
+`kWaveformReady` is the pattern.
+
+**Two test fixtures with the same name in one binary is a GoogleTest failure,
+not a shadowing.** `tests/app` links every file into `cutline_app_tests`, and a
+second `WithFootage` in an anonymous namespace still collides — the suite is keyed
+by name. It fails at run time with "all tests in the same test suite must use the
+same test fixture class", which reads like a compiler problem and is not.
 
 **A drag threshold measured along one axis stops a vertical gesture starting.**
 The timeline's drags were all horizontal until the volume band, so `moved_` was

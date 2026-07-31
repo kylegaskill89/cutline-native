@@ -136,6 +136,14 @@ std::optional<double> nearest_snap(std::span<const double> points, double time,
   return best;
 }
 
+double source_time_of(const TimelineBlock& block, double local_t) noexcept {
+  const double travelled = local_t * block.speed;
+  if (!block.reverse) return block.source_in + travelled;
+  // Reverse runs from the far end back, so the source span has to be known
+  // before the first pixel can be placed.
+  return block.source_in + block.duration() * block.speed - travelled;
+}
+
 double gain_to_band(double gain, double maximum) noexcept {
   if (!(maximum > 0.0)) return 0.0;
   // Silence has no logarithm, and everything below the floor is silence as far
@@ -329,6 +337,21 @@ Rect TimelineView::transition_rect(std::size_t track, std::size_t block) const {
   const double centre = row.x + scale_.to_x(blocks[block].end);
   const double half = scale_.width_of(duration) * 0.5;
   return Rect{centre - half, row.y, half * 2.0, row.height};
+}
+
+Rect TimelineView::waveform_area(std::size_t track, std::size_t block) const {
+  if (track >= model_.tracks.size()) return {};
+  const std::vector<TimelineBlock>& blocks = model_.tracks[track].blocks;
+  if (block >= blocks.size()) return {};
+
+  const std::shared_ptr<const Waveform>& wave = blocks[block].waveform;
+  if (wave == nullptr || wave->empty()) return {};
+
+  const Rect box = block_rect(track, block);
+  // Inset by the border the clip's surface draws, so the envelope does not sit
+  // on top of its own edge.
+  if (box.height < 6.0 || box.width < 2.0) return {};
+  return box.inset(2.0);
 }
 
 Rect TimelineView::gain_area(std::size_t track, std::size_t block) const {
@@ -575,6 +598,46 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
       const State state = clip.selected ? State::Selected : State::Normal;
       const SurfaceStyle& style = theme.style(Part::Clip, state);
       paint_surface(painter, box.inset(1.0), style);
+
+      // The waveform first, under everything: it is the clip's picture, and the
+      // label and the volume band read over the top of it.
+      //
+      // A column per pixel rather than a shape through the buckets. What it
+      // costs is what is on screen, not how long the clip is — a ten-minute
+      // source zoomed out to a centimetre draws a centimetre's worth of
+      // columns, and the envelope it draws them from is shared rather than
+      // sliced per clip.
+      if (const Rect wave_box = waveform_area(track, i); !wave_box.empty()) {
+        const Waveform& wave = *clip.waveform;
+        painter.push_clip(box, style.corner_radius);
+
+        Color ink = style.text;
+        ink.a *= 0.4f;
+        const double middle = wave_box.y + wave_box.height * 0.5;
+        const double reach = wave_box.height * 0.5;
+
+        // Only the part of the block that is actually on screen.
+        const double from = std::max(wave_box.x, tracks.x);
+        const double to = std::min(wave_box.right(), tracks.right());
+
+        for (double x = std::floor(from); x < to; x += 1.0) {
+          const double local_t = (x - wave_box.x) / scale_.pixels_per_second;
+          const double source_t = source_time_of(clip, local_t);
+          const auto bucket =
+              static_cast<std::ptrdiff_t>(std::floor(source_t * wave.buckets_per_second));
+          if (bucket < 0 || static_cast<std::size_t>(bucket) >= wave.size()) continue;
+
+          const double low = std::clamp(static_cast<double>(wave.minimum[bucket]), -1.0, 1.0);
+          const double high = std::clamp(static_cast<double>(wave.maximum[bucket]), -1.0, 1.0);
+          // Up is positive, which is only a convention but the universal one.
+          const double top = middle - high * reach;
+          const double bottom = middle - low * reach;
+          // A silent bucket is still a clip, so it keeps a centre line rather
+          // than a gap that reads as a hole in the audio.
+          painter.line(x, top, x, std::max(bottom, top + 1.0), ink, 1.0);
+        }
+        painter.pop_clip();
+      }
 
       // Only worth a label if there is room for one to be read.
       if (!clip.label.empty() && box.width > metrics_.font_size * 2.0) {
