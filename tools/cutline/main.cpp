@@ -398,6 +398,15 @@ struct App {
   bool looping = false;
   Button* loop_button = nullptr;
 
+  /// Whether scaling keeps a layer's shape. Premiere's "Uniform Scale".
+  ///
+  /// A setting rather than a field on the clip, because it describes how the
+  /// controls behave and not what the picture is: a clip scaled to 80 by 80 is
+  /// the same clip whether or not the lock was on while it was set. Putting it
+  /// in the model would mean serialising it, undoing it, and answering what a
+  /// locked clip with unequal scales means.
+  bool aspect_locked = false;
+
   /// Shuttle speed, as a multiple of real time. Zero is not shuttling.
   ///
   /// A rate of exactly 1 is ordinary playback, with sound, driven by the audio
@@ -699,6 +708,15 @@ void complain(HWND owner, const std::string& message);
 [[nodiscard]] std::optional<std::filesystem::path> choose_image_file(HWND owner);
 void take_snapshot(App& app);
 
+/// The scale axis tied to this one by the aspect lock, if it is a scale at all.
+[[nodiscard]] std::optional<cutline::editor::ClipParam> other_scale_axis(
+    cutline::editor::ClipParam param) noexcept {
+  using cutline::editor::ClipParam;
+  if (param == ClipParam::ScaleX) return ClipParam::ScaleY;
+  if (param == ClipParam::ScaleY) return ClipParam::ScaleX;
+  return std::nullopt;
+}
+
 /// A heading inside the inspector, over the group of controls it names.
 void inspector_heading(App& app, std::string text) {
   auto& label = app.inspector->emplace<Label>(std::move(text));
@@ -910,6 +928,22 @@ void build_effect_clipboard_row(App& app, const std::string& clip_id) {
   // Nothing has been copied yet. A button that silently does nothing is worse
   // than one that says it cannot.
   paste.set_enabled(!app.effect_clipboard.empty());
+
+  auto& clear = row.emplace<Button>("Clear", [&app, clip_id] {
+    // Both stacks, because the button is next to neither of them and "clear
+    // the effects" on a clip means all of them. Only one is ever non-empty in
+    // practice — a clip is video or audio.
+    cutline::core::Project next =
+        cutline::core::clear_clip_effects(app.session.project(), clip_id);
+    next = cutline::core::clear_audio_effects(std::move(next), clip_id);
+    app.session.apply(std::move(next));
+    refresh_timeline(app);
+    invalidate_preview(app);
+    app.inspector_stale = true;
+  });
+  const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), clip_id);
+  clear.set_enabled(clip != nullptr &&
+                    !(clip->effects.empty() && clip->audio_effects.empty()));
 }
 
 /// The order of the rows is the order the effects apply in, which is why moving
@@ -1417,6 +1451,17 @@ void refresh_inspector(App& app) {
   // an audio clip, which has no geometry to move.
   inspector_heading(app, visual ? "Motion" : "Audio");
 
+  // Premiere's "Uniform Scale", beside the rows it governs. Only for a clip
+  // that has geometry — an audio clip has no shape to keep.
+  if (visual) {
+    auto& lock = app.inspector->emplace<Checkbox>("Lock aspect", app.aspect_locked);
+    lock.set_on_change([&app](bool locked) {
+      app.aspect_locked = locked;
+      if (app.monitor != nullptr) app.monitor->set_aspect_locked(locked);
+      mark_dirty(app);
+    });
+  }
+
   for (const cutline::editor::ParamSpec& spec :
        cutline::editor::clip_parameters(app.session.project(), clip_id,
                                         local_playhead(app, clip_id))) {
@@ -1437,6 +1482,18 @@ void refresh_inspector(App& app) {
         [&app, clip_id, param = spec.param](double value) {
           app.session.apply(cutline::editor::set_clip_parameter(
               app.session.project(), clip_id, param, value, local_playhead(app, clip_id)));
+          // With the lock on, the other axis follows. Applied here rather than
+          // in the binding because the lock is a property of the controls, and
+          // an edit made from a script or a monitor drag should not have a
+          // checkbox somewhere else deciding what it meant.
+          if (app.aspect_locked) {
+            const auto tied = other_scale_axis(param);
+            if (tied.has_value()) {
+              app.session.apply(cutline::editor::set_clip_parameter(
+                  app.session.project(), clip_id, *tied, value,
+                  local_playhead(app, clip_id)));
+            }
+          }
           refresh_timeline(app);
           invalidate_preview(app);
           // Marked, not rebuilt: this lambda belongs to the slider that a
@@ -2784,6 +2841,9 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   if (app != nullptr) {
     app->monitor = &picture;
     picture.set_frame(app->pattern.view());
+    // Pushed rather than defaulted, for the same reason snapping is: the panel
+    // is rebuilt by a rearrangement and the setting is not.
+    picture.set_aspect_locked(app->aspect_locked);
 
     // Live on every pixel so the preview follows the drag, and once on release
     // so the whole gesture is one entry in the undo stack — the same split the

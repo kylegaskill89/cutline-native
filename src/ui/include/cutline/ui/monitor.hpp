@@ -160,6 +160,15 @@ class MonitorView : public Widget {
   [[nodiscard]] bool snapping() const noexcept { return snapping_; }
   void set_snapping(bool snapping) noexcept { snapping_ = snapping; }
 
+  /// Whether a corner drag keeps the layer's shape without being asked.
+  ///
+  /// Shift means "keep the shape" either way; this makes it the default rather
+  /// than adding a second, opposite meaning for the same key. A modifier that
+  /// reverses itself depending on a setting elsewhere is one nobody can
+  /// predict.
+  [[nodiscard]] bool aspect_locked() const noexcept { return aspect_locked_; }
+  void set_aspect_locked(bool locked) noexcept { aspect_locked_ = locked; }
+
   [[nodiscard]] Part part() const noexcept override { return Part::Panel; }
   [[nodiscard]] bool paints_surface() const noexcept override { return true; }
   void paint_content(Painter& painter, const Theme& theme) const override;
@@ -194,6 +203,7 @@ class MonitorView : public Widget {
   std::function<void(const MonitorBox&)> on_commit_;
 
   bool snapping_ = true;
+  bool aspect_locked_ = false;
   std::vector<SnapGuide> guides_;
 
   /// The gesture in flight. `origin_` is the box as it was at the press, so

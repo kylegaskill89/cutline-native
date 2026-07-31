@@ -440,10 +440,12 @@ void MonitorView::resize_to(double x, double y, const Modifiers& modifiers) {
   double width = right - left;
   double height = bottom - top;
 
-  // Shift keeps the shape, which is the aspect lock. Applied by taking the
+  // Shift keeps the shape, and the aspect lock makes that the default rather
+  // than giving the same key a second, opposite meaning. Applied by taking the
   // larger of the two changes rather than one axis arbitrarily, so the layer
   // follows the pointer on whichever axis it was pulled hardest.
-  if (modifiers.shift && grip_x != 0 && grip_y != 0 && half_w > 0.0 && half_h > 0.0) {
+  const bool proportional = modifiers.shift || aspect_locked_;
+  if (proportional && grip_x != 0 && grip_y != 0 && half_w > 0.0 && half_h > 0.0) {
     const double factor = std::max(width / (half_w * 2.0), height / (half_h * 2.0));
     const double wanted_w = std::max(min_w, half_w * 2.0 * factor);
     const double wanted_h = std::max(min_h, half_h * 2.0 * factor);

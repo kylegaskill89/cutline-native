@@ -479,7 +479,40 @@ TEST(TransformHandles, ShiftOnACornerKeepsTheShape) {
   EXPECT_NEAR(box.width * 400.0, 300.0, 0.001);
 }
 
+// The lock makes shift's meaning the default rather than giving the same key a
+// second, opposite one. A modifier that reverses depending on a setting
+// elsewhere is one nobody can predict.
+TEST(TransformHandles, TheAspectLockKeepsTheShapeWithoutShift) {
+  WithLayer fixture;
+  fixture.monitor.set_aspect_locked(true);
+  fixture.press(300.0, 300.0);
+  fixture.move(400.0, 320.0);
+
+  const MonitorBox& box = *fixture.monitor.transform();
+  EXPECT_NEAR(box.width, box.height, 1e-9);
+}
+
+TEST(TransformHandles, ShiftStillKeepsTheShapeWithTheLockOff) {
+  WithLayer fixture;
+  fixture.monitor.set_aspect_locked(false);
+  fixture.press(300.0, 300.0);
+  fixture.move(400.0, 320.0, Modifiers{.shift = true});
+
+  const MonitorBox& box = *fixture.monitor.transform();
+  EXPECT_NEAR(box.width, box.height, 1e-9);
+}
+
+TEST(TransformHandles, WithTheLockOffACornerScalesBothAxesFreely) {
+  WithLayer fixture;
+  fixture.press(300.0, 300.0);
+  fixture.move(400.0, 320.0);
+
+  const MonitorBox& box = *fixture.monitor.transform();
+  EXPECT_GT(std::abs(box.width - box.height), 0.01);
+}
+
 TEST(TransformHandles, ALayerCannotBeScaledDownToNothing) {
+
   WithLayer fixture;
   fixture.press(300.0, 300.0);
   // Dragged well past the anchor, which would otherwise turn the box inside
