@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1784** under the `ui` preset; 1521 of them need no GPU, no window, no FFmpeg |
+| Tests | **1818** under the `ui` preset; 1555 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1521 of the 1784 tests.
+binding between them — 1555 of the 1818 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -122,7 +122,7 @@ tools    executables.
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1521 tests run with
+place that knows both, and it is pure too. That is what makes 1555 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -269,8 +269,6 @@ here.**
 
 ### B. Not built anywhere
 
-- **Program-monitor transform handles** — drag to move, corners to scale, top to
-  rotate, plus edge and centre snap guides.
 - **Preview resolution** (Full/½/¼) and **loop playback**.
 - **J/K/L shuttle**, I/O keys, marker keys, S for snap.
 - **Copy/paste an effect stack**; aspect lock on scale.
@@ -284,8 +282,8 @@ here.**
 
 ### Suggested order
 
-1. Anything in B, by appetite. The transform handles are the one left that need
-   new machinery rather than new wiring.
+1. Anything in B, by appetite. Most of what is left is wiring; the packaging in
+   phase 8 is the one that is not.
 
 And one thing worth doing whatever comes next: **nothing in the test suite ever
 resizes a real window.** The pixel tests draw on a fixed CPU raster surface and
@@ -294,7 +292,16 @@ path had never been exercised until somebody dragged the window under a driver �
 which is how the crash in *Traps* was found, after it had been shipping happily
 past a green suite for weeks.
 
-Ten are already done and are worth reading as the pattern for the rest:
+Eleven are already done and are worth reading as the pattern for the rest:
+
+- **The monitor's transform handles** — `ui/monitor.hpp` for the gesture and
+  `editor/monitor_binding.hpp` for the conversion. The conversion is the part
+  worth knowing: the model stores a *scale* relative to the media's aspect-fit
+  size, and the overlay works in canvas fractions, so the two look alike and are
+  not — get them the wrong way round and the picture is only wrong when the
+  media is not the shape of the frame. The other one is `kMonitorInset`: the
+  picture keeps a border because a layer filling the frame has its handles *on*
+  the frame's edge, and a press outside a widget goes to whatever is behind it.
 
 - **The master fader and the meter** — `audio/meter.hpp` measures and
   `ui/meter_view.hpp` draws, the same split the scopes use. Two things in it

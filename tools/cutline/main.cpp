@@ -30,6 +30,7 @@
 #include "cutline/editor/generators.hpp"
 #include "cutline/editor/import.hpp"
 #include "cutline/editor/inspector.hpp"
+#include "cutline/editor/monitor_binding.hpp"
 #include "cutline/editor/session.hpp"
 #include "cutline/editor/timeline_binding.hpp"
 #include "cutline/editor/titles.hpp"
@@ -413,6 +414,28 @@ struct App {
   Slider* master_fader = nullptr;
   Label* master_reading = nullptr;
 
+  /// True between the press and the release on a transform handle, which is
+  /// what stops the refresh below writing the model's box over the one the
+  /// pointer is describing.
+  bool dragging_handle = false;
+
+  /// What the preview renders instead of the document, while a gesture is in
+  /// flight.
+  ///
+  /// One gesture is one undo entry, so a drag must not write to the session
+  /// until it finishes — but the whole point of dragging on the *picture* is
+  /// watching the picture. Every other dragged control resolves this by
+  /// previewing inside the view: the timeline moves its own blocks, a slider
+  /// moves its own thumb. A monitor cannot, because what it would have to
+  /// preview is a rendered frame. So the edit is made against a copy, shown,
+  /// and thrown away; the release makes it again against the session, once.
+  std::optional<cutline::core::Project> live_project;
+
+  /// The project the preview should render: the gesture's if there is one.
+  [[nodiscard]] const cutline::core::Project& showing() const noexcept {
+    return live_project.has_value() ? *live_project : session.project();
+  }
+
   /// Set when the picture has changed and the measurements no longer describe
   /// it. Deferred like the preview is, so scrubbing across ten frames measures
   /// the one that is finally shown rather than all ten.
@@ -589,6 +612,7 @@ void refresh_scopes(App& app);
 void choose_scope(App& app, cutline::ui::ScopeKind kind);
 void show_master_gain(App& app, double gain);
 void refresh_meter(App& app);
+void refresh_handles(App& app);
 void invalidate_playback(App& app);
 void open_export_dialog(App& app);
 void poll_export(App& app);
@@ -1414,7 +1438,29 @@ void refresh_timeline(App& app) {
   app.timeline->set_model(cutline::editor::timeline_model(
       app.session.project(), app.session.selection(), app.timeline_media));
   app.timeline->set_playhead(app.session.playhead());
+  refresh_handles(app);
   mark_dirty(app);
+}
+
+/// Puts the handles on whatever is selected, or takes them away.
+///
+/// Driven from the same refresh as the timeline, because that is where a change
+/// of selection or of playhead lands, and both move the box: a keyframed
+/// transform is a different rectangle at a different moment.
+///
+/// The one exception is while a handle is being dragged. The view is showing
+/// the box the pointer is describing and the model is a frame behind it, so
+/// writing the model's answer back mid-gesture would fight the drag — which
+/// looked, on screen, like the layer sticking every few pixels.
+void refresh_handles(App& app) {
+  if (app.monitor == nullptr) return;
+  if (app.dragging_handle) return;
+
+  const auto selection = app.session.selection();
+  app.monitor->set_transform(
+      selection.empty() ? std::nullopt
+                        : cutline::editor::monitor_box(app.session.project(), selection.front(),
+                                                       app.session.playhead()));
 }
 
 /// What the sort button says, and what pressing it moves to next.
@@ -1524,7 +1570,9 @@ void refresh_preview(App& app) {
   }
   if (!has_media) return;
 
-  const cutline::core::Project& project = app.session.project();
+  // The gesture's project while one is in flight, so a transform being dragged
+  // on the picture shows in the picture without being written down.
+  const cutline::core::Project& project = app.showing();
   if (app.preview == nullptr) {
     // The same device the windows draw on, when there is one. That is what
     // lets the finished frame be handed over rather than copied.
@@ -1738,6 +1786,13 @@ void choose_scope(App& app, cutline::ui::ScopeKind kind) {
 /// Marks the picture as no longer matching the playhead or the project.
 void invalidate_preview(App& app) {
 #if CUTLINE_HAVE_PREVIEW
+  // The gesture's project outlives the gesture only by accident, and an
+  // accident here is invisible: the preview goes on rendering a project the
+  // document no longer has, and looks merely out of date. Anything asking for
+  // a fresh picture while no handle is being dragged is asking for the
+  // document's.
+  if (!app.dragging_handle) app.live_project.reset();
+
   app.preview_stale = true;
   // The scopes measure the picture, so anything that changes the picture
   // changes them. Here rather than at every call site, because every one of
@@ -2220,6 +2275,7 @@ void choose_tool(App& app, cutline::ui::Tool tool) {
 void run_command(App& app, cutline::editor::Command command) {
   if (cutline::editor::run(app.session, command)) {
     refresh_timeline(app);
+    refresh_browser(app);
     refresh_title(app);
     invalidate_preview(app);
     app.inspector_stale = true;
@@ -2343,6 +2399,39 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   if (app != nullptr) {
     app->monitor = &picture;
     picture.set_frame(app->pattern.view());
+
+    // Live on every pixel so the preview follows the drag, and once on release
+    // so the whole gesture is one entry in the undo stack — the same split the
+    // timeline and every slider use.
+    picture.set_on_transform_change([app](const cutline::ui::MonitorBox& box) {
+      const auto selection = app->session.selection();
+      if (selection.empty()) return;
+      app->dragging_handle = true;
+      // Against the session's project every time rather than against the last
+      // preview: the box the view reports is where the layer should be, not how
+      // far it has come, and compounding them would send it off across the
+      // canvas at several times the speed of the pointer.
+      app->live_project = cutline::editor::apply_monitor_box(
+          app->session.project(), selection.front(), box, app->session.playhead());
+      invalidate_preview(*app);
+    });
+    picture.set_on_transform_commit([app](const cutline::ui::MonitorBox& box) {
+      const auto selection = app->session.selection();
+      app->dragging_handle = false;
+      app->live_project.reset();
+      if (selection.empty()) return;
+
+      app->session.apply(cutline::editor::apply_monitor_box(
+          app->session.project(), selection.front(), box, app->session.playhead()));
+      refresh_timeline(*app);
+      invalidate_preview(*app);
+      // The inspector's Motion rows are showing the same numbers, and a
+      // transform dragged on the picture that left them stale would be two
+      // controls disagreeing about one value. On the commit only — rebuilding
+      // it per mouse move would destroy and remake dozens of widgets a second.
+      app->inspector_stale = true;
+    });
+    refresh_handles(*app);
   }
 
   auto& transport = panel->emplace<Box>(Axis::Horizontal);
@@ -2383,17 +2472,17 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   auto panel = std::make_unique<Panel>();
 
   auto& tools = panel->emplace<Box>(Axis::Horizontal);
+  // Through `run_command` rather than calling the session directly, so the
+  // button and Ctrl+Z do the same thing. They did not: these two refreshed the
+  // timeline and the pool and forgot the preview, so undoing a transform with
+  // the button left the picture showing the edit that had just been undone,
+  // while the same undo from the keyboard was fine. Anything with two ways to
+  // reach it needs one place that does it.
   tools.emplace<Button>("Undo", [app] {
-    if (app == nullptr || !app->session.undo()) return;
-    refresh_timeline(*app);
-    refresh_browser(*app);
-    app->inspector_stale = true;
+    if (app != nullptr) run_command(*app, cutline::editor::Command::Undo);
   });
   tools.emplace<Button>("Redo", [app] {
-    if (app == nullptr || !app->session.redo()) return;
-    refresh_timeline(*app);
-    refresh_browser(*app);
-    app->inspector_stale = true;
+    if (app != nullptr) run_command(*app, cutline::editor::Command::Redo);
   });
   // The tool palette, between the history buttons and the timecode. Premiere
   // floats it over the timeline; a row in the toolbar is the same thing without

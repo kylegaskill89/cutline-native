@@ -1,9 +1,84 @@
 #include "cutline/ui/monitor.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <numbers>
+#include <span>
 #include <utility>
+#include <vector>
 
 namespace cutline::ui {
+namespace {
+
+/// Half the side of a handle's grab square, in pixels. The drawn square is the
+/// same size: a handle that is easier to hit than it looks is a handle you
+/// grab by accident when you meant to move the layer.
+constexpr double kHandleReach = 5.0;
+
+/// How far above the top edge the rotation handle floats. Clear of the corner
+/// handles either side of it, which is the whole reason it is not simply on
+/// the edge.
+constexpr double kRotateOffset = 13.0;
+
+// The border around the picture is `kMonitorInset`, in the header because
+// `picture()` is public and where it lands depends on it. It has to clear the
+// rotation handle, which reaches furthest.
+static_assert(kMonitorInset >= kRotateOffset + kHandleReach,
+              "the border has to be wide enough for the rotation handle");
+
+/// How close a drag has to come before it snaps, in pixels of the widget
+/// rather than fractions of the canvas — this is about what the hand can aim
+/// at, not about what the canvas is.
+constexpr double kSnapReach = 6.0;
+
+/// The degrees a rotation snaps to with shift held. Twelve of them round the
+/// circle: enough for the angles anybody types in, few enough to be a snap.
+constexpr double kRotationStep = 15.0;
+
+/// The smallest a layer may be dragged to, in canvas fractions. Not zero: a
+/// box with no width has no handles to grab, so it could be scaled down and
+/// never back up.
+constexpr double kMinExtent = 0.02;
+
+[[nodiscard]] constexpr double to_radians(double degrees) noexcept {
+  return degrees * std::numbers::pi / 180.0;
+}
+
+[[nodiscard]] std::pair<double, double> rotate(double x, double y, double radians) noexcept {
+  const double c = std::cos(radians);
+  const double s = std::sin(radians);
+  return {x * c - y * s, x * s + y * c};
+}
+
+[[nodiscard]] double distance(double ax, double ay, double bx, double by) noexcept {
+  return std::hypot(ax - bx, ay - by);
+}
+
+/// One thing a drag can line up with: the value the centre has to take, and
+/// the line to draw when it does. The two differ for an edge snap — the centre
+/// lands half a box in from the frame, and the guide belongs on the frame.
+struct SnapTarget {
+  double centre = 0.0;
+  double guide = 0.0;
+};
+
+/// The nearest target within `reach`, if any.
+[[nodiscard]] std::optional<SnapTarget> snapped(double value,
+                                                std::span<const SnapTarget> targets,
+                                                double reach) noexcept {
+  std::optional<SnapTarget> best;
+  double closest = reach;
+  for (const SnapTarget& target : targets) {
+    const double gap = std::abs(value - target.centre);
+    if (gap <= closest) {
+      closest = gap;
+      best = target;
+    }
+  }
+  return best;
+}
+
+}  // namespace
 
 MonitorView::MonitorView() {
   // The picture is letterboxed inside the panel, so nothing should ever run
@@ -38,7 +113,7 @@ Rect MonitorView::picture() const {
   double aspect = canvas_aspect_;
   if (!frame_.empty()) aspect = frame_.aspect();
   else if (!texture_.empty()) aspect = texture_.aspect();
-  return fit_aspect(bounds(), aspect);
+  return fit_aspect(bounds().inset(kMonitorInset), aspect);
 }
 
 std::optional<std::pair<double, double>> MonitorView::to_picture(double x, double y) const {
@@ -76,6 +151,337 @@ void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
   // A hairline around it, so a frame that is mostly black still reads as a
   // picture with edges rather than as a hole in the panel.
   if (style.border.a > 0.0) painter.stroke(area, 0.0, style.border, 1.0);
+
+  paint_overlay(painter, theme);
+}
+
+void MonitorView::paint_overlay(Painter& painter, const Theme& theme) const {
+  if (!box_.has_value()) return;
+  const Rect area = picture();
+  if (area.empty()) return;
+
+  // The accent, so the overlay reads as the selection it is and picks up
+  // whatever the theme's selection colour happens to be — over a picture, a
+  // fixed colour is the one that will be invisible against some footage.
+  const SurfaceStyle& selected = theme.style(Part::Button, State::Selected);
+  const Color ink = selected.border.a > 0.0 ? selected.border : selected.text;
+
+  // The guides first, so the box and its handles sit on top of them.
+  for (const SnapGuide& guide : guides_) {
+    const Color faint{ink.r, ink.g, ink.b, ink.a * 0.6f};
+    if (guide.vertical) {
+      const double x = area.x + guide.at * area.width;
+      painter.line(x, area.y, x, area.bottom(), faint, 1.0);
+    } else {
+      const double y = area.y + guide.at * area.height;
+      painter.line(area.x, y, area.right(), y, faint, 1.0);
+    }
+  }
+
+  const auto c = corners();
+  for (std::size_t i = 0; i < c.size(); ++i) {
+    const auto& from = c[i];
+    const auto& to = c[(i + 1) % c.size()];
+    painter.line(from.first, from.second, to.first, to.second, ink, 1.0);
+  }
+
+  // The stalk to the rotation handle, so it reads as belonging to the box
+  // rather than floating near it.
+  const Rect spin = handle_rect(TransformHandle::Rotate);
+  if (!spin.empty()) {
+    const double top_x = (c[0].first + c[1].first) * 0.5;
+    const double top_y = (c[0].second + c[1].second) * 0.5;
+    painter.line(top_x, top_y, spin.x + kHandleReach, spin.y + kHandleReach, ink, 1.0);
+  }
+
+  constexpr std::array kDrawn{
+      TransformHandle::TopLeft, TransformHandle::Top,    TransformHandle::TopRight,
+      TransformHandle::Right,   TransformHandle::BottomRight, TransformHandle::Bottom,
+      TransformHandle::BottomLeft, TransformHandle::Left, TransformHandle::Rotate};
+  for (const TransformHandle handle : kDrawn) {
+    const Rect box = handle_rect(handle);
+    if (box.empty()) continue;
+    // Filled pale and outlined in the accent: a solid accent square vanishes
+    // against footage the same colour, and an outline alone vanishes against
+    // detail.
+    painter.fill(box, 0.0, Fill::solid(Color{1.0f, 1.0f, 1.0f, 0.9f}));
+    painter.stroke(box, 0.0, ink, 1.0);
+  }
+}
+
+// -------------------------------------------------------- transform handles --
+
+void MonitorView::set_transform(std::optional<MonitorBox> box) {
+  box_ = box;
+  if (!box_.has_value()) {
+    dragging_ = TransformHandle::None;
+    guides_.clear();
+  }
+}
+
+std::pair<double, double> MonitorView::centre_px() const {
+  const Rect area = picture();
+  if (!box_.has_value() || area.empty()) return {0.0, 0.0};
+  return {area.x + box_->x * area.width, area.y + box_->y * area.height};
+}
+
+std::array<std::pair<double, double>, 4> MonitorView::corners() const {
+  const Rect area = picture();
+  if (!box_.has_value() || area.empty()) return {};
+
+  const auto [cx, cy] = centre_px();
+  const double half_w = box_->width * area.width * 0.5;
+  const double half_h = box_->height * area.height * 0.5;
+  const double angle = to_radians(box_->rotation);
+
+  // Clockwise from the top left, which is the order every handle enumerator
+  // and every hit test below assumes.
+  const std::array<std::pair<double, double>, 4> local{
+      std::pair{-half_w, -half_h}, std::pair{half_w, -half_h},
+      std::pair{half_w, half_h},   std::pair{-half_w, half_h}};
+
+  std::array<std::pair<double, double>, 4> out{};
+  for (std::size_t i = 0; i < local.size(); ++i) {
+    const auto [dx, dy] = rotate(local[i].first, local[i].second, angle);
+    out[i] = {cx + dx, cy + dy};
+  }
+  return out;
+}
+
+Rect MonitorView::handle_rect(TransformHandle handle) const {
+  if (!box_.has_value() || handle == TransformHandle::None ||
+      handle == TransformHandle::Move) {
+    return {};
+  }
+
+  const auto c = corners();
+  const auto midpoint = [&c](std::size_t a, std::size_t b) {
+    return std::pair{(c[a].first + c[b].first) * 0.5, (c[a].second + c[b].second) * 0.5};
+  };
+
+  std::pair<double, double> at{};
+  switch (handle) {
+    case TransformHandle::TopLeft: at = c[0]; break;
+    case TransformHandle::TopRight: at = c[1]; break;
+    case TransformHandle::BottomRight: at = c[2]; break;
+    case TransformHandle::BottomLeft: at = c[3]; break;
+    case TransformHandle::Top: at = midpoint(0, 1); break;
+    case TransformHandle::Right: at = midpoint(1, 2); break;
+    case TransformHandle::Bottom: at = midpoint(2, 3); break;
+    case TransformHandle::Left: at = midpoint(3, 0); break;
+    case TransformHandle::Rotate: {
+      // Out along the box's own "up", so it stays above the top edge however
+      // far the layer has been turned.
+      const auto top = midpoint(0, 1);
+      const auto [ox, oy] = rotate(0.0, -kRotateOffset, to_radians(box_->rotation));
+      at = {top.first + ox, top.second + oy};
+      break;
+    }
+    default: return {};
+  }
+  return Rect{at.first - kHandleReach, at.second - kHandleReach, kHandleReach * 2.0,
+              kHandleReach * 2.0};
+}
+
+TransformHandle MonitorView::handle_at(double x, double y) const {
+  if (!box_.has_value()) return TransformHandle::None;
+
+  // Corners before edges, and rotation before either: they overlap, and the
+  // smaller, more specific target has to win or it can never be hit.
+  constexpr std::array kOrder{TransformHandle::Rotate,   TransformHandle::TopLeft,
+                              TransformHandle::TopRight, TransformHandle::BottomRight,
+                              TransformHandle::BottomLeft, TransformHandle::Top,
+                              TransformHandle::Right,    TransformHandle::Bottom,
+                              TransformHandle::Left};
+  for (const TransformHandle handle : kOrder) {
+    if (handle_rect(handle).contains(x, y)) return handle;
+  }
+
+  // Inside the box itself, which moves it. Tested in the box's own frame so a
+  // rotated layer is grabbed where it looks rather than where its bounding
+  // rectangle is.
+  const auto [cx, cy] = centre_px();
+  const Rect area = picture();
+  if (area.empty()) return TransformHandle::None;
+  const auto [lx, ly] = rotate(x - cx, y - cy, -to_radians(box_->rotation));
+  if (std::abs(lx) <= box_->width * area.width * 0.5 &&
+      std::abs(ly) <= box_->height * area.height * 0.5) {
+    return TransformHandle::Move;
+  }
+  return TransformHandle::None;
+}
+
+bool MonitorView::on_mouse_down(const MouseEvent& event) {
+  if (!box_.has_value() || event.button != MouseButton::Left) return false;
+
+  const TransformHandle handle = handle_at(event.x, event.y);
+  if (handle == TransformHandle::None) return false;
+
+  dragging_ = handle;
+  origin_ = *box_;
+  press_x_ = event.x;
+  press_y_ = event.y;
+  guides_.clear();
+  return true;
+}
+
+bool MonitorView::on_mouse_move(const MouseEvent& event) {
+  if (dragging_ == TransformHandle::None || !box_.has_value()) return false;
+  drag_to(event.x, event.y, event.modifiers);
+  if (on_change_) on_change_(*box_);
+  return true;
+}
+
+bool MonitorView::on_mouse_up(const MouseEvent& event) {
+  if (dragging_ == TransformHandle::None) return false;
+
+  drag_to(event.x, event.y, event.modifiers);
+  dragging_ = TransformHandle::None;
+  guides_.clear();
+  if (box_.has_value() && *box_ != origin_ && on_commit_) on_commit_(*box_);
+  return true;
+}
+
+void MonitorView::drag_to(double x, double y, const Modifiers& modifiers) {
+  guides_.clear();
+  switch (dragging_) {
+    case TransformHandle::Move: move_to(x, y, modifiers); break;
+    case TransformHandle::Rotate: rotate_to(x, y, modifiers); break;
+    case TransformHandle::None: break;
+    default: resize_to(x, y, modifiers); break;
+  }
+}
+
+void MonitorView::move_to(double x, double y, const Modifiers& modifiers) {
+  const Rect area = picture();
+  if (area.empty()) return;
+
+  MonitorBox next = origin_;
+  next.x = origin_.x + (x - press_x_) / area.width;
+  next.y = origin_.y + (y - press_y_) / area.height;
+
+  // Snapping is off while control is held, which is the way out of a snap that
+  // is fighting you. Off, too, for a rotated layer on the edges: the edges of
+  // a turned box are not the edges of anything the canvas has, and snapping a
+  // corner of a rhombus to the frame is a coincidence rather than an
+  // alignment. Its centre still snaps, because a centre is a centre.
+  if (snapping_ && !modifiers.control) {
+    const bool square = std::abs(std::fmod(origin_.rotation, 360.0)) < 1e-9;
+    const double reach_x = kSnapReach / area.width;
+    const double reach_y = kSnapReach / area.height;
+
+    // Centre to centre, and each edge to the frame's matching edge. Expressed
+    // as targets for the *centre* so one comparison covers all of them.
+    std::vector<SnapTarget> xs{{.centre = 0.5, .guide = 0.5}};
+    std::vector<SnapTarget> ys{{.centre = 0.5, .guide = 0.5}};
+    if (square) {
+      xs.push_back({.centre = next.width * 0.5, .guide = 0.0});
+      xs.push_back({.centre = 1.0 - next.width * 0.5, .guide = 1.0});
+      ys.push_back({.centre = next.height * 0.5, .guide = 0.0});
+      ys.push_back({.centre = 1.0 - next.height * 0.5, .guide = 1.0});
+    }
+
+    if (const auto at = snapped(next.x, xs, reach_x)) {
+      next.x = at->centre;
+      guides_.push_back(SnapGuide{.vertical = true, .at = at->guide});
+    }
+    if (const auto at = snapped(next.y, ys, reach_y)) {
+      next.y = at->centre;
+      guides_.push_back(SnapGuide{.vertical = false, .at = at->guide});
+    }
+  }
+
+  box_ = next;
+}
+
+void MonitorView::resize_to(double x, double y, const Modifiers& modifiers) {
+  const Rect area = picture();
+  if (area.empty()) return;
+
+  const double angle = to_radians(origin_.rotation);
+  const double cx = area.x + origin_.x * area.width;
+  const double cy = area.y + origin_.y * area.height;
+  const double half_w = origin_.width * area.width * 0.5;
+  const double half_h = origin_.height * area.height * 0.5;
+
+  // In the box's own frame, where a resize is arithmetic on two numbers
+  // whatever the rotation is.
+  const auto [px, py] = rotate(x - cx, y - cy, -angle);
+
+  // Which sides the handle moves: -1 for the left or top, +1 for the right or
+  // bottom, 0 for a side it leaves alone. The opposite side is what stays put,
+  // which is what makes a corner drag feel like it is pinned there.
+  int grip_x = 0;
+  int grip_y = 0;
+  switch (dragging_) {
+    case TransformHandle::TopLeft: grip_x = -1; grip_y = -1; break;
+    case TransformHandle::TopRight: grip_x = 1; grip_y = -1; break;
+    case TransformHandle::BottomRight: grip_x = 1; grip_y = 1; break;
+    case TransformHandle::BottomLeft: grip_x = -1; grip_y = 1; break;
+    case TransformHandle::Top: grip_y = -1; break;
+    case TransformHandle::Bottom: grip_y = 1; break;
+    case TransformHandle::Left: grip_x = -1; break;
+    case TransformHandle::Right: grip_x = 1; break;
+    default: return;
+  }
+
+  const double min_w = kMinExtent * area.width;
+  const double min_h = kMinExtent * area.height;
+
+  double left = -half_w;
+  double right = half_w;
+  double top = -half_h;
+  double bottom = half_h;
+  if (grip_x < 0) left = std::min(px, right - min_w);
+  if (grip_x > 0) right = std::max(px, left + min_w);
+  if (grip_y < 0) top = std::min(py, bottom - min_h);
+  if (grip_y > 0) bottom = std::max(py, top + min_h);
+
+  double width = right - left;
+  double height = bottom - top;
+
+  // Shift keeps the shape, which is the aspect lock. Applied by taking the
+  // larger of the two changes rather than one axis arbitrarily, so the layer
+  // follows the pointer on whichever axis it was pulled hardest.
+  if (modifiers.shift && grip_x != 0 && grip_y != 0 && half_w > 0.0 && half_h > 0.0) {
+    const double factor = std::max(width / (half_w * 2.0), height / (half_h * 2.0));
+    const double wanted_w = std::max(min_w, half_w * 2.0 * factor);
+    const double wanted_h = std::max(min_h, half_h * 2.0 * factor);
+    // Grown or shrunk about the corner that is staying put, not about the
+    // centre — otherwise the anchor drifts and the drag feels unhinged.
+    if (grip_x < 0) left = right - wanted_w; else right = left + wanted_w;
+    if (grip_y < 0) top = bottom - wanted_h; else bottom = top + wanted_h;
+    width = right - left;
+    height = bottom - top;
+  }
+
+  // The new centre, back in the widget's frame.
+  const auto [ox, oy] = rotate((left + right) * 0.5, (top + bottom) * 0.5, angle);
+
+  MonitorBox next = origin_;
+  next.width = width / area.width;
+  next.height = height / area.height;
+  next.x = (cx + ox - area.x) / area.width;
+  next.y = (cy + oy - area.y) / area.height;
+  box_ = next;
+}
+
+void MonitorView::rotate_to(double x, double y, const Modifiers& modifiers) {
+  const auto [cx, cy] = centre_px();
+  if (distance(x, y, cx, cy) < 1.0) return;
+
+  // The handle floats above the box, so pointing straight up is no rotation.
+  double degrees = std::atan2(y - cy, x - cx) * 180.0 / std::numbers::pi + 90.0;
+  if (modifiers.shift) degrees = std::round(degrees / kRotationStep) * kRotationStep;
+
+  // Into (-180, 180], which is the range the inspector's slider covers and the
+  // one the model is written against.
+  degrees = std::fmod(degrees + 180.0, 360.0);
+  if (degrees < 0.0) degrees += 360.0;
+
+  MonitorBox next = origin_;
+  next.rotation = degrees - 180.0;
+  box_ = next;
 }
 
 }  // namespace cutline::ui

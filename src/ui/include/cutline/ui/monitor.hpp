@@ -13,11 +13,71 @@
 #include "cutline/ui/layout.hpp"
 #include "cutline/ui/widget.hpp"
 
+#include <array>
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace cutline::ui {
+
+/// Where a layer sits on the canvas, in canvas fractions: the centre at
+/// (0.5, 0.5), a width of 1 spanning the frame.
+///
+/// Fractions rather than pixels because that is what the model stores, and
+/// because it makes the overlay independent of what resolution the preview
+/// happens to be rendered at. What it is *not* is a clip's transform: scale
+/// there is relative to the aspect-fit size of the media, and only the caller
+/// knows what that is. Converting between the two is one multiplication, and it
+/// belongs where the media is known.
+struct MonitorBox {
+  double x = 0.5;
+  double y = 0.5;
+  double width = 1.0;
+  double height = 1.0;
+  double rotation = 0.0;  ///< degrees, clockwise
+
+  friend bool operator==(const MonitorBox&, const MonitorBox&) = default;
+};
+
+/// What a press on the overlay took hold of. The order is the one the hit test
+/// walks, which is why the corners come before the edges: a corner handle sits
+/// inside both edges it belongs to, and testing an edge first would make the
+/// corners unreachable.
+enum class TransformHandle {
+  None,
+  TopLeft,
+  TopRight,
+  BottomRight,
+  BottomLeft,
+  Top,
+  Right,
+  Bottom,
+  Left,
+  Rotate,
+  Move,
+};
+
+/// A snap line the overlay is currently held against, in canvas fractions.
+/// Drawn while a drag is snapped and gone as soon as it is not, which is the
+/// only thing that tells the difference between "it lined up" and "it was put
+/// there".
+struct SnapGuide {
+  bool vertical = true;  ///< a vertical line at `at` along x; otherwise along y
+  double at = 0.0;
+
+  friend bool operator==(const SnapGuide&, const SnapGuide&) = default;
+};
+
+/// The border kept between the panel and the picture.
+///
+/// Not decoration: a layer filling the frame has its transform handles *on* the
+/// frame's edge, and half of each one would fall outside the widget. A press
+/// outside a widget's bounds goes to whatever is behind it, so without this the
+/// corner handles of a full-frame layer could not be grabbed at all — which is
+/// exactly how it behaved the first time it was tried on screen.
+inline constexpr double kMonitorInset = 20.0;
 
 class MonitorView : public Widget {
  public:
@@ -67,15 +127,83 @@ class MonitorView : public Widget {
   [[nodiscard]] std::optional<std::pair<double, double>> to_picture(double x,
                                                                     double y) const;
 
+  // ------------------------------------------------------ transform handles --
+
+  /// The layer being transformed, or nothing when there is no selection to
+  /// show handles for.
+  void set_transform(std::optional<MonitorBox> box);
+  [[nodiscard]] const std::optional<MonitorBox>& transform() const noexcept { return box_; }
+
+  /// Every pixel of a drag, so the preview can follow it, and once on release
+  /// so the edit is one entry in the undo stack. The same split every other
+  /// dragged control here uses.
+  void set_on_transform_change(std::function<void(const MonitorBox&)> on_change) {
+    on_change_ = std::move(on_change);
+  }
+  void set_on_transform_commit(std::function<void(const MonitorBox&)> on_commit) {
+    on_commit_ = std::move(on_commit);
+  }
+
+  /// What a press at this point would take hold of.
+  [[nodiscard]] TransformHandle handle_at(double x, double y) const;
+
+  /// Where a handle's grab square is, in widget pixels. Empty when there is no
+  /// box, or for `None`.
+  [[nodiscard]] Rect handle_rect(TransformHandle handle) const;
+
+  /// The lines the drag is currently snapped to. Empty when nothing is being
+  /// dragged, or when it is not lined up with anything.
+  [[nodiscard]] const std::vector<SnapGuide>& guides() const noexcept { return guides_; }
+
+  /// Whether snapping applies at all. Off with a modifier held, which is the
+  /// universal way out of a snap that is fighting you.
+  [[nodiscard]] bool snapping() const noexcept { return snapping_; }
+  void set_snapping(bool snapping) noexcept { snapping_ = snapping; }
+
   [[nodiscard]] Part part() const noexcept override { return Part::Panel; }
   [[nodiscard]] bool paints_surface() const noexcept override { return true; }
   void paint_content(Painter& painter, const Theme& theme) const override;
 
+  bool on_mouse_down(const MouseEvent& event) override;
+  bool on_mouse_move(const MouseEvent& event) override;
+  bool on_mouse_up(const MouseEvent& event) override;
+
  private:
+  /// The box's four corners in widget pixels, clockwise from the top left,
+  /// with the rotation applied. Everything about the overlay — drawing, hit
+  /// testing, dragging — is expressed against these, because rotation is only
+  /// a rotation in *pixel* space: canvas fractions are anisotropic, and a
+  /// square turned 45 degrees in them comes out as a rhombus.
+  [[nodiscard]] std::array<std::pair<double, double>, 4> corners() const;
+  [[nodiscard]] std::pair<double, double> centre_px() const;
+
+  void drag_to(double x, double y, const Modifiers& modifiers);
+  void move_to(double x, double y, const Modifiers& modifiers);
+  void resize_to(double x, double y, const Modifiers& modifiers);
+  void rotate_to(double x, double y, const Modifiers& modifiers);
+
+  void paint_overlay(Painter& painter, const Theme& theme) const;
+
   ImageView frame_;
   TextureView texture_;
   double canvas_aspect_ = 16.0 / 9.0;
   std::string placeholder_ = "No preview";
+
+  std::optional<MonitorBox> box_;
+  std::function<void(const MonitorBox&)> on_change_;
+  std::function<void(const MonitorBox&)> on_commit_;
+
+  bool snapping_ = true;
+  std::vector<SnapGuide> guides_;
+
+  /// The gesture in flight. `origin_` is the box as it was at the press, so
+  /// every frame of the drag is computed from where it started rather than
+  /// accumulated — accumulating turns a snap into a place the box can never
+  /// get out of, because each frame starts from the snapped value.
+  TransformHandle dragging_ = TransformHandle::None;
+  MonitorBox origin_;
+  double press_x_ = 0.0;
+  double press_y_ = 0.0;
 };
 
 }  // namespace cutline::ui

@@ -23,6 +23,7 @@ add_executable(cutline_core_tests
   editor/generators_test.cpp
   editor/import_test.cpp
   editor/inspector_test.cpp
+  editor/monitor_binding_test.cpp
   editor/session_test.cpp
   editor/timeline_binding_test.cpp
   editor/titles_test.cpp

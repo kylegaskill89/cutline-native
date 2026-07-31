@@ -13,7 +13,9 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cmath>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace cutline::ui {
@@ -97,12 +99,16 @@ TEST(FitAspect, ANonsenseAspectOrAnEmptyBoxGivesNothing) {
 TEST(Monitor, LetterboxesToTheFramesOwnShape) {
   const Pixels frame(200, 100);
   MonitorView monitor;
+  // Forty wider and taller than the picture wants: there is a border around it,
+  // so the transform handles of a layer filling the frame are inside the widget
+  // and can be pressed at all.
   monitor.set_frame(frame.view());
-  monitor.arrange(Rect{0.0, 0.0, 400.0, 400.0}, flat_context());
+  monitor.arrange(Rect{0.0, 0.0, 440.0, 440.0}, flat_context());
 
   const Rect picture = monitor.picture();
   EXPECT_DOUBLE_EQ(picture.width, 400.0);
   EXPECT_DOUBLE_EQ(picture.height, 200.0);
+  EXPECT_GT(picture.x, 0.0);
 }
 
 TEST(Monitor, UsesTheSequenceShapeUntilAFrameArrives) {
@@ -110,7 +116,7 @@ TEST(Monitor, UsesTheSequenceShapeUntilAFrameArrives) {
   // first frame is decoded.
   MonitorView monitor;
   monitor.set_canvas_aspect(2.0);
-  monitor.arrange(Rect{0.0, 0.0, 400.0, 400.0}, flat_context());
+  monitor.arrange(Rect{0.0, 0.0, 440.0, 440.0}, flat_context());
 
   const Rect empty = monitor.picture();
   EXPECT_DOUBLE_EQ(empty.height, 200.0);
@@ -326,6 +332,311 @@ TEST(Monitor, ATextureViewKnowsItsOwnShape) {
   // A resource with no size is as useless as no resource at all, and the
   // monitor would divide by it.
   EXPECT_TRUE(fake_texture(0, 180).empty());
+}
+
+// ------------------------------------------------------ transform handles --
+
+/// A monitor with a picture, a square canvas, and a layer filling half of it.
+/// Square so a rotation is a rotation on screen rather than something that has
+/// to be corrected for while reading the test.
+/// Placed so that the picture inside its border lands exactly on the origin at
+/// 400 by 400, which keeps every coordinate below a plain fraction of it.
+const Rect kPlaced{-kMonitorInset, -kMonitorInset, 400.0 + kMonitorInset * 2.0,
+                   400.0 + kMonitorInset * 2.0};
+
+struct WithLayer {
+  WithLayer() {
+    monitor.set_canvas_aspect(1.0);
+    monitor.set_transform(MonitorBox{.x = 0.5, .y = 0.5, .width = 0.5, .height = 0.5});
+    monitor.arrange(kPlaced, flat_context());
+  }
+
+  void press(double x, double y, Modifiers modifiers = {}) {
+    monitor.on_mouse_down(MouseEvent{.x = x, .y = y, .modifiers = modifiers});
+  }
+  void move(double x, double y, Modifiers modifiers = {}) {
+    monitor.on_mouse_move(MouseEvent{.x = x, .y = y, .modifiers = modifiers});
+  }
+  void release(double x, double y, Modifiers modifiers = {}) {
+    monitor.on_mouse_up(MouseEvent{.x = x, .y = y, .modifiers = modifiers});
+  }
+
+  MonitorView monitor;
+};
+
+TEST(TransformHandles, WithNoLayerThereIsNothingToGrab) {
+  MonitorView monitor;
+  monitor.arrange(kPlaced, flat_context());
+  EXPECT_EQ(monitor.handle_at(200.0, 200.0), TransformHandle::None);
+  EXPECT_TRUE(monitor.handle_rect(TransformHandle::TopLeft).empty());
+}
+
+TEST(TransformHandles, TheCornersSitOnTheLayersCorners) {
+  const WithLayer fixture;
+  // The layer spans a quarter to three quarters of a 400-pixel picture.
+  const Rect top_left = fixture.monitor.handle_rect(TransformHandle::TopLeft);
+  EXPECT_NEAR(top_left.x + top_left.width * 0.5, 100.0, 0.001);
+  EXPECT_NEAR(top_left.y + top_left.height * 0.5, 100.0, 0.001);
+
+  const Rect bottom_right = fixture.monitor.handle_rect(TransformHandle::BottomRight);
+  EXPECT_NEAR(bottom_right.x + bottom_right.width * 0.5, 300.0, 0.001);
+  EXPECT_NEAR(bottom_right.y + bottom_right.height * 0.5, 300.0, 0.001);
+}
+
+TEST(TransformHandles, TheRotationHandleFloatsAboveTheTopEdge) {
+  const WithLayer fixture;
+  const Rect spin = fixture.monitor.handle_rect(TransformHandle::Rotate);
+  EXPECT_NEAR(spin.x + spin.width * 0.5, 200.0, 0.001);
+  // Above the top edge, and clear of the corners either side of it.
+  EXPECT_LT(spin.y + spin.height * 0.5, 100.0);
+}
+
+// A corner handle sits inside the two edge handles it belongs to, so an edge
+// tested first would make the corners unreachable.
+TEST(TransformHandles, ACornerWinsOverTheEdgesItTouches) {
+  const WithLayer fixture;
+  EXPECT_EQ(fixture.monitor.handle_at(100.0, 100.0), TransformHandle::TopLeft);
+}
+
+TEST(TransformHandles, TheInsideOfTheLayerMovesIt) {
+  const WithLayer fixture;
+  EXPECT_EQ(fixture.monitor.handle_at(200.0, 200.0), TransformHandle::Move);
+  EXPECT_EQ(fixture.monitor.handle_at(20.0, 20.0), TransformHandle::None);
+}
+
+TEST(TransformHandles, DraggingTheInsideMovesTheLayerWithThePointer) {
+  WithLayer fixture;
+  fixture.monitor.set_snapping(false);
+  fixture.press(200.0, 200.0);
+  fixture.move(260.0, 220.0);
+
+  EXPECT_NEAR(fixture.monitor.transform()->x, 0.65, 1e-9);
+  EXPECT_NEAR(fixture.monitor.transform()->y, 0.55, 1e-9);
+  // Moving does not resize.
+  EXPECT_NEAR(fixture.monitor.transform()->width, 0.5, 1e-9);
+}
+
+TEST(TransformHandles, EveryPixelOfADragIsReportedAndTheReleaseCommitsOnce) {
+  WithLayer fixture;
+  fixture.monitor.set_snapping(false);
+  int changes = 0;
+  int commits = 0;
+  fixture.monitor.set_on_transform_change([&](const MonitorBox&) { ++changes; });
+  fixture.monitor.set_on_transform_commit([&](const MonitorBox&) { ++commits; });
+
+  fixture.press(200.0, 200.0);
+  fixture.move(220.0, 200.0);
+  fixture.move(240.0, 200.0);
+  fixture.release(240.0, 200.0);
+
+  EXPECT_EQ(changes, 2);
+  EXPECT_EQ(commits, 1);
+}
+
+// One gesture is one undo entry, and a gesture that changed nothing is none.
+TEST(TransformHandles, ADragThatEndedWhereItStartedCommitsNothing) {
+  WithLayer fixture;
+  int commits = 0;
+  fixture.monitor.set_on_transform_commit([&](const MonitorBox&) { ++commits; });
+
+  fixture.press(200.0, 200.0);
+  fixture.release(200.0, 200.0);
+  EXPECT_EQ(commits, 0);
+}
+
+TEST(TransformHandles, DraggingACornerLeavesTheOppositeOneWhereItWas) {
+  WithLayer fixture;
+  fixture.press(100.0, 100.0);
+  fixture.move(50.0, 60.0);
+
+  const MonitorBox& box = *fixture.monitor.transform();
+  // The bottom right was at (300, 300) and has to still be.
+  EXPECT_NEAR((box.x + box.width * 0.5) * 400.0, 300.0, 0.001);
+  EXPECT_NEAR((box.y + box.height * 0.5) * 400.0, 300.0, 0.001);
+  EXPECT_NEAR((box.x - box.width * 0.5) * 400.0, 50.0, 0.001);
+  EXPECT_NEAR((box.y - box.height * 0.5) * 400.0, 60.0, 0.001);
+}
+
+TEST(TransformHandles, AnEdgeHandleChangesOneAxisOnly) {
+  WithLayer fixture;
+  fixture.press(300.0, 200.0);  // the right edge
+  fixture.move(360.0, 260.0);
+
+  const MonitorBox& box = *fixture.monitor.transform();
+  EXPECT_NEAR(box.width * 400.0, 260.0, 0.001);
+  EXPECT_NEAR(box.height * 400.0, 200.0, 0.001);
+  EXPECT_NEAR(box.y, 0.5, 1e-9);
+}
+
+TEST(TransformHandles, ShiftOnACornerKeepsTheShape) {
+  WithLayer fixture;
+  fixture.press(300.0, 300.0);
+  fixture.move(400.0, 320.0, Modifiers{.shift = true});
+
+  const MonitorBox& box = *fixture.monitor.transform();
+  EXPECT_NEAR(box.width, box.height, 1e-9);
+  // Pulled hardest along x, so that is the axis it followed.
+  EXPECT_NEAR(box.width * 400.0, 300.0, 0.001);
+}
+
+TEST(TransformHandles, ALayerCannotBeScaledDownToNothing) {
+  WithLayer fixture;
+  fixture.press(300.0, 300.0);
+  // Dragged well past the anchor, which would otherwise turn the box inside
+  // out and leave no handle to grab it by.
+  fixture.move(20.0, 20.0);
+
+  const MonitorBox& box = *fixture.monitor.transform();
+  EXPECT_GT(box.width, 0.0);
+  EXPECT_GT(box.height, 0.0);
+}
+
+TEST(TransformHandles, TheRotationHandleTurnsTheLayer) {
+  WithLayer fixture;
+  const Rect spin = fixture.monitor.handle_rect(TransformHandle::Rotate);
+  fixture.press(spin.x + spin.width * 0.5, spin.y + spin.height * 0.5);
+  // Out to the right of the centre, which is a quarter turn clockwise.
+  fixture.move(340.0, 200.0);
+
+  EXPECT_NEAR(fixture.monitor.transform()->rotation, 90.0, 0.001);
+}
+
+TEST(TransformHandles, ShiftSnapsTheRotationToWholeSteps) {
+  WithLayer fixture;
+  const Rect spin = fixture.monitor.handle_rect(TransformHandle::Rotate);
+  fixture.press(spin.x + spin.width * 0.5, spin.y + spin.height * 0.5);
+  fixture.move(338.0, 190.0, Modifiers{.shift = true});
+
+  const double turned = fixture.monitor.transform()->rotation;
+  EXPECT_NEAR(std::fmod(turned, 15.0), 0.0, 1e-9);
+}
+
+// The handles follow the layer round, so a turned layer is grabbed where it
+// looks rather than where its bounding rectangle is.
+TEST(TransformHandles, AQuarterTurnPutsTheTopLeftHandleWhereTheTopRightWas) {
+  MonitorView monitor;
+  monitor.set_canvas_aspect(1.0);
+  monitor.set_transform(
+      MonitorBox{.x = 0.5, .y = 0.5, .width = 0.5, .height = 0.5, .rotation = 90.0});
+  monitor.arrange(kPlaced, flat_context());
+
+  const Rect top_left = monitor.handle_rect(TransformHandle::TopLeft);
+  EXPECT_NEAR(top_left.x + top_left.width * 0.5, 300.0, 0.001);
+  EXPECT_NEAR(top_left.y + top_left.height * 0.5, 100.0, 0.001);
+}
+
+TEST(TransformHandles, ATurnedLayerIsGrabbedWhereItLooks) {
+  MonitorView monitor;
+  monitor.set_canvas_aspect(1.0);
+  monitor.set_transform(
+      MonitorBox{.x = 0.5, .y = 0.5, .width = 0.8, .height = 0.2, .rotation = 90.0});
+  monitor.arrange(kPlaced, flat_context());
+
+  // Turned upright, so it is tall and thin: a point above the centre is inside
+  // it and a point beside the centre is not.
+  EXPECT_EQ(monitor.handle_at(200.0, 130.0), TransformHandle::Move);
+  EXPECT_EQ(monitor.handle_at(130.0, 200.0), TransformHandle::None);
+}
+
+// ---------------------------------------------------------------- snapping --
+
+TEST(TransformSnapping, TheCentreSnapsToTheCentreOfTheFrame) {
+  WithLayer fixture;
+  fixture.press(200.0, 200.0);
+  fixture.move(202.0, 200.0);
+
+  EXPECT_NEAR(fixture.monitor.transform()->x, 0.5, 1e-9);
+
+  // Two guides, not one: the layer was already centred vertically, so it is
+  // lined up on both axes and both lines are true.
+  ASSERT_EQ(fixture.monitor.guides().size(), 2u);
+  EXPECT_EQ(fixture.monitor.guides()[0], (SnapGuide{.vertical = true, .at = 0.5}));
+  EXPECT_EQ(fixture.monitor.guides()[1], (SnapGuide{.vertical = false, .at = 0.5}));
+}
+
+TEST(TransformSnapping, AnEdgeSnapsToTheEdgeOfTheFrameAndTheGuideGoesThere) {
+  WithLayer fixture;
+  fixture.press(200.0, 200.0);
+  // Left edge two pixels short of the frame's left.
+  fixture.move(102.0, 200.0);
+
+  const MonitorBox& box = *fixture.monitor.transform();
+  EXPECT_NEAR((box.x - box.width * 0.5) * 400.0, 0.0, 1e-9);
+  ASSERT_FALSE(fixture.monitor.guides().empty());
+  EXPECT_DOUBLE_EQ(fixture.monitor.guides().front().at, 0.0);
+}
+
+TEST(TransformSnapping, ControlIsTheWayOutOfASnap) {
+  WithLayer fixture;
+  fixture.press(200.0, 200.0);
+  fixture.move(202.0, 200.0, Modifiers{.control = true});
+
+  EXPECT_GT(fixture.monitor.transform()->x, 0.5);
+  EXPECT_TRUE(fixture.monitor.guides().empty());
+}
+
+TEST(TransformSnapping, TurnedOffEntirelyNothingSnaps) {
+  WithLayer fixture;
+  fixture.monitor.set_snapping(false);
+  fixture.press(200.0, 200.0);
+  fixture.move(202.0, 200.0);
+
+  EXPECT_GT(fixture.monitor.transform()->x, 0.5);
+}
+
+// A turned layer's edges are not the edges of anything, so lining one up with
+// the frame would be a coincidence rather than an alignment. Its centre is
+// still a centre.
+TEST(TransformSnapping, ATurnedLayerSnapsByItsCentreOnly) {
+  MonitorView monitor;
+  monitor.set_canvas_aspect(1.0);
+  monitor.set_transform(
+      MonitorBox{.x = 0.5, .y = 0.5, .width = 0.5, .height = 0.5, .rotation = 30.0});
+  monitor.arrange(kPlaced, flat_context());
+
+  monitor.on_mouse_down(MouseEvent{.x = 200.0, .y = 200.0});
+  monitor.on_mouse_move(MouseEvent{.x = 102.0, .y = 200.0});
+  // No edge snap: the left edge lands where the pointer put it.
+  EXPECT_NEAR(monitor.transform()->x * 400.0, 102.0, 1e-9);
+
+  monitor.on_mouse_move(MouseEvent{.x = 202.0, .y = 200.0});
+  EXPECT_NEAR(monitor.transform()->x, 0.5, 1e-9);
+}
+
+TEST(TransformSnapping, TheGuidesGoWhenTheDragDoes) {
+  WithLayer fixture;
+  fixture.press(200.0, 200.0);
+  fixture.move(202.0, 200.0);
+  ASSERT_FALSE(fixture.monitor.guides().empty());
+
+  fixture.release(202.0, 200.0);
+  EXPECT_TRUE(fixture.monitor.guides().empty());
+}
+
+// ------------------------------------------------------------- the drawing --
+
+TEST(TransformOverlay, NothingIsDrawnWithoutALayer) {
+  MonitorView monitor;
+  monitor.set_canvas_aspect(1.0);
+  monitor.arrange(kPlaced, flat_context());
+  const Pixels pixels(400, 400);
+  monitor.set_frame(pixels.view());
+
+  RecordingPainter painter;
+  monitor.paint(painter, default_theme());
+  const std::size_t bare = painter.count(DrawCall::Kind::Line);
+
+  monitor.set_transform(MonitorBox{});
+  RecordingPainter with;
+  monitor.paint(with, default_theme());
+  EXPECT_GT(with.count(DrawCall::Kind::Line), bare);
+}
+
+TEST(TransformOverlay, SelectingAndThenNotLeavesNoHandlesBehind) {
+  WithLayer fixture;
+  fixture.monitor.set_transform(std::nullopt);
+  EXPECT_EQ(fixture.monitor.handle_at(200.0, 200.0), TransformHandle::None);
+  EXPECT_FALSE(fixture.monitor.transform().has_value());
 }
 
 }  // namespace
