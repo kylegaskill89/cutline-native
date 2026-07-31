@@ -218,7 +218,15 @@ lighting its M would leave somebody pressing a button that is already off. The
 mixer and the exporter have honoured all of this from the start; until now there
 was no way to press it.
 
-1501 tests, plus a headless check that lays every panel out in every theme —
+In and out points mark the span the sequence is cut for. They are set from the
+buttons or from I and O, drawn along the foot of the ruler, saved with the
+project, and offered to export as "only the marked range" with the timecodes it
+means. Marking where a mark already is takes it away, which is how one is
+removed without a third control that exists only to undo the other two. The two
+can never cross: setting one past the other clears that other, so an inverted
+pair is unrepresentable rather than something every reader has to check for.
+
+1523 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected, every effect on it, a title, and
 the colour picker open, which is the only way the controls a panel is made of
 get checked at all. Given a directory, that check writes each theme's frame out

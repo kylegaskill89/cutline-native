@@ -849,6 +849,76 @@ TEST(Timeline, AMutedTrackHeaderLooksDisabled) {
   EXPECT_TRUE(found);
 }
 
+// ------------------------------------------------------- the marked span --
+
+TEST(MarkedSpan, IsNotDrawnWhenNothingIsMarked) {
+  // An unmarked sequence is the whole sequence, and a bar across all of it
+  // would say something had been chosen when nothing had.
+  const Fixture fixture;
+  EXPECT_TRUE(fixture.view->marked_bar().empty());
+}
+
+TEST(MarkedSpan, RunsBetweenTheTwoMarks) {
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.in_point = 2.0;
+  model.out_point = 5.0;
+  fixture.view->set_model(model);
+
+  const Rect bar = fixture.view->marked_bar();
+  const Rect ruler = fixture.view->ruler_area();
+  ASSERT_FALSE(bar.empty());
+  EXPECT_DOUBLE_EQ(bar.x, ruler.x + 200.0) << "two seconds at a hundred a second";
+  EXPECT_DOUBLE_EQ(bar.width, 300.0);
+  EXPECT_LE(bar.bottom(), ruler.bottom());
+  EXPECT_GE(bar.y, ruler.y);
+}
+
+TEST(MarkedSpan, AnInAloneReachesTheEndOfTheSequence) {
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.in_point = 2.0;
+  fixture.view->set_model(model);
+
+  // The sample runs to twelve seconds.
+  EXPECT_DOUBLE_EQ(fixture.view->marked_bar().width, 1000.0);
+}
+
+TEST(MarkedSpan, AnOutAloneReachesBackToTheStart) {
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.out_point = 3.0;
+  fixture.view->set_model(model);
+
+  const Rect bar = fixture.view->marked_bar();
+  EXPECT_DOUBLE_EQ(bar.x, fixture.view->ruler_area().x);
+  EXPECT_DOUBLE_EQ(bar.width, 300.0);
+}
+
+TEST(MarkedSpan, IsDrawnInsideTheRulersClip) {
+  // Otherwise a span scrolled off the left is painted across the track headers.
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.in_point = 0.0;
+  model.out_point = 12.0;
+  fixture.view->set_model(model);
+
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+  EXPECT_TRUE(painter.clips_balanced());
+
+  int depth = 0;
+  bool inside = false;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::PushClip) ++depth;
+    if (call.kind == DrawCall::Kind::PopClip) --depth;
+    if (call.kind == DrawCall::Kind::Fill && call.bounds == fixture.view->marked_bar()) {
+      inside = depth > 0;
+    }
+  }
+  EXPECT_TRUE(inside);
+}
+
 // --------------------------------------------------- the header switches --
 
 TEST(TrackSwitch, AudioAndVideoTracksOfferDifferentOnes) {

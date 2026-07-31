@@ -20,6 +20,7 @@
 #include "cutline/core/edit.hpp"
 #include "cutline/core/effects.hpp"
 #include "cutline/core/model.hpp"
+#include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/core/time.hpp"
 #include "cutline/editor/browser_binding.hpp"
@@ -442,6 +443,10 @@ struct App {
     std::size_t resolution = 0;
     std::size_t mixdown = 0;
     bool audio = true;
+    /// Render only what is marked in and out. Ignored, and unpressable, when
+    /// nothing is marked — there is no such thing as "the marked range" then,
+    /// and a checkbox that means the whole sequence either way is a lie.
+    bool marked_only = false;
   };
   ExportSetup export_setup;
 
@@ -1495,6 +1500,10 @@ constexpr std::array kApplicationKeys{
 /// belong to a focused slider before they belong to the playhead, and taking
 /// them first would make the inspector unusable from the keyboard.
 constexpr std::array kTransportKeys{
+    // Premiere's I and O, and its Ctrl+Shift+X to throw both away.
+    Binding{Key::I, false, false, cutline::editor::Command::MarkIn},
+    Binding{Key::O, false, false, cutline::editor::Command::MarkOut},
+    Binding{Key::X, true, true, cutline::editor::Command::ClearMarks},
     Binding{Key::Left, false, false, cutline::editor::Command::PreviousFrame},
     Binding{Key::Right, false, false, cutline::editor::Command::NextFrame},
     Binding{Key::Home, false, false, cutline::editor::Command::GoToStart},
@@ -1538,22 +1547,28 @@ void choose_tool(App& app, cutline::ui::Tool tool) {
   mark_dirty(app);
 }
 
+/// Runs a command and brings the interface back into line with it.
+///
+/// One place, so a key and a button that name the same command cannot end up
+/// refreshing different things. The command decides whether it applies —
+/// nothing here needs to know when a razor has anything to cut.
+void run_command(App& app, cutline::editor::Command command) {
+  if (cutline::editor::run(app.session, command)) {
+    refresh_timeline(app);
+    refresh_title(app);
+    invalidate_preview(app);
+    app.inspector_stale = true;
+  }
+  mark_dirty(app);
+}
+
 /// Runs whichever command the key is bound to, if any.
 bool run_binding(App& app, std::span<const Binding> bindings, Key key,
                  const Modifiers& modifiers) {
   for (const Binding& binding : bindings) {
     if (binding.key != key) continue;
     if (binding.control != modifiers.control || binding.shift != modifiers.shift) continue;
-
-    // The command decides whether it applies. Nothing here needs to know when
-    // a razor has anything to cut.
-    if (cutline::editor::run(app.session, binding.command)) {
-      refresh_timeline(app);
-      refresh_title(app);
-      invalidate_preview(app);
-      app.inspector_stale = true;
-    }
-    mark_dirty(app);
+    run_command(app, binding.command);
     return true;
   }
   return false;
@@ -1635,8 +1650,15 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   }
 
   auto& transport = panel->emplace<Box>(Axis::Horizontal);
-  transport.emplace<Button>("Mark In");
-  transport.emplace<Button>("Mark Out");
+  // Both toggle: marking where a mark already is takes it away, which is how
+  // one is removed without a third button that exists only to undo the other
+  // two. `run` is what decides that, so the button and the I key cannot drift.
+  transport.emplace<Button>("Mark In", [app] {
+    if (app != nullptr) run_command(*app, cutline::editor::Command::MarkIn);
+  });
+  transport.emplace<Button>("Mark Out", [app] {
+    if (app != nullptr) run_command(*app, cutline::editor::Command::MarkOut);
+  });
   transport.emplace<Spacer>();
   auto& play = transport.emplace<Button>("Play", [app] {
     if (app != nullptr) toggle_playback(*app);
@@ -2259,6 +2281,11 @@ void start_export(App& app) {
   settings.height = height;
   settings.audio = app.export_setup.audio;
   settings.audio_channels = kExportMixdowns[app.export_setup.mixdown].channels;
+  if (app.export_setup.marked_only && cutline::core::has_marks(project)) {
+    const cutline::core::MarkedSpan span = cutline::core::marked_span(project);
+    settings.start = span.start;
+    settings.duration = span.duration;
+  }
 
   App::ExportJob& job = app.export_job;
   job.cancel = false;
@@ -2445,6 +2472,24 @@ void settle_export(App& app) {
     // A mixdown for a file with no audio in it is a choice with nothing behind
     // it, so it greys out rather than sitting there looking answerable.
     refresh_export_dialog(*app);
+  });
+
+  // Labelled with the span it means. "In to out" says nothing about how long
+  // the file will be, and this is the last screen before a render that may take
+  // minutes.
+  const bool marked = app != nullptr && cutline::core::has_marks(app->session.project());
+  std::string range = "Only the marked range";
+  if (marked) {
+    const cutline::core::MarkedSpan span = cutline::core::marked_span(app->session.project());
+    const double fps = app->session.project().fps;
+    range += std::format(" ({} to {})", cutline::core::seconds_to_timecode(span.start, fps),
+                         cutline::core::seconds_to_timecode(span.start + span.duration, fps));
+  }
+  auto& only = body.emplace<Checkbox>(std::move(range),
+                                      app != nullptr && app->export_setup.marked_only && marked);
+  only.set_enabled(marked);
+  only.set_on_change([app](bool on) {
+    if (app != nullptr) app->export_setup.marked_only = on;
   });
 
   body.emplace<Spacer>();
@@ -3351,6 +3396,11 @@ template <typename T>
     // of parameter row — slider, toggle, colour — is laid out in every theme.
     {
       App app;
+      // Marked, so the ruler draws its span. Nothing else in the check would
+      // put a mark on the sequence, and the bar is painted in the one place a
+      // theme has never otherwise been asked about.
+      app.session.apply(cutline::core::set_in_point(app.session.project(), 1.0));
+      app.session.apply(cutline::core::set_out_point(app.session.project(), 6.0));
       app.main.host = std::make_unique<WidgetHost>(build_interface(&app));
 
       // Shown, not merely present. Only the active panel in a group is built,

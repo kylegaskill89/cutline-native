@@ -109,6 +109,11 @@ struct TimelineModel {
   double duration = 0.0;
   double fps = 30.0;
 
+  /// The marked span, drawn as a bar along the ruler. Either may be set alone,
+  /// and a missing one reaches to that end of the sequence.
+  std::optional<double> in_point;
+  std::optional<double> out_point;
+
   /// The end of the last block, or `duration` where that is longer.
   [[nodiscard]] double content_duration() const noexcept;
 
@@ -320,6 +325,11 @@ class TimelineView : public Widget {
   [[nodiscard]] Rect header_rect(std::size_t track) const;
   [[nodiscard]] Rect block_rect(std::size_t track, std::size_t block) const;
   [[nodiscard]] double playhead_x() const;
+
+  /// The bar along the ruler showing what is marked. Empty when neither mark is
+  /// set — an unmarked sequence is the whole sequence, and drawing a bar across
+  /// all of it would say something was chosen when nothing was.
+  [[nodiscard]] Rect marked_bar() const;
 
   [[nodiscard]] std::optional<BlockRef> block_at(double x, double y) const;
 

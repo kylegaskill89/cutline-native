@@ -29,6 +29,14 @@ enum class Command {
   NudgeLeft,
   NudgeRight,
 
+  // -- the marked span
+  /// Marks the in point at the playhead — or clears it, when it is already
+  /// there. The same key undoing itself is how a mark is removed without a
+  /// third control that exists only to take one away.
+  MarkIn,
+  MarkOut,
+  ClearMarks,
+
   // -- selection
   SelectAll,
   SelectNone,

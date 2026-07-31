@@ -5,7 +5,9 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cutline::core {
@@ -328,6 +330,95 @@ TEST(EmptyProject, HonoursACustomTrackCount) {
   EXPECT_EQ(p.tracks[0].kind, TrackKind::Video);
   EXPECT_EQ(p.tracks[1].kind, TrackKind::Video);
   EXPECT_EQ(p.tracks[2].kind, TrackKind::Audio);
+}
+
+// ------------------------------------------------------------- in and out --
+
+TEST(Marks, AnUnmarkedProjectIsTheWholeTimeline) {
+  const Project p = one_clip_project();  // one clip, ten seconds
+  EXPECT_FALSE(has_marks(p));
+  EXPECT_EQ(marked_span(p), (MarkedSpan{.start = 0.0, .duration = 10.0}));
+}
+
+TEST(Marks, AnInAloneRunsToTheEnd) {
+  const Project p = set_in_point(one_clip_project(), 4.0);
+  EXPECT_TRUE(has_marks(p));
+  EXPECT_EQ(marked_span(p), (MarkedSpan{.start = 4.0, .duration = 6.0}));
+}
+
+TEST(Marks, AnOutAloneRunsFromTheStart) {
+  const Project p = set_out_point(one_clip_project(), 4.0);
+  EXPECT_EQ(marked_span(p), (MarkedSpan{.start = 0.0, .duration = 4.0}));
+}
+
+TEST(Marks, BothTogetherAreTheSpanBetweenThem) {
+  Project p = set_in_point(one_clip_project(), 2.0);
+  p = set_out_point(std::move(p), 7.0);
+  EXPECT_EQ(marked_span(p), (MarkedSpan{.start = 2.0, .duration = 5.0}));
+}
+
+TEST(Marks, AnInPastTheOutClearsTheOut) {
+  // Rather than crossing it. Somebody marking an in past the out has moved on
+  // to a different span, and dragging the out after it would silently keep a
+  // boundary they had stopped caring about.
+  Project p = set_out_point(one_clip_project(), 3.0);
+  p = set_in_point(std::move(p), 6.0);
+
+  EXPECT_FALSE(p.out_point.has_value());
+  EXPECT_DOUBLE_EQ(*p.in_point, 6.0);
+  EXPECT_EQ(marked_span(p), (MarkedSpan{.start = 6.0, .duration = 4.0}));
+}
+
+TEST(Marks, AnOutBeforeTheInClearsTheIn) {
+  Project p = set_in_point(one_clip_project(), 6.0);
+  p = set_out_point(std::move(p), 3.0);
+
+  EXPECT_FALSE(p.in_point.has_value());
+  EXPECT_DOUBLE_EQ(*p.out_point, 3.0);
+}
+
+TEST(Marks, TheTwoCanNeverBeInverted) {
+  // The property the two rules above exist to guarantee: whatever order the
+  // marks are set in, `marked_span` never has to cope with a backwards range.
+  Project p = one_clip_project();
+  for (const double at : {5.0, 1.0, 8.0, 3.0, 3.0, 9.0}) {
+    p = set_in_point(std::move(p), at);
+    EXPECT_GE(marked_span(p).duration, 0.0);
+    p = set_out_point(std::move(p), 10.0 - at);
+    EXPECT_GE(marked_span(p).duration, 0.0);
+    if (p.in_point.has_value() && p.out_point.has_value()) {
+      EXPECT_LT(*p.in_point, *p.out_point);
+    }
+  }
+}
+
+TEST(Marks, ClearingLeavesTheWholeTimeline) {
+  Project p = set_in_point(one_clip_project(), 2.0);
+  p = set_out_point(std::move(p), 7.0);
+  p = clear_marks(std::move(p));
+
+  EXPECT_FALSE(has_marks(p));
+  EXPECT_EQ(marked_span(p), (MarkedSpan{.start = 0.0, .duration = 10.0}));
+}
+
+TEST(Marks, AreClampedToTheSequence) {
+  // A mark left behind by a clip that has since been deleted must not ask the
+  // exporter for frames that are not there.
+  const Project negative = set_in_point(one_clip_project(), -5.0);
+  EXPECT_DOUBLE_EQ(*negative.in_point, 0.0) << "negative times are clamped when set";
+
+  Project stale = one_clip_project();
+  stale.out_point = 900.0;  // as a file written before a clip was deleted might
+  EXPECT_EQ(marked_span(stale), (MarkedSpan{.start = 0.0, .duration = 10.0}));
+}
+
+TEST(Marks, SettingNothingClearsOnlyThatOne) {
+  Project p = set_in_point(one_clip_project(), 2.0);
+  p = set_out_point(std::move(p), 7.0);
+
+  p = set_in_point(std::move(p), std::nullopt);
+  EXPECT_FALSE(p.in_point.has_value());
+  EXPECT_TRUE(p.out_point.has_value()) << "the other one is not collateral";
 }
 
 }  // namespace

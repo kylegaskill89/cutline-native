@@ -289,6 +289,16 @@ struct Project {
   std::vector<Track> tracks;
   std::vector<Marker> markers;
 
+  /// The span the sequence is marked out for — Premiere's in and out points.
+  /// What export offers to render instead of the whole timeline.
+  ///
+  /// Either may be set without the other, so these are two optionals rather
+  /// than one optional range. They can never cross: setting one past the other
+  /// clears that other, which makes an inverted pair unrepresentable instead of
+  /// something every reader has to remember to check for. See `marked_span`.
+  std::optional<double> in_point;
+  std::optional<double> out_point;
+
   friend bool operator==(const Project&, const Project&) = default;
 };
 

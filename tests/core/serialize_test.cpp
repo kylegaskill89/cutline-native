@@ -104,6 +104,8 @@ Project rich_project() {
 
   p.tracks = {v, a};
   p.markers = {Marker{.id = "k1", .time = 3.0, .label = "cue", .color = "#ff0000"}};
+  p.in_point = 1.5;
+  p.out_point = 8.25;
   return p;
 }
 

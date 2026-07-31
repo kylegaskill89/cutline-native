@@ -8,6 +8,7 @@
 #include "cutline/editor/commands.hpp"
 
 #include "cutline/core/edit.hpp"
+#include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 
 #include <gtest/gtest.h>
@@ -49,10 +50,10 @@ constexpr double kFps = 30.0;
 }
 
 constexpr std::array kAllCommands{
-    Command::Split,     Command::Delete,        Command::RippleDelete, Command::NudgeLeft,
-    Command::NudgeRight, Command::SelectAll,    Command::SelectNone,   Command::GoToStart,
-    Command::GoToEnd,   Command::PreviousFrame, Command::NextFrame,    Command::Undo,
-    Command::Redo,
+    Command::Split,         Command::Delete,     Command::RippleDelete, Command::NudgeLeft,
+    Command::NudgeRight,    Command::MarkIn,     Command::MarkOut,      Command::ClearMarks,
+    Command::SelectAll,     Command::SelectNone, Command::GoToStart,    Command::GoToEnd,
+    Command::PreviousFrame, Command::NextFrame,  Command::Undo,         Command::Redo,
 };
 
 // ----------------------------------------------------------- the contract --
@@ -285,6 +286,81 @@ TEST(Commands, EveryEditIsUndoable) {
     ASSERT_TRUE(run(session, Command::Undo)) << to_string(command);
     EXPECT_EQ(session.project(), before) << to_string(command) << " did not undo cleanly";
   }
+}
+
+// ------------------------------------------------------------- in and out --
+
+TEST(Marks, MarkInPutsTheInAtThePlayhead) {
+  Session session(sample_project());
+  session.set_playhead(3.0);
+
+  ASSERT_TRUE(run(session, Command::MarkIn));
+  ASSERT_TRUE(session.project().in_point.has_value());
+  EXPECT_DOUBLE_EQ(*session.project().in_point, 3.0);
+}
+
+TEST(Marks, MarkingWhereTheMarkAlreadyIsTakesItAway) {
+  // The same key undoing itself, which is how a mark is removed without a
+  // third control that exists only to take one away.
+  Session session(sample_project());
+  session.set_playhead(3.0);
+  ASSERT_TRUE(run(session, Command::MarkIn));
+
+  ASSERT_TRUE(run(session, Command::MarkIn));
+  EXPECT_FALSE(session.project().in_point.has_value());
+}
+
+TEST(Marks, MarkingSomewhereElseMovesIt) {
+  Session session(sample_project());
+  session.set_playhead(3.0);
+  ASSERT_TRUE(run(session, Command::MarkIn));
+
+  session.set_playhead(6.0);
+  ASSERT_TRUE(run(session, Command::MarkIn));
+  EXPECT_DOUBLE_EQ(*session.project().in_point, 6.0);
+}
+
+TEST(Marks, MarkOutIsTheSameTheOtherWayRound) {
+  Session session(sample_project());
+  session.set_playhead(8.0);
+
+  ASSERT_TRUE(run(session, Command::MarkOut));
+  EXPECT_DOUBLE_EQ(*session.project().out_point, 8.0);
+  EXPECT_FALSE(session.project().in_point.has_value());
+}
+
+TEST(Marks, ClearingIsOnlyOfferedWhenThereIsSomethingToClear) {
+  Session session(sample_project());
+  EXPECT_FALSE(can_run(session, Command::ClearMarks));
+
+  session.set_playhead(2.0);
+  ASSERT_TRUE(run(session, Command::MarkIn));
+  EXPECT_TRUE(can_run(session, Command::ClearMarks));
+
+  ASSERT_TRUE(run(session, Command::ClearMarks));
+  EXPECT_FALSE(core::has_marks(session.project()));
+}
+
+TEST(Marks, MarkingIsOfferedWhenThereIsSomethingToMark) {
+  const Session session(sample_project());
+  EXPECT_TRUE(can_run(session, Command::MarkIn));
+  EXPECT_TRUE(can_run(session, Command::MarkOut));
+}
+
+TEST(Marks, AMarkCanStillBeRemovedFromASequenceWithNothingLeftInIt) {
+  // Pressing the key where the mark already is removes it, so an empty
+  // timeline that still carries a mark has to keep offering that — otherwise
+  // the only way to take one away is greyed out.
+  Session session(sample_project());
+  session.set_playhead(2.0);
+  ASSERT_TRUE(run(session, Command::MarkIn));
+
+  session.select(std::vector<std::string>{"c1", "c2"});
+  ASSERT_TRUE(run(session, Command::Delete));
+  ASSERT_DOUBLE_EQ(core::timeline_duration(session.project()), 0.0);
+
+  EXPECT_TRUE(can_run(session, Command::MarkIn));
+  EXPECT_FALSE(can_run(session, Command::MarkOut)) << "there was never an out";
 }
 
 }  // namespace

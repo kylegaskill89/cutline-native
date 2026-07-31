@@ -276,6 +276,23 @@ double TimelineView::playhead_x() const {
   return time_area().x + scale_.to_x(playhead_);
 }
 
+Rect TimelineView::marked_bar() const {
+  if (!model_.in_point.has_value() && !model_.out_point.has_value()) return {};
+
+  const double total = model_.content_duration();
+  const double from = std::clamp(model_.in_point.value_or(0.0), 0.0, total);
+  const double to = std::clamp(model_.out_point.value_or(total), 0.0, total);
+  if (to <= from) return {};
+
+  const Rect ruler = ruler_area();
+  const double x = ruler.x + scale_.to_x(from);
+  const double width = scale_.width_of(to - from);
+  // Along the foot of the ruler, under the tick labels. A bar across the whole
+  // ruler would fight the ticks for the same pixels and win.
+  const double height = std::max(3.0, ruler.height * 0.2);
+  return Rect{x, ruler.bottom() - height, width, height};
+}
+
 std::optional<BlockRef> TimelineView::block_at(double x, double y) const {
   if (!tracks_area().contains(x, y)) return std::nullopt;
 
@@ -445,6 +462,14 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
     const Rect label{x + 3.0, ruler.y, 100.0, ruler.height * 0.6};
     painter.text(text_run(label, core::seconds_to_timecode(tick.time, model_.fps), ruler_style,
                           metrics_.small_font_size, TextAlign::Left, false));
+  }
+
+  // Inside the ruler's clip, so a span running off either end is cut at the
+  // edge of the ruler rather than drawn across the track headers.
+  if (const Rect marked = marked_bar(); !marked.empty()) {
+    // The playhead's colour: this is the other thing on the ruler that says
+    // where something is, and a second accent would be one too many.
+    painter.fill(marked, 1.0, theme.style(Part::Playhead, State::Normal).fill);
   }
   painter.pop_clip();
 

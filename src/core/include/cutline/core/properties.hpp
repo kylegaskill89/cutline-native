@@ -105,6 +105,38 @@ struct TrackPropsPatch {
 [[nodiscard]] const Marker* next_marker(const Project& p, double time) noexcept;
 [[nodiscard]] const Marker* previous_marker(const Project& p, double time) noexcept;
 
+// ------------------------------------------------------------- in and out --
+
+/// Marks the in point, or clears it when given nothing.
+///
+/// An in past the current out clears the out rather than crossing it, so the
+/// pair can never be inverted and nothing downstream has to check for it.
+/// Negative times are clamped to the start of the sequence.
+[[nodiscard]] Project set_in_point(Project p, std::optional<double> time);
+
+/// The same the other way round: an out before the current in clears the in.
+[[nodiscard]] Project set_out_point(Project p, std::optional<double> time);
+
+[[nodiscard]] Project clear_marks(Project p);
+
+/// Whether either mark is set. What greys out "export the marked range".
+[[nodiscard]] bool has_marks(const Project& p) noexcept;
+
+/// The span the marks describe: where it starts, and how long, in seconds.
+///
+/// A missing mark falls back to the end of the sequence it is missing from, so
+/// an in alone means "from here to the end" and an out alone means "from the
+/// start to here" — which is the whole point of marking one and not the other.
+/// With neither, the whole timeline.
+struct MarkedSpan {
+  double start = 0.0;
+  double duration = 0.0;
+
+  friend bool operator==(const MarkedSpan&, const MarkedSpan&) = default;
+};
+
+[[nodiscard]] MarkedSpan marked_span(const Project& p) noexcept;
+
 // --------------------------------------------------------------- factories --
 
 /// A project with empty tracks and no media.

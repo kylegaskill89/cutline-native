@@ -227,6 +227,9 @@ json write(const Project& p) {
   for (const Marker& m : p.markers) markers.push_back(write(m));
   put_unless_empty(j, "markers", markers);
 
+  put_if_set(j, "in_point", p.in_point);
+  put_if_set(j, "out_point", p.out_point);
+
   return j;
 }
 
@@ -442,6 +445,9 @@ Project read_project(const json& j) {
       });
     }
   }
+
+  p.in_point = read_optional<double>(j, "in_point");
+  p.out_point = read_optional<double>(j, "out_point");
   return p;
 }
 

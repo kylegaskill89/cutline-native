@@ -28,8 +28,8 @@ measurements and the one correction they forced.
 | Local | `d:\Videos\cutline-native` |
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
-| Size | ~31k lines of source, ~21k of tests, 72 commits |
-| Tests | **1501** under the `ui` preset; 1261 of them need no GPU, no window, no FFmpeg |
+| Size | ~31k lines of source, ~21k of tests |
+| Tests | **1523** under the `ui` preset; 1283 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1261 of the 1501 tests.
+binding between them — 1283 of the 1523 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -264,14 +264,9 @@ here.**
 | **Colour mattes, adjustment layers** | the compositor renders adjustment layers; the browser has icons for both kinds | nothing creates one |
 | **Gain automation** | rubber-band model, mixer honours it | no way to add or drag a point |
 | **Waveforms, thumbnails** | `compute_peaks`, `extract_thumbnails` | the timeline draws neither |
-| **In/Out range** | `ExporterSettings::start`/`duration` | **`Mark In` and `Mark Out` are buttons with no handler** — see below |
 | **Link/unlink, add/remove/rename track** | all in core | no button, no shortcut, no command |
 | **Snapshot to PNG** | the whole path (`render_frame` does it) | no button |
 | **Fade handles** | fades work, through inspector sliders | not draggable on the clip |
-
-**`Mark In` and `Mark Out` do nothing when pressed.** That is not a gap, it is a
-lie in the interface, and it is about twenty lines given the exporter already
-takes a range. Fix it first whatever else you do.
 
 ### B. Not built anywhere
 
@@ -293,13 +288,16 @@ takes a range. Fix it first whatever else you do.
 
 ### Suggested order
 
-1. **Mark In/Out**, because a dead button is worse than a missing one.
-2. **Transitions.** The biggest parity item that is pure UI work — the render
+1. **Transitions.** The biggest parity item that is pure UI work — the render
    side is finished and completely unreachable, which is the worst combination.
-3. **Audio effects panel.** Same shape, probably more panel work.
-4. **Markers**, then **interpolation chips** — both small and both visible.
-5. Anything in B, by appetite. Scopes and the VU meter are the two that need new
+2. **Audio effects panel.** Same shape, probably more panel work.
+3. **Markers**, then **interpolation chips** — both small and both visible.
+4. Anything in B, by appetite. Scopes and the VU meter are the two that need new
    machinery rather than new wiring.
+
+*(In and out points were the first of these and are done: marked from the
+buttons or from I and O, drawn along the foot of the ruler, saved with the
+project, and offered to export as "only the marked range".)*
 
 ---
 
@@ -323,6 +321,11 @@ rather than a crop, and it is pinned by `ASmallerCanvasIsTheSamePictureSmaller`.
 
 **`Media::has_video` means "contributes picture"**, not "came from a video file".
 `place_media` checks it, and a title with it false is silently refused.
+
+**A `can_run` that says no must mean a `run` that does nothing.** There is a test
+that walks every command and asserts the two agree; adding a command whose `run`
+succeeds where `can_run` refused fails it. Express the condition once and have
+both call it.
 
 **A panel rebuild destroys the widget whose handler is running.** The inspector
 is rebuilt by setting `app.inspector_stale` and letting the frame loop do it, for

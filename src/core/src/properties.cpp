@@ -233,6 +233,50 @@ const Marker* previous_marker(const Project& p, double time) noexcept {
   return found;
 }
 
+// ------------------------------------------------------------- in and out --
+
+Project set_in_point(Project p, std::optional<double> time) {
+  if (!time.has_value()) {
+    p.in_point.reset();
+    return p;
+  }
+  const double at = std::max(0.0, *time);
+  p.in_point = at;
+  // Cleared rather than pushed along. Somebody marking an in past the out has
+  // moved on to a different span, and dragging the out after it would silently
+  // keep a boundary they had stopped caring about.
+  if (p.out_point.has_value() && *p.out_point <= at) p.out_point.reset();
+  return p;
+}
+
+Project set_out_point(Project p, std::optional<double> time) {
+  if (!time.has_value()) {
+    p.out_point.reset();
+    return p;
+  }
+  const double at = std::max(0.0, *time);
+  p.out_point = at;
+  if (p.in_point.has_value() && *p.in_point >= at) p.in_point.reset();
+  return p;
+}
+
+Project clear_marks(Project p) {
+  p.in_point.reset();
+  p.out_point.reset();
+  return p;
+}
+
+bool has_marks(const Project& p) noexcept {
+  return p.in_point.has_value() || p.out_point.has_value();
+}
+
+MarkedSpan marked_span(const Project& p) noexcept {
+  const double total = timeline_duration(p);
+  const double start = std::clamp(p.in_point.value_or(0.0), 0.0, total);
+  const double end = std::clamp(p.out_point.value_or(total), 0.0, total);
+  return MarkedSpan{.start = start, .duration = std::max(0.0, end - start)};
+}
+
 // --------------------------------------------------------------- factories --
 
 Project empty_project(int video_tracks, int audio_tracks) {

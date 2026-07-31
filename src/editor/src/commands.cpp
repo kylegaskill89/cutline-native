@@ -1,10 +1,13 @@
 #include "cutline/editor/commands.hpp"
 
 #include "cutline/core/edit.hpp"
+#include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/core/time.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,6 +44,23 @@ namespace {
   return clips_under(session.project(), session.playhead());
 }
 
+/// Whether marking is worth offering: something to mark, or a mark to remove.
+///
+/// The second half matters. Pressing the key where the mark already is removes
+/// it, so a sequence emptied out from under a mark must keep offering the key
+/// that takes it away.
+[[nodiscard]] bool can_mark(const core::Project& project, const std::optional<double>& mark) {
+  return core::timeline_duration(project) > 0.0 || mark.has_value();
+}
+
+/// Whether the mark is already where the playhead is, to within half a frame.
+/// Both came from frame-snapped times, so they agree to within rounding and
+/// nothing else.
+[[nodiscard]] bool mark_is_here(const std::optional<double>& mark, double playhead,
+                                double frame) {
+  return mark.has_value() && std::abs(*mark - playhead) < frame * 0.5;
+}
+
 [[nodiscard]] std::vector<std::string> every_clip(const core::Project& project) {
   std::vector<std::string> ids;
   for (const core::Track& track : project.tracks) {
@@ -58,6 +78,9 @@ std::string_view to_string(Command command) noexcept {
     case Command::RippleDelete: return "ripple_delete";
     case Command::NudgeLeft: return "nudge_left";
     case Command::NudgeRight: return "nudge_right";
+    case Command::MarkIn: return "mark_in";
+    case Command::MarkOut: return "mark_out";
+    case Command::ClearMarks: return "clear_marks";
     case Command::SelectAll: return "select_all";
     case Command::SelectNone: return "select_none";
     case Command::GoToStart: return "go_to_start";
@@ -81,6 +104,14 @@ bool can_run(const Session& session, Command command) {
     case Command::NudgeRight:
     case Command::SelectNone:
       return !session.selection().empty();
+
+    case Command::MarkIn:
+      return can_mark(session.project(), session.project().in_point);
+    case Command::MarkOut:
+      return can_mark(session.project(), session.project().out_point);
+
+    case Command::ClearMarks:
+      return core::has_marks(session.project());
 
     case Command::SelectAll:
       return !every_clip(session.project()).empty();
@@ -124,6 +155,24 @@ bool run(Session& session, Command command) {
       return session.apply(core::move_clips(project, session.selected_group(), -frame));
     case Command::NudgeRight:
       return session.apply(core::move_clips(project, session.selected_group(), frame));
+
+    case Command::MarkIn: {
+      if (!can_mark(project, project.in_point)) return false;
+      // Already there, so this takes it away.
+      const bool here = mark_is_here(project.in_point, session.playhead(), frame);
+      return session.apply(core::set_in_point(
+          project, here ? std::nullopt : std::optional<double>(session.playhead())));
+    }
+
+    case Command::MarkOut: {
+      if (!can_mark(project, project.out_point)) return false;
+      const bool here = mark_is_here(project.out_point, session.playhead(), frame);
+      return session.apply(core::set_out_point(
+          project, here ? std::nullopt : std::optional<double>(session.playhead())));
+    }
+
+    case Command::ClearMarks:
+      return session.apply(core::clear_marks(project));
 
     case Command::SelectAll: {
       std::vector<std::string> all = every_clip(project);
