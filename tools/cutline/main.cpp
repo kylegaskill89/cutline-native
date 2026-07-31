@@ -23,6 +23,7 @@
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/core/time.hpp"
+#include "cutline/editor/autosave.hpp"
 #include "cutline/editor/browser_binding.hpp"
 #include "cutline/editor/commands.hpp"
 #include "cutline/editor/document.hpp"
@@ -290,6 +291,15 @@ constexpr const wchar_t* kWindowClass = L"CutlineWindow";
 /// whatever has arrived.
 constexpr UINT kMediaReady = WM_APP + 1;
 
+/// The timer that offers to write a recovery copy.
+///
+/// A Win32 timer rather than a check in the frame loop, because the loop blocks
+/// on its message queue whenever nothing is playing — and an editor left alone
+/// with unsaved work is exactly the case a recovery copy is for. It fires
+/// oftener than a copy is due; `autosave_due` decides.
+constexpr UINT_PTR kAutosaveTimer = 1;
+constexpr UINT kAutosaveTickMs = 5000;
+
 /// One real window: its widgets, its pixels, and where the two meet.
 ///
 /// The main window is one of these and every torn-out panel is another. Kept as
@@ -404,6 +414,9 @@ struct App {
   /// saving one would put a copy of somebody's effects in every file that had
   /// ever had Copy pressed in it.
   cutline::editor::EffectClipboard effect_clipboard;
+
+  /// What has been written to the recovery copy so far.
+  cutline::editor::AutosaveState autosave;
 
   cutline::ui::ScopesView* scopes = nullptr;
   cutline::ui::ScopeKind scope_kind = cutline::ui::ScopeKind::Histogram;
@@ -2230,9 +2243,80 @@ void complain(HWND owner, const std::string& message) {
   MessageBoxA(owner, message.c_str(), "Cutline", MB_OK | MB_ICONWARNING);
 }
 
+/// Writes a recovery copy if one is due. Called from the autosave timer.
+///
+/// Silent about failure, and deliberately: this is a background courtesy, and a
+/// message box interrupting an edit to say that a file the user never asked for
+/// could not be written would be worse than the thing it is warning about. It
+/// simply tries again at the next tick.
+void poll_autosave(App& app) {
+  const std::uint64_t revision = app.session.revision();
+  if (!cutline::editor::autosave_due(app.autosave, app.session.modified(), revision,
+                                     std::chrono::steady_clock::now())) {
+    return;
+  }
+
+  if (cutline::editor::write_autosave(app.session.path(), app.session.project())) {
+    app.autosave = {.written_at = std::chrono::steady_clock::now(),
+                    .written_revision = revision,
+                    .ever_written = true};
+  }
+}
+
+/// Throws away the recovery copy and forgets there was one.
+///
+/// After a save, and on the way out. What is left in the recovery directory is
+/// then exactly what was never recovered from, which is what makes finding one
+/// at startup mean something.
+void clear_autosave(App& app, const std::filesystem::path& document) {
+  cutline::editor::discard_autosave(document);
+  app.autosave = {};
+}
+
+/// Offers back a recovery copy of `document`, if there is one newer than the
+/// document itself. Returns whether it was taken.
+///
+/// Asked rather than restored silently. A recovery copy is a guess about what
+/// somebody wanted, and one that opens a different project from the one they
+/// double-clicked without saying so is a guess made too confidently.
+[[nodiscard]] bool offer_recovery(App& app, const std::filesystem::path& document) {
+  const auto found = cutline::editor::find_recovery(document);
+  if (!found.has_value()) return false;
+
+  const std::string what =
+      document.empty() ? std::string("an unsaved project")
+                       : document.filename().string();
+  const std::string message =
+      "Cutline has unsaved changes to " + what +
+      " from a session that did not close normally.\n\nRecover them?";
+  if (MessageBoxA(app.main.window, message.c_str(), "Cutline",
+                  MB_YESNO | MB_ICONQUESTION) != IDYES) {
+    // Refused once is refused: keeping it would offer the same changes again
+    // every time the project was opened.
+    clear_autosave(app, document);
+    return false;
+  }
+
+  const auto loaded = cutline::editor::read_project(found->path);
+  if (!loaded.has_value()) {
+    complain(app.main.window, "Could not read the recovered project.\n\n" + loaded.error());
+    return false;
+  }
+
+  // Opened against the *document's* path, so saving writes where the project
+  // lives rather than into the recovery directory. It stays modified, because
+  // it is: what is on disk is still the older version.
+  app.session.reset(loaded->project, document);
+  app.session.mark_unsaved();
+  refresh_all(app);
+  return true;
+}
+
 void open_project(App& app) {
   const auto path = choose_file(app.main.window, false);
   if (!path.has_value()) return;
+
+  if (offer_recovery(app, *path)) return;
 
   const auto loaded = cutline::editor::read_project(*path);
   if (!loaded.has_value()) {
@@ -2268,12 +2352,17 @@ bool save_project(App& app, bool ask_where) {
     return false;
   }
 
+  // The old document's recovery copy goes before the new path is recorded, or
+  // "Save As" would leave one behind under the name it used to have.
+  clear_autosave(app, app.session.path());
   app.session.mark_saved(path);
+  clear_autosave(app, path);
   refresh_title(app);
   return true;
 }
 
 void new_project(App& app) {
+  clear_autosave(app, app.session.path());
   app.session.reset(sample_project());
   refresh_all(app);
 }
@@ -4191,6 +4280,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     case WM_ERASEBKGND:
       return 1;  // every pixel is painted, so erasing only causes a flash
 
+    case WM_TIMER:
+      if (wparam == kAutosaveTimer) {
+        poll_autosave(*app);
+        return 0;
+      }
+      break;
+
 #if CUTLINE_HAVE_PREVIEW
     case kMediaReady: {
       // Rebuilt rather than patched: what arrives belongs to a source, and
@@ -4838,6 +4934,14 @@ int main(int argc, char** argv) {
   reconcile_windows(app);
   refresh_float_titles(app);
 
+  // Anything left over from a session that did not close cleanly. Only the
+  // never-saved document is offered here; a recovery copy of a project on disk
+  // is offered when that project is opened, which is where somebody is
+  // expecting to be asked about it.
+  (void)offer_recovery(app, {});
+
+  SetTimer(window, kAutosaveTimer, kAutosaveTickMs, nullptr);
+
   // Two loops in one, and which is running is the difference between an
   // interface and a video player.
   //
@@ -4888,6 +4992,15 @@ int main(int argc, char** argv) {
       }
     }
   }
+
+  KillTimer(window, kAutosaveTimer);
+
+  // Only when there is nothing unsaved. Closing with unsaved work is the case a
+  // recovery copy exists for — this application does not stop you and ask, so
+  // keeping it is the difference between "you chose to discard that" and "you
+  // lost it". What is left in the recovery directory is exactly what was never
+  // saved and never recovered.
+  if (!app.session.modified()) clear_autosave(app, app.session.path());
 
   // Before the windows go, so neither the audio thread nor the export thread is
   // still reading things that are being torn down.

@@ -37,6 +37,14 @@ bool Session::apply(core::Project next) {
   return true;
 }
 
+void Session::mark_unsaved() {
+  // The comparison is against a snapshot, so the flag cannot simply be set: an
+  // edit would recompute it and find the project matching what it was told was
+  // on disk. Clearing the snapshot is what makes the difference stick.
+  saved_ = core::Project{};
+  refresh_modified();
+}
+
 void Session::reset(core::Project project, std::filesystem::path path) {
   project_ = std::move(project);
   // The history belongs to the document being closed, not to the new one.

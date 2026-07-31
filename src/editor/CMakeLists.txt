@@ -7,6 +7,7 @@
 #
 # Pure, and needs no Skia, no GPU and no FFmpeg.
 add_library(cutline_editor
+  src/autosave.cpp
   src/browser_binding.cpp
   src/commands.cpp
   src/document.cpp

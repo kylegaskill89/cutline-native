@@ -58,6 +58,12 @@ class Session {
   /// Records that what is here now is what is on disk.
   void mark_saved(std::filesystem::path path);
 
+  /// Records that what is here is *not* what is on disk, without saying what
+  /// is. For a project recovered from an autosave: it belongs to `path()`, the
+  /// file there is the older version, and the title bar and the close prompt
+  /// both have to know that before anything else has been edited.
+  void mark_unsaved();
+
   /// For the title bar: the file's name, or "Untitled", marked when there is
   /// anything unsaved.
   [[nodiscard]] std::string document_title() const;

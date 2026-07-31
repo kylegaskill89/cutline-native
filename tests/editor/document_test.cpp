@@ -211,7 +211,43 @@ TEST(SessionDocument, UndoingBackToWhatIsOnDiskLeavesNothingToSave) {
   EXPECT_TRUE(session.modified());
 }
 
+// A project recovered from an autosave belongs to the file it came from, and
+// the file there is the older version -- so it has to read as unsaved before
+// anything else has been edited, or the title bar and the close prompt both
+// say there is nothing to lose.
+TEST(SessionDocument, ARecoveredProjectReadsAsUnsavedFromTheStart) {
+  Session session(sample_project());
+  session.reset(sample_project(), "D:/films/cut.cutline");
+  ASSERT_FALSE(session.modified());
+
+  session.mark_unsaved();
+  EXPECT_TRUE(session.modified());
+  EXPECT_EQ(session.path(), std::filesystem::path("D:/films/cut.cutline"));
+}
+
+// The flag is a comparison against a snapshot, so simply setting it would not
+// survive the next edit recomputing it.
+TEST(SessionDocument, AnEditAfterRecoveringStillReadsAsUnsaved) {
+  Session session(sample_project());
+  session.reset(sample_project(), "D:/films/cut.cutline");
+  session.mark_unsaved();
+
+  const std::vector<std::string> ids{"c1"};
+  ASSERT_TRUE(session.apply(core::move_clips(session.project(), ids, 2.0)));
+  EXPECT_TRUE(session.modified());
+}
+
+TEST(SessionDocument, SavingAfterRecoveringSettlesAgain) {
+  Session session(sample_project());
+  session.reset(sample_project(), "D:/films/cut.cutline");
+  session.mark_unsaved();
+
+  session.mark_saved("D:/films/cut.cutline");
+  EXPECT_FALSE(session.modified());
+}
+
 TEST(SessionDocument, OpeningAProjectCountsAsSaved) {
+
   Session session(sample_project());
   const std::vector<std::string> ids{"c1"};
   session.apply(core::move_clips(session.project(), ids, 2.0));
