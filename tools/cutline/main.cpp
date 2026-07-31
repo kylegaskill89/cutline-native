@@ -18,6 +18,7 @@
 /// Not the editor. A harness for the parts of it that exist.
 
 #include "cutline/core/edit.hpp"
+#include "cutline/core/version.hpp"
 #include "cutline/core/effects.hpp"
 #include "cutline/core/model.hpp"
 #include "cutline/core/properties.hpp"
@@ -55,6 +56,7 @@
 
 #if CUTLINE_HAVE_PREVIEW
 #include "cutline/app/preview.hpp"
+#include "cutline/app/updater.hpp"
 #include "cutline/app/thumbnails.hpp"
 #include "cutline/app/waveforms.hpp"
 #include "cutline/engine/exporter.hpp"
@@ -66,6 +68,8 @@
 // defines, the other for the types in its own signatures.
 #include <commdlg.h>
 #include <dwmapi.h>
+// For `ShellExecuteW`, which is what starts the downloaded installer.
+#include <shellapi.h>
 // For `timeBeginPeriod`: the default 15.6 ms scheduler tick is most of a frame
 // at 60 Hz, and the playback loop cannot pace itself with one that coarse.
 #include <timeapi.h>
@@ -301,6 +305,11 @@ constexpr UINT kMediaReady = WM_APP + 1;
 constexpr UINT_PTR kAutosaveTimer = 1;
 constexpr UINT kAutosaveTickMs = 5000;
 
+/// Posted by the updater's worker when its state changes. The same reason
+/// `kMediaReady` exists: the loop blocks on its queue, and an answer that
+/// arrived while nothing was moving would be shown at the next mouse move.
+constexpr UINT kUpdateChanged = WM_APP + 2;
+
 /// One real window: its widgets, its pixels, and where the two meet.
 ///
 /// The main window is one of these and every torn-out panel is another. Kept as
@@ -515,6 +524,10 @@ struct App {
   /// relabelled without rebuilding the row it is in.
   Button* canvas_button = nullptr;
 
+  /// The update check. Shows the running version and asks about newer ones.
+  cutline::app::Updater updater;
+  Button* version_button = nullptr;
+
   /// Set when the picture has changed and the measurements no longer describe
   /// it. Deferred like the preview is, so scrubbing across ten frames measures
   /// the one that is finally shown rather than all ten.
@@ -713,6 +726,8 @@ void add_adjustment(App& app);
 void complain(HWND owner, const std::string& message);
 [[nodiscard]] std::optional<std::filesystem::path> choose_image_file(HWND owner);
 void take_snapshot(App& app);
+void check_for_updates(App& app);
+void settle_update(App& app);
 [[nodiscard]] bool confirm_discard(App& app);
 bool save_project(App& app, bool ask_where);
 
@@ -2654,6 +2669,107 @@ void clear_autosave(App& app, const std::filesystem::path& document) {
   return true;
 }
 
+/// Asks whether there is a newer version.
+///
+/// Only ever from the button. Nothing checks on its own: an editor that phones
+/// home the moment it opens is one that has decided on the user's behalf that
+/// it may, and this one has no telemetry and no reason to start.
+void check_for_updates(App& app) {
+  using State = cutline::app::Updater::State;
+  switch (app.updater.state()) {
+    case State::Available:
+      // Already found; pressing again gets on with it.
+      app.updater.download();
+      break;
+    case State::Ready:
+      settle_update(app);
+      break;
+    case State::Checking:
+    case State::Downloading:
+      break;
+    default:
+      app.updater.check(cutline::editor::Version{cutline::core::kVersionMajor,
+                                                 cutline::core::kVersionMinor,
+                                                 cutline::core::kVersionPatch});
+      if (app.version_button != nullptr) app.version_button->set_text("Checking...");
+      mark_dirty(app);
+      break;
+  }
+}
+
+/// Acts on whatever the updater has just decided.
+///
+/// Every branch that offers something asks first. An editor that downloaded and
+/// ran an installer because somebody pressed a button labelled with a version
+/// number would be doing rather more than it said it would.
+void settle_update(App& app) {
+  using State = cutline::app::Updater::State;
+  const std::string running = std::string("v") + std::string(cutline::core::kVersion);
+
+  switch (app.updater.state()) {
+    case State::UpToDate:
+      if (app.version_button != nullptr) app.version_button->set_text(running);
+      MessageBoxA(app.main.window, ("Cutline " + running + " is the latest version.").c_str(),
+                  "Cutline", MB_OK | MB_ICONINFORMATION);
+      break;
+
+    case State::Available: {
+      const cutline::editor::Release found = app.updater.found();
+      const std::string message =
+          "Cutline " + found.version.to_string() + " is available.\n\n" +
+          (found.notes.empty() ? std::string("") : found.notes + "\n\n") + "Download it now?";
+      if (app.version_button != nullptr) {
+        app.version_button->set_text("Update to " + found.version.to_string());
+      }
+      if (MessageBoxA(app.main.window, message.c_str(), "Cutline",
+                      MB_YESNO | MB_ICONQUESTION) == IDYES) {
+        app.updater.download();
+      }
+      break;
+    }
+
+    case State::Ready: {
+      // The installer replaces the running program, so the editor has to go
+      // first — and anything unsaved has to be dealt with before it does.
+      if (!confirm_discard(app)) break;
+      if (MessageBoxA(app.main.window,
+                      "The update is ready.\n\nCutline will close while it installs.", "Cutline",
+                      MB_OKCANCEL | MB_ICONINFORMATION) != IDOK) {
+        break;
+      }
+
+      const std::wstring path = app.updater.installer().wstring();
+      const auto started = reinterpret_cast<INT_PTR>(
+          ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+      // Anything at or below 32 is a failure code rather than an instance
+      // handle, which is this API's way of saying so.
+      if (started <= 32) {
+        complain(app.main.window, "The installer would not start. It is at\n\n" +
+                                      app.updater.installer().string());
+        break;
+      }
+      PostMessageW(app.main.window, WM_CLOSE, 0, 0);
+      break;
+    }
+
+    case State::Failed:
+      if (app.version_button != nullptr) app.version_button->set_text(running);
+      complain(app.main.window, "Could not check for updates.\n\n" + app.updater.error());
+      break;
+
+    case State::Downloading:
+      if (app.version_button != nullptr) {
+        app.version_button->set_text(
+            std::format("{:.0f}%", app.updater.progress() * 100.0));
+      }
+      break;
+
+    case State::Idle:
+      break;
+  }
+  mark_dirty(app);
+}
+
 void open_project(App& app) {
   // Before the file dialog, so somebody who decides to save first is not asked
   // to pick a file twice.
@@ -2967,6 +3083,24 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     // theme whose lists are roomier.
     pool.set_items(cutline::editor::browser_items(sample_project()));
   }
+
+  // Under the pool rather than in the toolbar above it. It was in the toolbar
+  // first, and `--check` reported two controls cut in half by the edge of the
+  // panel — the same trap a third generator button fell into. This row has room
+  // and this is a thing you look at rather than reach for.
+  //
+  // The version doubles as the button: a label saying what is running and a
+  // separate control asking about newer would be two where one will do, and
+  // putting the number on the button is what makes "there is a newer one" mean
+  // anything.
+  auto& footer = panel->emplace<Box>(Axis::Horizontal);
+  auto& version = footer.emplace<Button>(
+      std::string("v") + std::string(cutline::core::kVersion), [app] {
+        if (app != nullptr) check_for_updates(*app);
+      });
+  if (app != nullptr) app->version_button = &version;
+  footer.emplace<Spacer>();
+
   return panel;
 }
 
@@ -4770,6 +4904,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       }
       break;
 
+    case kUpdateChanged:
+      settle_update(*app);
+      return 0;
+
 #if CUTLINE_HAVE_PREVIEW
     case kMediaReady: {
       // Rebuilt rather than patched: what arrives belongs to a source, and
@@ -5400,6 +5538,9 @@ int main(int argc, char** argv) {
   app.waveforms.set_on_arrival([window] { PostMessageW(window, kMediaReady, 0, 0); });
   app.filmstrips.set_on_arrival([window] { PostMessageW(window, kMediaReady, 0, 0); });
 #endif
+  // Same shape, and for the same reason: the answer arrives on a worker while
+  // the loop is blocked on its queue.
+  app.updater.set_on_change([window] { PostMessageW(window, kUpdateChanged, 0, 0); });
 
   // One pixel of frame handed back to the compositor, which is enough to keep
   // the drop shadow and the rounded corners the system draws around a window.

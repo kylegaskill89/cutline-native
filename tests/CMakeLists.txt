@@ -29,6 +29,7 @@ add_executable(cutline_core_tests
   editor/timeline_binding_test.cpp
   editor/titles_test.cpp
   editor/transitions_test.cpp
+  editor/updates_test.cpp
   editor/workspace_test.cpp
   render/effect_catalog_test.cpp
   render/effects_test.cpp
