@@ -605,7 +605,57 @@ DragMode TimelineView::zone_at(double x, double y) const {
   return DragMode::Move;
 }
 
-std::optional<BlockRef> TimelineView::selection() const {
+Rect TimelineView::marquee() const {
+  if (mode_ != DragMode::Marquee || !moved_) return {};
+
+  const double left = std::min(press_x_, marquee_x_);
+  const double top = std::min(press_y_, marquee_y_);
+  const Rect swept{left, top, std::abs(marquee_x_ - press_x_), std::abs(marquee_y_ - press_y_)};
+
+  // Never outside the tracks: a sweep that ran up into the ruler would be drawn
+  // over the timecodes and would look like it was selecting them.
+  const Rect area = tracks_area();
+  const double x0 = std::max(swept.x, area.x);
+  const double y0 = std::max(swept.y, area.y);
+  const double x1 = std::min(swept.right(), area.right());
+  const double y1 = std::min(swept.bottom(), area.bottom());
+  if (x1 <= x0 || y1 <= y0) return {};
+  return Rect{x0, y0, x1 - x0, y1 - y0};
+}
+
+std::vector<BlockRef> TimelineView::blocks_touching(const Rect& area) const {
+  std::vector<BlockRef> found;
+  if (area.empty()) return found;
+
+  for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
+    const Rect row = track_rect(track);
+    if (row.empty() || row.bottom() <= area.y || row.y >= area.bottom()) continue;
+
+    for (std::size_t i = 0; i < model_.tracks[track].blocks.size(); ++i) {
+      const Rect box = block_rect(track, i);
+      if (box.empty()) continue;
+      // Overlap rather than containment. A clip wider than the window can never
+      // be enclosed by a rectangle drawn inside it, and being unable to sweep
+      // up the long clip is exactly when somebody would reach for a sweep.
+      if (box.right() <= area.x || box.x >= area.right()) continue;
+      found.push_back(BlockRef{track, i});
+    }
+  }
+  return found;
+}
+
+std::vector<BlockRef> TimelineView::selection() const {
+  std::vector<BlockRef> chosen;
+  for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
+    const std::vector<TimelineBlock>& blocks = model_.tracks[track].blocks;
+    for (std::size_t i = 0; i < blocks.size(); ++i) {
+      if (blocks[i].selected) chosen.push_back(BlockRef{track, i});
+    }
+  }
+  return chosen;
+}
+
+std::optional<BlockRef> TimelineView::first_selected() const {
   for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
     const std::vector<TimelineBlock>& blocks = model_.tracks[track].blocks;
     for (std::size_t i = 0; i < blocks.size(); ++i) {
@@ -616,12 +666,19 @@ std::optional<BlockRef> TimelineView::selection() const {
 }
 
 void TimelineView::select(std::optional<BlockRef> block) {
+  if (!block.has_value()) return select(std::span<const BlockRef>{});
+  const std::array<BlockRef, 1> one{*block};
+  select(std::span<const BlockRef>{one});
+}
+
+void TimelineView::select(std::span<const BlockRef> blocks) {
   for (TimelineTrack& track : model_.tracks) {
     for (TimelineBlock& clip : track.blocks) clip.selected = false;
   }
-  if (block.has_value() && block->track < model_.tracks.size()) {
-    std::vector<TimelineBlock>& blocks = model_.tracks[block->track].blocks;
-    if (block->block < blocks.size()) blocks[block->block].selected = true;
+  for (const BlockRef& block : blocks) {
+    if (block.track >= model_.tracks.size()) continue;
+    std::vector<TimelineBlock>& row = model_.tracks[block.track].blocks;
+    if (block.block < row.size()) row[block.block].selected = true;
   }
 }
 
@@ -933,6 +990,17 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
     }
   }
   painter.pop_clip();
+
+  // ---- the sweep, over the clips it is gathering and under the playhead
+  if (const Rect swept = marquee(); !swept.empty()) {
+    const SurfaceStyle& style = theme.style(Part::Clip, State::Selected);
+    Fill wash = style.fill;
+    wash.color.a *= 0.25f;
+    painter.push_clip(tracks, 0.0);
+    painter.fill(swept, 0.0, wash);
+    painter.stroke(swept, 0.0, style.text, 1.0);
+    painter.pop_clip();
+  }
 
   // ---- the playhead, last and over everything, clipped to the time area so
   // it never draws across the headers
@@ -1251,8 +1319,49 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
     return true;
   }
 
+  // Shift on a clip adds it to the selection, or takes it out again if it was
+  // already in. Toggling rather than only adding, because otherwise there is no
+  // way to correct a sweep that caught one clip too many except by starting
+  // over.
+  if (hit.has_value() && event.modifiers.shift && tool_ == Tool::Selection) {
+    std::vector<BlockRef> chosen = selection();
+    const auto already = std::ranges::find(chosen, *hit);
+    if (already != chosen.end()) {
+      chosen.erase(already);
+    } else {
+      chosen.push_back(*hit);
+    }
+    select(chosen);
+    if (on_select_) on_select_(chosen);
+    // No drag. A shift-click is about what is selected, and moving the clip as
+    // well would make gathering a selection up shove it around.
+    return true;
+  }
+
+  // A press on empty track starts a sweep. Nothing was taken away to make room
+  // for it: this was already the gesture that deselected, and a press that goes
+  // nowhere still does exactly that.
+  if (!hit.has_value() && tool_ == Tool::Selection) {
+    mode_ = DragMode::Marquee;
+    press_x_ = event.x;
+    press_y_ = event.y;
+    marquee_x_ = event.x;
+    marquee_y_ = event.y;
+    moved_ = false;
+    // Kept so a shift-sweep adds to what was there, and so dragging back over
+    // the start does not leave the earlier selection half rubbed out.
+    marquee_from_ = event.modifiers.shift ? selection() : std::vector<BlockRef>{};
+    select(marquee_from_);
+    if (on_select_) on_select_(marquee_from_);
+    return true;
+  }
+
   select(hit);
-  if (on_select_) on_select_(hit);
+  if (on_select_) {
+    const std::vector<BlockRef> chosen =
+        hit.has_value() ? std::vector<BlockRef>{*hit} : std::vector<BlockRef>{};
+    on_select_(chosen);
+  }
 
   if (hit.has_value()) {
     mode_ = zone_at(event.x, event.y);
@@ -1331,6 +1440,27 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
     scrub_to(event.x);
     return true;
   }
+  if (mode_ == DragMode::Marquee) {
+    marquee_x_ = event.x;
+    marquee_y_ = event.y;
+    // Both axes, like the volume drags: a sweep straight down a stack of tracks
+    // covers no distance in x at all.
+    if (!moved_ && std::hypot(event.x - press_x_, event.y - press_y_) < kDragThreshold) {
+      return true;
+    }
+    moved_ = true;
+
+    // Live, so the sweep can be seen gathering clips up rather than only
+    // reporting what it caught once it is too late to adjust.
+    std::vector<BlockRef> chosen = marquee_from_;
+    for (const BlockRef& block : blocks_touching(marquee())) {
+      if (std::ranges::find(chosen, block) == chosen.end()) chosen.push_back(block);
+    }
+    select(chosen);
+    if (on_select_) on_select_(chosen);
+    return true;
+  }
+
   if (!drag_.has_value()) return false;
 
   const bool volume = mode_ == DragMode::GainLevel || mode_ == DragMode::GainPointDrag ||
@@ -1358,6 +1488,15 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
 
 bool TimelineView::on_mouse_up(const MouseEvent& event) {
   if (event.button != MouseButton::Left || mode_ == DragMode::None) return false;
+
+  // A sweep has already reported everything it gathered, on every move. There
+  // is no edit at the end of it — nothing about the project changed.
+  if (mode_ == DragMode::Marquee) {
+    mode_ = DragMode::None;
+    moved_ = false;
+    marquee_from_.clear();
+    return true;
+  }
 
   // Reported once, at the end. The model has been updated all along so the
   // drag can be seen; firing on every move would put a hundred entries in the

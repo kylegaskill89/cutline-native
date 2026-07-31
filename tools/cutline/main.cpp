@@ -2216,26 +2216,38 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     invalidate_preview(*app);
   });
 
-  tracks.set_on_select([app](std::optional<cutline::ui::BlockRef> ref) {
+  tracks.set_on_select([app](std::span<const cutline::ui::BlockRef> refs) {
     if (app == nullptr || app->timeline == nullptr) return;
-    if (!ref.has_value()) {
+    if (refs.empty()) {
       app->session.clear_selection();
       app->inspector_stale = true;
+      refresh_timeline(*app);
       return;
     }
-    const auto id = cutline::editor::block_clip_id(app->timeline->model(), *ref);
-    if (id.has_value()) {
-      // The whole linked group, not the one block that was hit. Clicking a
-      // video clip and seeing its audio stay unhighlighted says the two are
-      // separate when the point of linking them is that they are not — and
-      // every edit was already going to reach both, so showing one selected
-      // was the interface disagreeing with what it was about to do.
-      app->session.select(cutline::core::group_members(app->session.project(), *id));
-      // The view highlighted the single block it was clicked on, and the
-      // session now says otherwise. Rebuilt rather than patched, for the usual
-      // reason: which blocks are in the group is the model's answer.
-      refresh_timeline(*app);
+
+    // Each block, expanded to the whole linked group it belongs to. Clicking a
+    // video clip and seeing its audio stay unhighlighted says the two are
+    // separate when the point of linking them is that they are not — and every
+    // edit was already going to reach both, so showing one selected was the
+    // interface disagreeing with what it was about to do.
+    std::vector<std::string> ids;
+    for (const cutline::ui::BlockRef& ref : refs) {
+      const auto id = cutline::editor::block_clip_id(app->timeline->model(), ref);
+      if (!id.has_value()) continue;
+      for (std::string& member :
+           cutline::core::group_members(app->session.project(), *id)) {
+        // A sweep across a linked pair reaches both blocks and each names the
+        // whole group, so without this the same clip arrives twice.
+        if (std::ranges::find(ids, member) == ids.end()) ids.push_back(std::move(member));
+      }
     }
+
+    app->session.select(std::move(ids));
+    // The view highlighted what was swept; the session may say more, because a
+    // group reaches clips the rectangle never touched. Rebuilt rather than
+    // patched, for the usual reason: which blocks are in a group is the model's
+    // answer, not the view's.
+    refresh_timeline(*app);
     app->inspector_stale = true;
   });
 

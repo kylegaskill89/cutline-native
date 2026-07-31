@@ -380,6 +380,12 @@ enum class DragMode {
   /// follow — but it is reported the same way, because "the timeline was used"
   /// is better as one thing for a caller to handle than as two.
   Razor,
+  /// Sweeping a rectangle over empty track to gather up everything it touches.
+  ///
+  /// It starts on a press that hit no clip, which was previously the gesture
+  /// for "deselect and do nothing" — so nothing has been taken away to make room
+  /// for it, and a press with no drag still clears the selection.
+  Marquee,
   /// Moving a clip's whole volume band, which sets its constant gain. Only
   /// while it has no automation — with points on it there is no one level to
   /// set, and `GainSegment` is what a drag means instead.
@@ -492,13 +498,19 @@ class TimelineView : public Widget {
 
   /// Called while the playhead is dragged, and once when it is clicked.
   void set_on_scrub(std::function<void(double)> on_scrub) { on_scrub_ = std::move(on_scrub); }
-  /// Called when the selection changes. Null means everything was deselected.
-  void set_on_select(std::function<void(std::optional<BlockRef>)> on_select) {
+  /// Called when the selection changes. Empty means everything was deselected.
+  void set_on_select(std::function<void(std::span<const BlockRef>)> on_select) {
     on_select_ = std::move(on_select);
   }
 
-  [[nodiscard]] std::optional<BlockRef> selection() const;
+  /// Every selected block, in track then block order.
+  [[nodiscard]] std::vector<BlockRef> selection() const;
+  /// The first of them, which is all a caller wanting "the" selected clip needs
+  /// and what most of them want.
+  [[nodiscard]] std::optional<BlockRef> first_selected() const;
+
   void select(std::optional<BlockRef> block);
+  void select(std::span<const BlockRef> blocks);
 
   /// Called once, at the end of a gesture. Not on every mouse move: the model
   /// is already updated live so the drag can be seen, and an edit that fired
@@ -572,6 +584,16 @@ class TimelineView : public Widget {
   /// Where a block's transition is drawn: centred on its out-edge, half either
   /// side. Empty when it has none.
   [[nodiscard]] Rect transition_rect(std::size_t track, std::size_t block) const;
+
+  /// The rectangle being swept, or empty when nothing is. Between the press and
+  /// wherever the pointer has got to, in either direction — a marquee dragged
+  /// up and to the left is the same marquee.
+  [[nodiscard]] Rect marquee() const;
+
+  /// Every block a rectangle touches. Touching rather than containing: a sweep
+  /// has to be able to catch a clip wider than the screen, which no rectangle
+  /// could ever enclose.
+  [[nodiscard]] std::vector<BlockRef> blocks_touching(const Rect& area) const;
 
   /// The strip of a block its filmstrip is drawn in. Empty when the block has
   /// no frames yet, or is too small to show one.
@@ -744,8 +766,17 @@ class TimelineView : public Widget {
   /// Taken from the theme at layout, because input arrives without one.
   Metrics metrics_;
 
+  /// Where a marquee is being swept from and to, in the view's own
+  /// coordinates. Only meaningful while the mode is `Marquee`.
+  double marquee_x_ = 0.0;
+  double marquee_y_ = 0.0;
+  /// What was selected when the sweep began, so a shift-sweep can add to it
+  /// rather than replace it — and so dragging back over the start does not
+  /// leave the earlier selection half rubbed out.
+  std::vector<BlockRef> marquee_from_;
+
   std::function<void(double)> on_scrub_;
-  std::function<void(std::optional<BlockRef>)> on_select_;
+  std::function<void(std::span<const BlockRef>)> on_select_;
   std::function<void(const TimelineEdit&)> on_edit_;
   std::function<void(TrackControlRef)> on_track_toggle_;
 };

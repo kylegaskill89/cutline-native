@@ -278,16 +278,19 @@ removed without a third control that exists only to undo the other two. The two
 can never cross: setting one past the other clears that other, so an inverted
 pair is unrepresentable rather than something every reader has to check for.
 
-Clicking a linked clip selects everything linked to it, so what is highlighted is
-what an edit is about to reach — the two had no business disagreeing.
+More than one clip can be selected: shift-click adds one or takes it out again,
+and a drag over empty track sweeps up everything the rectangle touches — touches
+rather than encloses, since a clip wider than the window could never be enclosed
+and that is exactly when a sweep is what somebody wants. Clicking a linked clip
+selects everything linked to it, so what is highlighted is what an edit is about
+to reach; the two had no business disagreeing.
 
 Clips link and unlink, and tracks can be added and removed, from the timeline's
 toolbar or from Premiere's Ctrl+L. Both go through the command table rather than
 touching the model where the button is, so a shortcut and a button cannot come to
 mean different things — and the same `can_run` that would grey out a menu item is
 what greys out the button, which is why Link is dark until two clips are selected
-and Unlink until one of them is linked. Selecting two still means Select All: the
-timeline holds one clip at a time, and multi-select is the next thing it needs.
+and Unlink until one of them is linked.
 
 Video clips show a filmstrip and audio clips show their waveform, both extracted
 on workers so the interface never waits for a decoder. Each describes the
@@ -360,7 +363,7 @@ had been there, tested, since the first phase, and the mixer and the exporter
 have honoured automation from the start. This is the second feature in a row
 whose work was entirely the gesture.
 
-1693 tests, plus a headless check that lays every panel out in every theme —
+1704 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a matte, an adjustment layer, a title, and the
 colour picker open, which is the only way the controls a panel is made of get

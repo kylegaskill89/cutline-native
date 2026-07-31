@@ -213,21 +213,19 @@ TEST(Timeline, ClickingAClipSelectsIt) {
 
   fixture.host->mouse_down(press(box.x + 10.0, box.y + 10.0));
 
-  const auto selected = fixture.view->selection();
-  ASSERT_TRUE(selected.has_value());
-  EXPECT_EQ(*selected, (BlockRef{1, 1}));
+  EXPECT_EQ(fixture.view->selection(), (std::vector<BlockRef>{{1, 1}}));
 }
 
 TEST(Timeline, ClickingEmptyTrackClearsTheSelection) {
   Fixture fixture;
   fixture.view->select(BlockRef{1, 0});
-  ASSERT_TRUE(fixture.view->selection().has_value());
+  ASSERT_FALSE(fixture.view->selection().empty());
 
   // Well past the last clip on that track.
   const Rect row = fixture.view->track_rect(0);
   fixture.host->mouse_down(press(fixture.view->time_area().right() - 20.0, row.y + 5.0));
 
-  EXPECT_FALSE(fixture.view->selection().has_value());
+  EXPECT_TRUE(fixture.view->selection().empty());
 }
 
 TEST(Timeline, OnlyOneClipIsSelectedAtATime) {
@@ -246,15 +244,16 @@ TEST(Timeline, OnlyOneClipIsSelectedAtATime) {
 
 TEST(Timeline, SelectionIsReportedOnce) {
   Fixture fixture;
-  std::vector<std::optional<BlockRef>> reported;
-  fixture.view->set_on_select([&](std::optional<BlockRef> ref) { reported.push_back(ref); });
+  std::vector<std::vector<BlockRef>> reported;
+  fixture.view->set_on_select([&](std::span<const BlockRef> refs) {
+    reported.emplace_back(refs.begin(), refs.end());
+  });
 
   const Rect box = fixture.view->block_rect(1, 0);
   fixture.host->mouse_down(press(box.x + 5.0, box.y + 5.0));
 
   ASSERT_EQ(reported.size(), 1u);
-  ASSERT_TRUE(reported[0].has_value());
-  EXPECT_EQ(*reported[0], (BlockRef{1, 0}));
+  EXPECT_EQ(reported[0], (std::vector<BlockRef>{{1, 0}}));
 }
 
 TEST(Timeline, TheHeaderColumnIsNotPartOfTheTracks) {
@@ -1204,7 +1203,7 @@ TEST(TrackSwitch, APressOnOneDoesNotScrubOrSelect) {
   int scrubs = 0;
   int selections = 0;
   fixture.view->set_on_scrub([&](double) { ++scrubs; });
-  fixture.view->set_on_select([&](std::optional<BlockRef>) { ++selections; });
+  fixture.view->set_on_select([&](std::span<const BlockRef>) { ++selections; });
 
   const Rect box = fixture.view->control_rect(2, TrackControl::Solo);
   fixture.host->mouse_down(press(box.x + 2.0, box.y + 2.0));
@@ -1374,13 +1373,13 @@ TEST(Razor, DoesNotSelectWhatItCuts) {
   Fixture fixture;
   fixture.view->set_tool(Tool::Razor);
   int selections = 0;
-  fixture.view->set_on_select([&](std::optional<BlockRef>) { ++selections; });
+  fixture.view->set_on_select([&](std::span<const BlockRef>) { ++selections; });
 
   const Rect box = fixture.view->block_rect(1, 0);
   fixture.host->mouse_down(press(box.x + 60.0, box.y + 10.0));
 
   EXPECT_EQ(selections, 0);
-  EXPECT_FALSE(fixture.view->selection().has_value());
+  EXPECT_TRUE(fixture.view->selection().empty());
 }
 
 TEST(Razor, DoesNotMoveTheClipItIsDraggedAcross) {
@@ -1711,7 +1710,7 @@ TEST(GainBand, TheBandIsDrawnOnEveryAudioClipRatherThanTheSelectedOne) {
   // Nothing is selected, and the line is there anyway: which clips carry a
   // level is what somebody reading a mix wants to see without clicking through
   // them one at a time.
-  EXPECT_FALSE(fixture.view->selection().has_value());
+  EXPECT_TRUE(fixture.view->selection().empty());
 
   // A line's endpoints are its bounds' origin and that origin plus its extents.
   const double y = fixture.view->gain_to_y(1, 0, 1.0);
@@ -2315,6 +2314,188 @@ TEST(Filmstrip, ScrollingSlidesTheStripRatherThanReshufflingIt) {
           << "a tile landed " << at << " tiles along, scrolled to " << start;
     }
   }
+}
+
+// -------------------------------------------------- selecting more than one --
+//
+// Everything above the timeline has always taken a list — the session, the
+// commands, `selected_group`. This is the view catching up with them.
+
+[[nodiscard]] MouseEvent shift_press(double x, double y) {
+  return MouseEvent{.x = x, .y = y, .button = MouseButton::Left, .modifiers = {.shift = true}};
+}
+
+TEST(MultiSelect, ShiftAddsAClipToTheSelection) {
+  Fixture fixture;
+  const Rect first = fixture.view->block_rect(1, 0);
+  const Rect second = fixture.view->block_rect(1, 1);
+
+  fixture.host->mouse_down(press(first.x + 10.0, first.y + 10.0));
+  fixture.host->mouse_up(press(first.x + 10.0, first.y + 10.0));
+  fixture.host->mouse_down(shift_press(second.x + 10.0, second.y + 10.0));
+
+  EXPECT_EQ(fixture.view->selection(), (std::vector<BlockRef>{{1, 0}, {1, 1}}));
+}
+
+// Toggling rather than only adding: otherwise a sweep that caught one clip too
+// many can only be corrected by starting over.
+TEST(MultiSelect, ShiftOnASelectedClipTakesItOutAgain) {
+  Fixture fixture;
+  const Rect first = fixture.view->block_rect(1, 0);
+  const Rect second = fixture.view->block_rect(1, 1);
+
+  fixture.host->mouse_down(press(first.x + 10.0, first.y + 10.0));
+  fixture.host->mouse_up(press(first.x + 10.0, first.y + 10.0));
+  fixture.host->mouse_down(shift_press(second.x + 10.0, second.y + 10.0));
+  fixture.host->mouse_up(shift_press(second.x + 10.0, second.y + 10.0));
+  fixture.host->mouse_down(shift_press(first.x + 10.0, first.y + 10.0));
+
+  EXPECT_EQ(fixture.view->selection(), (std::vector<BlockRef>{{1, 1}}));
+}
+
+// A shift-click is about what is selected. Moving the clip as well would make
+// gathering a selection up shove it around.
+TEST(MultiSelect, ShiftClickingDoesNotStartADrag) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+  const TimelineBlock before = fixture.view->model().tracks[1].blocks[0];
+
+  fixture.host->mouse_down(shift_press(box.x + 40.0, box.y + 10.0));
+  fixture.host->mouse_move(shift_press(box.x + 200.0, box.y + 10.0));
+
+  EXPECT_EQ(fixture.view->drag_mode(), DragMode::None);
+  EXPECT_DOUBLE_EQ(fixture.view->model().tracks[1].blocks[0].start, before.start);
+}
+
+TEST(MultiSelect, APlainClickGoesBackToOneClip) {
+  Fixture fixture;
+  const Rect first = fixture.view->block_rect(1, 0);
+  const Rect second = fixture.view->block_rect(1, 1);
+
+  fixture.host->mouse_down(press(first.x + 10.0, first.y + 10.0));
+  fixture.host->mouse_up(press(first.x + 10.0, first.y + 10.0));
+  fixture.host->mouse_down(shift_press(second.x + 10.0, second.y + 10.0));
+  fixture.host->mouse_up(shift_press(second.x + 10.0, second.y + 10.0));
+
+  fixture.host->mouse_down(press(first.x + 10.0, first.y + 10.0));
+  EXPECT_EQ(fixture.view->selection(), (std::vector<BlockRef>{{1, 0}}));
+}
+
+// ------------------------------------------------------------- the marquee --
+
+TEST(Marquee, SweepingEmptyTrackGathersWhatItTouches) {
+  Fixture fixture;
+  std::vector<std::size_t> reported;
+  fixture.view->set_on_select([&](std::span<const BlockRef> refs) {
+    reported.push_back(refs.size());
+  });
+
+  // From below the last track, up and across the two clips on track 1.
+  const Rect tracks = fixture.view->tracks_area();
+  const Rect first = fixture.view->block_rect(1, 0);
+  const double from_y = tracks.bottom() - 2.0;
+
+  fixture.host->mouse_down(press(first.x + 20.0, from_y));
+  fixture.host->mouse_move(press(first.x + 600.0, first.y + 5.0));
+  fixture.host->mouse_up(press(first.x + 600.0, first.y + 5.0));
+
+  const std::vector<BlockRef> chosen = fixture.view->selection();
+  EXPECT_GE(chosen.size(), 2u) << "the sweep crossed both clips on that track";
+  EXPECT_FALSE(reported.empty()) << "nothing was reported while sweeping";
+}
+
+TEST(Marquee, ASweepDrawsTheRectangleItIsGathering) {
+  Fixture fixture;
+  const Rect tracks = fixture.view->tracks_area();
+  const double x = fixture.view->time_area().x + 40.0;
+
+  EXPECT_TRUE(fixture.view->marquee().empty()) << "nothing is being swept yet";
+
+  fixture.host->mouse_down(press(x, tracks.bottom() - 2.0));
+  fixture.host->mouse_move(press(x + 300.0, tracks.y + 10.0));
+
+  const Rect swept = fixture.view->marquee();
+  EXPECT_FALSE(swept.empty());
+  // Drawn upwards and rightwards, which is the same rectangle either way round.
+  EXPECT_NEAR(swept.x, x, 0.01);
+  EXPECT_NEAR(swept.width, 300.0, 0.01);
+
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+  const bool drew_it = std::ranges::any_of(painter.calls(), [&](const DrawCall& call) {
+    return call.kind == DrawCall::Kind::Stroke && std::abs(call.bounds.width - swept.width) < 0.5;
+  });
+  EXPECT_TRUE(drew_it);
+}
+
+// A sweep never runs up into the ruler. Drawn over the timecodes it would look
+// like it was selecting them.
+TEST(Marquee, ASweepStaysInsideTheTracks) {
+  Fixture fixture;
+  const Rect tracks = fixture.view->tracks_area();
+  const double x = fixture.view->time_area().x + 40.0;
+
+  fixture.host->mouse_down(press(x, tracks.y + 20.0));
+  fixture.host->mouse_move(press(x + 200.0, tracks.y - 400.0));
+
+  const Rect swept = fixture.view->marquee();
+  ASSERT_FALSE(swept.empty());
+  EXPECT_GE(swept.y, tracks.y - 0.01);
+}
+
+// A clip wider than the window can never be enclosed by a rectangle drawn
+// inside it, and that is exactly when somebody reaches for a sweep.
+TEST(Marquee, ItCatchesAClipTooLongToEnclose) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(2, 0);  // the 12-second audio clip
+  const Rect small{box.x + 30.0, box.y + 4.0, 20.0, 10.0};
+
+  const std::vector<BlockRef> caught = fixture.view->blocks_touching(small);
+  EXPECT_NE(std::ranges::find(caught, BlockRef{2, 0}), caught.end());
+}
+
+TEST(Marquee, APressThatGoesNowhereStillClearsTheSelection) {
+  Fixture fixture;
+  fixture.view->select(BlockRef{1, 0});
+
+  const Rect tracks = fixture.view->tracks_area();
+  fixture.host->mouse_down(press(fixture.view->time_area().right() - 20.0, tracks.bottom() - 3.0));
+  fixture.host->mouse_up(press(fixture.view->time_area().right() - 20.0, tracks.bottom() - 3.0));
+
+  EXPECT_TRUE(fixture.view->selection().empty());
+  EXPECT_TRUE(fixture.view->marquee().empty());
+}
+
+TEST(Marquee, ShiftSweepingAddsToWhatWasAlreadyThere) {
+  Fixture fixture;
+  const Rect upper = fixture.view->block_rect(0, 0);  // the clip on track 0
+  fixture.host->mouse_down(press(upper.x + 10.0, upper.y + 10.0));
+  fixture.host->mouse_up(press(upper.x + 10.0, upper.y + 10.0));
+  ASSERT_EQ(fixture.view->selection().size(), 1u);
+
+  const Rect tracks = fixture.view->tracks_area();
+  const Rect first = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(shift_press(first.x + 20.0, tracks.bottom() - 2.0));
+  fixture.host->mouse_move(shift_press(first.x + 300.0, first.y + 5.0));
+  fixture.host->mouse_up(shift_press(first.x + 300.0, first.y + 5.0));
+
+  const std::vector<BlockRef> chosen = fixture.view->selection();
+  EXPECT_NE(std::ranges::find(chosen, BlockRef{0, 0}), chosen.end())
+      << "the sweep threw away what was already selected";
+  EXPECT_GT(chosen.size(), 1u);
+}
+
+// The other tools each mean one thing over a clip, and a sweep would be a
+// second meaning for the same drag.
+TEST(Marquee, TheOtherToolsDoNotSweep) {
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Razor);
+
+  const Rect tracks = fixture.view->tracks_area();
+  fixture.host->mouse_down(press(fixture.view->time_area().x + 40.0, tracks.bottom() - 2.0));
+  fixture.host->mouse_move(press(fixture.view->time_area().x + 300.0, tracks.y + 10.0));
+
+  EXPECT_TRUE(fixture.view->marquee().empty());
 }
 
 }  // namespace

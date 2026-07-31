@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1693** under the `ui` preset; 1430 of them need no GPU, no window, no FFmpeg |
+| Tests | **1704** under the `ui` preset; 1441 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1430 of the 1693 tests.
+binding between them — 1441 of the 1704 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -121,7 +121,7 @@ tools    executables.
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1430 tests run with
+place that knows both, and it is pure too. That is what makes 1441 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -265,7 +265,6 @@ here.**
 | | Exists | Missing |
 |---|---|---|
 | **Renaming a track** | `set_track_label` in core | no way to type one in |
-| **Selecting more than one clip** | the session and every command take a list | the timeline selects one at a time, so `Link` is only reachable through Select All |
 | **Snapshot to PNG** | the whole path (`render_frame` does it) | no button |
 | **Fade handles** | fades work, through inspector sliders | not draggable on the clip |
 
@@ -289,12 +288,7 @@ here.**
 
 ### Suggested order
 
-1. **Selecting more than one clip on the timeline.** Shift-click, and a
-   rubber-band over several. Everything above it already takes a list — the
-   session, `selected_group`, every command — so this is the view's selection
-   model rather than new machinery, and it is what makes linking usable: with
-   one clip at a time, `Link` can only be reached through Select All.
-2. Anything in B, by appetite. Scopes and the VU meter are the two that need new
+1. Anything in B, by appetite. Scopes and the VU meter are the two that need new
    machinery rather than new wiring.
 
 And one thing worth doing whatever comes next: **nothing in the test suite ever
@@ -304,7 +298,7 @@ path had never been exercised until somebody dragged the window under a driver �
 which is how the crash in *Traps* was found, after it had been shipping happily
 past a green suite for weeks.
 
-Eight are already done and are worth reading as the pattern for the rest:
+Nine are already done and are worth reading as the pattern for the rest:
 
 - **In and out points** — marked from the buttons or from I and O, drawn along
   the foot of the ruler, saved with the project, offered to export as "only the
@@ -344,6 +338,12 @@ Eight are already done and are worth reading as the pattern for the rest:
   a window message rather than setting a flag, because the loop blocks on its
   queue when nothing is playing and a polled flag would show the waveform at the
   next mouse move.
+- **Multi-select** — `TimelineView::selection` and the `Marquee` mode. Worth
+  reading for what it did *not* need: everything above the view already took a
+  list, so this was the view catching up rather than a change to the model. The
+  sweep catches what it *touches* rather than what it encloses, because a clip
+  wider than the window can never be enclosed and that is exactly when somebody
+  reaches for a sweep.
 - **Thumbnails** — `app::ThumbnailCache` and the tiling in `ui/timeline.cpp`.
   Copied wholesale from the waveform cache, which is the point: the only real
   differences are that filmstrips are pixels, so the cache is bounded and evicts
