@@ -136,6 +136,20 @@ std::optional<double> nearest_snap(std::span<const double> points, double time,
   return best;
 }
 
+const FilmFrame* Filmstrip::nearest(double t) const noexcept {
+  const FilmFrame* best = nullptr;
+  double closest = std::numeric_limits<double>::max();
+  for (const FilmFrame& frame : frames) {
+    if (frame.empty()) continue;
+    const double distance = std::abs(frame.t - t);
+    if (distance < closest) {
+      closest = distance;
+      best = &frame;
+    }
+  }
+  return best;
+}
+
 double source_time_of(const TimelineBlock& block, double local_t) noexcept {
   const double travelled = local_t * block.speed;
   if (!block.reverse) return block.source_in + travelled;
@@ -337,6 +351,21 @@ Rect TimelineView::transition_rect(std::size_t track, std::size_t block) const {
   const double centre = row.x + scale_.to_x(blocks[block].end);
   const double half = scale_.width_of(duration) * 0.5;
   return Rect{centre - half, row.y, half * 2.0, row.height};
+}
+
+Rect TimelineView::filmstrip_area(std::size_t track, std::size_t block) const {
+  if (track >= model_.tracks.size()) return {};
+  const std::vector<TimelineBlock>& blocks = model_.tracks[track].blocks;
+  if (block >= blocks.size()) return {};
+
+  const std::shared_ptr<const Filmstrip>& strip = blocks[block].filmstrip;
+  if (strip == nullptr || strip->empty()) return {};
+
+  const Rect box = block_rect(track, block);
+  // Below a certain size a thumbnail is a smear and the label is what carries
+  // the clip, so there is nothing to gain by drawing one.
+  if (box.height < 20.0 || box.width < 8.0) return {};
+  return box.inset(2.0);
 }
 
 Rect TimelineView::waveform_area(std::size_t track, std::size_t block) const {
@@ -599,8 +628,42 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
       const SurfaceStyle& style = theme.style(Part::Clip, state);
       paint_surface(painter, box.inset(1.0), style);
 
-      // The waveform first, under everything: it is the clip's picture, and the
-      // label and the volume band read over the top of it.
+      // The filmstrip first, under everything, for the same reason the waveform
+      // is: it is the clip's picture and the label reads over the top of it.
+      //
+      // Tiled left to right, each tile showing the frame nearest the source
+      // time under it. Only the tiles on screen are drawn — a ten-minute clip
+      // scrolled mostly out of view costs what is visible of it.
+      if (const Rect strip_box = filmstrip_area(track, i); !strip_box.empty()) {
+        const Filmstrip& strip = *clip.filmstrip;
+        painter.push_clip(box, style.corner_radius);
+
+        // Sized by the frames themselves, so a filmstrip of mixed sources still
+        // lines up and a vertical video does not come out stretched.
+        const double aspect = strip.frames.front().aspect();
+        const double tile = std::max(8.0, strip_box.height * (aspect > 0.0 ? aspect : 1.6));
+
+        const double from = std::max(strip_box.x, tracks.x);
+        const double to = std::min(strip_box.right(), tracks.right());
+        // Started at a whole tile from the block's own start rather than from
+        // the edge of the screen, so scrolling slides the strip instead of
+        // reshuffling which frame is in which tile.
+        const double first = strip_box.x + std::floor((from - strip_box.x) / tile) * tile;
+
+        for (double x = first; x < to; x += tile) {
+          const double centre = (x + tile * 0.5 - strip_box.x) / scale_.pixels_per_second;
+          const FilmFrame* frame = strip.nearest(source_time_of(clip, centre));
+          if (frame == nullptr) continue;
+          painter.image(Rect{x, strip_box.y, tile, strip_box.height},
+                        ImageView{.pixels = frame->rgba.data(),
+                                  .width = frame->width,
+                                  .height = frame->height});
+        }
+        painter.pop_clip();
+      }
+
+      // The waveform next, under everything else: it is the clip's picture, and
+      // the label and the volume band read over the top of it.
       //
       // A column per pixel rather than a shape through the buckets. What it
       // costs is what is on screen, not how long the clip is — a ten-minute

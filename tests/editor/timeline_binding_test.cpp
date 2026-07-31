@@ -620,7 +620,8 @@ TEST(Binding, AnAudioClipTakesTheEnvelopeOfItsOwnSourceAndStream) {
     return some_waveform();
   };
 
-  const ui::TimelineModel model = timeline_model(sample_project(), {}, source);
+  const ui::TimelineModel model =
+      timeline_model(sample_project(), {}, TimelineMedia{.waveforms = source});
 
   ASSERT_EQ(asked.size(), 1u);
   EXPECT_EQ(asked[0].first, "m2");
@@ -632,7 +633,10 @@ TEST(Binding, AnAudioClipTakesTheEnvelopeOfItsOwnSourceAndStream) {
 // a clip of its own, on its own track, and that is the one with the envelope.
 TEST(Binding, AVideoClipIsNotAskedForAnEnvelope) {
   const ui::TimelineModel model =
-      timeline_model(sample_project(), {}, [](std::string_view, int) { return some_waveform(); });
+      timeline_model(sample_project(), {},
+                     TimelineMedia{.waveforms = [](std::string_view, int) {
+                       return some_waveform();
+                     }});
 
   EXPECT_EQ(model.tracks[0].blocks[0].waveform, nullptr);
   EXPECT_EQ(model.tracks[1].blocks[0].waveform, nullptr);
@@ -679,7 +683,8 @@ TEST(Binding, EveryClipOfASourceSharesOneEnvelope) {
 
   const std::shared_ptr<const ui::Waveform> shared = some_waveform();
   const ui::TimelineModel model =
-      timeline_model(project, {}, [&](std::string_view, int) { return shared; });
+      timeline_model(project, {},
+                     TimelineMedia{.waveforms = [&](std::string_view, int) { return shared; }});
 
   EXPECT_EQ(model.tracks[2].blocks[0].waveform, model.tracks[2].blocks[1].waveform);
 }

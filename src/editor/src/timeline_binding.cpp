@@ -93,7 +93,7 @@ std::string default_track_label(const core::Project& project, std::size_t index)
 
 ui::TimelineModel timeline_model(const core::Project& project,
                                  std::span<const std::string> selection,
-                                 const WaveformSource& waveforms) {
+                                 const TimelineMedia& media) {
   ui::TimelineModel model;
   model.fps = project.fps;
   model.duration = core::timeline_duration(project);
@@ -162,7 +162,19 @@ ui::TimelineModel timeline_model(const core::Project& project,
       // The envelope, on audio clips only — a video clip draws its picture, not
       // its sound, and the audio it was linked to is a clip of its own.
       std::shared_ptr<const ui::Waveform> waveform;
-      if (audio && waveforms) waveform = waveforms(clip.media_id, clip.audio_stream);
+      if (audio && media.waveforms) waveform = media.waveforms(clip.media_id, clip.audio_stream);
+
+      // And the filmstrip on the ones that draw a picture. `has_video` rather
+      // than the track's kind, because that is the flag meaning "contributes
+      // picture" — an adjustment layer sets it and has nothing to show, and a
+      // generated source has no file to take frames from either way.
+      std::shared_ptr<const ui::Filmstrip> filmstrip;
+      if (!audio && media.filmstrips) {
+        const core::Media* source = media_of(project, clip.media_id);
+        if (source != nullptr && source->has_video && !core::is_generated_media(*source)) {
+          filmstrip = media.filmstrips(clip.media_id);
+        }
+      }
 
       row.blocks.push_back(ui::TimelineBlock{
           .id = clip.id,
@@ -174,6 +186,7 @@ ui::TimelineModel timeline_model(const core::Project& project,
           .transition = std::move(transition),
           .gain = std::move(band),
           .waveform = std::move(waveform),
+          .filmstrip = std::move(filmstrip),
           // What turns a position along the block into a position in the
           // source's envelope. Taken through the core's accessors so a clip
           // with no explicit speed reads as 1 rather than 0.

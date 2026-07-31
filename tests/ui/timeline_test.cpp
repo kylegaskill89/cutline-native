@@ -2090,5 +2090,151 @@ TEST(Waveform, TheEnvelopeIsDrawnUnderTheVolumeBand) {
   EXPECT_LT(last_column, band);
 }
 
+// --------------------------------------------------------- the filmstrip --
+
+/// Frames at known source times, each a flat colour, so a test can say which
+/// one ended up in which tile.
+[[nodiscard]] std::shared_ptr<const Filmstrip> strip_at(std::vector<double> times) {
+  auto strip = std::make_shared<Filmstrip>();
+  std::uint8_t shade = 10;
+  for (const double t : times) {
+    FilmFrame frame;
+    frame.t = t;
+    frame.width = 16;
+    frame.height = 9;
+    frame.rgba.assign(static_cast<std::size_t>(frame.width * frame.height * 4), shade);
+    shade = static_cast<std::uint8_t>(shade + 40);
+    strip->frames.push_back(std::move(frame));
+  }
+  return strip;
+}
+
+[[nodiscard]] TimelineModel filmed_model(TimelineBlock block) {
+  TimelineModel model;
+  model.fps = kFps;
+  model.tracks = {TimelineTrack{.name = "V1", .blocks = {std::move(block)}}};
+  return model;
+}
+
+struct FilmFixture {
+  explicit FilmFixture(TimelineBlock block) {
+    host = std::make_unique<WidgetHost>(std::make_unique<TimelineView>());
+    view = static_cast<TimelineView*>(&host->root());
+    view->set_model(filmed_model(std::move(block)));
+    view->set_scale(TimeScale{.pixels_per_second = 100.0, .start = 0.0});
+    host->resize(Rect{0.0, 0.0, 1000.0, 400.0}, flat_context());
+  }
+
+  std::unique_ptr<WidgetHost> host;
+  TimelineView* view = nullptr;
+};
+
+TEST(Filmstrip, TheNearestFrameToATimeIsTheOneShown) {
+  const std::shared_ptr<const Filmstrip> strip = strip_at({0.0, 10.0, 20.0});
+
+  ASSERT_NE(strip->nearest(0.0), nullptr);
+  EXPECT_DOUBLE_EQ(strip->nearest(0.0)->t, 0.0);
+  EXPECT_DOUBLE_EQ(strip->nearest(4.0)->t, 0.0);
+  EXPECT_DOUBLE_EQ(strip->nearest(6.0)->t, 10.0);
+  // Outside the range at either end, the end frame is the nearest one there is.
+  EXPECT_DOUBLE_EQ(strip->nearest(-100.0)->t, 0.0);
+  EXPECT_DOUBLE_EQ(strip->nearest(999.0)->t, 20.0);
+}
+
+TEST(Filmstrip, AnEmptyStripHasNoNearestFrame) {
+  const Filmstrip empty;
+  EXPECT_EQ(empty.nearest(0.0), nullptr);
+}
+
+TEST(Filmstrip, ABlockWithNoFramesYetHasNowhereToDrawThem) {
+  const FilmFixture fixture{TimelineBlock{.start = 0.0, .end = 4.0}};
+  EXPECT_TRUE(fixture.view->filmstrip_area(0, 0).empty());
+}
+
+TEST(Filmstrip, TheStripIsDrawnAcrossTheBlock) {
+  const FilmFixture plain{TimelineBlock{.start = 0.0, .end = 6.0}};
+  RecordingPainter before;
+  plain.view->paint(before, default_theme());
+  EXPECT_EQ(before.count(DrawCall::Kind::Image), 0u);
+
+  TimelineBlock filmed{.start = 0.0, .end = 6.0};
+  filmed.filmstrip = strip_at({0.0, 3.0, 6.0});
+  const FilmFixture fixture{std::move(filmed)};
+
+  RecordingPainter after;
+  fixture.view->paint(after, default_theme());
+  // Six hundred pixels of clip, tiled by a 16:9 thumbnail at the track's
+  // height, so several tiles rather than one stretched frame.
+  EXPECT_GT(after.count(DrawCall::Kind::Image), 3u);
+}
+
+// The cost is what is on screen. A source scrolled almost entirely out of view
+// costs the tiles that are visible, not the ones that are not.
+TEST(Filmstrip, ALongClipCostsWhatIsVisible) {
+  TimelineBlock filmed{.start = 0.0, .end = 600.0};
+  filmed.filmstrip = strip_at({0.0, 200.0, 400.0});
+  FilmFixture fixture{std::move(filmed)};
+  fixture.view->set_scale(TimeScale{.pixels_per_second = 100.0, .start = 0.0});
+
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+
+  // A thousand pixels of window at a track's height is a few dozen tiles, not
+  // the sixty thousand pixels of clip.
+  EXPECT_LT(painter.count(DrawCall::Kind::Image), 40u);
+}
+
+TEST(Filmstrip, TilesKeepTheFramesShapeRatherThanStretching) {
+  TimelineBlock filmed{.start = 0.0, .end = 6.0};
+  filmed.filmstrip = strip_at({0.0, 3.0});
+  const FilmFixture fixture{std::move(filmed)};
+
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+
+  const DrawCall* first = painter.first(DrawCall::Kind::Image);
+  ASSERT_NE(first, nullptr);
+  const Rect strip = fixture.view->filmstrip_area(0, 0);
+  ASSERT_FALSE(strip.empty());
+  // 16 by 9, so a tile is its height times that and not some share of the clip.
+  EXPECT_NEAR(first->bounds.width / first->bounds.height, 16.0 / 9.0, 0.01);
+  EXPECT_NEAR(first->bounds.height, strip.height, 0.01);
+}
+
+// Which frame is in which tile must not depend on where the view is scrolled.
+// The tiles are a grid on the *clip*, so scrolling slides the strip along with
+// the block rather than reshuffling which frame sits where.
+TEST(Filmstrip, ScrollingSlidesTheStripRatherThanReshufflingIt) {
+  // Every tile's offset from the block's own left edge, in tile widths.
+  const auto offsets_in_tiles = [](double start) {
+    TimelineBlock filmed{.start = 0.0, .end = 30.0};
+    filmed.filmstrip = strip_at({0.0, 10.0, 20.0});
+    FilmFixture fixture{std::move(filmed)};
+    fixture.view->set_scale(TimeScale{.pixels_per_second = 100.0, .start = start});
+
+    RecordingPainter painter;
+    fixture.view->paint(painter, default_theme());
+
+    // From the strip rather than the block: the strip is inset from the clip's
+    // border, and the grid is anchored to where the frames actually start.
+    const double left = fixture.view->filmstrip_area(0, 0).x;
+    std::vector<double> out;
+    for (const DrawCall& call : painter.calls()) {
+      if (call.kind != DrawCall::Kind::Image) continue;
+      out.push_back((call.bounds.x - left) / call.bounds.width);
+    }
+    return out;
+  };
+
+  for (const double start : {0.0, 1.0, 3.7}) {
+    const std::vector<double> tiles = offsets_in_tiles(start);
+    ASSERT_FALSE(tiles.empty()) << "scrolled to " << start;
+    for (const double at : tiles) {
+      EXPECT_NEAR(at, std::round(at), 1e-6)
+          << "a tile landed " << at << " tiles along, scrolled to " << start;
+    }
+  }
+}
+
 }  // namespace
 }  // namespace cutline::ui

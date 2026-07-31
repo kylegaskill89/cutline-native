@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1653** under the `ui` preset; 1405 of them need no GPU, no window, no FFmpeg |
+| Tests | **1675** under the `ui` preset; 1412 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1405 of the 1653 tests.
+binding between them — 1412 of the 1675 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -114,14 +114,14 @@ ui       widgets, layout, themes, painters. Depends on core (for time) only.
 editor   bindings: turns a project into what a panel shows, and a gesture into
          an operation. Depends on core and ui. Pure.
 engine   frame renderer, exporter, player. Joins render + media + gpu.
-app      preview and the waveform cache: the whole stack, and the work the
-         interface waits on without doing it.
+app      preview, and the waveform and thumbnail caches: the whole stack, and
+         the work the interface waits on without doing itself.
 tools    executables.
 ```
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1405 tests run with
+place that knows both, and it is pure too. That is what makes 1412 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -139,7 +139,8 @@ break would be silly.
 - *Wiring* → `tools/cutline/main.cpp`. It is large; that is fine, it is the
   composition root.
 - *Something the interface needs but must not wait for* → `app`, as a cache with
-  a worker behind it. `WaveformCache` is the one to copy.
+  a worker behind it. `WaveformCache` is the one to copy; `ThumbnailCache` is
+  what copying it looks like.
 
 ---
 
@@ -263,7 +264,6 @@ here.**
 
 | | Exists | Missing |
 |---|---|---|
-| **Thumbnails** | `extract_thumbnails`, and `app::WaveformCache` as the pattern | the timeline draws none |
 | **Link/unlink, add/remove/rename track** | all in core | no button, no shortcut, no command |
 | **Snapshot to PNG** | the whole path (`render_frame` does it) | no button |
 | **Fade handles** | fades work, through inspector sliders | not draggable on the clip |
@@ -288,13 +288,9 @@ here.**
 
 ### Suggested order
 
-1. **Thumbnails on video clips.** `extract_thumbnails` has been there since phase
-   2 and nothing draws them. **Follow `app::WaveformCache`** — the shape is
-   already right: ask on the paint thread, decode on a worker, wake the message
-   loop when an answer lands, key the cache by source rather than by clip. What
-   differs is that a filmstrip is pixels rather than numbers, so it is far bigger
-   and wants a bound on how many are held, and `extract_thumbnails` seeks per
-   frame where the waveform decodes straight through.
+1. **The resize crash.** See *Known bugs* below. The application dies whenever
+   its window is resized, which is not something to build more features on top
+   of.
 2. **Link/unlink and the track operations** — all in core, none of them bound to
    anything. Small, and the command table is where they go.
 3. Anything in B, by appetite. Scopes and the VU meter are the two that need new
@@ -340,6 +336,13 @@ Eight are already done and are worth reading as the pattern for the rest:
   a window message rather than setting a flag, because the loop blocks on its
   queue when nothing is playing and a polled flag would show the waveform at the
   next mouse move.
+- **Thumbnails** — `app::ThumbnailCache` and the tiling in `ui/timeline.cpp`.
+  Copied wholesale from the waveform cache, which is the point: the only real
+  differences are that filmstrips are pixels, so the cache is bounded and evicts
+  the least recently wanted, and that the strip describes the *source*, so a
+  short clip of a long file may repeat a frame. That is a deliberate limit —
+  sampling finely enough to show each instant would mean holding a decoded film
+  in memory, and the strip's job is to say what the footage is.
 - **The volume rubber band** — `GainBand` in `ui/timeline.hpp`. The whole of it
   was drawing and gesture: `move_gain_keyframe` and `set_clip_gain` had been in
   the core, tested, since phase 1. **Check the core before assuming a feature
@@ -347,6 +350,31 @@ Eight are already done and are worth reading as the pattern for the rest:
   wiring only. The part worth reading is the scale: gain is a linear multiplier
   and the band is decibels, because on a linear scale every trim anyone makes
   lands in the top few pixels of a forty-pixel clip.
+
+---
+
+## 7a. Known bugs
+
+**Resizing the window crashes the application.** An access violation inside
+`skia.dll`, on any resize — maximising, or a `SetWindowPos` to 1600x1000 — and
+it does not depend on what is loaded: it happens with an empty sample project,
+with no media imported, and at every size tried. Seven fresh instances out of
+seven.
+
+Found by driving the real window, which is the third time that has caught
+something a green suite did not. Nothing in the test suite resizes a real
+window: the pixel tests use a fixed CPU raster surface and `--check` lays out at
+one size, so the whole `WM_SIZE` → recreate-the-surface path is untested.
+
+It is **not** new. A `theme_window.exe` built before the waveform, filmstrip and
+volume work crashes identically, so this predates all of it — but it had never
+been noticed because nobody had resized the window under a driver before.
+
+What is known: the fault is in Skia rather than in our own drawing, the
+exception is `0xc0000005` at a consistent offset, and the same instance that had
+been running a while survived a maximise once, so it may not be quite
+unconditional. Start at `Shell::resized`, `SkiaWindow`, and whatever the D3D12
+swapchain does when the compositor is sharing the device.
 
 ---
 

@@ -34,6 +34,22 @@ namespace cutline::editor {
 using WaveformSource =
     std::function<std::shared_ptr<const ui::Waveform>(std::string_view media_id, int stream)>;
 
+/// Where a source's filmstrip comes from. The same bargain as `WaveformSource`:
+/// answer with what is already extracted, never decode here, and null simply
+/// means the clip is drawn without one.
+using FilmstripSource =
+    std::function<std::shared_ptr<const ui::Filmstrip>(std::string_view media_id)>;
+
+/// What the timeline can be given beyond the project itself.
+///
+/// A struct rather than more parameters, because both of these are optional,
+/// both arrive from a worker, and a third would otherwise mean changing every
+/// caller again.
+struct TimelineMedia {
+  WaveformSource waveforms;
+  FilmstripSource filmstrips;
+};
+
 /// What the timeline should draw for this project.
 ///
 /// Track order follows the project's, which is video first and topmost first —
@@ -41,7 +57,7 @@ using WaveformSource =
 /// does everywhere else.
 [[nodiscard]] ui::TimelineModel timeline_model(const core::Project& project,
                                                std::span<const std::string> selection = {},
-                                               const WaveformSource& waveforms = {});
+                                               const TimelineMedia& media = {});
 
 /// The name a track shows when it has not been given one.
 ///

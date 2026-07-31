@@ -50,6 +50,7 @@
 
 #if CUTLINE_HAVE_PREVIEW
 #include "cutline/app/preview.hpp"
+#include "cutline/app/thumbnails.hpp"
 #include "cutline/app/waveforms.hpp"
 #include "cutline/engine/exporter.hpp"
 #include "cutline/engine/player.hpp"
@@ -268,12 +269,14 @@ struct App;
 /// layout, all of it — and the only thing that differs is which dock they show.
 constexpr const wchar_t* kWindowClass = L"CutlineWindow";
 
-/// Posted by the waveform worker when an envelope is ready.
+/// Posted by a media worker when something the timeline draws is ready.
 ///
 /// A message rather than a flag the loop polls, because the loop blocks on its
-/// queue whenever nothing is playing — an envelope would otherwise appear at
-/// the next mouse move rather than when it was decoded.
-constexpr UINT kWaveformReady = WM_APP + 1;
+/// queue whenever nothing is playing — a waveform would otherwise appear at the
+/// next mouse move rather than when it was decoded. One message for both caches
+/// rather than one each: what it triggers is a rebuild, and a rebuild takes
+/// whatever has arrived.
+constexpr UINT kMediaReady = WM_APP + 1;
 
 /// One real window: its widgets, its pixels, and where the two meet.
 ///
@@ -330,13 +333,13 @@ struct App {
   cutline::editor::Session session{sample_project()};
   TimelineView* timeline = nullptr;
 
-  /// Where the timeline's audio envelopes come from.
+  /// Where the timeline's envelopes and filmstrips come from.
   ///
-  /// A function rather than the cache itself, and that is what keeps
-  /// `refresh_timeline` free of `#if`s: under a build with no media layer it is
-  /// simply unset and clips are drawn without waveforms, and the self-check
-  /// points it at a fabricated envelope so every theme paints one.
-  cutline::editor::WaveformSource waveform_source;
+  /// Functions rather than the caches themselves, and that is what keeps
+  /// `refresh_timeline` free of `#if`s: under a build with no media layer they
+  /// are simply unset and clips are drawn plain, and the self-check points them
+  /// at fabricated ones so every theme paints both.
+  cutline::editor::TimelineMedia timeline_media;
   Label* readout = nullptr;
   /// The media pool down the left, and the button that cycles its order.
   MediaBrowser* browser = nullptr;
@@ -376,12 +379,14 @@ struct App {
   TestPattern pattern;
 
 #if CUTLINE_HAVE_PREVIEW
-  /// The audio envelopes the timeline draws, filled in on a worker.
+  /// The audio envelopes and the filmstrips the timeline draws, both filled in
+  /// on workers of their own.
   ///
-  /// Above the device deliberately: it needs no GPU and no preview, only a
-  /// decoder, and it is the one piece of media work that happens whether or not
+  /// Above the device deliberately: they need no GPU and no preview, only a
+  /// decoder, and they are the pieces of media work that happen whether or not
   /// anything is being rendered.
   cutline::app::WaveformCache waveforms;
+  cutline::app::ThumbnailCache filmstrips;
 
   /// The one Direct3D device: the compositor renders on it and the windows
   /// draw on it.
@@ -1304,22 +1309,32 @@ void refresh_inspector(App& app) {
 /// Everything goes through here rather than being patched in place, which is
 /// what keeps the view from drifting out of step with the document — an undo
 /// changes the project in ways no incremental update could follow.
-/// Asks for any audio envelope the project needs and does not have.
+/// Asks for any envelope or filmstrip the project needs and does not have.
 ///
 /// Here rather than in the importer because that is not the only way a source
 /// arrives: an undo, a paste, and a project opened from disk all bring media
 /// that never went past it. Requests already known or already queued cost
 /// nothing, which is what makes calling this on every rebuild reasonable.
-void request_waveforms([[maybe_unused]] App& app) {
+void request_media([[maybe_unused]] App& app) {
 #if CUTLINE_HAVE_PREVIEW
   const cutline::core::Project& project = app.session.project();
   for (const cutline::core::Track& track : project.tracks) {
-    if (track.kind != cutline::core::TrackKind::Audio) continue;
+    const bool audio = track.kind == cutline::core::TrackKind::Audio;
     for (const cutline::core::Clip& clip : track.clips) {
       const auto media =
           std::ranges::find(project.media, clip.media_id, &cutline::core::Media::id);
       if (media == project.media.end()) continue;
-      app.waveforms.request(media->id, media->path, clip.audio_stream);
+
+      if (audio) {
+        app.waveforms.request(media->id, media->path, clip.audio_stream);
+        continue;
+      }
+      // A still has one frame that never changes and a generated source has no
+      // file, so neither is a filmstrip — asking would be an error reported
+      // once a frame for as long as the clip is on screen.
+      if (media->has_video && !cutline::core::is_generated_media(*media) && !media->is_image) {
+        app.filmstrips.request(media->id, media->path, media->duration);
+      }
     }
   }
 #endif
@@ -1328,9 +1343,9 @@ void request_waveforms([[maybe_unused]] App& app) {
 void refresh_timeline(App& app) {
   if (app.timeline == nullptr) return;
 
-  request_waveforms(app);
+  request_media(app);
   app.timeline->set_model(cutline::editor::timeline_model(
-      app.session.project(), app.session.selection(), app.waveform_source));
+      app.session.project(), app.session.selection(), app.timeline_media));
   app.timeline->set_playhead(app.session.playhead());
   mark_dirty(app);
 }
@@ -3519,12 +3534,16 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       return 1;  // every pixel is painted, so erasing only causes a flash
 
 #if CUTLINE_HAVE_PREVIEW
-    case kWaveformReady:
-      // Rebuilt rather than patched: the envelope arrives against a source, and
-      // which blocks show it is the binding's answer, not this one's. Guarded
-      // by the flag so a burst of arrivals is one rebuild rather than one each.
-      if (app->waveforms.take_arrival()) refresh_timeline(*app);
+    case kMediaReady: {
+      // Rebuilt rather than patched: what arrives belongs to a source, and
+      // which blocks show it is the binding's answer, not this one's. Both
+      // flags are taken before the test, so a burst of arrivals is one rebuild
+      // and neither cache is left holding a flag the other consumed.
+      const bool waves = app->waveforms.take_arrival();
+      const bool strips = app->filmstrips.take_arrival();
+      if (waves || strips) refresh_timeline(*app);
       return 0;
+    }
 #endif
 
     case WM_CLOSE:
@@ -3578,6 +3597,50 @@ template <typename T>
 ///
 /// Layout and paint are timed apart because the fixes are different: a slow
 /// paint argues for the GPU, a slow layout argues for doing less of it.
+/// A fabricated envelope and filmstrip for every source.
+///
+/// Nothing in the sample project has a file behind it, so nothing is ever
+/// decoded and neither the waveform nor the filmstrip would be drawn — which
+/// would make them the two parts of the timeline that no check ever looks at and
+/// no benchmark ever pays for. Built here rather than taken from the caches so
+/// this works under the skia preset too, which is the one the nightly runs and
+/// which has no decoder at all.
+[[nodiscard]] cutline::editor::TimelineMedia sample_timeline_media() {
+  auto envelope = std::make_shared<cutline::ui::Waveform>();
+  envelope->buckets_per_second = 20.0;
+  for (int i = 0; i < 20 * 120; ++i) {
+    // Something with shape to it, so a flat line would be visibly wrong rather
+    // than merely different.
+    const double at = i / 20.0;
+    const auto level = static_cast<float>(0.25 + 0.7 * std::abs(std::sin(at * 0.7)) *
+                                                     std::abs(std::cos(at * 0.11)));
+    envelope->minimum.push_back(-level);
+    envelope->maximum.push_back(level);
+  }
+
+  // Four frames of flat colour — enough to see that tiles land where they
+  // should and that the strip advances along the clip.
+  auto strip = std::make_shared<cutline::ui::Filmstrip>();
+  for (int f = 0; f < 4; ++f) {
+    cutline::ui::FilmFrame frame;
+    frame.t = f * 8.0;
+    frame.width = 32;
+    frame.height = 18;
+    frame.rgba.resize(static_cast<std::size_t>(frame.width * frame.height * 4));
+    for (std::size_t p = 0; p < frame.rgba.size(); p += 4) {
+      frame.rgba[p] = static_cast<std::uint8_t>(40 + f * 50);
+      frame.rgba[p + 1] = 90;
+      frame.rgba[p + 2] = static_cast<std::uint8_t>(200 - f * 40);
+      frame.rgba[p + 3] = 255;
+    }
+    strip->frames.push_back(std::move(frame));
+  }
+
+  return cutline::editor::TimelineMedia{
+      .waveforms = [envelope](std::string_view, int) { return envelope; },
+      .filmstrips = [strip](std::string_view) { return strip; }};
+}
+
 [[nodiscard]] int benchmark() {
   struct Size {
     const char* name;
@@ -3608,7 +3671,17 @@ template <typename T>
         continue;
       }
 
-      WidgetHost host(build_interface(nullptr));
+      // A real document rather than a null one. With no app the timeline holds
+      // an empty model, so every number this printed was for a window with no
+      // clips in it — which is not the thing anybody is worried about the cost
+      // of. Now it paints the sample sequence with waveforms and filmstrips on
+      // it, which is what a populated timeline actually costs.
+      App app;
+      app.main.host = std::make_unique<WidgetHost>(build_interface(&app));
+      app.timeline_media = sample_timeline_media();
+      refresh_timeline(app);
+      WidgetHost& host = *app.main.host;
+
       const Rect client{0.0, 0.0, static_cast<double>(size.width),
                         static_cast<double>(size.height)};
 
@@ -3667,7 +3740,12 @@ template <typename T>
       return 1;
     }
 
-    WidgetHost host(build_interface(nullptr));
+    App app;
+    app.main.host = std::make_unique<WidgetHost>(build_interface(&app));
+    app.timeline_media = sample_timeline_media();
+    refresh_timeline(app);
+    WidgetHost& host = *app.main.host;
+
     const std::unique_ptr<SkiaPainter> painter = SkiaPainter::create(surface->getCanvas());
     const LayoutContext context{theme, *painter};
     const Rect client{0.0, 0.0, static_cast<double>(size.width),
@@ -3880,26 +3958,7 @@ template <typename T>
             app.session.project(), clip_id, 0, "amount", true, 0.0));
       }
 
-      // A fabricated envelope on every source, so the check paints waveforms.
-      //
-      // Nothing in the sample project has a file behind it, so nothing would
-      // ever be decoded and this drawing — a column per pixel across every
-      // audio clip, in four themes — would be the one part of the timeline no
-      // check ever looked at. Built here rather than taken from the cache so it
-      // works under the skia preset too, which is the one the nightly runs and
-      // which has no decoder at all.
-      auto envelope = std::make_shared<cutline::ui::Waveform>();
-      envelope->buckets_per_second = 20.0;
-      for (int i = 0; i < 20 * 120; ++i) {
-        // Something with shape to it, so a flat line would be visibly wrong
-        // rather than merely different.
-        const double at = i / 20.0;
-        const auto level = static_cast<float>(0.25 + 0.7 * std::abs(std::sin(at * 0.7)) *
-                                                         std::abs(std::cos(at * 0.11)));
-        envelope->minimum.push_back(-level);
-        envelope->maximum.push_back(level);
-      }
-      app.waveform_source = [envelope](std::string_view, int) { return envelope; };
+      app.timeline_media = sample_timeline_media();
 
       // The panel was built before any of those edits, so the timeline is still
       // holding the model it started with — the transition and the marks would
@@ -4088,13 +4147,17 @@ int main(int argc, char** argv) {
   refresh_title(app);
 
 #if CUTLINE_HAVE_PREVIEW
-  app.waveform_source = [&app](std::string_view media_id, int stream) {
+  app.timeline_media.waveforms = [&app](std::string_view media_id, int stream) {
     return app.waveforms.find(media_id, stream);
   };
+  app.timeline_media.filmstrips = [&app](std::string_view media_id) {
+    return app.filmstrips.find(media_id);
+  };
   // Set once the window exists, since posting to one that does not is the
-  // message going nowhere. Runs on the worker's thread, so it does the one
+  // message going nowhere. Runs on a worker's thread, so each does the one
   // thing that is safe from there and leaves the rest to the message handler.
-  app.waveforms.set_on_arrival([window] { PostMessageW(window, kWaveformReady, 0, 0); });
+  app.waveforms.set_on_arrival([window] { PostMessageW(window, kMediaReady, 0, 0); });
+  app.filmstrips.set_on_arrival([window] { PostMessageW(window, kMediaReady, 0, 0); });
 #endif
 
   // One pixel of frame handed back to the compositor, which is enough to keep

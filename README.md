@@ -278,6 +278,20 @@ removed without a third control that exists only to undo the other two. The two
 can never cross: setting one past the other clears that other, so an inverted
 pair is unrepresentable rather than something every reader has to check for.
 
+Video clips show a filmstrip and audio clips show their waveform, both extracted
+on workers so the interface never waits for a decoder. Each describes the
+*source* rather than a clip of one, so a file cut into twenty pieces is decoded
+once and every piece shares the result by pointer — the model is rebuilt after
+every gesture, and copying half a megabyte of peaks or two of pixels per drag is
+the difference between editing feeling free and feeling like work.
+
+The filmstrip is tiled left to right, each tile showing the frame nearest the
+source time under it, and only the tiles on screen are drawn. Sampling is coarse
+by design: a strip says what the footage is, not what each instant of it looks
+like, and a short clip of a long source may repeat a frame. Because these are
+pixels rather than numbers the cache is bounded, and drops whichever source has
+gone longest without being wanted.
+
 Audio clips show their waveform. The envelope is min and max per bucket rather
 than an average, so a transient is visible instead of averaged away, and it is
 drawn a column per pixel — what it costs is what is on screen, not how long the
@@ -328,7 +342,7 @@ had been there, tested, since the first phase, and the mixer and the exporter
 have honoured automation from the start. This is the second feature in a row
 whose work was entirely the gesture.
 
-1653 tests, plus a headless check that lays every panel out in every theme —
+1675 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a matte, an adjustment layer, a title, and the
 colour picker open, which is the only way the controls a panel is made of get

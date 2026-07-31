@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -64,6 +65,45 @@ struct Waveform {
   }
 
   friend bool operator==(const Waveform&, const Waveform&) = default;
+};
+
+/// One frame of a source, scaled small enough to draw on a clip.
+///
+/// Tightly packed 8-bit RGBA, owned rather than borrowed: a filmstrip outlives
+/// the draw that shows it, unlike the decoded frame the monitor displays.
+struct FilmFrame {
+  double t = 0.0;  ///< source seconds this was taken from
+  int width = 0;
+  int height = 0;
+  std::vector<std::uint8_t> rgba;
+
+  [[nodiscard]] bool empty() const noexcept {
+    return width <= 0 || height <= 0 || rgba.empty();
+  }
+  [[nodiscard]] double aspect() const noexcept {
+    return height > 0 ? static_cast<double>(width) / height : 0.0;
+  }
+
+  friend bool operator==(const FilmFrame&, const FilmFrame&) = default;
+};
+
+/// Frames sampled across a source, in time order.
+///
+/// Like `Waveform`, this describes a *source* rather than a clip of one, so
+/// trimming costs nothing and a source used a dozen times is decoded once. The
+/// consequence is that a short clip of a long source may show the same frame in
+/// every tile — the strip says what the footage is, not what each instant of it
+/// looks like, and sampling densely enough for the latter would mean holding a
+/// decoded film in memory.
+struct Filmstrip {
+  std::vector<FilmFrame> frames;
+
+  [[nodiscard]] bool empty() const noexcept { return frames.empty(); }
+
+  /// The frame nearest a source time, or null when there are none.
+  [[nodiscard]] const FilmFrame* nearest(double t) const noexcept;
+
+  friend bool operator==(const Filmstrip&, const Filmstrip&) = default;
 };
 
 /// One point on a clip's volume rubber band.
@@ -154,6 +194,10 @@ struct TimelineBlock {
   /// Null while it is still being decoded, which is what an audio clip looks
   /// like for the first moment after it is imported.
   std::shared_ptr<const Waveform> waveform;
+
+  /// The source's filmstrip, if it has been extracted yet. Shared for the same
+  /// reason the envelope is, and more so: these are pixels.
+  std::shared_ptr<const Filmstrip> filmstrip;
 
   /// Where this block starts in its source, and how fast it runs through it.
   ///
@@ -508,6 +552,10 @@ class TimelineView : public Widget {
   /// Where a block's transition is drawn: centred on its out-edge, half either
   /// side. Empty when it has none.
   [[nodiscard]] Rect transition_rect(std::size_t track, std::size_t block) const;
+
+  /// The strip of a block its filmstrip is drawn in. Empty when the block has
+  /// no frames yet, or is too small to show one.
+  [[nodiscard]] Rect filmstrip_area(std::size_t track, std::size_t block) const;
 
   /// The strip of a block its waveform is drawn in. Empty when the block has
   /// no envelope yet, or is too short to hold one.
