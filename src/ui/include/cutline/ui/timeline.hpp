@@ -381,9 +381,20 @@ enum class DragMode {
   /// is better as one thing for a caller to handle than as two.
   Razor,
   /// Moving a clip's whole volume band, which sets its constant gain. Only
-  /// reachable while it has no automation: once there are points, the line runs
-  /// through them and there is no single level left to drag.
+  /// while it has no automation — with points on it there is no one level to
+  /// set, and `GainSegment` is what a drag means instead.
   GainLevel,
+  /// Moving one stretch of an automated band up or down, carrying the points at
+  /// each end of it with it.
+  ///
+  /// This is how a level is ridden once there is automation on the clip: grab
+  /// the line between two points and move it. Offering only the points meant
+  /// every adjustment was two drags that had to match, which is a fiddly way to
+  /// say "this bit is too loud".
+  ///
+  /// The two ends move by the same number of decibels rather than to the same
+  /// value, so a ramp stays the ramp it was and only its level changes.
+  GainSegment,
   /// Moving one point of the automation, in time as well as level. Adding a
   /// point is this mode too — it is created under the pointer on the press and
   /// dragged from there, so nothing has to distinguish a new point from an old
@@ -436,6 +447,15 @@ struct TimelineEdit {
   /// same value in each, which makes adding one and moving one the same edit.
   GainPoint gain_from;
   GainPoint gain_to;
+
+  /// `GainSegment` only: the points whose level changed, at the times they
+  /// already had.
+  ///
+  /// A list because a stretch in the middle of a band moves the point at each
+  /// end of it, and only times that do not change — which is what lets these be
+  /// applied as ordinary upserts, keeping each keyframe's interpolation instead
+  /// of rebuilding it.
+  std::vector<GainPoint> gain_moved;
 
   friend bool operator==(const TimelineEdit&, const TimelineEdit&) = default;
 };
@@ -586,9 +606,18 @@ class TimelineView : public Widget {
   [[nodiscard]] std::optional<GainPointRef> gain_point_at(double x, double y) const;
 
   /// Whether a press here would take hold of a clip's volume band — the line
-  /// itself, not one of its points. False once the clip is automated, since
-  /// there is no single level to move.
+  /// itself, rather than one of its points. True whether or not the clip is
+  /// automated; what a drag then means is `GainLevel` on a flat band and
+  /// `GainSegment` on one with points.
   [[nodiscard]] bool over_gain_band(double x, double y) const;
+
+  /// Which points a drag of the band under `x` would carry.
+  ///
+  /// Empty on a flat band, since that has no points and moves as a whole. One
+  /// index before the first point or after the last, where the line is flat and
+  /// held by a single end. Two in between.
+  [[nodiscard]] std::vector<std::size_t> gain_segment_at(std::size_t track, std::size_t block,
+                                                         double x) const;
 
   [[nodiscard]] double playhead_x() const;
 
@@ -704,6 +733,13 @@ class TimelineView : public Widget {
   GainPoint gain_origin_;
   /// The level the band was at when a `GainLevel` drag started.
   double gain_level_origin_ = 1.0;
+
+  /// Which points a `GainSegment` drag is carrying, and what they were worth
+  /// when it began. Held from the press for the same reason `origin_` is:
+  /// working from where the drag started rather than from the last move is what
+  /// stops a long one accumulating rounding.
+  std::vector<std::size_t> gain_segment_;
+  std::vector<double> gain_segment_origin_;
 
   /// Taken from the theme at layout, because input arrives without one.
   Metrics metrics_;

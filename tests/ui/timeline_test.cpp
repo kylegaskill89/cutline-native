@@ -1773,17 +1773,98 @@ TEST(GainBand, APressBelowTheBandStillMovesTheClip) {
   EXPECT_EQ(fixture.view->zone_at(box.x + 200.0, box.bottom() - 4.0), DragMode::Move);
 }
 
-TEST(GainBand, AnAutomatedClipHasNoSingleLevelToDrag) {
+// An automated band is grabbed where the *line* is, which is wherever the
+// points evaluate to rather than the stored level — the level is not what is
+// playing once there is automation on the clip.
+TEST(GainBand, AnAutomatedBandIsGrabbedWhereTheLineIs) {
   const BandFixture fixture{GainBand{.level = 1.0, .points = {{2.0, 0.5}, {5.0, 1.0}}}};
   const Rect box = fixture.view->block_rect(1, 0);
 
-  // The line runs through the points now, so there is nothing a level drag
-  // could mean that would not silently rewrite every one of them.
-  for (const double at : {50.0, 200.0, 400.0, 700.0}) {
-    for (double dy = 2.0; dy < box.height - 2.0; dy += 3.0) {
-      EXPECT_FALSE(fixture.view->over_gain_band(box.x + at, box.y + dy));
-    }
-  }
+  // Halfway along the ramp between the two points.
+  const double x = box.x + 350.0;
+  const double on_the_line = fixture.view->gain_to_y(1, 0, 0.75);
+  EXPECT_TRUE(fixture.view->over_gain_band(x, on_the_line));
+  EXPECT_FALSE(fixture.view->over_gain_band(x, on_the_line + 20.0))
+      << "well below the line is the clip body, not the band";
+}
+
+TEST(GainBand, DraggingAnAutomatedBandMovesTheStretchRatherThanTheLevel) {
+  const BandFixture fixture{GainBand{.level = 1.0, .points = {{2.0, 0.5}, {5.0, 1.0}}}};
+  const Rect box = fixture.view->block_rect(1, 0);
+  EXPECT_EQ(fixture.view->zone_at(box.x + 350.0, fixture.view->gain_to_y(1, 0, 0.75)),
+            DragMode::GainSegment);
+}
+
+// Which points a stretch carries: one at each end in the middle of the band,
+// and the single end that holds the flat run outside the points up.
+TEST(GainBand, AStretchIsHeldByThePointsAtItsEnds) {
+  const BandFixture fixture{GainBand{.points = {{2.0, 0.5}, {5.0, 1.0}, {7.0, 0.25}}}};
+  const Rect area = fixture.view->gain_area(1, 0);
+
+  EXPECT_EQ(fixture.view->gain_segment_at(1, 0, area.x + 50.0), (std::vector<std::size_t>{0}))
+      << "before the first point the line is flat";
+  EXPECT_EQ(fixture.view->gain_segment_at(1, 0, area.x + 350.0),
+            (std::vector<std::size_t>{0, 1}));
+  EXPECT_EQ(fixture.view->gain_segment_at(1, 0, area.x + 600.0),
+            (std::vector<std::size_t>{1, 2}));
+  EXPECT_EQ(fixture.view->gain_segment_at(1, 0, area.x + 780.0), (std::vector<std::size_t>{2}))
+      << "after the last point it is flat again";
+}
+
+// The whole point of moving both ends by the same number of decibels: a ramp
+// stays the ramp it was. Setting both to the pointer's height would flatten it.
+TEST(GainBand, DraggingAStretchKeepsItsShape) {
+  BandFixture fixture{GainBand{.points = {{2.0, 0.25}, {6.0, 1.0}}}};
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const double before = gain_to_band(1.0, 2.0) - gain_to_band(0.25, 2.0);
+
+  const double x = fixture.view->block_rect(1, 0).x + 400.0;
+  const double y = fixture.view->gain_to_y(1, 0, 0.625);
+  fixture.host->mouse_down(press(x, y));
+  fixture.host->mouse_move(press(x, y + 8.0));
+  fixture.host->mouse_up(press(x, y + 8.0));
+
+  const std::vector<GainPoint>& points = fixture.band().points;
+  ASSERT_EQ(points.size(), 2u);
+  // Both quieter, by the same amount, and their times untouched.
+  EXPECT_LT(points[0].v, 0.25);
+  EXPECT_LT(points[1].v, 1.0);
+  EXPECT_DOUBLE_EQ(points[0].t, 2.0);
+  EXPECT_DOUBLE_EQ(points[1].t, 6.0);
+  EXPECT_NEAR(gain_to_band(points[1].v, 2.0) - gain_to_band(points[0].v, 2.0), before, 1e-6);
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::GainSegment);
+  EXPECT_EQ(last->gain_moved.size(), 2u);
+}
+
+TEST(GainBand, DraggingTheFlatRunBeforeTheFirstPointCarriesOnlyThatPoint) {
+  BandFixture fixture{GainBand{.points = {{4.0, 1.0}, {6.0, 0.5}}}};
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const double x = fixture.view->block_rect(1, 0).x + 100.0;  // 1s, before the first
+  const double y = fixture.view->gain_to_y(1, 0, 1.0);
+  fixture.host->mouse_down(press(x, y));
+  fixture.host->mouse_move(press(x, y + 10.0));
+  fixture.host->mouse_up(press(x, y + 10.0));
+
+  ASSERT_TRUE(last.has_value());
+  ASSERT_EQ(last->gain_moved.size(), 1u);
+  EXPECT_DOUBLE_EQ(last->gain_moved[0].t, 4.0);
+  EXPECT_LT(fixture.band().points[0].v, 1.0);
+  EXPECT_DOUBLE_EQ(fixture.band().points[1].v, 0.5) << "the far point stayed put";
+}
+
+// A point sits on the line, so a press near both has to mean the point — it is
+// the more precise target and the one being aimed at.
+TEST(GainBand, APressOnAPointTakesThePointRatherThanTheStretch) {
+  const BandFixture fixture{GainBand{.points = {{2.0, 0.5}, {5.0, 1.0}}}};
+  const Rect dot = fixture.view->gain_point_rect(1, 0, 0);
+  EXPECT_EQ(fixture.view->zone_at(dot.x + dot.width * 0.5, dot.y + dot.height * 0.5),
+            DragMode::GainPointDrag);
 }
 
 TEST(GainBand, AltPutsAPointWhereTheBandAlreadyIs) {

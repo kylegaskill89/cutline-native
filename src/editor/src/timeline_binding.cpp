@@ -268,6 +268,15 @@ core::Project apply_timeline_edit(core::Project project, std::string_view clip_i
       return core::move_gain_keyframe(std::move(project), clip_id, edit.gain_from.t,
                                       edit.gain_to.t, edit.gain_to.v);
 
+    case ui::DragMode::GainSegment:
+      // Upserts rather than moves: a segment drag changes levels and not times,
+      // so each point is set where it already is — which is what keeps the
+      // interpolation mode the keyframe was carrying.
+      for (const ui::GainPoint& point : edit.gain_moved) {
+        project = core::set_gain_keyframe(std::move(project), clip_id, point.t, point.v);
+      }
+      return project;
+
     case ui::DragMode::GainPointRemove:
       return core::remove_gain_keyframe_at(std::move(project), clip_id, edit.gain_from.t);
 

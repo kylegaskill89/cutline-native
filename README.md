@@ -278,6 +278,9 @@ removed without a third control that exists only to undo the other two. The two
 can never cross: setting one past the other clears that other, so an inverted
 pair is unrepresentable rather than something every reader has to check for.
 
+Clicking a linked clip selects everything linked to it, so what is highlighted is
+what an edit is about to reach — the two had no business disagreeing.
+
 Clips link and unlink, and tracks can be added and removed, from the timeline's
 toolbar or from Premiere's Ctrl+L. Both go through the command table rather than
 touching the model where the button is, so a shortcut and a button cannot come to
@@ -336,6 +339,13 @@ decibels holds both a fine trim and ducking a bed under a voice — and below it
 clip is silent, because the one thing a volume control at its bottom stop is
 expected to do is nothing at all.
 
+Once there are points, dragging the *line between two of them* moves that
+stretch, carrying the point at each end with it. That is how a level is ridden:
+grab the bit that is too loud and pull it down. Both ends move by the same number
+of decibels rather than to the same value, so a ramp stays the ramp it was and
+only its level changes — and outside the points, where the line is flat, the drag
+carries the single end holding it up.
+
 Adding a point takes the value the band already had there, so automating a clip
 never starts by altering it — the same bargain the inspector's stopwatch makes.
 
@@ -350,7 +360,7 @@ had been there, tested, since the first phase, and the mixer and the exporter
 have honoured automation from the start. This is the second feature in a row
 whose work was entirely the gesture.
 
-1686 tests, plus a headless check that lays every panel out in every theme —
+1693 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a matte, an adjustment layer, a title, and the
 colour picker open, which is the only way the controls a panel is made of get

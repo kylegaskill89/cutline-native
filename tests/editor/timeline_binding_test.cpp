@@ -562,6 +562,37 @@ TEST(Binding, AddingAPointIsTheSameEditAsMovingOne) {
   EXPECT_DOUBLE_EQ(kfs[0].v, 0.6);
 }
 
+TEST(Binding, DraggingAStretchSetsEveryPointItCarried) {
+  Project project = core::set_gain_keyframe(sample_project(), "a", 2.0, 0.5);
+  project = core::set_gain_keyframe(std::move(project), "a", 6.0, 1.0);
+
+  project = apply_timeline_edit(
+      std::move(project), "a",
+      ui::TimelineEdit{.mode = ui::DragMode::GainSegment,
+                       .gain_moved = {{2.0, 0.4}, {6.0, 0.8}}});
+
+  const std::vector<core::Keyframe>& kfs = core::find_clip(project, "a")->gain_keyframes;
+  ASSERT_EQ(kfs.size(), 2u) << "a stretch moves points, it does not add any";
+  EXPECT_DOUBLE_EQ(kfs[0].v, 0.4);
+  EXPECT_DOUBLE_EQ(kfs[1].v, 0.8);
+  EXPECT_DOUBLE_EQ(kfs[0].t, 2.0);
+  EXPECT_DOUBLE_EQ(kfs[1].t, 6.0);
+}
+
+// The times do not change, so each point is set where it already is — an
+// upsert, which is what keeps the interpolation the keyframe was carrying.
+TEST(Binding, DraggingAStretchKeepsEachKeyframesInterpolation) {
+  Project project = core::set_gain_keyframe(sample_project(), "a", 2.0, 0.5);
+  project = core::set_gain_keyframe(std::move(project), "a", 6.0, 1.0);
+  project = core::set_gain_keyframe_interp(std::move(project), "a", core::Interp::Ease);
+
+  project = apply_timeline_edit(
+      std::move(project), "a",
+      ui::TimelineEdit{.mode = ui::DragMode::GainSegment, .gain_moved = {{2.0, 0.4}}});
+
+  EXPECT_EQ(core::gain_keyframe_interp_of(*core::find_clip(project, "a")), core::Interp::Ease);
+}
+
 TEST(Binding, RemovingAPointTakesTheKeyframeAway) {
   Project project = core::set_gain_keyframe(sample_project(), "a", 2.0, 0.5);
   project = core::set_gain_keyframe(std::move(project), "a", 6.0, 1.0);

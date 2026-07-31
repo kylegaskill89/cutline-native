@@ -2224,7 +2224,18 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
       return;
     }
     const auto id = cutline::editor::block_clip_id(app->timeline->model(), *ref);
-    if (id.has_value()) app->session.select_one(*id);
+    if (id.has_value()) {
+      // The whole linked group, not the one block that was hit. Clicking a
+      // video clip and seeing its audio stay unhighlighted says the two are
+      // separate when the point of linking them is that they are not — and
+      // every edit was already going to reach both, so showing one selected
+      // was the interface disagreeing with what it was about to do.
+      app->session.select(cutline::core::group_members(app->session.project(), *id));
+      // The view highlighted the single block it was clicked on, and the
+      // session now says otherwise. Rebuilt rather than patched, for the usual
+      // reason: which blocks are in the group is the model's answer.
+      refresh_timeline(*app);
+    }
     app->inspector_stale = true;
   });
 
