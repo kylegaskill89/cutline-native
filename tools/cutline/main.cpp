@@ -36,13 +36,14 @@
 #include "cutline/editor/titles.hpp"
 #include "cutline/editor/transitions.hpp"
 #include "cutline/editor/workspace.hpp"
+#include "cutline/render/preview.hpp"
 #include "cutline/ui/browser.hpp"
 #include "cutline/ui/color_picker.hpp"
 #include "cutline/ui/controls.hpp"
 #include "cutline/ui/dock.hpp"
 #include "cutline/ui/dock_view.hpp"
-#include "cutline/ui/monitor.hpp"
 #include "cutline/ui/meter_view.hpp"
+#include "cutline/ui/monitor.hpp"
 #include "cutline/ui/scopes_view.hpp"
 #include "cutline/ui/skia_painter.hpp"
 #include "cutline/ui/skia_window.hpp"
@@ -436,6 +437,15 @@ struct App {
     return live_project.has_value() ? *live_project : session.project();
   }
 
+  /// How much of the sequence's own resolution the preview renders at.
+  ///
+  /// Compositing costs per pixel, so a half is a quarter of the work and a
+  /// quarter a sixteenth. It changes nothing about the document and nothing
+  /// about an export — a snapshot renders at full size too, since it is a frame
+  /// of the sequence rather than a picture of the monitor.
+  double preview_scale = 1.0;
+  Button* preview_scale_button = nullptr;
+
   /// Set when the picture has changed and the measurements no longer describe
   /// it. Deferred like the preview is, so scrubbing across ten frames measures
   /// the one that is finally shown rather than all ten.
@@ -613,6 +623,9 @@ void choose_scope(App& app, cutline::ui::ScopeKind kind);
 void show_master_gain(App& app, double gain);
 void refresh_meter(App& app);
 void refresh_handles(App& app);
+[[nodiscard]] std::string preview_scale_name(double scale);
+[[nodiscard]] double next_preview_scale(double scale) noexcept;
+void choose_preview_scale(App& app, double scale);
 void invalidate_playback(App& app);
 void open_export_dialog(App& app);
 void poll_export(App& app);
@@ -1571,8 +1584,15 @@ void refresh_preview(App& app) {
   if (!has_media) return;
 
   // The gesture's project while one is in flight, so a transform being dragged
-  // on the picture shows in the picture without being written down.
-  const cutline::core::Project& project = app.showing();
+  // on the picture shows in the picture without being written down. Then at
+  // whatever resolution the preview is set to, which is a copy — but only when
+  // it is set to something, and the copy costs a fraction of the render it
+  // saves.
+  const cutline::core::Project& document = app.showing();
+  const cutline::core::Project reduced =
+      app.preview_scale == 1.0 ? cutline::core::Project{}
+                               : cutline::render::scaled_canvas(document, app.preview_scale);
+  const cutline::core::Project& project = app.preview_scale == 1.0 ? document : reduced;
   if (app.preview == nullptr) {
     // The same device the windows draw on, when there is one. That is what
     // lets the finished frame be handed over rather than copied.
@@ -1680,6 +1700,42 @@ void take_snapshot([[maybe_unused]] App& app) {
 /// panel is drawn at, so the waveform is not being asked to describe detail
 /// finer than a pixel of graph.
 constexpr int kScopeWidth = 320;
+
+/// The resolutions the preview offers, and what each is called.
+///
+/// Three, doubling: full, half, quarter. A quarter is a sixteenth of the work,
+/// which is as far as it is worth going — below that the picture stops saying
+/// anything about focus or grain, and the compositing is no longer what the
+/// scrub is waiting on.
+constexpr std::array<std::pair<double, std::string_view>, 3> kPreviewScales{{
+    {1.0, "Full"},
+    {0.5, "1/2"},
+    {0.25, "1/4"},
+}};
+
+[[nodiscard]] std::string preview_scale_name(double scale) {
+  using Entry = std::pair<double, std::string_view>;
+  const auto found = std::ranges::find(kPreviewScales, scale, &Entry::first);
+  return std::string(found == kPreviewScales.end() ? kPreviewScales.front().second
+                                                   : found->second);
+}
+
+[[nodiscard]] double next_preview_scale(double scale) noexcept {
+  using Entry = std::pair<double, std::string_view>;
+  const auto at = std::ranges::find(kPreviewScales, scale, &Entry::first);
+  if (at == kPreviewScales.end()) return kPreviewScales.front().first;
+  const auto index = static_cast<std::size_t>(at - kPreviewScales.begin());
+  return kPreviewScales[(index + 1) % kPreviewScales.size()].first;
+}
+
+void choose_preview_scale(App& app, double scale) {
+  if (app.preview_scale == scale) return;
+  app.preview_scale = scale;
+  if (app.preview_scale_button != nullptr) {
+    app.preview_scale_button->set_text(preview_scale_name(scale));
+  }
+  invalidate_preview(app);
+}
 
 /// The reading under the master fader.
 ///
@@ -2451,6 +2507,15 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   transport.emplace<Button>("Snapshot", [app] {
     if (app != nullptr) take_snapshot(*app);
   });
+
+  // One button that cycles rather than three, which is the idiom the scope tabs
+  // and the sort order already use for a short list in a crowded row.
+  auto& quality = transport.emplace<Button>(
+      preview_scale_name(app == nullptr ? 1.0 : app->preview_scale), [app] {
+        if (app != nullptr) choose_preview_scale(*app, next_preview_scale(app->preview_scale));
+      });
+  if (app != nullptr) app->preview_scale_button = &quality;
+
   transport.emplace<Spacer>();
   auto& play = transport.emplace<Button>("Play", [app] {
     if (app != nullptr) toggle_playback(*app);

@@ -33,6 +33,7 @@ add_executable(cutline_core_tests
   render/effects_test.cpp
   render/mix_test.cpp
   render/plan_test.cpp
+  render/preview_test.cpp
   render/scopes_test.cpp
   ui/browser_test.cpp
   ui/color_picker_test.cpp

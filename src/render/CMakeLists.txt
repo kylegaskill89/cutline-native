@@ -3,6 +3,7 @@ add_library(cutline_render
   src/effects.cpp
   src/mix.cpp
   src/plan.cpp
+  src/preview.cpp
   src/scopes.cpp)
 add_library(cutline::render ALIAS cutline_render)
 
