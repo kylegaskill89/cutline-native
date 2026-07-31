@@ -265,7 +265,6 @@ here.**
 | | Exists | Missing |
 |---|---|---|
 | **Renaming a track** | `set_track_label` in core | no way to type one in |
-| **Snapshot to PNG** | the whole path (`render_frame` does it) | no button |
 
 ### B. Not built anywhere
 

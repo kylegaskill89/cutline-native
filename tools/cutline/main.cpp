@@ -88,6 +88,7 @@
 #include <cstdint>
 #include <atomic>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <thread>
 #include <optional>
@@ -558,6 +559,8 @@ void add_title(App& app);
 void add_matte(App& app);
 void add_adjustment(App& app);
 void complain(HWND owner, const std::string& message);
+[[nodiscard]] std::optional<std::filesystem::path> choose_image_file(HWND owner);
+void take_snapshot(App& app);
 
 /// A heading inside the inspector, over the group of controls it names.
 void inspector_heading(App& app, std::string text) {
@@ -1526,6 +1529,61 @@ void refresh_preview(App& app) {
 #endif
 }
 
+/// Writes the frame at the playhead to a PNG.
+///
+/// Rendered again rather than read back off the monitor: what is on screen is
+/// letterboxed into whatever the panel happens to be, and a snapshot is a frame
+/// of the *sequence* at its own size. This is the same call export makes per
+/// frame, so the file is what the exported movie would contain.
+void take_snapshot([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.preview == nullptr) {
+    complain(app.main.window, "There is no preview to take a snapshot of yet.");
+    return;
+  }
+
+  const auto frame = app.preview->frame_at(app.session.project(), app.session.playhead());
+  if (!frame.has_value()) {
+    complain(app.main.window, "Could not render the frame.\n\n" + frame.error());
+    return;
+  }
+  if (frame->empty()) {
+    complain(app.main.window, "There is nothing at the playhead to save.");
+    return;
+  }
+
+  // Asked for after the frame is in hand. A dialog that opens and then reports
+  // that there was nothing to save wastes the answer it just collected.
+  const auto path = choose_image_file(app.main.window);
+  if (!path.has_value()) return;
+
+  // Through Skia, which this already links for the window's surface. The
+  // alternative was the uncompressed writer `render_frame` carries for its own
+  // use, and a 4K snapshot stored raw is thirty megabytes.
+  const SkImageInfo info = SkImageInfo::Make(frame->width, frame->height,
+                                             kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+  const SkPixmap pixels(info, frame->pixels, static_cast<std::size_t>(frame->row_bytes()));
+
+  SkDynamicMemoryWStream out;
+  if (!SkPngEncoder::Encode(&out, pixels, SkPngEncoder::Options{})) {
+    complain(app.main.window, "Could not encode the snapshot.");
+    return;
+  }
+
+  const sk_sp<SkData> encoded = out.detachAsData();
+  std::ofstream file(*path, std::ios::binary);
+  if (!file) {
+    complain(app.main.window, "Could not write " + path->string());
+    return;
+  }
+  file.write(static_cast<const char*>(encoded->data()),
+             static_cast<std::streamsize>(encoded->size()));
+  if (!file) complain(app.main.window, "Could not write " + path->string());
+#else
+  complain(app.main.window, "This build has no preview to take a snapshot of.");
+#endif
+}
+
 /// Marks the picture as no longer matching the playhead or the project.
 void invalidate_preview(App& app) {
 #if CUTLINE_HAVE_PREVIEW
@@ -1806,6 +1864,25 @@ void add_adjustment(App& app) {
   dialog.lpstrFile = buffer.data();
   dialog.nMaxFile = static_cast<DWORD>(buffer.size());
   dialog.lpstrDefExt = L"mp4";
+  dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+
+  if (GetSaveFileNameW(&dialog) == FALSE) return std::nullopt;
+  return std::filesystem::path(buffer.data());
+}
+
+/// Where a snapshot should go. A third dialog for the same reason the second
+/// exists: the filter and the default extension are the whole of what these
+/// functions do.
+[[nodiscard]] std::optional<std::filesystem::path> choose_image_file(HWND owner) {
+  std::array<wchar_t, MAX_PATH> buffer{};
+
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = owner;
+  dialog.lpstrFilter = L"PNG image\0*.png\0All files\0*.*\0";
+  dialog.lpstrFile = buffer.data();
+  dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+  dialog.lpstrDefExt = L"png";
   dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
 
   if (GetSaveFileNameW(&dialog) == FALSE) return std::nullopt;
@@ -2094,6 +2171,13 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   });
   transport.emplace<Button>("Mark Out", [app] {
     if (app != nullptr) run_command(*app, cutline::editor::Command::MarkOut);
+  });
+  // The frame at the playhead, written out as a PNG. Under the monitor rather
+  // than in the project panel, which the spec suggests: that row is already
+  // full, and `--check` said so by finding two controls cut in half by the edge
+  // of it. This is also where the frame being saved is on show.
+  transport.emplace<Button>("Snapshot", [app] {
+    if (app != nullptr) take_snapshot(*app);
   });
   transport.emplace<Spacer>();
   auto& play = transport.emplace<Button>("Play", [app] {

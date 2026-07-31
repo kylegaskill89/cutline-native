@@ -292,6 +292,12 @@ and that is exactly when a sweep is what somebody wants. Clicking a linked clip
 selects everything linked to it, so what is highlighted is what an edit is about
 to reach; the two had no business disagreeing.
 
+Snapshot writes the frame at the playhead to a PNG. Rendered again rather than
+read off the monitor, because what is on screen is letterboxed into whatever the
+panel happens to be and a snapshot is a frame of the *sequence*, at its own size
+— the same call export makes per frame, so the file is what the movie would
+contain.
+
 Clips link and unlink, and tracks can be added and removed, from the timeline's
 toolbar or from Premiere's Ctrl+L. Both go through the command table rather than
 touching the model where the button is, so a shortcut and a button cannot come to
