@@ -3,9 +3,13 @@
 /// Creating and editing titles.
 ///
 /// A title is a generated media: nothing on disk, a `TextSpec` in the project.
-/// That makes it the one source an editor creates rather than imports, and the
-/// reason this is not part of `import.hpp` — there is no file, no probe, and no
-/// pool to deduplicate against. Two titles with the same words are two titles.
+/// That makes it a source an editor creates rather than imports, and the reason
+/// this is not part of `import.hpp` — there is no file, no probe, and no pool to
+/// deduplicate against. Two titles with the same words are two titles.
+///
+/// The other generated media — colour mattes and adjustment layers — are in
+/// `generators.hpp`, apart from these because text carries a whole
+/// specification of its own and they carry almost nothing.
 ///
 /// Editing is by whole spec rather than field by field. A caller reads the spec
 /// it has, changes what it means to change, and sets it back; a setter per

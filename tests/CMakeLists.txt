@@ -19,6 +19,7 @@ add_executable(cutline_core_tests
   editor/commands_test.cpp
   editor/document_test.cpp
   editor/effects_binding_test.cpp
+  editor/generators_test.cpp
   editor/import_test.cpp
   editor/inspector_test.cpp
   editor/session_test.cpp

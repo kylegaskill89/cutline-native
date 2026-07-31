@@ -218,6 +218,14 @@ lighting its M would leave somebody pressing a button that is already off. The
 mixer and the exporter have honoured all of this from the start; until now there
 was no way to press it.
 
+Colour mattes and adjustment layers can be made at last, from a New menu beside
+Import — the third and fourth things the editor creates rather than imports. A
+matte's panel is two swatches and an angle, and the second swatch is what turns a
+flat fill into a gradient: there is no separate switch, because a gradient with
+one colour is a solid and saying so twice invites the two to disagree. An
+adjustment layer's panel says what it is for, since a clip that draws nothing of
+its own otherwise looks like a clip that is broken.
+
 Markers are dropped on the ruler with M, walked with shift and control, and
 thrown away with Ctrl+Alt+M — the awkward chord being the point, since that one
 clears the lot. Dropping one where one already sits takes it away, which is the
@@ -270,10 +278,12 @@ removed without a third control that exists only to undo the other two. The two
 can never cross: setting one past the other clears that other, so an inverted
 pair is unrepresentable rather than something every reader has to check for.
 
-1578 tests, plus a headless check that lays every panel out in every theme —
+1594 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
-clip with all eight of its own, a title, and the colour picker open, which is
-the only way the controls a panel is made of get checked at all. Given a directory, that check writes each theme's frame out
+clip with all eight of its own, a matte, an adjustment layer, a title, and the
+colour picker open, which is the only way the controls a panel is made of get
+checked at all. It fails on a widget that landed nowhere, outside the window, or
+cut in half by the panel holding it. Given a directory, that check writes each theme's frame out
 as a PNG, so a changed fingerprint can be looked at rather than guessed at.
 
 ## Building

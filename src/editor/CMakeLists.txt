@@ -11,6 +11,7 @@ add_library(cutline_editor
   src/commands.cpp
   src/document.cpp
   src/effects_binding.cpp
+  src/generators.cpp
   src/import.cpp
   src/inspector.cpp
   src/session.cpp

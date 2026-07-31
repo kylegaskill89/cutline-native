@@ -27,6 +27,7 @@
 #include "cutline/editor/commands.hpp"
 #include "cutline/editor/document.hpp"
 #include "cutline/editor/effects_binding.hpp"
+#include "cutline/editor/generators.hpp"
 #include "cutline/editor/import.hpp"
 #include "cutline/editor/inspector.hpp"
 #include "cutline/editor/session.hpp"
@@ -519,6 +520,8 @@ void settle_export(App& app);
 void toggle_playback(App& app);
 void import_media(App& app);
 void add_title(App& app);
+void add_matte(App& app);
+void add_adjustment(App& app);
 void complain(HWND owner, const std::string& message);
 
 /// A heading inside the inspector, over the group of controls it names.
@@ -963,6 +966,75 @@ void build_transition_controls(App& app, const std::string& clip_id) {
   });
 }
 
+/// A colour matte's fill, when the selected clip is one.
+///
+/// Two swatches and an angle, and the second swatch is what turns a flat fill
+/// into a gradient — there is no separate switch, because a gradient with one
+/// colour is a solid and saying so twice invites the two to disagree.
+void build_matte_controls(App& app, const std::string& clip_id,
+                          const cutline::editor::MatteFill& fill) {
+  inspector_heading(app, "Colour Matte");
+
+  const auto write = [&app, clip_id](cutline::editor::MatteFill changed, bool rebuild_panel) {
+    const cutline::core::Clip* clip =
+        cutline::core::find_clip(app.session.project(), clip_id);
+    if (clip == nullptr) return;
+    app.session.apply(cutline::editor::set_matte_fill(app.session.project(), clip->media_id,
+                                                      std::move(changed)));
+    refresh_browser(app);
+    refresh_timeline(app);
+    invalidate_preview(app);
+    // Off for the swatches: rebuilding destroys the swatch, and a destroyed
+    // swatch closes the picker hanging open above it.
+    if (rebuild_panel) app.inspector_stale = true;
+  };
+
+  auto& colour_row = app.inspector->emplace<Box>(Axis::Horizontal);
+  colour_row.emplace<Label>("Colour").set_small(true);
+  auto& colour = colour_row.emplace<ColorSwatch>(parse_color(fill.color));
+  colour.set_on_commit([write, fill](const Color& picked) {
+    cutline::editor::MatteFill changed = fill;
+    changed.color = to_hex(picked);
+    write(std::move(changed), false);
+  });
+
+  auto& ramp = app.inspector->emplace<Box>(Axis::Horizontal);
+  auto& gradient = ramp.emplace<Checkbox>("Gradient", fill.gradient.has_value());
+  gradient.set_on_change([write, fill](bool on) {
+    cutline::editor::MatteFill changed = fill;
+    if (on) {
+      // Black by default, which is the one second colour that reads as a ramp
+      // whatever the first one is.
+      changed.gradient = cutline::core::MatteGradient{.color2 = "#000000", .angle = 0.0};
+    } else {
+      changed.gradient.reset();
+    }
+    // This one does rebuild: turning it on adds two controls below.
+    write(std::move(changed), true);
+  });
+  ramp.emplace<Spacer>();
+
+  if (!fill.gradient.has_value()) return;
+
+  auto& second_row = app.inspector->emplace<Box>(Axis::Horizontal);
+  second_row.emplace<Label>("To").set_small(true);
+  auto& second = second_row.emplace<ColorSwatch>(parse_color(fill.gradient->color2));
+  second.set_on_commit([write, fill](const Color& picked) {
+    cutline::editor::MatteFill changed = fill;
+    changed.gradient->color2 = to_hex(picked);
+    write(std::move(changed), false);
+  });
+
+  app.inspector->emplace<Label>("Angle (deg)").set_small(true);
+  auto& angle = app.inspector->emplace<Slider>(ValueRange{.minimum = 0.0, .maximum = 360.0},
+                                               fill.gradient->angle);
+  angle.set_on_commit([write, fill](double value) {
+    cutline::editor::MatteFill changed = fill;
+    changed.gradient->angle = value;
+    write(std::move(changed), false);
+  });
+}
+
 /// A title's own text and styling, when the selected clip is one.
 ///
 /// Above Motion rather than below the effects: what a title *says* is the first
@@ -1119,6 +1191,16 @@ void refresh_inspector(App& app) {
           cutline::editor::clip_title_spec(app.session.project(), clip_id);
       spec != nullptr) {
     build_title_controls(app, clip_id, *spec);
+  } else if (const std::optional<cutline::editor::MatteFill> fill =
+                 cutline::editor::clip_matte_fill(app.session.project(), clip_id);
+             fill.has_value()) {
+    build_matte_controls(app, clip_id, *fill);
+  } else if (cutline::editor::clip_is_adjustment(app.session.project(), clip_id)) {
+    // Said out loud. An adjustment layer draws nothing of its own, and a clip
+    // showing black where a picture should be looks like one that is broken
+    // rather than one that is working exactly as intended.
+    inspector_heading(app, "Adjustment Layer");
+    app.inspector->emplace<Label>("Its effects apply to everything below it.").set_small(true);
   }
 
   // Premiere's own heading for the built-in transform, and the honest one for
@@ -1586,6 +1668,24 @@ void add_title(App& app) {
   refresh_all(app);
 }
 
+void add_matte(App& app) {
+  std::string clip_id;
+  app.session.apply(cutline::editor::add_color_matte_at(
+      app.session.project(), cutline::editor::MatteFill{}, app.session.playhead(), {},
+      &clip_id));
+  if (!clip_id.empty()) app.session.select_one(clip_id);
+  refresh_all(app);
+}
+
+void add_adjustment(App& app) {
+  std::string clip_id;
+  app.session.apply(cutline::editor::add_adjustment_layer_at(app.session.project(),
+                                                             app.session.playhead(), {},
+                                                             &clip_id));
+  if (!clip_id.empty()) app.session.select_one(clip_id);
+  refresh_all(app);
+}
+
 /// The system's open or save dialog.
 [[nodiscard]] std::optional<std::filesystem::path> choose_file(HWND owner, bool saving) {
   std::array<wchar_t, MAX_PATH> buffer{};
@@ -1817,8 +1917,26 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   tools.emplace<Button>("Remove", [app] {
     if (app != nullptr) remove_from_pool(*app);
   });
-  tools.emplace<Button>("New Title", [app] {
-    if (app != nullptr) add_title(*app);
+  // One button and a menu rather than three buttons. Three would not fit — the
+  // first attempt put New Title, Matte and Adjustment in this row and the last
+  // of them was cut off by the edge of the panel — and a fourth generator would
+  // not fit either.
+  auto& generate = tools.emplace<Button>("New");
+  generate.set_on_click([app, control = &generate] {
+    if (app == nullptr || app->main.host == nullptr) return;
+
+    auto list = std::make_unique<MenuList>(
+        std::vector<std::string>{"Title", "Colour Matte", "Adjustment Layer"});
+    list->set_on_choose([app](std::size_t index) {
+      if (app->main.host != nullptr) app->main.host->close_popup();
+      switch (index) {
+        case 0: add_title(*app); break;
+        case 1: add_matte(*app); break;
+        case 2: add_adjustment(*app); break;
+        default: break;
+      }
+    });
+    app->main.host->open_popup(std::move(list), control->bounds());
   });
   tools.emplace<Spacer>();
 
@@ -3586,16 +3704,40 @@ template <typename T>
     // on screen reads as a missing feature rather than as a bug.
     int empty = 0;
     int escaped = 0;
+    int clipped = 0;
     int counted = 0;
-    const auto walk = [&](this const auto& self, const Widget& widget) -> void {
+
+    /// Walks a subtree, carrying the nearest ancestor that clips its children.
+    ///
+    /// The clip is what makes a control unreachable rather than merely untidy:
+    /// a row of buttons wider than the panel holding it looks fine in the widget
+    /// tree and has its last button cut in half on screen. That happened — three
+    /// generator buttons in the project panel's toolbar, the third of them
+    /// sliced by the panel's edge — and nothing here noticed, because everything
+    /// was inside the *window*.
+    ///
+    /// Horizontally only. A column overflowing its scroll view vertically is the
+    /// entire point of a scroll view.
+    const auto walk_within = [&](this const auto& self, const Widget& widget,
+                                 const Widget* clipper) -> void {
       ++counted;
       // A spacer is the exception: it exists to absorb whatever room is left
       // over, and when a column has overflowed its panel there is none. Zero is
       // the right answer there, not a layout that went wrong.
       if (widget.bounds().empty() && dynamic_cast<const Spacer*>(&widget) == nullptr) ++empty;
       if (widget.bounds().x < -0.5 || widget.bounds().right() > kWidth + 0.5) ++escaped;
-      for (const auto& child : widget.children()) self(*child);
+
+      if (clipper != nullptr && !widget.bounds().empty() &&
+          dynamic_cast<const ScrollView*>(clipper) == nullptr &&
+          (widget.bounds().x < clipper->bounds().x - 0.5 ||
+           widget.bounds().right() > clipper->bounds().right() + 0.5)) {
+        ++clipped;
+      }
+
+      const Widget* next = widget.clips_children() ? &widget : clipper;
+      for (const auto& child : widget.children()) self(*child, next);
     };
+    const auto walk = [&](const Widget& widget) { walk_within(widget, nullptr); };
     walk(host.root());
 
     // Every panel, not only the ones the default arrangement happens to show.
@@ -3721,6 +3863,36 @@ template <typename T>
         ++failures;
       }
 
+      // A colour matte with a gradient on it, whose panel has an angle and two
+      // swatches, and an adjustment layer, whose panel says what it is for. Both
+      // are generated media the editor makes rather than imports, and neither
+      // panel exists anywhere else in this check.
+      std::string matte_clip;
+      app.session.apply(cutline::editor::add_color_matte_at(
+          app.session.project(),
+          cutline::editor::MatteFill{
+              .color = "#204080",
+              .gradient = cutline::core::MatteGradient{.color2 = "#000000", .angle = 45.0}},
+          0.0, {}, &matte_clip));
+      if (!matte_clip.empty()) {
+        app.session.select_one(matte_clip);
+        refresh_inspector(app);
+        app.main.host->update_layout(context);
+        app.main.host->paint(*painter, theme);
+        walk(app.main.host->root());
+      }
+
+      std::string adjust_clip;
+      app.session.apply(cutline::editor::add_adjustment_layer_at(app.session.project(), 0.0, {},
+                                                                 &adjust_clip));
+      if (!adjust_clip.empty()) {
+        app.session.select_one(adjust_clip);
+        refresh_inspector(app);
+        app.main.host->update_layout(context);
+        app.main.host->paint(*painter, theme);
+        walk(app.main.host->root());
+      }
+
       // And again for a title, whose panel has controls no other clip does —
       // the text field among them, which nothing else in the interface uses yet
       // and which would otherwise never be laid out in any theme.
@@ -3773,9 +3945,9 @@ template <typename T>
       }
     }
 
-    std::println("{:<10} {:>3} widgets, {} empty, {} outside the window", theme.id, counted,
-                 empty, escaped);
-    if (empty > 0 || escaped > 0) ++failures;
+    std::println("{:<10} {:>3} widgets, {} empty, {} outside the window, {} clipped away",
+                 theme.id, counted, empty, escaped, clipped);
+    if (empty > 0 || escaped > 0 || clipped > 0) ++failures;
   }
 
   for (std::size_t i = 0; i < fingerprints.size(); ++i) {

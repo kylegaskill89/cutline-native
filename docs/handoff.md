@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1578** under the `ui` preset; 1338 of them need no GPU, no window, no FFmpeg |
+| Tests | **1594** under the `ui` preset; 1354 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1338 of the 1578 tests.
+binding between them — 1354 of the 1594 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -88,8 +88,9 @@ editor. Renaming it is on the list and nobody has bothered. It takes:
 
 - `--check [dir]` — headless: builds the whole interface in every theme, lays
   out every panel, paints it, and reports widget counts plus a per-theme pixel
-  fingerprint. Given a directory it writes each theme's frame as a PNG.
-  **Run this before every commit.** Exit code 0 or 1.
+  fingerprint. It fails on a widget that landed nowhere, one outside the window,
+  and one cut in half by the panel holding it. Given a directory it writes each
+  theme's frame as a PNG. **Run this before every commit.** Exit code 0 or 1.
 - `--benchmark` — layout and paint timings per theme and per window size.
 
 `preview_window` is a throwaway viewport for driving the render pipeline by hand.
@@ -117,7 +118,7 @@ tools    executables.
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1261 tests run with
+place that knows both, and it is pure too. That is what makes 1354 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -257,7 +258,6 @@ here.**
 
 | | Exists | Missing |
 |---|---|---|
-| **Colour mattes, adjustment layers** | the compositor renders adjustment layers; the browser has icons for both kinds | nothing creates one |
 | **Gain automation** | rubber-band model, mixer honours it | no way to add or drag a point |
 | **Waveforms, thumbnails** | `compute_peaks`, `extract_thumbnails` | the timeline draws neither |
 | **Link/unlink, add/remove/rename track** | all in core | no button, no shortcut, no command |
@@ -284,18 +284,17 @@ here.**
 
 ### Suggested order
 
-1. **Colour mattes and adjustment layers.** Small: two buttons beside New Title,
-   and `editor/titles.hpp` is the shape to copy — a generated media the editor
-   creates rather than imports.
-2. **Gain automation** — the rubber band. Bigger than it sounds: it needs a new
+1. **Gain automation** — the rubber band. Bigger than it sounds: it needs a new
    gesture on the timeline rather than a new panel.
-3. **Waveforms and thumbnails on clips.** The media layer computes both; the
+2. **Waveforms and thumbnails on clips.** The media layer computes both; the
    timeline draws neither. Watch the cost — a peak list per clip per zoom is the
    sort of thing that quietly makes scrolling expensive.
+3. **Link/unlink and the track operations** — all in core, none of them bound to
+   anything. Small, and the command table is where they go.
 4. Anything in B, by appetite. Scopes and the VU meter are the two that need new
    machinery rather than new wiring.
 
-Five are already done and are worth reading as the pattern for the rest:
+Six are already done and are worth reading as the pattern for the rest:
 
 - **In and out points** — marked from the buttons or from I and O, drawn along
   the foot of the ruler, saved with the project, offered to export as "only the
@@ -320,6 +319,11 @@ Five are already done and are worth reading as the pattern for the rest:
   thing already is takes it away, so no control exists only to undo another.
   The chip is one setting per property rather than per keyframe, which is what
   the reference exposed and what anybody actually wants.
+- **Colour mattes and adjustment layers** — `editor/generators.hpp`, alongside
+  `titles.hpp`, which is the same shape. Both set `has_video`, which means
+  "contributes picture" and is what `place_media` checks; an adjustment layer
+  contributes a filter rather than a picture and still needs the flag, which is
+  exactly the sort of thing that gets set honestly and breaks.
 
 ---
 
@@ -349,6 +353,12 @@ a track, a transition with no handles to borrow, a mark past the end of the
 sequence — all storable, all silently skipped. Whenever you expose something new,
 check what the *resolver* does with the edge cases before deciding what the panel
 offers, and put the answer in the binding layer where both can see it.
+
+**A row of controls can be wider than the panel holding it, and nothing in the
+widget tree minds.** The last one is simply cut in half on screen. `--check`
+catches this now — it walks with the nearest clipping ancestor and counts
+anything sticking out of it horizontally — but only because a third button in the
+project panel's toolbar went missing that way first.
 
 **Measure text before you centre it.** A label centred in a box too small for it
 overflows both ends, and what survives the clip is a word missing its first and
@@ -395,6 +405,8 @@ a backwards move smaller than one frame took compositing from 23 ms to 2 ms.
 - **They write the direction; you write the code.** They review lightly and
   expect the tests to be the proof. Do not ask for approval on ordinary
   decisions — make the call, state it plainly, and say why.
+  **Give options when a decision is needed.** Prompt them with a decision and
+   the pros and cons of each choice.
 - **Verify on screen before claiming something works.** Three real bugs shipped
   past a green test suite. If the desktop makes that impossible, say so rather
   than implying it was checked.
