@@ -289,14 +289,30 @@ std::expected<void, std::string> SkiaWindow::resize(int width, int height) {
   if (width <= 0 || height <= 0) return std::unexpected("a window with no size cannot be drawn");
   if (width == impl_->width && height == impl_->height) return {};
 
-  // Everything the swapchain owns has to be let go before it will resize, and
-  // the GPU may still be reading it.
+  // In this order, and every step of it matters.
+  //
+  // Skia first: it has recorded work against the buffers it wrapped, and that
+  // work has to be handed to the GPU before anything is destroyed. Flushing
+  // *after* dropping the surfaces — which is what this did — submits commands
+  // that refer to objects already gone, and leaves the context holding render
+  // targets for buffers the swapchain is about to replace. The window survived
+  // that until the next `present`, which is exactly where it died.
+  if (impl_->context != nullptr) impl_->context->flushAndSubmit(GrSyncCpu::kYes);
+  // Then the GPU: it may still be reading the buffers for a frame on screen.
   impl_->wait_for_idle();
+  // Then our references, and then Skia's own cached copies of them. Without
+  // this the context can hand back a render target for a resource the
+  // swapchain has freed, and whether that faults depends on what the driver
+  // put in its place — which is why this crashed three times in five rather
+  // than every time.
   impl_->release_buffers();
-  // Skia holds its own references to the wrapped resources until it is told the
-  // frame is over. Without this the buffers are still live and `ResizeBuffers`
-  // refuses.
-  if (impl_->context != nullptr) impl_->context->flushAndSubmit();
+  if (impl_->context != nullptr) {
+    impl_->context->freeGpuResources();
+    impl_->context->flushAndSubmit(GrSyncCpu::kYes);
+  }
+  // A frame that was in flight is not in flight any more: its surface has just
+  // been destroyed, so `present` must not go looking for it.
+  impl_->drawing = false;
 
   if (const HRESULT result = impl_->swapchain->ResizeBuffers(
           kBufferCount, static_cast<UINT>(width), static_cast<UINT>(height), kFormat, 0);

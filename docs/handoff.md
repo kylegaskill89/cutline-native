@@ -288,13 +288,17 @@ here.**
 
 ### Suggested order
 
-1. **The resize crash.** See *Known bugs* below. The application dies whenever
-   its window is resized, which is not something to build more features on top
-   of.
-2. **Link/unlink and the track operations** — all in core, none of them bound to
+1. **Link/unlink and the track operations** — all in core, none of them bound to
    anything. Small, and the command table is where they go.
-3. Anything in B, by appetite. Scopes and the VU meter are the two that need new
+2. Anything in B, by appetite. Scopes and the VU meter are the two that need new
    machinery rather than new wiring.
+
+And one thing worth doing whatever comes next: **nothing in the test suite ever
+resizes a real window.** The pixel tests draw on a fixed CPU raster surface and
+`--check` lays out at one size, so the whole `WM_SIZE` → recreate-the-swapchain
+path had never been exercised until somebody dragged the window under a driver —
+which is how the crash in *Traps* was found, after it had been shipping happily
+past a green suite for weeks.
 
 Eight are already done and are worth reading as the pattern for the rest:
 
@@ -350,31 +354,6 @@ Eight are already done and are worth reading as the pattern for the rest:
   wiring only. The part worth reading is the scale: gain is a linear multiplier
   and the band is decibels, because on a linear scale every trim anyone makes
   lands in the top few pixels of a forty-pixel clip.
-
----
-
-## 7a. Known bugs
-
-**Resizing the window crashes the application.** An access violation inside
-`skia.dll`, on any resize — maximising, or a `SetWindowPos` to 1600x1000 — and
-it does not depend on what is loaded: it happens with an empty sample project,
-with no media imported, and at every size tried. Seven fresh instances out of
-seven.
-
-Found by driving the real window, which is the third time that has caught
-something a green suite did not. Nothing in the test suite resizes a real
-window: the pixel tests use a fixed CPU raster surface and `--check` lays out at
-one size, so the whole `WM_SIZE` → recreate-the-surface path is untested.
-
-It is **not** new. A `theme_window.exe` built before the waveform, filmstrip and
-volume work crashes identically, so this predates all of it — but it had never
-been noticed because nobody had resized the window under a driver before.
-
-What is known: the fault is in Skia rather than in our own drawing, the
-exception is `0xc0000005` at a consistent offset, and the same instance that had
-been running a while survived a maximise once, so it may not be quite
-unconditional. Start at `Shell::resized`, `SkiaWindow`, and whatever the D3D12
-swapchain does when the compositor is sharing the device.
 
 ---
 
@@ -435,6 +414,21 @@ it is very often a button inside the popup running its own click handler.
 midpoint. Effects run on coded values, where FFmpeg's filters are defined and
 where the spec specifies them. Each operation happens in the space it was defined
 in. Do not "fix" either one.
+
+**Flush Skia's recorded work *before* destroying what it drew into.** Resizing
+the swapchain crashed the application — an access violation in `skia.dll`, seven
+fresh instances out of seven — because `SkiaWindow::resize` dropped the wrapped
+surfaces and only then called `flushAndSubmit`, submitting commands that
+referred to objects already gone and leaving the context holding render targets
+for buffers the swapchain was about to replace. It survived the resize itself
+and died in the *next* `present`, which is a long way from the cause. The order
+that works is: flush and submit, wait for the GPU, drop our surfaces, purge
+Skia's cached copies, then `ResizeBuffers`.
+
+Whether it faulted depended on what the driver put in the freed memory, so it
+was three times in five rather than every time — and once tracing was added it
+sometimes stopped happening at all. Timing-sensitive crashes that go away when
+you look at them are still real.
 
 **The frame loop blocks on its message queue whenever nothing is playing.**
 Anything finishing on a worker has to *post* rather than set a flag for the loop
