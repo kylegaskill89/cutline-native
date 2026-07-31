@@ -2,7 +2,8 @@ add_library(cutline_render
   src/effect_catalog.cpp
   src/effects.cpp
   src/mix.cpp
-  src/plan.cpp)
+  src/plan.cpp
+  src/scopes.cpp)
 add_library(cutline::render ALIAS cutline_render)
 
 target_include_directories(cutline_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

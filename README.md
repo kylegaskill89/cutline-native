@@ -292,6 +292,20 @@ and that is exactly when a sweep is what somebody wants. Clicking a linked clip
 selects everything linked to it, so what is highlighted is what an edit is about
 to reach; the two had no business disagreeing.
 
+The scopes are in: histogram, waveform, RGB parade and vectorscope, in a panel
+of their own that docks and tears out like any other. The counting lives in the
+render layer and the drawing in the widget layer, which is what lets the
+arithmetic be checked against a frame built in three lines — and what guarantees
+a scope can never affect an export, since the only thing passing between them is
+a set of tallies.
+
+Two numbers in it are worth knowing. The vectorscope's square reaches to 140 of
+chroma rather than 128, because a fully saturated primary sits about 136 from
+grey and a square stopping at 128 would clamp the very colours the scope exists
+to show. And the drawing applies a gain on top of the usual square root: a
+scatter spread over 65,536 cells leaves single pixels at a few per cent, which on
+screen is nothing at all.
+
 Snapshot writes the frame at the playhead to a PNG. Rendered again rather than
 read off the monitor, because what is on screen is letterboxed into whatever the
 panel happens to be and a snapshot is a frame of the *sequence*, at its own size
@@ -382,7 +396,7 @@ had been there, tested, since the first phase, and the mixer and the exporter
 have honoured automation from the start. This is the second feature in a row
 whose work was entirely the gesture.
 
-1730 tests, plus a headless check that lays every panel out in every theme —
+1758 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a matte, an adjustment layer, a title, and the
 colour picker open, which is the only way the controls a panel is made of get

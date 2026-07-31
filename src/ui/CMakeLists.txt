@@ -8,6 +8,7 @@ add_library(cutline_ui
   src/monitor.cpp
   src/painter.cpp
   src/recording_painter.cpp
+  src/scopes_view.cpp
   src/theme.cpp
   src/themes.cpp
   src/timeline.cpp
@@ -22,11 +23,18 @@ target_include_directories(cutline_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
 # way is what lets the whole look of the application be tested without a window
 # -- and what keeps most UI work off the long Skia build.
 #
-# The one exception is the core, for time: frame durations and timecode. Those
-# are already written and tested there, and reimplementing them here to keep a
-# layering rule that costs nothing to break would be silly. The core is pure and
-# brings no dependencies of its own.
-target_link_libraries(cutline_ui PUBLIC cutline::core cutline::options)
+# Two exceptions, both pure and neither bringing a dependency of its own.
+#
+# The core, for time: frame durations and timecode are already written and
+# tested there, and reimplementing them here to keep a layering rule that costs
+# nothing to break would be silly.
+#
+# And the render layer, for what a scope measures. `ScopesView` draws a
+# histogram; it does not count one. Keeping the counting in `render` is what
+# lets the arithmetic be tested against a frame built in three lines with no
+# widget, and what guarantees a scope can never affect an export — the only
+# thing that flows between them is a set of tallies.
+target_link_libraries(cutline_ui PUBLIC cutline::core cutline::render cutline::options)
 
 # The Skia backend is a separate target so the pure half above stays buildable
 # without it. Nothing in the widget layer will link this directly: it is chosen

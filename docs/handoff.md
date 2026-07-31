@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1730** under the `ui` preset; 1467 of them need no GPU, no window, no FFmpeg |
+| Tests | **1758** under the `ui` preset; 1495 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1467 of the 1730 tests.
+binding between them — 1495 of the 1758 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -110,7 +110,8 @@ render   pure: plan a frame, resolve an effect stack, mix. Depends on core.
 media    FFmpeg: probe, decode, encode, resample, peaks, thumbnails.
 gpu      Direct3D 12: the compositor and the presenter.
 text     Skia: rasterises a title.
-ui       widgets, layout, themes, painters. Depends on core (for time) only.
+ui       widgets, layout, themes, painters. Depends on core (for time) and
+         render (for what a scope measures). Both pure.
 editor   bindings: turns a project into what a panel shows, and a gesture into
          an operation. Depends on core and ui. Pure.
 engine   frame renderer, exporter, player. Joins render + media + gpu.
@@ -121,7 +122,7 @@ tools    executables.
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1467 tests run with
+place that knows both, and it is pure too. That is what makes 1495 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -268,7 +269,6 @@ here.**
 
 ### B. Not built anywhere
 
-- **Scopes** — histogram, waveform, parade, vectorscope. Nothing in any layer.
 - **VU meter and master volume** — there is no master volume in the model at
   all; the limiter is fixed at 0.95.
 - **Program-monitor transform handles** — drag to move, corners to scale, top to
@@ -336,6 +336,13 @@ Nine are already done and are worth reading as the pattern for the rest:
   a window message rather than setting a flag, because the loop blocks on its
   queue when nothing is playing and a polled flag would show the waveform at the
   next mouse move.
+- **Scopes** — `render/scopes.hpp` counts and `ui/scopes_view.hpp` draws, and
+  the split is the point: the arithmetic is checked against a frame built in
+  three lines with no widget, and a scope can never affect an export because the
+  only thing that flows between them is a set of tallies. Worth reading for the
+  two numbers that are not obvious — the vectorscope's reach, which is 140 and
+  not 128 because a saturated primary is further from grey than either axis
+  alone, and the drawing's gain, which is what makes a one-pixel cell visible.
 - **Multi-select** — `TimelineView::selection` and the `Marquee` mode. Worth
   reading for what it did *not* need: everything above the view already took a
   list, so this was the view catching up rather than a change to the model. The
@@ -416,6 +423,10 @@ it is very often a button inside the popup running its own click handler.
 midpoint. Effects run on coded values, where FFmpeg's filters are defined and
 where the spec specifies them. Each operation happens in the space it was defined
 in. Do not "fix" either one.
+
+**`small` is a macro.** `<rpcndr.h>`, which arrives with `windows.h`, defines
+it as `char`. A local called `small` produces "'std::vector<uint8_t>' followed by
+'char' is illegal", which names neither the variable nor the header.
 
 **Flush Skia's recorded work *before* destroying what it drew into.** Resizing
 the swapchain crashed the application — an access violation in `skia.dll`, seven

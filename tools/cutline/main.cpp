@@ -41,6 +41,7 @@
 #include "cutline/ui/dock.hpp"
 #include "cutline/ui/dock_view.hpp"
 #include "cutline/ui/monitor.hpp"
+#include "cutline/ui/scopes_view.hpp"
 #include "cutline/ui/skia_painter.hpp"
 #include "cutline/ui/skia_window.hpp"
 #include "cutline/ui/theme.hpp"
@@ -195,11 +196,17 @@ using cutline::ui::built_in_themes;
 /// A panel is a name from here plus whatever `make_panel` builds for it. The
 /// layout only ever moves the name around, which is what lets an arrangement be
 /// saved and restored without saving any widgets.
-constexpr std::array<std::pair<std::string_view, std::string_view>, 4> kPanels{{
+constexpr std::array<std::pair<std::string_view, std::string_view>, 5> kPanels{{
     {"project", "Project"},
     {"effects", "Effect Controls"},
     {"monitor", "Program Monitor"},
     {"timeline", "Timeline"},
+    // A panel rather than the overlay on the monitor the spec describes. The
+    // overlay was the right answer for an application with one fixed layout;
+    // this one has dockable panels that tear out into windows of their own, so
+    // a scope can sit beside the picture, or on another screen, or be closed —
+    // none of which an overlay offers. It costs the picture no room either way.
+    {"scopes", "Scopes"},
 }};
 
 /// The panels this build has, which is what a saved arrangement is measured
@@ -382,6 +389,20 @@ struct App {
   /// scrolling with it.
   Box* inspector = nullptr;
   MonitorView* monitor = nullptr;
+
+  /// The scopes, what they are showing, and the tabs that choose it.
+  ///
+  /// The readings are held here rather than only in the widget because the
+  /// panel is rebuilt by a rearrangement or a theme change, and measuring again
+  /// would mean rendering a frame again — which is the expensive half.
+  cutline::ui::ScopesView* scopes = nullptr;
+  cutline::ui::ScopeKind scope_kind = cutline::ui::ScopeKind::Histogram;
+  std::shared_ptr<const cutline::ui::ScopeReadings> scope_readings;
+  Button* scope_button = nullptr;
+  /// Set when the picture has changed and the measurements no longer describe
+  /// it. Deferred like the preview is, so scrubbing across ten frames measures
+  /// the one that is finally shown rather than all ten.
+  bool scopes_stale = true;
   /// Shown when there is nothing to decode — which is always under the skia
   /// preset, and until something is imported under the ui one.
   TestPattern pattern;
@@ -549,6 +570,9 @@ void reconcile_windows(App& app);
 void refresh_float_titles(App& app);
 void refresh_all(App& app);
 void invalidate_preview(App& app);
+void invalidate_scopes(App& app);
+void refresh_scopes(App& app);
+void choose_scope(App& app, cutline::ui::ScopeKind kind);
 void invalidate_playback(App& app);
 void open_export_dialog(App& app);
 void poll_export(App& app);
@@ -1584,10 +1608,96 @@ void take_snapshot([[maybe_unused]] App& app) {
 #endif
 }
 
+/// How wide a frame is measured at.
+///
+/// A scope is a statistical picture, and a couple of hundred columns tell the
+/// same story as four thousand for a fortieth of the work — which matters when
+/// it happens every time the playhead moves. It is also about the width the
+/// panel is drawn at, so the waveform is not being asked to describe detail
+/// finer than a pixel of graph.
+constexpr int kScopeWidth = 320;
+
+/// Measures the frame at the playhead, if the scopes are on show and stale.
+///
+/// Through `frame_at` rather than off the monitor's texture: a scope measures
+/// the *frame*, and what the monitor holds may be a texture on the graphics
+/// card that would have to come down anyway. Downscaled by sampling rather than
+/// averaging — a scope counts pixels that exist, and an averaged pixel is one
+/// the frame does not contain.
+void refresh_scopes([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.scopes == nullptr || !app.scopes_stale) return;
+  app.scopes_stale = false;
+
+  if (app.preview == nullptr) return;
+  const auto frame = app.preview->frame_at(app.session.project(), app.session.playhead());
+  if (!frame.has_value() || frame->empty()) return;
+
+  const int step = std::max(1, frame->width / kScopeWidth);
+  const int width = std::max(1, frame->width / step);
+  const int height = std::max(1, frame->height / step);
+
+  // Not `small`: <rpcndr.h>, which arrives with windows.h, defines that as
+  // `char`, and the error it produces names neither.
+  std::vector<std::uint8_t> sampled(static_cast<std::size_t>(width) * height * 4);
+  for (int y = 0; y < height; ++y) {
+    const std::uint8_t* row =
+        frame->pixels + static_cast<std::ptrdiff_t>(y) * step * frame->row_bytes();
+    for (int x = 0; x < width; ++x) {
+      const std::uint8_t* pixel = row + static_cast<std::ptrdiff_t>(x) * step * 4;
+      const std::size_t at = (static_cast<std::size_t>(y) * width + x) * 4;
+      sampled[at] = pixel[0];
+      sampled[at + 1] = pixel[1];
+      sampled[at + 2] = pixel[2];
+      sampled[at + 3] = pixel[3];
+    }
+  }
+
+  const cutline::render::ScopeImage image{
+      .pixels = sampled.data(), .width = width, .height = height};
+
+  auto readings = std::make_shared<cutline::ui::ScopeReadings>();
+  readings->histogram = cutline::render::compute_histogram(image);
+  readings->waveform =
+      cutline::render::compute_waveform(image, cutline::render::ScopeChannel::Luma);
+  readings->parade = cutline::render::compute_parade(image);
+  readings->vectorscope = cutline::render::compute_vectorscope(image);
+  readings->measured = true;
+
+  app.scope_readings = std::move(readings);
+  app.scopes->set_readings(app.scope_readings);
+  mark_dirty(app);
+#endif
+}
+
+/// Says the measurements no longer describe what is on screen.
+void invalidate_scopes(App& app) {
+  app.scopes_stale = true;
+  mark_dirty(app);
+}
+
+/// Shows one of the four, and lights its tab.
+void choose_scope(App& app, cutline::ui::ScopeKind kind) {
+  app.scope_kind = kind;
+  if (app.scopes != nullptr) app.scopes->set_kind(kind);
+
+  // Relabelled here rather than by rebuilding the row, which would destroy the
+  // button whose click is still running — the same trap the theme switcher has.
+  if (app.scope_button != nullptr) {
+    app.scope_button->set_text(std::string(cutline::ui::to_string(kind)));
+  }
+  mark_dirty(app);
+}
+
 /// Marks the picture as no longer matching the playhead or the project.
 void invalidate_preview(App& app) {
 #if CUTLINE_HAVE_PREVIEW
   app.preview_stale = true;
+  // The scopes measure the picture, so anything that changes the picture
+  // changes them. Here rather than at every call site, because every one of
+  // those already says "the picture is out of date" and would otherwise have to
+  // remember to say it twice.
+  app.scopes_stale = true;
   mark_dirty(app);
 #else
   (void)app;
@@ -2396,7 +2506,48 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   return panel;
 }
 
+/// The scopes, with a row of tabs to choose between them.
+[[nodiscard]] std::unique_ptr<Widget> make_scopes_panel(App* app) {
+  auto panel = std::make_unique<Panel>();
+
+  auto& tabs = panel->emplace<Box>(Axis::Horizontal);
+  auto& view = panel->emplace<cutline::ui::ScopesView>();
+  if (app != nullptr) {
+    app->scopes = &view;
+    view.set_kind(app->scope_kind);
+    // Whatever was last measured. The panel may be rebuilt by a rearrangement
+    // or a theme change long after the frame it is showing was rendered, and a
+    // scope that went blank because a tab moved would be a puzzle.
+    view.set_readings(app->scope_readings);
+  }
+
+  // One button that cycles rather than four tabs. Four names as long as
+  // "Vectorscope" do not fit a panel docked in a narrow column — the first
+  // attempt lost two of them off the edge — and this is the idiom the sort
+  // button already established for a short list in a tight row.
+  auto& choice = tabs.emplace<Button>(
+      std::string(cutline::ui::to_string(app == nullptr ? cutline::ui::ScopeKind::Histogram
+                                                        : app->scope_kind)),
+      [app] {
+        if (app == nullptr) return;
+        constexpr std::array kOrder{
+            cutline::ui::ScopeKind::Histogram, cutline::ui::ScopeKind::Waveform,
+            cutline::ui::ScopeKind::Parade, cutline::ui::ScopeKind::Vectorscope};
+        const auto at = std::ranges::find(kOrder, app->scope_kind);
+        const std::size_t next =
+            at == kOrder.end() ? 0 : (static_cast<std::size_t>(at - kOrder.begin()) + 1) %
+                                         kOrder.size();
+        choose_scope(*app, kOrder[next]);
+      });
+  tabs.emplace<Spacer>();
+  if (app != nullptr) app->scope_button = &choice;
+
+  if (app != nullptr) invalidate_scopes(*app);
+  return panel;
+}
+
 [[nodiscard]] std::unique_ptr<Widget> make_panel(App* app, const PanelId& id) {
+  if (id == "scopes") return make_scopes_panel(app);
   if (id == "project") return make_project_panel(app);
   if (id == "monitor") return make_monitor_panel(app);
   if (id == "timeline") return make_timeline_panel(app);
@@ -3396,6 +3547,9 @@ void settle(App& app) {
     app.preview_stale = false;
     refresh_preview(app);
   }
+  // After the preview, and only when the panel is open. Measuring costs a
+  // second render of the frame, so a scope nobody is looking at costs nothing.
+  refresh_scopes(app);
 #endif
 }
 

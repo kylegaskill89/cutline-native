@@ -31,6 +31,7 @@ add_executable(cutline_core_tests
   render/effects_test.cpp
   render/mix_test.cpp
   render/plan_test.cpp
+  render/scopes_test.cpp
   ui/browser_test.cpp
   ui/color_picker_test.cpp
   ui/containers_test.cpp
@@ -40,6 +41,7 @@ add_executable(cutline_core_tests
   ui/layout_test.cpp
   ui/monitor_test.cpp
   ui/painter_test.cpp
+  ui/scopes_view_test.cpp
   ui/theme_test.cpp
   ui/timeline_test.cpp
   ui/timescale_test.cpp
