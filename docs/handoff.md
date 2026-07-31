@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1724** under the `ui` preset; 1461 of them need no GPU, no window, no FFmpeg |
+| Tests | **1727** under the `ui` preset; 1464 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1461 of the 1724 tests.
+binding between them — 1464 of the 1727 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -121,7 +121,7 @@ tools    executables.
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1461 tests run with
+place that knows both, and it is pure too. That is what makes 1464 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -443,6 +443,12 @@ not a shadowing.** `tests/app` links every file into `cutline_app_tests`, and a
 second `WithFootage` in an anonymous namespace still collides — the suite is keyed
 by name. It fails at run time with "all tests in the same test suite must use the
 same test fixture class", which reads like a compiler problem and is not.
+
+**Reading a keyframe list while adding to it reads an unsorted list.**
+`ensure_gain_anchors` added the head anchor and then asked what the band was
+worth at the tail — and `gain_value_at` walks in time order, so it answered with
+the head anchor it had just pushed on the end. Take every value you need before
+inserting any of them.
 
 **A press must not rewrite the selection it might be about to drag.** Taking
 hold of one clip of a multiple selection threw the rest away before the drag

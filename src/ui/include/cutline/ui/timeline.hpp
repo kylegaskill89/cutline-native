@@ -415,6 +415,12 @@ enum class DragMode {
   ///
   /// The two ends move by the same number of decibels rather than to the same
   /// value, so a ramp stays the ramp it was and only its level changes.
+  ///
+  /// **The clip's own edges count as points.** Without that, dragging the
+  /// stretch between the only two points on a clip moved the whole band, since
+  /// outside the outermost points the line is flat *because* those points define
+  /// it. Anchoring the edges is what makes two points enough to duck a region:
+  /// see `ensure_gain_anchors`.
   GainSegment,
   /// Moving one point of the automation, in time as well as level. Adding a
   /// point is this mode too — it is created under the pointer on the press and
@@ -745,6 +751,22 @@ class TimelineView : public Widget {
   /// draws between two points says is happening.
   [[nodiscard]] double gain_value_at(const GainBand& band, double t) const noexcept;
 
+  /// Puts a point at each end of the clip, at the level the band already has
+  /// there, unless one is there already.
+  ///
+  /// Called when a stretch drag begins, and it is what makes the ends hold.
+  /// Outside the outermost points a band is flat because those points define it,
+  /// so with only two of them dragging the middle moved everything — the ends
+  /// had nothing else holding them up. Anchoring them turns the clip's own edges
+  /// into the points they always looked like they were.
+  ///
+  /// The anchors take the value the band already had, so materialising them
+  /// changes nothing about what plays — the same bargain adding any other point
+  /// makes. They are ordinary points afterwards, visible and draggable, because
+  /// a control that holds the band but cannot be seen or moved would be worse
+  /// than the problem.
+  void ensure_gain_anchors(BlockRef block);
+
   TimelineModel model_;
   TimeScale scale_;
   Viewport vertical_;
@@ -785,6 +807,10 @@ class TimelineView : public Widget {
   /// stops a long one accumulating rounding.
   std::vector<std::size_t> gain_segment_;
   std::vector<double> gain_segment_origin_;
+  /// Anchors materialised at the start of this drag. Reported along with the
+  /// points that moved, so the model gets the ones holding the ends up as well
+  /// — otherwise the view would show a band the project does not have.
+  std::vector<GainPoint> gain_anchors_;
 
   /// Taken from the theme at layout, because input arrives without one.
   Metrics metrics_;

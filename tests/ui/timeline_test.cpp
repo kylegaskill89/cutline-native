@@ -1636,6 +1636,14 @@ TEST(Slide, ReportsWhereTheClipEndedUp) {
   return model;
 }
 
+/// The point at a given time, or null. The anchors shift every index, so tests
+/// name the time they mean rather than counting along the list.
+[[nodiscard]] const GainPoint* point_at(const std::vector<GainPoint>& points, double t) {
+  const auto found = std::ranges::find_if(
+      points, [t](const GainPoint& point) { return std::abs(point.t - t) < 1e-6; });
+  return found == points.end() ? nullptr : &*found;
+}
+
 struct BandFixture {
   explicit BandFixture(GainBand band = {}) {
     host = std::make_unique<WidgetHost>(std::make_unique<TimelineView>());
@@ -1827,18 +1835,76 @@ TEST(GainBand, DraggingAStretchKeepsItsShape) {
   fixture.host->mouse_move(press(x, y + 8.0));
   fixture.host->mouse_up(press(x, y + 8.0));
 
+  // Four now: the two that were there and an anchor at each end of the clip.
   const std::vector<GainPoint>& points = fixture.band().points;
-  ASSERT_EQ(points.size(), 2u);
+  ASSERT_EQ(points.size(), 4u);
+  const GainPoint& left = *point_at(points, 2.0);
+  const GainPoint& right = *point_at(points, 6.0);
+
   // Both quieter, by the same amount, and their times untouched.
-  EXPECT_LT(points[0].v, 0.25);
-  EXPECT_LT(points[1].v, 1.0);
-  EXPECT_DOUBLE_EQ(points[0].t, 2.0);
-  EXPECT_DOUBLE_EQ(points[1].t, 6.0);
-  EXPECT_NEAR(gain_to_band(points[1].v, 2.0) - gain_to_band(points[0].v, 2.0), before, 1e-6);
+  EXPECT_LT(left.v, 0.25);
+  EXPECT_LT(right.v, 1.0);
+  EXPECT_NEAR(gain_to_band(right.v, 2.0) - gain_to_band(left.v, 2.0), before, 1e-6);
 
   ASSERT_TRUE(last.has_value());
   EXPECT_EQ(last->mode, DragMode::GainSegment);
-  EXPECT_EQ(last->gain_moved.size(), 2u);
+  // The two anchors and the two that moved, so the project ends up with the
+  // band the view is showing.
+  EXPECT_EQ(last->gain_moved.size(), 4u);
+}
+
+// The report that prompted the anchors: two points, drag between them, and the
+// whole line moved. It no longer does — the clip's own edges hold the ends.
+TEST(GainBand, TwoPointsAreEnoughToDuckOneRegion) {
+  BandFixture fixture{GainBand{.points = {{2.0, 1.0}, {6.0, 1.0}}}};
+
+  const double x = fixture.view->block_rect(1, 0).x + 400.0;
+  const double y = fixture.view->gain_to_y(1, 0, 1.0);
+  fixture.host->mouse_down(press(x, y));
+  fixture.host->mouse_move(press(x, y + 10.0));
+  fixture.host->mouse_up(press(x, y + 10.0));
+
+  const std::vector<GainPoint>& points = fixture.band().points;
+  ASSERT_EQ(points.size(), 4u);
+
+  // The ends are where they were, and only the region between the two points
+  // has come down.
+  ASSERT_NE(point_at(points, 0.0), nullptr);
+  ASSERT_NE(point_at(points, 8.0), nullptr);
+  EXPECT_DOUBLE_EQ(point_at(points, 0.0)->v, 1.0) << "the head of the clip moved";
+  EXPECT_DOUBLE_EQ(point_at(points, 8.0)->v, 1.0) << "the tail of the clip moved";
+  EXPECT_LT(point_at(points, 2.0)->v, 1.0);
+  EXPECT_LT(point_at(points, 6.0)->v, 1.0);
+}
+
+// Anchoring happens on the drag, not on the press: a click that goes nowhere
+// must leave the clip exactly as it found it.
+TEST(GainBand, APressOnAStretchThatGoesNowhereAddsNothing) {
+  BandFixture fixture{GainBand{.points = {{2.0, 1.0}, {6.0, 1.0}}}};
+
+  const double x = fixture.view->block_rect(1, 0).x + 400.0;
+  const double y = fixture.view->gain_to_y(1, 0, 1.0);
+  fixture.host->mouse_down(press(x, y));
+  fixture.host->mouse_up(press(x, y));
+
+  EXPECT_EQ(fixture.band().points.size(), 2u);
+}
+
+// An anchor takes the level the band already had there, so materialising one
+// changes nothing about what plays.
+TEST(GainBand, AnAnchorArrivesAtTheLevelTheBandAlreadyHad) {
+  BandFixture fixture{GainBand{.points = {{2.0, 0.25}, {6.0, 1.0}}}};
+
+  // Drag the stretch beyond the last point, which anchors both ends.
+  const double x = fixture.view->block_rect(1, 0).x + 700.0;
+  const double y = fixture.view->gain_to_y(1, 0, 1.0);
+  fixture.host->mouse_down(press(x, y));
+  fixture.host->mouse_move(press(x, y + 6.0));
+
+  // The head anchor holds what the band was worth before the first point, which
+  // is that point's own value.
+  ASSERT_NE(point_at(fixture.band().points, 0.0), nullptr);
+  EXPECT_DOUBLE_EQ(point_at(fixture.band().points, 0.0)->v, 0.25);
 }
 
 // The complaint that prompted this: dragging a stretch looked like it moved the
@@ -1856,16 +1922,17 @@ TEST(GainBand, AStretchLeavesThePointsOutsideItAlone) {
   fixture.host->mouse_up(press(x, y + 10.0));
 
   const std::vector<GainPoint>& points = fixture.band().points;
-  ASSERT_EQ(points.size(), 3u);
-  EXPECT_DOUBLE_EQ(points[0].v, 1.0) << "the point outside the stretch moved";
-  EXPECT_LT(points[1].v, 0.5);
-  EXPECT_LT(points[2].v, 0.75);
+  ASSERT_EQ(points.size(), 5u) << "three points and an anchor at each end";
+  EXPECT_DOUBLE_EQ(point_at(points, 1.0)->v, 1.0) << "the point outside the stretch moved";
+  EXPECT_LT(point_at(points, 3.0)->v, 0.5);
+  EXPECT_LT(point_at(points, 6.0)->v, 0.75);
 }
 
-TEST(GainBand, DraggingTheFlatRunBeforeTheFirstPointCarriesOnlyThatPoint) {
+// The run before the first point is a stretch like any other once the head is
+// anchored: it is held by the anchor at one end and that point at the other, so
+// dragging it lifts the head of the clip and leaves everything past the point.
+TEST(GainBand, DraggingTheRunBeforeTheFirstPointLiftsTheHead) {
   BandFixture fixture{GainBand{.points = {{4.0, 1.0}, {6.0, 0.5}}}};
-  std::optional<TimelineEdit> last;
-  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
 
   const double x = fixture.view->block_rect(1, 0).x + 100.0;  // 1s, before the first
   const double y = fixture.view->gain_to_y(1, 0, 1.0);
@@ -1873,11 +1940,11 @@ TEST(GainBand, DraggingTheFlatRunBeforeTheFirstPointCarriesOnlyThatPoint) {
   fixture.host->mouse_move(press(x, y + 10.0));
   fixture.host->mouse_up(press(x, y + 10.0));
 
-  ASSERT_TRUE(last.has_value());
-  ASSERT_EQ(last->gain_moved.size(), 1u);
-  EXPECT_DOUBLE_EQ(last->gain_moved[0].t, 4.0);
-  EXPECT_LT(fixture.band().points[0].v, 1.0);
-  EXPECT_DOUBLE_EQ(fixture.band().points[1].v, 0.5) << "the far point stayed put";
+  const std::vector<GainPoint>& points = fixture.band().points;
+  EXPECT_LT(point_at(points, 0.0)->v, 1.0) << "the head did not move";
+  EXPECT_LT(point_at(points, 4.0)->v, 1.0);
+  EXPECT_DOUBLE_EQ(point_at(points, 6.0)->v, 0.5) << "the far point stayed put";
+  EXPECT_DOUBLE_EQ(point_at(points, 8.0)->v, 0.5) << "and so did the tail";
 }
 
 // A point sits on the line, so a press near both has to mean the point — it is

@@ -1144,6 +1144,36 @@ double TimelineView::gain_value_at(const GainBand& band, double t) const noexcep
   return band.points.back().v;
 }
 
+void TimelineView::ensure_gain_anchors(BlockRef block) {
+  gain_anchors_.clear();
+  if (block.track >= model_.tracks.size()) return;
+  std::vector<TimelineBlock>& blocks = model_.tracks[block.track].blocks;
+  if (block.block >= blocks.size() || !blocks[block.block].gain.has_value()) return;
+
+  GainBand& band = *blocks[block.block].gain;
+  if (band.points.empty()) return;
+
+  const double duration = blocks[block.block].duration();
+
+  // Both values read before either point is added. `gain_value_at` walks the
+  // list in time order, so pushing the head anchor first and only then asking
+  // about the tail reads an unsorted band and answers with whatever happens to
+  // be last in it — which is the head anchor.
+  std::vector<GainPoint> wanted;
+  for (const double edge : {0.0, duration}) {
+    const bool there = std::ranges::any_of(band.points, [&](const GainPoint& point) {
+      return std::abs(point.t - edge) <= core::kKeyframeMatchEps;
+    });
+    if (!there) wanted.push_back(GainPoint{edge, gain_value_at(band, edge)});
+  }
+
+  for (const GainPoint& anchor : wanted) {
+    band.points.push_back(anchor);
+    gain_anchors_.push_back(anchor);
+  }
+  std::ranges::sort(band.points, {}, &GainPoint::t);
+}
+
 std::optional<std::size_t> TimelineView::add_gain_point(BlockRef block, double x) {
   if (block.track >= model_.tracks.size()) return std::nullopt;
   std::vector<TimelineBlock>& blocks = model_.tracks[block.track].blocks;
@@ -1507,13 +1537,12 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
     } else if (mode_ == DragMode::GainLevel) {
       gain_level_origin_ = model_.tracks[hit->track].blocks[hit->block].gain->level;
     } else if (mode_ == DragMode::GainSegment) {
-      gain_segment_ = gain_segment_at(hit->track, hit->block, event.x);
+      // Nothing captured here on purpose. Anchoring adds points to the band, and
+      // a press that turns out not to be a drag must leave the clip exactly as
+      // it found it — so both wait until the pointer has actually travelled.
+      gain_segment_.clear();
       gain_segment_origin_.clear();
-      const std::vector<GainPoint>& points =
-          model_.tracks[hit->track].blocks[hit->block].gain->points;
-      for (const std::size_t at : gain_segment_) {
-        if (at < points.size()) gain_segment_origin_.push_back(points[at].v);
-      }
+      gain_anchors_.clear();
     }
 
     if (mode_ == DragMode::Slide) capture_neighbours();
@@ -1566,6 +1595,19 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
   moved_ = true;
 
   if (volume) {
+    // The first move of a stretch drag is where the band gains its anchors and
+    // the drag learns which points it is carrying — in that order, since
+    // anchoring adds points and indices found beforehand would name the wrong
+    // ones.
+    if (mode_ == DragMode::GainSegment && gain_segment_.empty() && drag_.has_value()) {
+      ensure_gain_anchors(*drag_);
+      gain_segment_ = gain_segment_at(drag_->track, drag_->block, press_x_);
+      const std::vector<GainPoint>& points =
+          model_.tracks[drag_->track].blocks[drag_->block].gain->points;
+      for (const std::size_t at : gain_segment_) {
+        if (at < points.size()) gain_segment_origin_.push_back(points[at].v);
+      }
+    }
     gain_to(event.x, event.y);
     return true;
   }
@@ -1614,6 +1656,10 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
       if (mode_ == DragMode::GainLevel) {
         edit.gain = band.level;
       } else if (mode_ == DragMode::GainSegment) {
+        // The anchors first, at the values they were given. They did not move,
+        // but the project has never heard of them — without these the band the
+        // view is showing is not the one that would be played back.
+        for (const GainPoint& anchor : gain_anchors_) edit.gain_moved.push_back(anchor);
         for (const std::size_t at : gain_segment_) {
           if (at < band.points.size()) edit.gain_moved.push_back(band.points[at]);
         }
@@ -1629,6 +1675,7 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
     moved_ = false;
     gain_segment_.clear();
     gain_segment_origin_.clear();
+    gain_anchors_.clear();
     return true;
   }
 

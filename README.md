@@ -353,8 +353,14 @@ Once there are points, dragging the *line between two of them* moves that
 stretch, carrying the point at each end with it. That is how a level is ridden:
 grab the bit that is too loud and pull it down. Both ends move by the same number
 of decibels rather than to the same value, so a ramp stays the ramp it was and
-only its level changes — and outside the points, where the line is flat, the drag
-carries the single end holding it up.
+only its level changes.
+
+**The clip's own edges count as points.** Without that, two points were not
+enough to duck a region: outside the outermost points a band is flat *because*
+those points define it, so moving them moved the whole line. A stretch drag now
+anchors each end of the clip at the level it already had — which changes nothing
+about what plays, and turns the edges into the points they always looked like
+they were. Two points and a drag give a dip with the head and tail left alone.
 
 Adding a point takes the value the band already had there, so automating a clip
 never starts by altering it — the same bargain the inspector's stopwatch makes.
@@ -370,7 +376,7 @@ had been there, tested, since the first phase, and the mixer and the exporter
 have honoured automation from the start. This is the second feature in a row
 whose work was entirely the gesture.
 
-1724 tests, plus a headless check that lays every panel out in every theme —
+1727 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a matte, an adjustment layer, a title, and the
 colour picker open, which is the only way the controls a panel is made of get
