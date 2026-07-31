@@ -75,7 +75,7 @@ without it they skip rather than silently pass.
 ### Tools
 
 ```
-build/ui/tools/theme_window/Release/theme_window.exe      # THE APPLICATION
+build/ui/tools/cutline/Release/cutline.exe                # THE APPLICATION
 build/media/tools/render_frame/Release/render_frame.exe <project.json> <seconds> <out.png>
 build/media/tools/export_project/Release/export_project.exe <project.json> <out.mp4>
 build/media/tools/play_project/Release/play_project.exe <project.json>
@@ -83,8 +83,10 @@ build/media/tools/decode_bench/Release/decode_bench.exe <file> [frames]
 build/media/tools/preview_window/Release/preview_window.exe <file>
 ```
 
-`theme_window` is badly named — it started as a theme harness and became the
-editor. Renaming it is on the list and nobody has bothered. It takes:
+`cutline` is the editor. It was called `theme_window` until it was renamed,
+having started as a harness for the theme layer and grown into the application
+while keeping the name; anything older than that commit refers to it by the old
+one. It takes:
 
 - `--check [dir]` — headless: builds the whole interface in every theme, lays
   out every panel, paints it, and reports widget counts plus a per-theme pixel
@@ -133,7 +135,7 @@ break would be silly.
   the resolved result is unchanged, which is what catches a mistyped key.
 - A new *control* → `ui/controls.hpp`. Themeable, tested with `RecordingPainter`.
 - *What a panel shows* → `editor/*_binding.hpp`, as plain data.
-- *Wiring* → `tools/theme_window/main.cpp`. It is large; that is fine, it is the
+- *Wiring* → `tools/cutline/main.cpp`. It is large; that is fine, it is the
   composition root.
 
 ---
@@ -192,7 +194,7 @@ Three layers, and the third one is not optional.
 backend that outputs a list of draw calls — "does an XP button draw its bevel
 inset when pressed" is an ordinary assertion, not a screenshot to squint at.
 
-**2. `theme_window --check`.** Builds the real interface in all four themes with
+**2. `cutline --check`.** Builds the real interface in all four themes with
 a real Skia painter, activates every panel in turn, builds an inspector with a
 clip selected and all eleven effects on it, animates two parameters, selects a
 title, opens the colour picker, and asserts every widget landed somewhere real
@@ -207,7 +209,7 @@ found things the other two could not, every single time:
   field showed a caret, took arrow keys, and swallowed every letter.
 - **Focus did not leave a field on a click elsewhere**, so a multiline title —
   which writes to the document only when focus goes — could never be committed.
-- **The compositor's shaders were never copied next to `theme_window`**, so the
+- **The compositor's shaders were never copied next to the window**, so the
   preview in the actual application had never once rendered a frame. It failed
   at "cannot open composite_layer_vs.cso" and showed the colour bars it starts
   with, which look exactly like a preview waiting for something to decode.

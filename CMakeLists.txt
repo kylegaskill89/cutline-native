@@ -101,7 +101,7 @@ endif()
 # and under the ui preset it decodes and previews. One window that gains
 # capability with the preset beats two windows that drift apart.
 if(CUTLINE_WITH_SKIA)
-  add_subdirectory(tools/theme_window)
+  add_subdirectory(tools/cutline)
 endif()
 
 if(CUTLINE_BUILD_TESTS)

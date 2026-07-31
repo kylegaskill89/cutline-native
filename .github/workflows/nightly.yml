@@ -72,4 +72,4 @@ jobs:
       # room than exists, or a theme that stopped reaching the pixels — neither
       # of which any unit test sees.
       - name: Paint every theme headlessly
-        run: ./build/ui/tools/theme_window/Release/theme_window.exe --check
+        run: ./build/ui/tools/cutline/Release/cutline.exe --check

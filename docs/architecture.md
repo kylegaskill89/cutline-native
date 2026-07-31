@@ -487,7 +487,7 @@ not soon enough.
 the painting layer, and those are already covered on every push, so the nightly
 pays for one long dependency rather than two.
 
-The last step of it is `theme_window --check`, which lays out and paints the
+The last step of it is `cutline --check`, which lays out and paints the
 whole interface in every theme with no window at all, and fails if any widget
 lands nowhere or if two themes come out identical. That catches what no unit
 test sees: a control demanding more room than exists, or a theme that stopped

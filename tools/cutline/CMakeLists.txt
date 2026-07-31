@@ -1,6 +1,6 @@
-add_executable(theme_window main.cpp)
+add_executable(cutline main.cpp)
 
-target_link_libraries(theme_window PRIVATE
+target_link_libraries(cutline PRIVATE
   cutline::core
   cutline::editor
   cutline::options
@@ -20,13 +20,13 @@ target_link_libraries(theme_window PRIVATE
 # layer. This tool needs it directly for one thing only: making the raster
 # surface the interface is drawn into.
 find_package(unofficial-skia CONFIG REQUIRED)
-target_link_libraries(theme_window PRIVATE unofficial::skia::skia)
+target_link_libraries(cutline PRIVATE unofficial::skia::skia)
 
 # Decoding and previewing when the media layer is present, and a chrome harness
 # when it is not. The window is the same either way; what it can do is not.
 if(TARGET cutline::app)
-  target_link_libraries(theme_window PRIVATE cutline::app)
-  target_compile_definitions(theme_window PRIVATE CUTLINE_HAVE_PREVIEW=1)
+  target_link_libraries(cutline PRIVATE cutline::app)
+  target_compile_definitions(cutline PRIVATE CUTLINE_HAVE_PREVIEW=1)
 
   # The compositor loads its shaders from beside the executable at runtime, so
   # they have to be built next to this one as well.
@@ -37,5 +37,5 @@ if(TARGET cutline::app)
   # it starts with, which look exactly like a preview waiting for something to
   # decode. Nothing caught it because no test runs the window, and the tools
   # that do render are the ones that had the shaders.
-  cutline_gpu_shaders(theme_window)
+  cutline_gpu_shaders(cutline)
 endif()
