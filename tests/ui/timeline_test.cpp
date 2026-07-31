@@ -2637,6 +2637,70 @@ TEST(MultiSelect, AClickThatWasNotADragCollapsesOntoTheClip) {
   EXPECT_EQ(fixture.view->selection(), (std::vector<BlockRef>{{1, 0}}));
 }
 
+// The whole selection has to move *while* the drag is happening. Previewing
+// only the clip under the pointer left the rest sitting still until the mouse
+// came up and then jumping — the drag showed something the release did not do.
+TEST(MultiSelect, EveryCarriedClipMovesDuringTheDragRatherThanAtTheEnd) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect first = fixture.view->block_rect(1, 0);
+  const Rect second = fixture.view->block_rect(1, 1);
+  const double y = first.y + first.height * 0.5;
+
+  fixture.host->mouse_down(press(first.x + 10.0, y));
+  fixture.host->mouse_up(press(first.x + 10.0, y));
+  fixture.host->mouse_down(shift_press(second.x + 10.0, y));
+  fixture.host->mouse_up(shift_press(second.x + 10.0, y));
+
+  const double was = fixture.view->model().tracks[1].blocks[1].start;
+
+  // Mid-drag, before any release.
+  fixture.host->mouse_down(press(first.x + 40.0, y));
+  fixture.host->mouse_move(press(first.x + 240.0, y));
+
+  EXPECT_NEAR(fixture.view->model().tracks[1].blocks[0].start, 2.0, 0.02);
+  EXPECT_NEAR(fixture.view->model().tracks[1].blocks[1].start, was + 2.0, 0.02)
+      << "the second clip waited for the release";
+}
+
+TEST(MultiSelect, ACarriedSelectionKeepsItsShapeAgainstTheStart) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect first = fixture.view->block_rect(1, 0);   // starts at 0
+  const Rect second = fixture.view->block_rect(1, 1);  // starts at 5
+  const double y = first.y + first.height * 0.5;
+
+  fixture.host->mouse_down(press(first.x + 10.0, y));
+  fixture.host->mouse_up(press(first.x + 10.0, y));
+  fixture.host->mouse_down(shift_press(second.x + 10.0, y));
+  fixture.host->mouse_up(shift_press(second.x + 10.0, y));
+
+  // Drag hard left. The first clip is already at zero, so nothing may move —
+  // clamping per clip would have slid the second one under the first.
+  fixture.host->mouse_down(press(first.x + 40.0, y));
+  fixture.host->mouse_move(press(first.x - 400.0, y));
+
+  EXPECT_DOUBLE_EQ(fixture.view->model().tracks[1].blocks[0].start, 0.0);
+  EXPECT_DOUBLE_EQ(fixture.view->model().tracks[1].blocks[1].start, 5.0);
+}
+
+TEST(MultiSelect, DraggingOutsideTheSelectionCarriesOnlyThatClip) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect first = fixture.view->block_rect(1, 0);
+  const Rect other = fixture.view->block_rect(0, 0);
+  const double y = first.y + first.height * 0.5;
+
+  fixture.host->mouse_down(press(first.x + 10.0, y));
+  fixture.host->mouse_up(press(first.x + 10.0, y));
+  const double untouched = fixture.view->model().tracks[1].blocks[0].start;
+
+  fixture.host->mouse_down(press(other.x + 20.0, other.y + other.height * 0.5));
+  fixture.host->mouse_move(press(other.x + 220.0, other.y + other.height * 0.5));
+
+  EXPECT_DOUBLE_EQ(fixture.view->model().tracks[1].blocks[0].start, untouched);
+}
+
 // But a drag keeps the group, which is the whole point of selecting several.
 TEST(MultiSelect, ADragKeepsTheSelectionItWasCarrying) {
   Fixture fixture;

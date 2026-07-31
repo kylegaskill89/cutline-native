@@ -1297,9 +1297,28 @@ void TimelineView::drag_to(double x) {
         start = *to_end - length;
       }
       start = std::max(0.0, core::snap_to_frame(start, model_.fps));
-      next.start = start;
-      next.end = start + length;
-      break;
+
+      // Everything the move is carrying, shifted by what the dragged clip
+      // worked out. Previewing only the one under the pointer left the rest of
+      // the selection sitting still until the mouse came up, and then jumping —
+      // so the drag showed something the release did not do.
+      double shift = start - origin_.start;
+      // Clamped for the set rather than per clip, so the earliest one stopping
+      // at the start of the timeline stops them all and the shape of the
+      // selection survives the edge. This is the same rule `move_clips` keeps.
+      double earliest = origin_.start;
+      for (const Moving& carried : moving_) earliest = std::min(earliest, carried.origin.start);
+      shift = std::max(shift, -earliest);
+
+      for (const Moving& carried : moving_) {
+        if (carried.ref.track >= model_.tracks.size()) continue;
+        std::vector<TimelineBlock>& row = model_.tracks[carried.ref.track].blocks;
+        if (carried.ref.block >= row.size()) continue;
+        row[carried.ref.block].start = carried.origin.start + shift;
+        row[carried.ref.block].end = carried.origin.end + shift;
+      }
+      refresh_bounds();
+      return;
     }
 
     case DragMode::TrimStart: {
@@ -1545,9 +1564,28 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
       gain_anchors_.clear();
     }
 
+    if (mode_ == DragMode::Move) capture_moving();
     if (mode_ == DragMode::Slide) capture_neighbours();
   }
   return true;
+}
+
+void TimelineView::capture_moving() {
+  moving_.clear();
+  if (!drag_.has_value()) return;
+
+  // The whole selection when the clip under the pointer is part of it, and that
+  // clip alone otherwise — dragging something outside the selection must not
+  // sweep up whatever happens to be highlighted elsewhere.
+  const std::vector<BlockRef> chosen = selection();
+  const bool carries = std::ranges::find(chosen, *drag_) != chosen.end();
+
+  for (const BlockRef& ref : carries ? chosen : std::vector<BlockRef>{*drag_}) {
+    if (ref.track >= model_.tracks.size()) continue;
+    const std::vector<TimelineBlock>& row = model_.tracks[ref.track].blocks;
+    if (ref.block >= row.size()) continue;
+    moving_.push_back(Moving{.ref = ref, .origin = row[ref.block]});
+  }
 }
 
 bool TimelineView::on_mouse_move(const MouseEvent& event) {
@@ -1714,6 +1752,7 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
   drag_.reset();
   before_.reset();
   after_.reset();
+  moving_.clear();
   moved_ = false;
   return true;
 }

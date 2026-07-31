@@ -715,6 +715,20 @@ class TimelineView : public Widget {
   void drag_to(double x);
   void refresh_bounds();
 
+  /// One block a move is carrying, as it was when the drag began.
+  ///
+  /// Every position is computed from these rather than from the last frame, so
+  /// a long drag cannot accumulate rounding — the same reason `origin_` exists,
+  /// applied to the rest of the selection.
+  struct Moving {
+    BlockRef ref;
+    TimelineBlock origin;
+  };
+  /// What a move is carrying: the whole selection when the clip under the
+  /// pointer is part of it, and that clip alone otherwise. Captured on the
+  /// press, because the selection is what it was when the drag started.
+  std::vector<Moving> moving_;
+
   /// A clip's neighbour on the same track, as it was when a slide began.
   ///
   /// Kept because a slide moves three edges at once and every one of them has
@@ -725,6 +739,9 @@ class TimelineView : public Widget {
     std::size_t index = 0;
     TimelineBlock origin;
   };
+
+  /// What a move should carry, taken at the press.
+  void capture_moving();
 
   /// Where a slide's neighbours are, and the room they leave.
   void capture_neighbours();
