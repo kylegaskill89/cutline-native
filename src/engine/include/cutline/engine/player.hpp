@@ -14,6 +14,7 @@
 /// so the thread does nothing but mix — no decoding, no allocation, no file
 /// access, all of which happened when the player was created.
 
+#include "cutline/audio/meter.hpp"
 #include "cutline/core/model.hpp"
 
 #include <expected>
@@ -57,6 +58,18 @@ class Player {
   /// was already queued so the jump is not preceded by a moment of the old
   /// position.
   void seek(double seconds);
+
+  /// Moves the master fader, taking effect on the next block. The one edit a
+  /// player accepts without being rebuilt, because a master fader is set by
+  /// ear against what is playing.
+  void set_master_gain(double gain);
+
+  /// The mix's levels as of the last block. Safe to poll at frame rate.
+  ///
+  /// Reads as silence while paused: levels fall only while audio is being
+  /// measured, and a meter frozen at whatever was playing when the space bar
+  /// was pressed says something untrue.
+  [[nodiscard]] audio::MeterReading levels() const;
 
   /// Timeline length, so a caller knows where playback will stop.
   [[nodiscard]] double duration() const noexcept;

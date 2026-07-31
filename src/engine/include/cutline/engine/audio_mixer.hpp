@@ -16,6 +16,7 @@
 /// the quiet end back up, and a project mixed against that behaviour would
 /// change if the order were tidied.
 
+#include "cutline/audio/meter.hpp"
 #include "cutline/core/model.hpp"
 
 #include <cstddef>
@@ -59,6 +60,21 @@ class AudioMixer {
   /// as mixing it whole. Seeking backwards or jumping needs `reset` first, or
   /// the filters ring with audio that no longer precedes what is playing.
   [[nodiscard]] std::expected<void, std::string> mix(double t, std::span<float> out);
+
+  /// Changes the master fader while mixing continues.
+  ///
+  /// The one property of a mix that can be changed without rebuilding it, and
+  /// the reason is what a master fader is for: it is adjusted *by ear*, against
+  /// what is playing, and a fader that only took effect once playback had been
+  /// torn down and rebuilt could not be used that way.
+  void set_master_gain(double gain) noexcept;
+  [[nodiscard]] double master_gain() const noexcept;
+
+  /// Levels of the mix as of the last block, for a meter to draw.
+  ///
+  /// Measured after the master fader and before the limiter, so it reads what
+  /// the limiter is being asked to hold back rather than what it let through.
+  [[nodiscard]] audio::MeterReading levels() const noexcept;
 
   /// Drains the limiter's look-ahead into `out`, which should hold
   /// `latency_frames()` frames. The tail of a timeline is lost without it.

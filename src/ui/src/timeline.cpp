@@ -188,6 +188,17 @@ double band_to_gain(double fraction, double maximum) noexcept {
   return std::clamp(std::pow(10.0, db / 20.0), 0.0, maximum);
 }
 
+double gain_to_fader_db(double gain) noexcept {
+  if (!(gain > 0.0)) return kGainFloorDb;
+  return std::max(20.0 * std::log10(gain), kGainFloorDb);
+}
+
+double fader_db_to_gain(double db, double maximum) noexcept {
+  if (!(maximum > 0.0)) return 0.0;
+  if (db <= kGainFloorDb) return 0.0;
+  return std::clamp(std::pow(10.0, db / 20.0), 0.0, maximum);
+}
+
 double TimelineModel::content_duration() const noexcept {
   double last = duration;
   for (const TimelineTrack& track : tracks) {

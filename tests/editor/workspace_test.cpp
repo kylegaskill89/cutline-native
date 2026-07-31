@@ -23,7 +23,8 @@ namespace {
 
 /// The panels this "build" has.
 const std::vector<ui::PanelId>& known_panels() {
-  static const std::vector<ui::PanelId> panels{"project", "effects", "monitor", "timeline"};
+  static const std::vector<ui::PanelId> panels{"project", "effects", "monitor",
+                                               "timeline", "scopes",  "audio"};
   return panels;
 }
 
@@ -206,11 +207,11 @@ TEST(Workspaces, SettlingDropsPanelsThisBuildDoesNotHave) {
   // A file written by a version that had a panel since removed. Left alone it
   // would show a tab nothing can fill.
   Workspaces workspaces = default_workspaces();
-  ASSERT_TRUE(ui::open_panel(*workspaces.current(), "scopes"));
-  ASSERT_TRUE(ui::contains_panel(workspaces.current()->root, "scopes"));
+  ASSERT_TRUE(ui::open_panel(*workspaces.current(), "captions"));
+  ASSERT_TRUE(ui::contains_panel(workspaces.current()->root, "captions"));
 
   settle(workspaces, known_panels());
-  EXPECT_FALSE(ui::contains_panel(workspaces.current()->root, "scopes"));
+  EXPECT_FALSE(ui::contains_panel(workspaces.current()->root, "captions"));
 }
 
 TEST(Workspaces, SettlingOpensPanelsTheFileNeverHeardOf) {

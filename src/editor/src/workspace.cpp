@@ -145,34 +145,48 @@ const ui::DockLayout* Workspaces::current() const noexcept {
 std::vector<Workspace> built_in_workspaces() {
   using ui::Axis;
 
+  // Every built-in names every panel, and there is a test that says so. The
+  // alternative is not "the panel is somewhere sensible instead" — it is
+  // `reconcile_panels` opening it wherever the first tab group happens to be,
+  // which put the master fader in a column too narrow to hold it.
+
   // Editing: the pool and the inspector down the left, the picture over the
-  // timeline. The arrangement most of the work happens in.
+  // timeline. The arrangement most of the work happens in. The scopes and the
+  // master share the monitor's group, since all three are things you look at
+  // rather than work in, and only one at a time.
   Workspace editing;
   editing.name = "Editing";
   editing.layout.root =
       split(Axis::Horizontal,
             {tabs({"project", "effects"}),
-             split(Axis::Vertical, {tabs({"monitor"}), tabs({"timeline"})}, {0.58, 0.42})},
+             split(Axis::Vertical, {tabs({"monitor", "scopes", "audio"}), tabs({"timeline"})},
+                   {0.58, 0.42})},
             {0.26, 0.74});
 
   // Colour: the picture as large as it will go, the controls beside it, and
-  // the timeline reduced to what is needed to move between shots.
+  // the timeline reduced to what is needed to move between shots. The scopes
+  // go in the side column rather than over the picture — grading means reading
+  // both at once.
   Workspace colour;
   colour.name = "Colour";
   colour.layout.root =
       split(Axis::Horizontal,
             {split(Axis::Vertical, {tabs({"monitor"}), tabs({"timeline"})}, {0.74, 0.26}),
-             tabs({"effects", "project"})},
-            {0.76, 0.24});
+             split(Axis::Vertical, {tabs({"scopes"}), tabs({"effects", "project", "audio"})},
+                   {0.5, 0.5})},
+            {0.72, 0.28});
 
   // Audio: the timeline given most of the room, because that is where the
-  // waveforms are, with the picture kept small for reference.
+  // waveforms are, with the picture kept small for reference. The master gets
+  // a column of its own here rather than a tab — a meter behind a tab is a
+  // meter nobody is watching, and this is the arrangement for watching it.
   Workspace audio;
   audio.name = "Audio";
   audio.layout.root =
       split(Axis::Vertical,
-            {split(Axis::Horizontal, {tabs({"project", "effects"}), tabs({"monitor"})},
-                   {0.34, 0.66}),
+            {split(Axis::Horizontal,
+                   {tabs({"project", "effects", "scopes"}), tabs({"monitor"}), tabs({"audio"})},
+                   {0.32, 0.54, 0.14}),
              tabs({"timeline"})},
             {0.42, 0.58});
 

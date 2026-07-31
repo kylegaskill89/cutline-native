@@ -213,7 +213,10 @@ json write(const Marker& m) {
 }
 
 json write(const Project& p) {
-  json j{{"canvas_w", p.canvas_w}, {"canvas_h", p.canvas_h}, {"fps", p.fps}};
+  json j{{"canvas_w", p.canvas_w},
+         {"canvas_h", p.canvas_h},
+         {"fps", p.fps},
+         {"master_gain", p.master_gain}};
 
   json media = json::array();
   for (const Media& m : p.media) media.push_back(write(m));
@@ -423,6 +426,7 @@ Project read_project(const json& j) {
   p.canvas_w = read_or(j, "canvas_w", p.canvas_w);
   p.canvas_h = read_or(j, "canvas_h", p.canvas_h);
   p.fps = read_or(j, "fps", p.fps);
+  p.master_gain = read_or(j, "master_gain", p.master_gain);
 
   const auto media = j.find("media");
   if (media != j.end() && media->is_array()) {

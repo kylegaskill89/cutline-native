@@ -3,6 +3,7 @@ add_library(cutline_audio
   src/chain.cpp
   src/compressor.cpp
   src/limiter.cpp
+  src/meter.cpp
   src/stretch.cpp)
 add_library(cutline::audio ALIAS cutline_audio)
 

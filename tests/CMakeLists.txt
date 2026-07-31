@@ -4,6 +4,7 @@ add_executable(cutline_core_tests
   audio/biquad_test.cpp
   audio/chain_test.cpp
   audio/limiter_test.cpp
+  audio/meter_test.cpp
   audio/stretch_test.cpp
   core/animate_test.cpp
   core/arrange_test.cpp
@@ -39,6 +40,7 @@ add_executable(cutline_core_tests
   ui/dock_test.cpp
   ui/dock_view_test.cpp
   ui/layout_test.cpp
+  ui/meter_view_test.cpp
   ui/monitor_test.cpp
   ui/painter_test.cpp
   ui/scopes_view_test.cpp

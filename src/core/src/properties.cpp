@@ -68,6 +68,11 @@ Project set_clip_gain(Project p, std::string_view clip_id, double gain) {
   return p;
 }
 
+Project set_master_gain(Project p, double gain) {
+  p.master_gain = std::clamp(gain, 0.0, kMaxMasterGain);
+  return p;
+}
+
 Project set_clip_fade(Project p, std::string_view clip_id, ClipEdge edge, double duration) {
   Clip* c = find_clip(p, clip_id);
   if (c == nullptr) return p;

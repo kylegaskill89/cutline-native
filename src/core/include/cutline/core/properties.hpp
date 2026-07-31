@@ -50,6 +50,11 @@ namespace cutline::core {
 
 [[nodiscard]] Project set_clip_transform(Project p, std::string_view clip_id, Transform transform);
 
+// ------------------------------------------------------------------ master --
+
+/// Sets the gain applied to the whole mix, clamped to the allowed range.
+[[nodiscard]] Project set_master_gain(Project p, double gain);
+
 // ------------------------------------------------------- generated media --
 
 /// Replaces a text media's styling. No-op unless the media is a title.

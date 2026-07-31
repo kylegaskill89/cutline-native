@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1759** under the `ui` preset; 1496 of them need no GPU, no window, no FFmpeg |
+| Tests | **1784** under the `ui` preset; 1521 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1496 of the 1759 tests.
+binding between them — 1521 of the 1784 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -122,7 +122,7 @@ tools    executables.
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1496 tests run with
+place that knows both, and it is pure too. That is what makes 1521 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -269,8 +269,6 @@ here.**
 
 ### B. Not built anywhere
 
-- **VU meter and master volume** — there is no master volume in the model at
-  all; the limiter is fixed at 0.95.
 - **Program-monitor transform handles** — drag to move, corners to scale, top to
   rotate, plus edge and centre snap guides.
 - **Preview resolution** (Full/½/¼) and **loop playback**.
@@ -286,8 +284,8 @@ here.**
 
 ### Suggested order
 
-1. Anything in B, by appetite. Scopes and the VU meter are the two that need new
-   machinery rather than new wiring.
+1. Anything in B, by appetite. The transform handles are the one left that need
+   new machinery rather than new wiring.
 
 And one thing worth doing whatever comes next: **nothing in the test suite ever
 resizes a real window.** The pixel tests draw on a fixed CPU raster surface and
@@ -296,7 +294,17 @@ path had never been exercised until somebody dragged the window under a driver �
 which is how the crash in *Traps* was found, after it had been shipping happily
 past a green suite for weeks.
 
-Nine are already done and are worth reading as the pattern for the rest:
+Ten are already done and are worth reading as the pattern for the rest:
+
+- **The master fader and the meter** — `audio/meter.hpp` measures and
+  `ui/meter_view.hpp` draws, the same split the scopes use. Two things in it
+  are worth knowing. The meter taps the mix *between* the master fader and the
+  limiter, so "over" means the limiter is having to work — a meter after it can
+  never read above the ceiling and would go quiet at exactly the moment the mix
+  got into trouble. And the master is the **one** edit playback survives: a
+  fader is set by ear against what is playing, so `AudioMixer` takes it through
+  an atomic and `advance_playback` discounts it from the comparison that
+  otherwise stops the sound whenever the document changes.
 
 - **In and out points** — marked from the buttons or from I and O, drawn along
   the foot of the ruler, saved with the project, offered to export as "only the

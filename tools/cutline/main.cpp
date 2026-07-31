@@ -41,6 +41,7 @@
 #include "cutline/ui/dock.hpp"
 #include "cutline/ui/dock_view.hpp"
 #include "cutline/ui/monitor.hpp"
+#include "cutline/ui/meter_view.hpp"
 #include "cutline/ui/scopes_view.hpp"
 #include "cutline/ui/skia_painter.hpp"
 #include "cutline/ui/skia_window.hpp"
@@ -196,11 +197,12 @@ using cutline::ui::built_in_themes;
 /// A panel is a name from here plus whatever `make_panel` builds for it. The
 /// layout only ever moves the name around, which is what lets an arrangement be
 /// saved and restored without saving any widgets.
-constexpr std::array<std::pair<std::string_view, std::string_view>, 5> kPanels{{
+constexpr std::array<std::pair<std::string_view, std::string_view>, 6> kPanels{{
     {"project", "Project"},
     {"effects", "Effect Controls"},
     {"monitor", "Program Monitor"},
     {"timeline", "Timeline"},
+    {"audio", "Audio Master"},
     // A panel rather than the overlay on the monitor the spec describes. The
     // overlay was the right answer for an application with one fixed layout;
     // this one has dockable panels that tear out into windows of their own, so
@@ -399,6 +401,18 @@ struct App {
   cutline::ui::ScopeKind scope_kind = cutline::ui::ScopeKind::Histogram;
   std::shared_ptr<const cutline::ui::ScopeReadings> scope_readings;
   Button* scope_button = nullptr;
+
+  /// The master fader and the meter beside it.
+  ///
+  /// The meter is polled from the frame loop rather than pushed to, because the
+  /// levels are produced on the player's render thread every few milliseconds
+  /// and the panel is repainted at frame rate. Waking the interface per audio
+  /// block to draw a bar that is about to be drawn again would be a lot of
+  /// messages for nothing.
+  cutline::ui::MeterView* meter = nullptr;
+  Slider* master_fader = nullptr;
+  Label* master_reading = nullptr;
+
   /// Set when the picture has changed and the measurements no longer describe
   /// it. Deferred like the preview is, so scrubbing across ten frames measures
   /// the one that is finally shown rather than all ten.
@@ -573,6 +587,8 @@ void invalidate_preview(App& app);
 void invalidate_scopes(App& app);
 void refresh_scopes(App& app);
 void choose_scope(App& app, cutline::ui::ScopeKind kind);
+void show_master_gain(App& app, double gain);
+void refresh_meter(App& app);
 void invalidate_playback(App& app);
 void open_export_dialog(App& app);
 void poll_export(App& app);
@@ -1617,6 +1633,36 @@ void take_snapshot([[maybe_unused]] App& app) {
 /// finer than a pixel of graph.
 constexpr int kScopeWidth = 320;
 
+/// The reading under the master fader.
+///
+/// Silence rather than "-36 dB" at the bottom stop: that is what the scale's
+/// floor means everywhere else in the application, and a number there would
+/// suggest the mix was merely quiet.
+void show_master_gain(App& app, double gain) {
+  if (app.master_reading == nullptr) return;
+  const double db = cutline::ui::gain_to_fader_db(gain);
+  app.master_reading->set_text(db <= cutline::ui::kGainFloorDb
+                                   ? std::string("Silent")
+                                   : std::format("{:+.1f} dB", db));
+}
+
+/// Copies the player's levels into the meter, once a frame.
+///
+/// Polled rather than pushed: levels are produced every few milliseconds on the
+/// render thread and the meter is drawn at frame rate, so a message per block
+/// would be several wake-ups for each thing drawn. A meter is also the one
+/// display where a missed update is invisible — the next one is milliseconds
+/// away and the ballistics carry across it.
+void refresh_meter([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.meter == nullptr) return;
+  // A player that has not been made yet reads as silence, which is true: there
+  // is nothing playing.
+  app.meter->set_levels(app.player == nullptr ? cutline::audio::MeterReading{}
+                                              : app.player->levels());
+#endif
+}
+
 /// Measures the frame at the playhead, if the scopes are on show and stale.
 ///
 /// Through `frame_at` rather than off the monitor's texture: a scope measures
@@ -1722,6 +1768,9 @@ void stop_playback(App& app) {
   }
   if (app.play_button != nullptr) app.play_button->set_text("Play");
   app.shown_frame = -1;
+  // Once more with the sound stopped, or the bars stay where the last thing
+  // playing left them and the meter goes on claiming there is audio.
+  refresh_meter(app);
   mark_dirty(app);
 #else
   (void)app;
@@ -1812,11 +1861,29 @@ void advance_playback(App& app) {
   // than trusted — clicking a clip should not stop playback.
   if (app.session.revision() != app.player_revision) {
     app.player_revision = app.session.revision();
+
+    // The master fader is the one edit playback survives, and it has to: it is
+    // set by ear against what is playing, and stopping the sound the moment the
+    // button came up would mean it could only ever be set against silence. The
+    // mixer takes it live, and nothing that was decoded depends on it — so the
+    // change is handed over and then discounted from the comparison below.
+    const double master = app.session.project().master_gain;
+    if (master != app.player_project.master_gain) {
+      app.player->set_master_gain(master);
+      app.player_project.master_gain = master;
+    }
+
     if (app.player_project != app.session.project()) {
       invalidate_playback(app);
       return;
     }
   }
+
+  // Before the frame check below: a meter is the one thing here that has
+  // something new to say between two pictures, and it costs a copy of a dozen
+  // doubles to say it.
+  refresh_meter(app);
+  mark_dirty(app);
 
   const double at = app.player->position();
   if (app.player->finished()) {
@@ -1868,6 +1935,12 @@ void refresh_all(App& app) {
   refresh_title(app);
   invalidate_preview(app);
   app.inspector_stale = true;
+  // The master fader belongs to the document, so a loaded project moves it.
+  if (app.master_fader != nullptr) {
+    app.master_fader->set_value(
+        cutline::ui::gain_to_fader_db(app.session.project().master_gain));
+    show_master_gain(app, app.session.project().master_gain);
+  }
   if (app.monitor != nullptr) {
     const cutline::core::Project& project = app.session.project();
     app.monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
@@ -2506,6 +2579,61 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   return panel;
 }
 
+/// The master fader and the meter it is set against.
+///
+/// The two belong together: a fader is moved by ear and by eye, and the eye
+/// part is the meter. Splitting them across panels would mean setting a level
+/// while watching something that might be behind another tab.
+[[nodiscard]] std::unique_ptr<Widget> make_audio_panel(App* app) {
+  auto panel = std::make_unique<Panel>();
+
+  // Stacked rather than side by side. The panel is as likely to be docked in a
+  // narrow column as given a whole region, and a fader beside a meter needs a
+  // width neither of them has on their own — the first attempt pushed the
+  // fader clean off the edge of the panel it was in.
+  auto& column = panel->emplace<Box>(Axis::Vertical);
+  column.emplace<Label>("Master").set_bold(true);
+
+  const double gain = app == nullptr ? 1.0 : app->session.project().master_gain;
+  auto& fader = column.emplace<Slider>(
+      ValueRange{.minimum = cutline::ui::kGainFloorDb,
+                 .maximum = cutline::ui::gain_to_fader_db(cutline::core::kMaxMasterGain)},
+      cutline::ui::gain_to_fader_db(gain));
+  // Unity, which is where a volume control resets to and where a project that
+  // has never been touched sits.
+  fader.set_default_value(0.0);
+
+  auto& reading = column.emplace<Label>();
+  reading.set_small(true);
+
+  auto& bars = column.emplace<cutline::ui::MeterView>();
+  if (app != nullptr) app->meter = &bars;
+
+  if (app != nullptr) {
+    app->master_fader = &fader;
+    app->master_reading = &reading;
+    show_master_gain(*app, gain);
+
+    // On every pixel of the drag, straight to the mixer: a master fader that
+    // only took effect on release could not be set by ear, which is the only
+    // way anybody sets one. The model is left alone until the button comes up,
+    // so one gesture is still one undo entry.
+    fader.set_on_change([app](double db) {
+      const double moved = cutline::ui::fader_db_to_gain(db, cutline::core::kMaxMasterGain);
+      if (app->player != nullptr) app->player->set_master_gain(moved);
+      show_master_gain(*app, moved);
+    });
+    fader.set_on_commit([app](double db) {
+      app->session.apply(cutline::core::set_master_gain(
+          app->session.project(),
+          cutline::ui::fader_db_to_gain(db, cutline::core::kMaxMasterGain)));
+      show_master_gain(*app, app->session.project().master_gain);
+    });
+  }
+
+  return panel;
+}
+
 /// The scopes, with a row of tabs to choose between them.
 [[nodiscard]] std::unique_ptr<Widget> make_scopes_panel(App* app) {
   auto panel = std::make_unique<Panel>();
@@ -2552,6 +2680,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   if (id == "monitor") return make_monitor_panel(app);
   if (id == "timeline") return make_timeline_panel(app);
   if (id == "effects") return make_effects_panel(app);
+  if (id == "audio") return make_audio_panel(app);
 
   // A layout naming a panel this build does not have. Saying so beats an empty
   // rectangle, which looks like a panel that failed to draw.

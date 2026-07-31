@@ -459,6 +459,26 @@ double Player::position() const noexcept {
   return std::max(seen, interpolated);
 }
 
+void Player::set_master_gain(double gain) {
+  // Safe from this thread although the mixer is built on the render thread:
+  // `create` waits on the promise the render thread sets *after* it has stored
+  // the mixer, so the pointer is published by the time any caller can hold a
+  // player. What it points at takes the change atomically.
+  if (impl_->mixer != nullptr) impl_->mixer->set_master_gain(gain);
+}
+
+audio::MeterReading Player::levels() const {
+  audio::MeterReading silent;
+  silent.count = impl_->channels;
+  if (impl_->mixer == nullptr) return silent;
+
+  // A meter's levels fall as audio goes past it, so a paused player's meter
+  // does not fall at all — it holds whatever was playing when the space bar
+  // was pressed, which reads as sound that is not there.
+  if (!impl_->running.load(std::memory_order_acquire)) return silent;
+  return impl_->mixer->levels();
+}
+
 void Player::seek(double seconds) {
   const std::lock_guard lock(impl_->control);
   impl_->seek_pending = true;

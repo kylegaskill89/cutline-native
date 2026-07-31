@@ -17,6 +17,7 @@ Project rich_project() {
   p.canvas_w = 3840;
   p.canvas_h = 2160;
   p.fps = 60.0;
+  p.master_gain = 0.7;
 
   Media footage;
   footage.id = "m1";
@@ -146,6 +147,7 @@ TEST(Serialize, AbsentFieldsFallBackToDefaults) {
   const Project& p = loaded->project;
   EXPECT_EQ(p.canvas_w, 1920);
   EXPECT_DOUBLE_EQ(p.fps, 30.0);
+  EXPECT_DOUBLE_EQ(p.master_gain, 1.0);
 
   const Clip& c = p.tracks[0].clips[0];
   EXPECT_DOUBLE_EQ(c.gain, 1.0);

@@ -165,6 +165,19 @@ inline constexpr double kGainFloorDb = -36.0;
 /// ran to true -infinity has no bottom to draw.
 [[nodiscard]] double band_to_gain(double fraction, double maximum) noexcept;
 
+/// The same scale expressed as a fader reading rather than a fraction, for the
+/// controls that show a number: the inspector's Volume row and the master
+/// fader. `gain_to_fader_db` floors at `kGainFloorDb` and `fader_db_to_gain`
+/// treats that floor as silence, so all three controls agree by construction
+/// about what the bottom of the range means.
+///
+/// Three views of one scale is the reason these live here rather than beside
+/// any one of them. The first version had the inspector on a percentage of its
+/// own, and a clip pulled down on the band read as pinned to the left of a
+/// slider that claimed to show the same value.
+[[nodiscard]] double gain_to_fader_db(double gain) noexcept;
+[[nodiscard]] double fader_db_to_gain(double db, double maximum) noexcept;
+
 /// One clip, as far as drawing is concerned.
 struct TimelineBlock {
   /// Opaque to the timeline, which never looks inside it. Whoever built the

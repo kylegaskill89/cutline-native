@@ -70,6 +70,13 @@ inline constexpr std::array<AnimProp, kAnimPropCount> kAnimProps{
 /// Allowed per-clip linear gain: 0 (silent) to 2 (about +6 dB).
 inline constexpr double kMaxGain = 2.0;
 
+/// Allowed master gain, the same range as a clip's. The master fader is not
+/// given more reach than a clip fader on purpose: mixing is a plain sum, so a
+/// master pushed further would only feed the limiter something it has to pull
+/// straight back down, which sounds like the mix being squashed rather than
+/// like it being loud.
+inline constexpr double kMaxMasterGain = 2.0;
+
 /// Shortest clip a trim may produce, in seconds.
 inline constexpr double kMinClip = 0.05;
 
@@ -282,6 +289,11 @@ struct Project {
   int canvas_w = 1920;
   int canvas_h = 1080;
   double fps = 30.0;
+
+  /// Linear gain applied to the whole mix, after the tracks are summed and
+  /// before the limiter. Ahead of the limiter so that turning the master down
+  /// gets a project *out* of limiting rather than quietly leaving it in.
+  double master_gain = 1.0;
 
   std::vector<Media> media;
   /// Video tracks first (topmost), then audio. Note that video tracks composite

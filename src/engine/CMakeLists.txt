@@ -10,12 +10,13 @@ target_include_directories(cutline_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc
 # The only layer that depends on everything, which is the point of it: it is
 # where the model, the plan, the decoder, and the compositor meet.
 # cutline::media is public because the exporter's settings name its encoder
-# types; everything else about it stays an implementation detail.
+# types, and cutline::audio because a mixer and a player both hand out a meter
+# reading; everything else about them stays an implementation detail.
 # ole32 and propsys are for WASAPI: the device enumerator is a COM object, and
 # the device's friendly name comes from a property store.
 target_link_libraries(cutline_engine
-  PUBLIC cutline::core cutline::gpu cutline::media cutline::options
-  PRIVATE cutline::audio cutline::render ole32 propsys)
+  PUBLIC cutline::core cutline::gpu cutline::media cutline::audio cutline::options
+  PRIVATE cutline::render ole32 propsys)
 
 # Titles, when there is something to draw glyphs with. Without it the renderer
 # skips text layers, exactly as it did before there was a rasteriser at all: the

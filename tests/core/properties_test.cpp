@@ -64,6 +64,17 @@ TEST(ClipProperties, GainIsClamped) {
   EXPECT_DOUBLE_EQ(set_clip_gain(p, "c1", 0.5).tracks[0].clips[0].gain, 0.5);
 }
 
+TEST(MasterProperties, MasterGainIsClamped) {
+  const Project p;
+  EXPECT_DOUBLE_EQ(set_master_gain(p, -1.0).master_gain, 0.0);
+  EXPECT_DOUBLE_EQ(set_master_gain(p, 99.0).master_gain, kMaxMasterGain);
+  EXPECT_DOUBLE_EQ(set_master_gain(p, 0.5).master_gain, 0.5);
+}
+
+TEST(MasterProperties, AFreshProjectMixesAtUnity) {
+  EXPECT_DOUBLE_EQ(Project{}.master_gain, 1.0);
+}
+
 TEST(ClipProperties, OpacityIsClamped) {
   const Project p = one_clip_project();
   EXPECT_DOUBLE_EQ(set_clip_opacity(p, "c1", -1.0).tracks[0].clips[0].opacity, 0.0);

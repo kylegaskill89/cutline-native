@@ -77,14 +77,10 @@ constexpr double kSliderMaxSpeed = 4.0;
 /// The two controls agree exactly, by construction: the same floor, the same
 /// ceiling, and the same rule that the bottom of the range is silence rather
 /// than merely very quiet.
-[[nodiscard]] double gain_shown(double stored) noexcept {
-  if (!(stored > 0.0)) return ui::kGainFloorDb;
-  return std::max(audio::linear_to_db(stored), ui::kGainFloorDb);
-}
+[[nodiscard]] double gain_shown(double stored) noexcept { return ui::gain_to_fader_db(stored); }
 
 [[nodiscard]] double gain_stored(double shown) noexcept {
-  if (shown <= ui::kGainFloorDb) return 0.0;
-  return std::clamp(audio::db_to_linear(shown), 0.0, core::kMaxGain);
+  return ui::fader_db_to_gain(shown, core::kMaxGain);
 }
 
 /// The loudest the model will hold, in the units the row is in. Taken from the

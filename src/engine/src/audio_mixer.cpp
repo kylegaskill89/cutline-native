@@ -2,14 +2,17 @@
 
 #include "cutline/audio/chain.hpp"
 #include "cutline/audio/limiter.hpp"
+#include "cutline/audio/meter.hpp"
 #include "cutline/audio/stretch.hpp"
 #include "cutline/media/audio.hpp"
 #include "cutline/render/mix.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <mutex>
 #include <set>
 #include <utility>
 
@@ -148,6 +151,20 @@ struct AudioMixer::Impl {
 
   std::unique_ptr<audio::Limiter> limiter;
 
+  /// Atomic because the master fader is the one thing about a mix that can be
+  /// changed while it is playing: the player's render thread reads this on
+  /// every block while the interface writes it from the message loop.
+  std::atomic<double> master_gain{1.0};
+
+  /// The meter belongs to whichever thread is mixing; its reading is published
+  /// under a lock for whoever is drawing. A reading is a few dozen bytes and is
+  /// taken once a block, so the lock is never contended for long enough to
+  /// matter — and the alternative, tearing a stereo pair across two atomics,
+  /// shows up as a meter whose channels disagree.
+  std::unique_ptr<audio::Meter> meter;
+  mutable std::mutex levels_lock;
+  audio::MeterReading levels;
+
   /// Scratch, reused across calls so mixing does not allocate per block.
   std::vector<float> voice_block;
 };
@@ -223,8 +240,18 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
   }
 
   impl->missing.assign(missing.begin(), missing.end());
+  impl->master_gain.store(std::clamp(project.master_gain, 0.0, core::kMaxMasterGain),
+                          std::memory_order_relaxed);
+  const audio::LimiterSettings limiting;
   impl->limiter = std::make_unique<audio::Limiter>(
-      audio::LimiterSettings{}, static_cast<double>(settings.sample_rate), settings.channels);
+      limiting, static_cast<double>(settings.sample_rate), settings.channels);
+  // The meter's "over" is the limiter's ceiling rather than full scale, so the
+  // warning means "the limiter is working" — which happens first, and is the
+  // thing that can still be acted on.
+  impl->meter = std::make_unique<audio::Meter>(static_cast<double>(settings.sample_rate),
+                                               settings.channels,
+                                               audio::MeterSettings{.over = limiting.limit});
+  impl->levels = impl->meter->read();
 
   return std::unique_ptr<AudioMixer>(new AudioMixer(std::move(impl)));
 }
@@ -296,8 +323,39 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
     for (std::size_t i = 0; i < span * channels; ++i) out[first * channels + i] += impl_->voice_block[i];
   }
 
+  // The master fader, ahead of the limiter: pulling it down has to take a hot
+  // mix *out* of limiting, and after the limiter it would only make an already
+  // squashed mix quieter.
+  const double master = impl_->master_gain.load(std::memory_order_relaxed);
+  if (master != 1.0) {
+    const auto gain = static_cast<float>(master);
+    for (float& sample : out) sample *= gain;
+  }
+
+  // Metered here, between the fader and the limiter: this is the mix as it was
+  // made, which is what a meter is for. See `levels`.
+  impl_->meter->process(out);
+  {
+    const std::lock_guard lock(impl_->levels_lock);
+    impl_->levels = impl_->meter->read();
+  }
+
   impl_->limiter->process(out);
   return {};
+}
+
+void AudioMixer::set_master_gain(double gain) noexcept {
+  impl_->master_gain.store(std::clamp(gain, 0.0, core::kMaxMasterGain),
+                           std::memory_order_relaxed);
+}
+
+double AudioMixer::master_gain() const noexcept {
+  return impl_->master_gain.load(std::memory_order_relaxed);
+}
+
+audio::MeterReading AudioMixer::levels() const noexcept {
+  const std::lock_guard lock(impl_->levels_lock);
+  return impl_->levels;
 }
 
 void AudioMixer::flush(std::span<float> out) { impl_->limiter->flush(out); }
@@ -309,6 +367,13 @@ std::size_t AudioMixer::latency_frames() const noexcept {
 void AudioMixer::reset() {
   for (Voice& voice : impl_->voices) voice.chain.reset();
   impl_->limiter->reset();
+
+  // The meter too: levels only fall while audio is being measured, so a seek
+  // that lands somewhere quiet would otherwise leave the bars where the last
+  // loud thing left them.
+  impl_->meter->reset();
+  const std::lock_guard lock(impl_->levels_lock);
+  impl_->levels = impl_->meter->read();
 }
 
 bool AudioMixer::silent() const noexcept {
