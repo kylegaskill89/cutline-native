@@ -218,6 +218,19 @@ lighting its M would leave somebody pressing a button that is already off. The
 mixer and the exporter have honoured all of this from the start; until now there
 was no way to press it.
 
+The eight audio effects are reachable too, from the same panel and through the
+same rows. An audio clip gets its own stack — add, remove, reorder, disable,
+adjust — with the registry's ranges, steps and units in the labels, so a cutoff
+reads as hertz and a shelf as decibels. There is no stopwatch on any of them:
+`AudioClipEffect` holds parameters and nothing else, and offering an animation
+control with nowhere to keep a keyframe would be a button that cannot do what it
+says. Clip gain *is* automatable — that is a different property, with its own
+rubber band still to come.
+
+Nothing needed writing but the join: the audio registry has declared each
+effect's parameters, ranges, defaults and units since the DSP was written, in
+exactly the shape the video catalogue uses.
+
 Transitions are reachable at last. All four — cross dissolve, dip to black, push
 and slide — have rendered since the segment resolver was written and none of them
 could be asked for. The panel offers them at a clip's out-edge, but only where
@@ -242,10 +255,10 @@ removed without a third control that exists only to undo the other two. The two
 can never cross: setting one past the other clears that other, so an inverted
 pair is unrepresentable rather than something every reader has to check for.
 
-1547 tests, plus a headless check that lays every panel out in every theme —
-including the inspector with a clip selected, every effect on it, a title, and
-the colour picker open, which is the only way the controls a panel is made of
-get checked at all. Given a directory, that check writes each theme's frame out
+1557 tests, plus a headless check that lays every panel out in every theme —
+including the inspector with a clip selected and every effect on it, an audio
+clip with all eight of its own, a title, and the colour picker open, which is
+the only way the controls a panel is made of get checked at all. Given a directory, that check writes each theme's frame out
 as a PNG, so a changed fingerprint can be looked at rather than guessed at.
 
 ## Building

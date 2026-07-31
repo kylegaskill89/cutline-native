@@ -576,8 +576,12 @@ struct ParamRow {
   bool keyed_here = false;
 };
 
+/// The animation handlers default to nothing, for a row that is not animatable.
+/// A parameter with nowhere to keep a keyframe — an audio effect's — builds no
+/// stopwatch and no marker, so neither is ever called.
 void build_param_row(App& app, const ParamRow& row, std::function<void(double)> on_commit,
-                     std::function<void(bool)> on_animate, std::function<void()> on_keyframe) {
+                     std::function<void(bool)> on_animate = {},
+                     std::function<void()> on_keyframe = {}) {
   auto& head = app.inspector->emplace<Box>(Axis::Horizontal);
 
   if (row.animatable) {
@@ -613,26 +617,73 @@ void build_param_row(App& app, const ParamRow& row, std::function<void(double)> 
 /// On the popup layer rather than in the panel, for the reason every menu is:
 /// the inspector is a scroll view, and a list opened at the bottom of it would
 /// be clipped to the panel that holds it.
-void open_effect_menu(App& app, const std::string& clip_id, const Rect& anchor) {
+void open_effect_menu(App& app, const std::string& clip_id, const Rect& anchor, bool audio) {
   if (app.main.host == nullptr) return;
 
   const std::vector<cutline::editor::EffectChoice> choices =
-      cutline::editor::addable_effects();
+      audio ? cutline::editor::addable_audio_effects() : cutline::editor::addable_effects();
   std::vector<std::string> names;
   names.reserve(choices.size());
   for (const cutline::editor::EffectChoice& choice : choices) names.push_back(choice.name);
 
   auto list = std::make_unique<MenuList>(std::move(names));
-  list->set_on_choose([&app, clip_id, choices](std::size_t index) {
+  list->set_on_choose([&app, clip_id, choices, audio](std::size_t index) {
     if (index >= choices.size()) return;
-    app.session.apply(cutline::editor::add_effect(app.session.project(), clip_id,
-                                                  choices[index].type));
+    app.session.apply(
+        audio ? cutline::editor::add_audio_effect(app.session.project(), clip_id,
+                                                  choices[index].type)
+              : cutline::editor::add_effect(app.session.project(), clip_id,
+                                            choices[index].type));
     if (app.main.host != nullptr) app.main.host->close_popup();
     app.inspector_stale = true;
     invalidate_preview(app);
   });
 
   app.main.host->open_popup(std::move(list), anchor);
+}
+
+/// The row an effect card starts with: its name as an on/off checkbox, then
+/// move up, move down and remove.
+///
+/// Shared by the visual and audio stacks. The two differ in which operations
+/// they call and in what a parameter row can do — not in this, and writing it
+/// twice is how the two would come to disagree about what a disabled effect
+/// looks like.
+///
+/// Each handler returns the edited project rather than applying it, so the
+/// applying, the rebuilding and the invalidating happen once here.
+void build_effect_header(App& app, const cutline::editor::EffectRow& row, std::size_t count,
+                         std::function<cutline::core::Project()> on_toggle,
+                         std::function<cutline::core::Project(int)> on_move,
+                         std::function<cutline::core::Project()> on_remove) {
+  const auto applied = [&app](cutline::core::Project next) {
+    app.session.apply(std::move(next));
+    app.inspector_stale = true;
+    invalidate_preview(app);
+  };
+
+  auto& line = app.inspector->emplace<Box>(Axis::Horizontal);
+
+  // The checkbox is the name as well: a disabled effect stays in the stack and
+  // stays visible, which is the whole point of disabling rather than removing.
+  auto& on = line.emplace<Checkbox>(row.name, row.enabled);
+  on.set_on_change([&app, applied, on_toggle](bool) { applied(on_toggle()); });
+
+  line.emplace<Spacer>();
+
+  // Moving is by button rather than by dragging the row. Dragging is what
+  // Premiere does and what this should eventually do; a button is what can be
+  // reached from the keyboard and what can be tested without a pointer.
+  auto& up = line.emplace<IconButton>(IconButton::Icon::ArrowUp);
+  up.set_enabled(row.index > 0);
+  up.set_on_click([applied, on_move] { applied(on_move(-1)); });
+
+  auto& down = line.emplace<IconButton>(IconButton::Icon::ArrowDown);
+  down.set_enabled(row.index + 1 < count);
+  down.set_on_click([applied, on_move] { applied(on_move(1)); });
+
+  line.emplace<IconButton>(IconButton::Icon::Cross,
+                           [applied, on_remove] { applied(on_remove()); });
 }
 
 /// The effect stack: a header per effect, its parameters beneath it.
@@ -647,7 +698,7 @@ void build_effect_controls(App& app, const std::string& clip_id) {
 
   auto& add = header.emplace<Button>("Add Effect");
   add.set_on_click([&app, clip_id, control = &add] {
-    open_effect_menu(app, clip_id, control->bounds());
+    open_effect_menu(app, clip_id, control->bounds(), false);
   });
 
   const std::vector<cutline::editor::EffectRow> rows =
@@ -660,48 +711,18 @@ void build_effect_controls(App& app, const std::string& clip_id) {
 
   const std::size_t count = rows.size();
   for (const cutline::editor::EffectRow& row : rows) {
-    auto& line = app.inspector->emplace<Box>(Axis::Horizontal);
-
-    // The checkbox is the name as well: a disabled effect stays in the stack
-    // and stays visible, which is the whole point of disabling rather than
-    // removing it.
-    auto& on = line.emplace<Checkbox>(row.name, row.enabled);
-    on.set_on_change([&app, clip_id, index = row.index](bool) {
-      app.session.apply(
-          cutline::core::toggle_clip_effect(app.session.project(), clip_id, index));
-      app.inspector_stale = true;
-      invalidate_preview(app);
-    });
-
-    line.emplace<Spacer>();
-
-    // Moving is by button rather than by dragging the row. Dragging is what
-    // Premiere does and what this should eventually do; a button is what can be
-    // reached from the keyboard and what can be tested without a pointer.
-    auto& up = line.emplace<IconButton>(IconButton::Icon::ArrowUp);
-    up.set_enabled(row.index > 0);
-    up.set_on_click([&app, clip_id, index = row.index] {
-      app.session.apply(
-          cutline::core::move_clip_effect(app.session.project(), clip_id, index, -1));
-      app.inspector_stale = true;
-      invalidate_preview(app);
-    });
-
-    auto& down = line.emplace<IconButton>(IconButton::Icon::ArrowDown);
-    down.set_enabled(row.index + 1 < count);
-    down.set_on_click([&app, clip_id, index = row.index] {
-      app.session.apply(
-          cutline::core::move_clip_effect(app.session.project(), clip_id, index, 1));
-      app.inspector_stale = true;
-      invalidate_preview(app);
-    });
-
-    line.emplace<IconButton>(IconButton::Icon::Cross, [&app, clip_id, index = row.index] {
-      app.session.apply(
-          cutline::core::remove_clip_effect(app.session.project(), clip_id, index));
-      app.inspector_stale = true;
-      invalidate_preview(app);
-    });
+    build_effect_header(
+        app, row, count,
+        [&app, clip_id, index = row.index] {
+          return cutline::core::toggle_clip_effect(app.session.project(), clip_id, index);
+        },
+        [&app, clip_id, index = row.index](int direction) {
+          return cutline::core::move_clip_effect(app.session.project(), clip_id, index,
+                                                 direction);
+        },
+        [&app, clip_id, index = row.index] {
+          return cutline::core::remove_clip_effect(app.session.project(), clip_id, index);
+        });
 
     if (row.unknown) {
       app.inspector->emplace<Label>("Not available in this version").set_small(true);
@@ -772,6 +793,73 @@ void build_effect_controls(App& app, const std::string& clip_id) {
             // would destroy the swatch, which closes the picker still open
             // above it — and nothing else in the panel depends on this value.
           });
+    }
+  }
+}
+
+/// The audio effect stack, for an audio clip.
+///
+/// Shorter than the visual one and not because it was cut down: the audio
+/// registry has no colours and `AudioClipEffect` has no keyframes, so there is
+/// no swatch and no stopwatch to build. What is here is the same header and the
+/// same parameter rows, from the same structs.
+void build_audio_effect_controls(App& app, const std::string& clip_id) {
+  auto& header = app.inspector->emplace<Box>(Axis::Horizontal);
+  header.emplace<Label>("Audio Effects").set_bold(true);
+  header.emplace<Spacer>();
+
+  auto& add = header.emplace<Button>("Add Effect");
+  add.set_on_click([&app, clip_id, control = &add] {
+    open_effect_menu(app, clip_id, control->bounds(), true);
+  });
+
+  const std::vector<cutline::editor::EffectRow> rows =
+      cutline::editor::clip_audio_effects(app.session.project(), clip_id);
+  if (rows.empty()) {
+    app.inspector->emplace<Label>("No effects").set_small(true);
+    return;
+  }
+
+  const std::size_t count = rows.size();
+  for (const cutline::editor::EffectRow& row : rows) {
+    build_effect_header(
+        app, row, count,
+        [&app, clip_id, index = row.index] {
+          return cutline::core::toggle_audio_effect(app.session.project(), clip_id, index);
+        },
+        [&app, clip_id, index = row.index](int direction) {
+          return cutline::core::move_audio_effect(app.session.project(), clip_id, index,
+                                                  direction);
+        },
+        [&app, clip_id, index = row.index] {
+          return cutline::core::remove_audio_effect(app.session.project(), clip_id, index);
+        });
+
+    if (row.unknown) {
+      app.inspector->emplace<Label>("Not available in this version").set_small(true);
+      continue;
+    }
+
+    for (const cutline::editor::EffectParamRow& param : row.params) {
+      const ParamRow control{.name = param.name,
+                             .suffix = param.suffix,
+                             .range = param.range,
+                             .value = param.value,
+                             .fallback = param.fallback,
+                             // No stopwatch: the model has nowhere to put an
+                             // audio effect keyframe, and offering one would be
+                             // a button that could not do what it said.
+                             .animatable = false};
+
+      build_param_row(app, control,
+                      [&app, clip_id, index = row.index, key = param.key](double value) {
+                        app.session.apply(cutline::core::set_audio_effect_param(
+                            app.session.project(), clip_id, index, key, value));
+                        // No `invalidate_preview`: this changes the sound and
+                        // not one pixel. The player notices the project has
+                        // moved on by itself, on the next frame.
+                        app.inspector_stale = true;
+                      });
     }
   }
 }
@@ -1067,10 +1155,13 @@ void refresh_inspector(App& app) {
   // stacks with them.
   if (visual) build_transition_controls(app, clip_id);
 
-  // Visual effects only, since that is the stack the compositor draws. An
-  // audio clip has its own, and it belongs here too — but it needs the audio
-  // registry described the same way first.
-  if (visual) build_effect_controls(app, clip_id);
+  // One stack or the other, never both: a clip is video or audio, and offering
+  // a blur on a waveform would be a control with nothing behind it.
+  if (visual) {
+    build_effect_controls(app, clip_id);
+  } else {
+    build_audio_effect_controls(app, clip_id);
+  }
 
   app.inspector->emplace<Spacer>();
 
@@ -3550,6 +3641,31 @@ template <typename T>
       app.main.host->update_layout(context);
       app.main.host->paint(*painter, theme);
       walk(app.main.host->root());
+
+      // And an audio clip, whose panel is a different stack from a different
+      // registry. Every audio effect on it, for the same reason every visual
+      // one goes on the clip above.
+      std::string audio_clip;
+      for (const auto& track : app.session.project().tracks) {
+        if (track.kind != cutline::core::TrackKind::Audio || track.clips.empty()) continue;
+        audio_clip = track.clips.front().id;
+        break;
+      }
+      if (!audio_clip.empty()) {
+        app.session.select_one(audio_clip);
+        for (const cutline::editor::EffectChoice& choice :
+             cutline::editor::addable_audio_effects()) {
+          app.session.apply(cutline::editor::add_audio_effect(app.session.project(), audio_clip,
+                                                              choice.type));
+        }
+        refresh_inspector(app);
+        app.main.host->update_layout(context);
+        app.main.host->paint(*painter, theme);
+        walk(app.main.host->root());
+      } else {
+        std::println("{}: no audio clip to build an audio panel from", theme.id);
+        ++failures;
+      }
 
       // And again for a title, whose panel has controls no other clip does —
       // the text field among them, which nothing else in the interface uses yet

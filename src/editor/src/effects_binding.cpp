@@ -1,5 +1,6 @@
 #include "cutline/editor/effects_binding.hpp"
 
+#include "cutline/audio/chain.hpp"
 #include "cutline/core/effects.hpp"
 #include "cutline/core/keyframe.hpp"
 #include "cutline/core/query.hpp"
@@ -183,6 +184,83 @@ core::Project toggle_effect_keyframe(core::Project project, std::string_view cli
   }
   return core::set_effect_keyframe(std::move(project), clip_id, index, std::string(key), local_t,
                                    core::effect_param_at(*effect, key, local_t));
+}
+
+// ------------------------------------------------------------ audio stack --
+
+std::vector<EffectRow> clip_audio_effects(const core::Project& project,
+                                          std::string_view clip_id) {
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr) return {};
+
+  std::vector<EffectRow> rows;
+  rows.reserve(clip->audio_effects.size());
+
+  for (std::size_t i = 0; i < clip->audio_effects.size(); ++i) {
+    const core::AudioClipEffect& effect = clip->audio_effects[i];
+    const audio::AudioEffectDef* def = audio::audio_effect_def(effect.type);
+
+    EffectRow row{.index = i,
+                  .type = effect.type,
+                  // The raw type for one this build does not know, so a project
+                  // written by a newer version still shows that something is
+                  // there rather than a gap in the stack.
+                  .name = def != nullptr ? std::string(def->name) : effect.type,
+                  .enabled = effect.enabled,
+                  .unknown = def == nullptr};
+    if (def == nullptr) {
+      rows.push_back(std::move(row));
+      continue;
+    }
+
+    for (const audio::AudioEffectParamDef& param : def->params) {
+      row.params.push_back(EffectParamRow{
+          .key = std::string(param.key),
+          .name = std::string(param.label),
+          .range = {.minimum = param.minimum, .maximum = param.maximum, .step = param.step},
+          // Through the registry rather than straight off the map, so a
+          // parameter the stored effect does not carry reads as its default
+          // instead of as zero.
+          .value = audio::audio_effect_param(effect, param.key),
+          .fallback = param.fallback,
+          .suffix = std::string(param.unit),
+      });
+    }
+    rows.push_back(std::move(row));
+  }
+  return rows;
+}
+
+std::vector<EffectChoice> addable_audio_effects() {
+  std::vector<EffectChoice> out;
+  for (const audio::AudioEffectDef& def : audio::audio_effect_defs()) {
+    out.push_back(EffectChoice{.type = std::string(def.id),
+                               .name = std::string(def.name),
+                               // One category. All eight are filters of one
+                               // sort or another, and inventing groupings the
+                               // registry does not have would be a fiction the
+                               // menu then has to keep telling.
+                               .category = "Audio"});
+  }
+  return out;
+}
+
+core::Project add_audio_effect(core::Project project, std::string_view clip_id,
+                               std::string_view type) {
+  const audio::AudioEffectDef* def = audio::audio_effect_def(type);
+  if (def == nullptr) return project;
+
+  // Every parameter written out, for the same reason the visual stack does it:
+  // the panel reads what is stored, and an effect added with an empty map would
+  // show its sliders at the registry defaults while the *file* said nothing —
+  // a difference that only appears after saving and reopening.
+  std::map<std::string, double> params;
+  for (const audio::AudioEffectParamDef& param : def->params) {
+    params.emplace(std::string(param.key), param.fallback);
+  }
+
+  return core::add_audio_effect(std::move(project), clip_id, std::string(def->id),
+                                std::move(params));
 }
 
 }  // namespace cutline::editor

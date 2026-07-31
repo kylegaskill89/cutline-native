@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1547** under the `ui` preset; 1307 of them need no GPU, no window, no FFmpeg |
+| Tests | **1557** under the `ui` preset; 1319 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1307 of the 1547 tests.
+binding between them — 1319 of the 1557 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -257,7 +257,6 @@ here.**
 
 | | Exists | Missing |
 |---|---|---|
-| **Audio effects** | eight, our own DSP, honoured by the mixer and by export; `AudioClipEffect` on the model | no catalogue entry, no panel — the effects UI is video-only |
 | **Markers** | add/remove/clear/nearest/next/previous in core | nothing draws them on the ruler |
 | **Keyframe interpolation** | the model stores Linear/Hold/Ease and animation honours it | no chip in the panel, so everything is linear in practice |
 | **Colour mattes, adjustment layers** | the compositor renders adjustment layers; the browser has icons for both kinds | nothing creates one |
@@ -287,15 +286,13 @@ here.**
 
 ### Suggested order
 
-1. **Audio effects panel.** The largest of these left, and the same shape as the
-   video one — `effect_catalog.hpp` beside the resolver, `effects_binding.hpp`
-   turning a stack into rows, a loop in the panel. The eight audio effects need
-   a catalogue of their own first.
-2. **Markers**, then **interpolation chips** — both small and both visible.
+1. **Markers**, then **interpolation chips** — both small and both visible.
+2. **Gain automation** — the rubber band. Bigger than it sounds: it needs a new
+   gesture on the timeline rather than a new panel.
 3. Anything in B, by appetite. Scopes and the VU meter are the two that need new
    machinery rather than new wiring.
 
-Two are already done and are worth reading as the pattern for the rest:
+Three are already done and are worth reading as the pattern for the rest:
 
 - **In and out points** — marked from the buttons or from I and O, drawn along
   the foot of the ruler, saved with the project, offered to export as "only the
@@ -308,6 +305,13 @@ Two are already done and are worth reading as the pattern for the rest:
   than offering a slider that changes no pixels. **Expect the same shape
   elsewhere** — the model will happily store things the renderer ignores, and
   the binding layer is where that gets caught.
+- **Audio effects** — the bottom of `editor/effects_binding.hpp`. Worth reading
+  for how little there was to write: the audio registry in `cutline::audio` had
+  declared every effect's parameters, ranges, defaults and units all along, in
+  exactly the shape the video catalogue uses, so the binding is a loop and the
+  panel is the same loop the video stack already had. **Look for the registry
+  before writing one.** An earlier draft of this document said the eight audio
+  effects "need a catalogue of their own first"; they did not.
 
 ---
 

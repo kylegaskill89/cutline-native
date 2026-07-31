@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <string>
+#include <vector>
 
 namespace cutline::editor {
 namespace {
@@ -320,6 +321,122 @@ TEST(AddableEffects, EachOneIsNamedAndFiled) {
     EXPECT_FALSE(choice.name.empty()) << choice.type;
     EXPECT_FALSE(choice.category.empty()) << choice.type;
   }
+}
+
+// ------------------------------------------------------------ audio stack --
+
+TEST(AudioEffects, EveryOneInTheRegistryCanBeAdded) {
+  // The offer and the registry have to be the same list, or the menu shows
+  // something that cannot be added or hides something that can.
+  const std::vector<EffectChoice> choices = addable_audio_effects();
+  ASSERT_FALSE(choices.empty());
+
+  for (const EffectChoice& choice : choices) {
+    const Project p = add_audio_effect(one_clip(), "c1", choice.type);
+    EXPECT_EQ(only_clip(p).audio_effects.size(), 1u) << choice.type;
+    EXPECT_EQ(only_clip(p).audio_effects.front().type, choice.type);
+  }
+}
+
+TEST(AudioEffects, AreNamedRatherThanKeyed) {
+  const std::vector<EffectChoice> choices = addable_audio_effects();
+  const auto compressor =
+      std::ranges::find(choices, "compressor", &EffectChoice::type);
+  ASSERT_NE(compressor, choices.end());
+  EXPECT_EQ(compressor->name, "Compressor");
+}
+
+TEST(AudioEffects, ANewOneCarriesEveryParameterAtItsDefault) {
+  // Written out rather than left implicit, for the same reason the visual stack
+  // does it: the panel reads what is stored, and an empty map would show the
+  // registry defaults while the file said nothing.
+  const Project p = add_audio_effect(one_clip(), "c1", "compressor");
+  const std::vector<EffectRow> rows = clip_audio_effects(p, "c1");
+
+  ASSERT_EQ(rows.size(), 1u);
+  ASSERT_FALSE(rows.front().params.empty());
+  EXPECT_EQ(only_clip(p).audio_effects.front().params.size(), rows.front().params.size());
+  for (const EffectParamRow& param : rows.front().params) {
+    EXPECT_DOUBLE_EQ(param.value, param.fallback) << param.key;
+  }
+}
+
+TEST(AudioEffects, AnUnknownTypeIsNotAdded) {
+  const Project before = one_clip();
+  EXPECT_EQ(add_audio_effect(before, "c1", "reverb"), before);
+}
+
+TEST(AudioEffects, RowsCarryTheRegistrysRangesAndUnits) {
+  const Project p = add_audio_effect(one_clip(), "c1", "highpass");
+  const std::vector<EffectRow> rows = clip_audio_effects(p, "c1");
+
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows.front().name, "High-Pass");
+  ASSERT_FALSE(rows.front().params.empty());
+
+  const EffectParamRow& cutoff = rows.front().params.front();
+  EXPECT_GT(cutoff.range.maximum, cutoff.range.minimum);
+  EXPECT_FALSE(cutoff.suffix.empty()) << "a frequency without its unit is a number";
+}
+
+TEST(AudioEffects, AParameterTheStoredEffectDoesNotCarryReadsAsItsDefault) {
+  // Missing is not zero. An absent cutoff means the registry default, not DC.
+  Project p = add_audio_effect(one_clip(), "c1", "highpass");
+  p.tracks[0].clips[0].audio_effects[0].params.clear();
+
+  const std::vector<EffectRow> rows = clip_audio_effects(p, "c1");
+  ASSERT_EQ(rows.size(), 1u);
+  for (const EffectParamRow& param : rows.front().params) {
+    EXPECT_DOUBLE_EQ(param.value, param.fallback) << param.key;
+  }
+}
+
+TEST(AudioEffects, NoneOfThemAnimate) {
+  // `AudioClipEffect` holds parameters and nothing else, so a panel must not
+  // offer a stopwatch it has nowhere to put the result of.
+  Project p = one_clip();
+  for (const EffectChoice& choice : addable_audio_effects()) {
+    p = add_audio_effect(std::move(p), "c1", choice.type);
+  }
+
+  for (const EffectRow& row : clip_audio_effects(p, "c1")) {
+    EXPECT_TRUE(row.colors.empty()) << row.type << " has no colours in the registry";
+    for (const EffectParamRow& param : row.params) {
+      EXPECT_FALSE(param.animated) << row.type << "." << param.key;
+      EXPECT_FALSE(param.keyed_here) << row.type << "." << param.key;
+    }
+  }
+}
+
+TEST(AudioEffects, KeepTheirStackOrder) {
+  Project p = add_audio_effect(one_clip(), "c1", "highpass");
+  p = add_audio_effect(std::move(p), "c1", "compressor");
+
+  const std::vector<EffectRow> rows = clip_audio_effects(p, "c1");
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].type, "highpass");
+  EXPECT_EQ(rows[1].type, "compressor");
+  EXPECT_EQ(rows[0].index, 0u);
+  EXPECT_EQ(rows[1].index, 1u);
+}
+
+TEST(AudioEffects, AnEffectThisBuildDoesNotKnowStillShowsUp) {
+  // A project written by a newer version should open and play, minus the effect
+  // it names — and the stack should say something is there rather than leaving
+  // a gap that reads as data lost.
+  Project p = one_clip();
+  p.tracks[0].clips[0].audio_effects.push_back(core::AudioClipEffect{.type = "reverb"});
+
+  const std::vector<EffectRow> rows = clip_audio_effects(p, "c1");
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_TRUE(rows.front().unknown);
+  EXPECT_EQ(rows.front().name, "reverb");
+  EXPECT_TRUE(rows.front().params.empty());
+}
+
+TEST(AudioEffects, AClipWithNoneHasNoRows) {
+  EXPECT_TRUE(clip_audio_effects(one_clip(), "c1").empty());
+  EXPECT_TRUE(clip_audio_effects(one_clip(), "ghost").empty());
 }
 
 }  // namespace

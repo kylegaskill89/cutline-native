@@ -143,4 +143,31 @@ struct EffectChoice {
                                                    std::string_view clip_id, std::size_t index,
                                                    std::string_view key, double local_t);
 
+// ------------------------------------------------------------ audio stack --
+//
+// The same rows, built from the audio registry instead of the video catalogue,
+// so a panel showing an audio clip's effects is the same loop over the same
+// struct. Two differences, both in what is absent rather than what is here:
+//
+//   - **No colours.** Nothing in the audio registry takes one.
+//   - **No keyframes.** `AudioClipEffect` holds parameters and nothing else, so
+//     `animated` and `keyed_here` are always false and a panel must not offer a
+//     stopwatch. Clip gain *is* automatable — that is a different property with
+//     its own rubber band, not part of this stack.
+//
+// The registry already exists, in `cutline::audio`: each effect declares its
+// parameters once with ranges, steps, defaults and units, exactly as the video
+// catalogue does. There was nothing to write here but the join.
+
+[[nodiscard]] std::vector<EffectRow> clip_audio_effects(const core::Project& project,
+                                                        std::string_view clip_id);
+
+[[nodiscard]] std::vector<EffectChoice> addable_audio_effects();
+
+/// Adds an audio effect with the values a new one should have — every parameter
+/// at its registry default, so a freshly added filter is the neutral one until
+/// somebody moves a slider.
+[[nodiscard]] core::Project add_audio_effect(core::Project project, std::string_view clip_id,
+                                             std::string_view type);
+
 }  // namespace cutline::editor
