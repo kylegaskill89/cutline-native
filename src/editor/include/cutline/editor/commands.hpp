@@ -47,6 +47,26 @@ enum class Command {
   NextMarker,
   PreviousMarker,
 
+  // -- linking
+  /// Ties the selected clips together so they move, trim and cut as one. What
+  /// a video clip and the audio that came in with it usually want to be.
+  LinkClips,
+  /// Unties them. Separate commands rather than one that toggles, because a
+  /// mixed selection — some linked, some not — has no honest answer to "which
+  /// way is this toggling", and guessing it would silently unlink what somebody
+  /// meant to gather up.
+  UnlinkClips,
+
+  // -- tracks
+  /// A new empty track. Video goes on top, since that is the layer new overlay
+  /// footage wants; audio goes at the bottom, where the next lane belongs.
+  AddVideoTrack,
+  AddAudioTrack,
+  /// Removes the track the selection is on, and everything on it. Offered only
+  /// when something is selected, because otherwise there is no answer to which
+  /// track is meant — and deleting a track is not a thing to guess at.
+  RemoveTrack,
+
   // -- selection
   SelectAll,
   SelectNone,

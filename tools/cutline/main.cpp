@@ -355,6 +355,13 @@ struct App {
   /// same trap the theme switcher has.
   std::vector<IconButton*> tool_buttons;
 
+  /// The two whose usefulness depends on what is selected, so they can be
+  /// greyed out. Held rather than rebuilt for the same reason as the palette,
+  /// and asked of `can_run` rather than of the selection directly, so the
+  /// button and the command cannot disagree about when an edit is possible.
+  Button* link_button = nullptr;
+  Button* unlink_button = nullptr;
+
   /// The named arrangements, one of which is on screen. Where the panels are
   /// lives in the active one, so a rearrangement is remembered against the
   /// workspace it was made in rather than against the application.
@@ -1340,7 +1347,24 @@ void request_media([[maybe_unused]] App& app) {
 #endif
 }
 
+/// Greys out the commands that have nothing to act on.
+///
+/// Through `can_run` rather than by asking the selection here, so a button is
+/// enabled exactly when pressing it would do something — the two cannot drift,
+/// because there is only one answer.
+void refresh_command_buttons(App& app) {
+  if (app.link_button != nullptr) {
+    app.link_button->set_enabled(cutline::editor::can_run(app.session,
+                                                          cutline::editor::Command::LinkClips));
+  }
+  if (app.unlink_button != nullptr) {
+    app.unlink_button->set_enabled(
+        cutline::editor::can_run(app.session, cutline::editor::Command::UnlinkClips));
+  }
+}
+
 void refresh_timeline(App& app) {
+  refresh_command_buttons(app);
   if (app.timeline == nullptr) return;
 
   request_media(app);
@@ -1888,6 +1912,12 @@ constexpr std::array kTransportKeys{
     Binding{Key::Delete, false, false, cutline::editor::Command::Delete},
     Binding{Key::Delete, false, true, cutline::editor::Command::RippleDelete},
     Binding{Key::Escape, false, false, cutline::editor::Command::SelectNone},
+    // Premiere's Ctrl+L, and shift for the other direction. Not one key that
+    // toggles: a selection with some clips linked and some not has no honest
+    // answer to which way it is going, and guessing would quietly unlink what
+    // somebody meant to gather up.
+    Binding{Key::L, true, false, cutline::editor::Command::LinkClips},
+    Binding{Key::L, true, true, cutline::editor::Command::UnlinkClips},
 };
 
 /// The tool palette, in the order it is drawn and offered.
@@ -2114,6 +2144,43 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
       app->tool_buttons.push_back(&button);
     }
   }
+
+  // Linking, and the track operations. Both act through the command table
+  // rather than calling the model here, so the button and the shortcut cannot
+  // come to mean different things — and `can_run` is what greys them out, which
+  // is the same answer a menu would ask for.
+  auto& link = tools.emplace<Button>("Link", [app] {
+    if (app != nullptr) run_command(*app, cutline::editor::Command::LinkClips);
+  });
+  auto& unlink = tools.emplace<Button>("Unlink", [app] {
+    if (app != nullptr) run_command(*app, cutline::editor::Command::UnlinkClips);
+  });
+  if (app != nullptr) {
+    app->link_button = &link;
+    app->unlink_button = &unlink;
+  }
+
+  // A menu rather than three more buttons, for the reason the project panel's
+  // New menu already found out: the row runs out of width before the commands
+  // run out.
+  auto& track_menu = tools.emplace<Button>("Track");
+  track_menu.set_on_click([app, control = &track_menu] {
+    if (app == nullptr || app->main.host == nullptr) return;
+
+    auto list = std::make_unique<MenuList>(
+        std::vector<std::string>{"Add Video Track", "Add Audio Track", "Remove Track"});
+    list->set_on_choose([app](std::size_t index) {
+      if (app->main.host != nullptr) app->main.host->close_popup();
+      using cutline::editor::Command;
+      switch (index) {
+        case 0: run_command(*app, Command::AddVideoTrack); break;
+        case 1: run_command(*app, Command::AddAudioTrack); break;
+        case 2: run_command(*app, Command::RemoveTrack); break;
+        default: break;
+      }
+    });
+    app->main.host->open_popup(std::move(list), control->bounds());
+  });
 
   tools.emplace<Spacer>();
   auto& readout = tools.emplace<Label>("00:00:00:00");

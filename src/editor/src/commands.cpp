@@ -61,6 +61,42 @@ namespace {
   return mark.has_value() && std::abs(*mark - playhead) < frame * 0.5;
 }
 
+/// The track a clip is on, or null.
+[[nodiscard]] const core::Track* track_of(const core::Project& project,
+                                          std::string_view clip_id) {
+  for (const core::Track& track : project.tracks) {
+    if (std::ranges::any_of(track.clips, [&](const core::Clip& c) { return c.id == clip_id; })) {
+      return &track;
+    }
+  }
+  return nullptr;
+}
+
+/// The track the selection is on, or null when nothing is selected — or when
+/// the selection spans more than one, which has no single answer.
+[[nodiscard]] const core::Track* selected_track(const Session& session) {
+  const std::span<const std::string> selection = session.selection();
+  if (selection.empty()) return nullptr;
+
+  const core::Track* found = nullptr;
+  for (const std::string& id : selection) {
+    const core::Track* track = track_of(session.project(), id);
+    if (track == nullptr) continue;
+    if (found != nullptr && found != track) return nullptr;
+    found = track;
+  }
+  return found;
+}
+
+/// Whether any of the selected clips belongs to a linked group. What decides
+/// there is something to unlink.
+[[nodiscard]] bool any_linked(const Session& session) {
+  return std::ranges::any_of(session.selection(), [&](const std::string& id) {
+    const core::Clip* clip = core::find_clip(session.project(), id);
+    return clip != nullptr && clip->group_id.has_value();
+  });
+}
+
 [[nodiscard]] std::vector<std::string> every_clip(const core::Project& project) {
   std::vector<std::string> ids;
   for (const core::Track& track : project.tracks) {
@@ -91,6 +127,11 @@ std::string_view to_string(Command command) noexcept {
     case Command::GoToEnd: return "go_to_end";
     case Command::PreviousFrame: return "previous_frame";
     case Command::NextFrame: return "next_frame";
+    case Command::LinkClips: return "link_clips";
+    case Command::UnlinkClips: return "unlink_clips";
+    case Command::AddVideoTrack: return "add_video_track";
+    case Command::AddAudioTrack: return "add_audio_track";
+    case Command::RemoveTrack: return "remove_track";
     case Command::Undo: return "undo";
     case Command::Redo: return "redo";
   }
@@ -141,6 +182,19 @@ bool can_run(const Session& session, Command command) {
       // There is always somewhere further to go; a timeline does not end at
       // its last clip, and the playhead is what says where the next one goes.
       return true;
+
+    // Two clips at least, or there is nothing to tie together.
+    case Command::LinkClips:
+      return session.selection().size() >= 2;
+    case Command::UnlinkClips:
+      return any_linked(session);
+
+    // Always: a sequence can always take another lane.
+    case Command::AddVideoTrack:
+    case Command::AddAudioTrack:
+      return true;
+    case Command::RemoveTrack:
+      return selected_track(session) != nullptr;
 
     case Command::Undo:
       return session.can_undo();
@@ -254,6 +308,36 @@ bool run(Session& session, Command command) {
     case Command::NextFrame:
       session.set_playhead(session.playhead() + frame);
       return true;
+
+    case Command::LinkClips: {
+      if (!can_run(session, command)) return false;
+      const std::vector<std::string> ids(session.selection().begin(),
+                                         session.selection().end());
+      return session.apply(core::link_clips(session.project(), ids));
+    }
+
+    case Command::UnlinkClips: {
+      if (!can_run(session, command)) return false;
+      // The whole group, not only what is selected. Unlinking one clip out of
+      // three would leave the other two tied to each other, which is not what
+      // anybody means by taking a link off.
+      const std::vector<std::string> ids = session.selected_group();
+      return session.apply(core::unlink_clips(session.project(), ids));
+    }
+
+    case Command::AddVideoTrack:
+      return session.apply(core::add_video_track(session.project()));
+    case Command::AddAudioTrack:
+      return session.apply(core::add_audio_track(session.project()));
+
+    case Command::RemoveTrack: {
+      const core::Track* track = selected_track(session);
+      if (track == nullptr) return false;
+      // The id by value: `remove_track` is handed the project this points into,
+      // and the vector it walks is rewritten underneath it.
+      const std::string id = track->id;
+      return session.apply(core::remove_track(session.project(), id));
+    }
 
     case Command::Undo:
       return session.undo();

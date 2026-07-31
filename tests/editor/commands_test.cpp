@@ -56,6 +56,8 @@ constexpr std::array kAllCommands{
     Command::ClearMarkers,  Command::NextMarker,    Command::PreviousMarker,
     Command::SelectAll,     Command::SelectNone,    Command::GoToStart,
     Command::GoToEnd,       Command::PreviousFrame, Command::NextFrame,
+    Command::LinkClips,     Command::UnlinkClips,   Command::AddVideoTrack,
+    Command::AddAudioTrack, Command::RemoveTrack,
     Command::Undo,          Command::Redo,
 };
 
@@ -88,7 +90,13 @@ TEST(Commands, WhatCannotRunDoesNothingWhenRunAnyway) {
 TEST(Commands, NothingWorksOnAnEmptyProject) {
   Session session{};
   for (const Command command : kAllCommands) {
-    if (command == Command::NextFrame || command == Command::GoToEnd) continue;
+    // Moving the playhead past the end is always allowed — a timeline does not
+    // stop at its last clip — and adding a track to an empty sequence is how
+    // one is started, so neither is idle here.
+    if (command == Command::NextFrame || command == Command::GoToEnd ||
+        command == Command::AddVideoTrack || command == Command::AddAudioTrack) {
+      continue;
+    }
     EXPECT_FALSE(can_run(session, command)) << to_string(command);
     EXPECT_FALSE(run(session, command)) << to_string(command);
   }
@@ -463,6 +471,126 @@ TEST(Markers, AJumpIsNotAnEditAndDoesNotGoOnTheUndoStack) {
   session.set_playhead(0.0);
   ASSERT_TRUE(run(session, Command::NextMarker));
   EXPECT_EQ(session.project(), before);
+}
+
+// ------------------------------------------------------------- the linking --
+
+TEST(Commands, LinkingNeedsTwoClips) {
+  Session session(sample_project());
+  EXPECT_FALSE(can_run(session, Command::LinkClips)) << "nothing selected";
+
+  session.select({"c1"});
+  EXPECT_FALSE(can_run(session, Command::LinkClips)) << "one clip is not a group";
+
+  session.select({"c1", "c2"});
+  EXPECT_TRUE(can_run(session, Command::LinkClips));
+}
+
+TEST(Commands, LinkedClipsMoveTogether) {
+  Session session(sample_project());
+  session.select({"c1", "c2"});
+  ASSERT_TRUE(run(session, Command::LinkClips));
+
+  // The proof that the link took: an edit aimed at one now reaches both, which
+  // is what `selected_group` is for and what every operation goes through.
+  session.select({"c1"});
+  const std::vector<std::string> group = session.selected_group();
+  EXPECT_EQ(group.size(), 2u);
+}
+
+TEST(Commands, ThereIsNothingToUnlinkUntilSomethingIsLinked) {
+  Session session(sample_project());
+  session.select({"c1", "c2"});
+  EXPECT_FALSE(can_run(session, Command::UnlinkClips));
+
+  ASSERT_TRUE(run(session, Command::LinkClips));
+  EXPECT_TRUE(can_run(session, Command::UnlinkClips));
+}
+
+// Unlinking one clip out of a group takes the whole group apart. Leaving the
+// others tied to each other is not what anybody means by removing a link.
+TEST(Commands, UnlinkingOneMemberUndoesTheWholeGroup) {
+  Session session(sample_project());
+  session.select({"c1", "c2"});
+  ASSERT_TRUE(run(session, Command::LinkClips));
+
+  session.select({"c1"});
+  ASSERT_TRUE(run(session, Command::UnlinkClips));
+
+  EXPECT_FALSE(core::find_clip(session.project(), "c1")->group_id.has_value());
+  EXPECT_FALSE(core::find_clip(session.project(), "c2")->group_id.has_value());
+}
+
+TEST(Commands, LinkingIsOneUndoStep) {
+  Session session(sample_project());
+  const Project before = session.project();
+  session.select({"c1", "c2"});
+  ASSERT_TRUE(run(session, Command::LinkClips));
+
+  ASSERT_TRUE(session.undo());
+  EXPECT_EQ(session.project(), before);
+}
+
+// -------------------------------------------------------------- the tracks --
+
+TEST(Commands, AVideoTrackGoesOnTopAndAnAudioTrackAtTheBottom) {
+  Session session(sample_project());
+  ASSERT_TRUE(run(session, Command::AddVideoTrack));
+  ASSERT_TRUE(run(session, Command::AddAudioTrack));
+
+  const std::vector<Track>& tracks = session.project().tracks;
+  ASSERT_EQ(tracks.size(), 3u);
+  EXPECT_EQ(tracks.front().kind, TrackKind::Video) << "the new video layer is the topmost";
+  EXPECT_EQ(tracks.back().kind, TrackKind::Audio) << "the new lane is the last one";
+}
+
+TEST(Commands, ATrackCanBeAddedToAnEmptySequence) {
+  // Which is how one is started, so this must not need a clip to exist first.
+  Session session{};
+  EXPECT_TRUE(can_run(session, Command::AddVideoTrack));
+  EXPECT_TRUE(run(session, Command::AddVideoTrack));
+  EXPECT_EQ(session.project().tracks.size(), 1u);
+}
+
+TEST(Commands, RemovingATrackNeedsToKnowWhichOne) {
+  Session session(sample_project());
+  EXPECT_FALSE(can_run(session, Command::RemoveTrack)) << "nothing says which track";
+
+  session.select({"c1"});
+  EXPECT_TRUE(can_run(session, Command::RemoveTrack));
+}
+
+TEST(Commands, RemovingATrackTakesItsClipsWithIt) {
+  Session session(sample_project());
+  session.select({"c1"});
+  ASSERT_TRUE(run(session, Command::RemoveTrack));
+
+  EXPECT_TRUE(session.project().tracks.empty());
+  EXPECT_EQ(clip_count(session.project()), 0u);
+}
+
+// A selection spanning two tracks has no single answer, and deleting a track is
+// not something to guess at.
+TEST(Commands, ASelectionAcrossTwoTracksNamesNoTrack) {
+  Project project = sample_project();
+  Track second{.id = "v2", .kind = TrackKind::Video};
+  second.clips = {Clip{.id = "c3", .media_id = "m1", .source_in = 0.0, .source_out = 4.0,
+                       .start = 0.0}};
+  project.tracks.push_back(std::move(second));
+
+  Session session(std::move(project));
+  session.select({"c1", "c3"});
+  EXPECT_FALSE(can_run(session, Command::RemoveTrack));
+  EXPECT_FALSE(run(session, Command::RemoveTrack));
+}
+
+TEST(Commands, RemovingATrackDropsTheSelectionThatNamedIt) {
+  // The clips are gone, so a selection still holding their ids would be a
+  // reference to nothing — which every later command would have to check for.
+  Session session(sample_project());
+  session.select({"c1"});
+  ASSERT_TRUE(run(session, Command::RemoveTrack));
+  EXPECT_TRUE(session.selection().empty());
 }
 
 }  // namespace

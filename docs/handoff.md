@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1675** under the `ui` preset; 1412 of them need no GPU, no window, no FFmpeg |
+| Tests | **1686** under the `ui` preset; 1423 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1412 of the 1675 tests.
+binding between them — 1423 of the 1686 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -121,7 +121,7 @@ tools    executables.
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1412 tests run with
+place that knows both, and it is pure too. That is what makes 1423 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -264,7 +264,8 @@ here.**
 
 | | Exists | Missing |
 |---|---|---|
-| **Link/unlink, add/remove/rename track** | all in core | no button, no shortcut, no command |
+| **Renaming a track** | `set_track_label` in core | no way to type one in |
+| **Selecting more than one clip** | the session and every command take a list | the timeline selects one at a time, so `Link` is only reachable through Select All |
 | **Snapshot to PNG** | the whole path (`render_frame` does it) | no button |
 | **Fade handles** | fades work, through inspector sliders | not draggable on the clip |
 
@@ -288,8 +289,11 @@ here.**
 
 ### Suggested order
 
-1. **Link/unlink and the track operations** — all in core, none of them bound to
-   anything. Small, and the command table is where they go.
+1. **Selecting more than one clip on the timeline.** Shift-click, and a
+   rubber-band over several. Everything above it already takes a list — the
+   session, `selected_group`, every command — so this is the view's selection
+   model rather than new machinery, and it is what makes linking usable: with
+   one clip at a time, `Link` can only be reached through Select All.
 2. Anything in B, by appetite. Scopes and the VU meter are the two that need new
    machinery rather than new wiring.
 
