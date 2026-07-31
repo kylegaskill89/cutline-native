@@ -199,6 +199,14 @@ struct TimelineBlock {
   /// reason the envelope is, and more so: these are pixels.
   std::shared_ptr<const Filmstrip> filmstrip;
 
+  /// How long the clip fades up at its head and down at its tail, in seconds.
+  ///
+  /// Alpha on a video clip and gain on an audio one, which is the model's rule
+  /// and not something the drawing has to know: either way it is the clip
+  /// arriving or leaving over that long.
+  double fade_in = 0.0;
+  double fade_out = 0.0;
+
   /// Where this block starts in its source, and how fast it runs through it.
   ///
   /// The envelope is the whole source, so drawing needs to know which part of
@@ -380,6 +388,13 @@ enum class DragMode {
   /// follow — but it is reported the same way, because "the timeline was used"
   /// is better as one thing for a caller to handle than as two.
   Razor,
+  /// Pulling a fade longer or shorter from the handle at a clip's top corner.
+  ///
+  /// The handle sits at the *end* of the fade rather than at the corner, so it
+  /// slides along the top edge as the fade grows — which is what makes the
+  /// gesture readable: the thing being dragged is where the fade finishes.
+  FadeIn,
+  FadeOut,
   /// Sweeping a rectangle over empty track to gather up everything it touches.
   ///
   /// It starts on a press that hit no clip, which was previously the gesture
@@ -444,6 +459,9 @@ struct TimelineEdit {
   /// `GainLevel` only: the level the band was dragged to, as a linear
   /// multiplier.
   double gain = 1.0;
+
+  /// `FadeIn` and `FadeOut` only: how long the fade ended up, in seconds.
+  double fade = 0.0;
 
   /// `GainPointDrag` only: where the point started and where it ended up.
   ///
@@ -594,6 +612,11 @@ class TimelineView : public Widget {
   /// has to be able to catch a clip wider than the screen, which no rectangle
   /// could ever enclose.
   [[nodiscard]] std::vector<BlockRef> blocks_touching(const Rect& area) const;
+
+  /// The grab handle for one of a clip's fades, sitting on the top edge at the
+  /// point the fade finishes. Empty when the block is too small to hold one.
+  [[nodiscard]] Rect fade_handle_rect(std::size_t track, std::size_t block,
+                                      bool out_edge) const;
 
   /// The strip of a block its filmstrip is drawn in. Empty when the block has
   /// no frames yet, or is too small to show one.

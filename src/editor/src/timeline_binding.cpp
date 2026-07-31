@@ -187,6 +187,8 @@ ui::TimelineModel timeline_model(const core::Project& project,
           .gain = std::move(band),
           .waveform = std::move(waveform),
           .filmstrip = std::move(filmstrip),
+          .fade_in = clip.fade_in,
+          .fade_out = clip.fade_out,
           // What turns a position along the block into a position in the
           // source's envelope. Taken through the core's accessors so a clip
           // with no explicit speed reads as 1 rather than 0.
@@ -201,18 +203,29 @@ ui::TimelineModel timeline_model(const core::Project& project,
 }
 
 core::Project apply_timeline_edit(core::Project project, std::string_view clip_id,
-                                  const ui::TimelineEdit& edit) {
+                                  const ui::TimelineEdit& edit,
+                                  std::span<const std::string> selection) {
   const core::Clip* clip = core::find_clip(project, clip_id);
   if (clip == nullptr) return project;
 
   const std::array<std::string, 1> ids{std::string(clip_id)};
 
   switch (edit.mode) {
-    case ui::DragMode::Move:
-      // Through move_clips rather than by assignment, so the whole linked
-      // group travels and the clamp against the start of the timeline is the
-      // model's rather than a second opinion about it.
-      return core::move_clips(std::move(project), ids, edit.result.start - clip->start);
+    case ui::DragMode::Move: {
+      // Everything selected, when the clip being dragged is one of them.
+      // Selecting several clips and having only the one under the pointer move
+      // makes the selection a decoration.
+      //
+      // `move_clips` takes the whole set at once rather than being called per
+      // clip, which is what keeps the clamp against the start of the timeline a
+      // single answer: one clip stopped at zero has to stop the rest with it, or
+      // the shape of the selection changes as it hits the edge.
+      const bool carries_selection =
+          std::ranges::find(selection, clip_id) != selection.end();
+      const std::span<const std::string> moving =
+          carries_selection ? selection : std::span<const std::string>{ids};
+      return core::move_clips(std::move(project), moving, edit.result.start - clip->start);
+    }
 
     case ui::DragMode::TrimStart:
       return core::set_clip_edge(std::move(project), clip_id, core::ClipEdge::In,
@@ -267,6 +280,11 @@ core::Project apply_timeline_edit(core::Project project, std::string_view clip_i
       // the caller having to know which happened.
       return core::move_gain_keyframe(std::move(project), clip_id, edit.gain_from.t,
                                       edit.gain_to.t, edit.gain_to.v);
+
+    case ui::DragMode::FadeIn:
+      return core::set_clip_fade(std::move(project), clip_id, core::ClipEdge::In, edit.fade);
+    case ui::DragMode::FadeOut:
+      return core::set_clip_fade(std::move(project), clip_id, core::ClipEdge::Out, edit.fade);
 
     case ui::DragMode::GainSegment:
       // Upserts rather than moves: a segment drag changes levels and not times,

@@ -2276,8 +2276,12 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     const auto id = cutline::editor::block_clip_id(app->timeline->model(), edit.block);
     if (!id.has_value()) return;
 
+    // The selection goes with it, so a move carries every clip that is
+    // highlighted rather than only the one under the pointer. `selected_group`
+    // rather than the raw selection, so linked partners travel too.
+    const std::vector<std::string> carried = app->session.selected_group();
     app->session.apply(
-        cutline::editor::apply_timeline_edit(app->session.project(), *id, edit));
+        cutline::editor::apply_timeline_edit(app->session.project(), *id, edit, carried));
     // Rebuilt whether or not the edit applied: when it did not, the view is
     // showing where the pointer went rather than where the clip is allowed to
     // be, and it has to snap back.

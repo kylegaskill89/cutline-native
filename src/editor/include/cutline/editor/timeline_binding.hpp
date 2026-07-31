@@ -81,9 +81,19 @@ struct TimelineMedia {
 /// Returns the project unchanged when the edit cannot apply — clamped against
 /// a neighbour, or past the end of the source — which is what every core
 /// operation does and what lets the caller skip the undo entry.
+/// `selection` is every clip the gesture should carry with it, which matters for
+/// exactly one mode: a move. Dragging one clip of a selection moves the whole
+/// selection, because that is what selecting several of them was for — while a
+/// trim, a slip and a fade stay on the clip whose edge or handle was grabbed,
+/// which is the one being aimed at.
+///
+/// Empty, or not containing `clip_id`, means the gesture applies to that clip
+/// alone — so a drag on something outside the selection does not sweep up
+/// whatever happened to be highlighted elsewhere.
 [[nodiscard]] core::Project apply_timeline_edit(core::Project project,
                                                 std::string_view clip_id,
-                                                const ui::TimelineEdit& edit);
+                                                const ui::TimelineEdit& edit,
+                                                std::span<const std::string> selection = {});
 
 /// Flips one of a track's header switches.
 ///

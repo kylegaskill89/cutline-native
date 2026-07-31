@@ -30,6 +30,11 @@ constexpr double kDragThreshold = 3.0;
 /// How close, in pixels, a dragged edge has to come before it sticks.
 constexpr double kSnapDistance = 10.0;
 
+/// The square grabbed to pull a fade. Small, because it sits on the top edge
+/// over the clip's own body and a large one would swallow the trim handle it
+/// shares a corner with.
+constexpr double kFadeHandle = 9.0;
+
 /// The grabbable strip at each end of a clip. Never more than a third of it,
 /// so a short clip can still be moved rather than being all handle.
 constexpr double kTrimHandle = 8.0;
@@ -353,6 +358,24 @@ Rect TimelineView::transition_rect(std::size_t track, std::size_t block) const {
   return Rect{centre - half, row.y, half * 2.0, row.height};
 }
 
+Rect TimelineView::fade_handle_rect(std::size_t track, std::size_t block,
+                                    bool out_edge) const {
+  if (track >= model_.tracks.size()) return {};
+  const std::vector<TimelineBlock>& blocks = model_.tracks[track].blocks;
+  if (block >= blocks.size()) return {};
+
+  const Rect box = block_rect(track, block);
+  // A clip too small to hold two handles and something between them would be
+  // all handle, and could then not be moved at all.
+  if (box.width < kFadeHandle * 3.0 || box.height < kFadeHandle * 2.0) return {};
+
+  const TimelineBlock& clip = blocks[block];
+  const double length = out_edge ? clip.fade_out : clip.fade_in;
+  const double along = std::min(scale_.width_of(length), box.width * 0.5);
+  const double x = out_edge ? box.right() - along : box.x + along;
+  return Rect{x - kFadeHandle * 0.5, box.y, kFadeHandle, kFadeHandle};
+}
+
 Rect TimelineView::filmstrip_area(std::size_t track, std::size_t block) const {
   if (track >= model_.tracks.size()) return {};
   const std::vector<TimelineBlock>& blocks = model_.tracks[track].blocks;
@@ -571,7 +594,18 @@ DragMode TimelineView::zone_at(double x, double y) const {
   // and the other tools each mean one specific thing everywhere on a clip,
   // which is what makes them usable without hunting for a zone.
   if (tool_ == Tool::Selection) {
-    // A point first: it sits on the line, so a press near both means the point,
+    // The fade handles first. With no fade set they sit exactly on the clip's
+    // corners, which is where the trim handles are, and a corner that trimmed
+    // instead of fading would leave the fades unreachable — where the trims are
+    // still reachable everywhere below the handle.
+    if (fade_handle_rect(hit->track, hit->block, false).contains(x, y)) {
+      return DragMode::FadeIn;
+    }
+    if (fade_handle_rect(hit->track, hit->block, true).contains(x, y)) {
+      return DragMode::FadeOut;
+    }
+
+    // A point next: it sits on the line, so a press near both means the point,
     // which is the more precise of the two and the one being aimed at.
     if (gain_point_at(x, y).has_value()) return DragMode::GainPointDrag;
     if (over_gain_band(x, y)) {
@@ -843,6 +877,29 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
             painter.fill(dot, kGainPointRadius, Fill::solid(line));
           }
         }
+        painter.pop_clip();
+      }
+
+      // The fades, as a ramp down to the corner the clip arrives or leaves at.
+      //
+      // Drawn even when the fade is zero, because the handle is what says the
+      // gesture exists — a control that only appears once you have used it is
+      // one nobody finds. At zero the ramp has no width and only the handle
+      // shows.
+      for (const bool out_edge : {false, true}) {
+        const Rect grip = fade_handle_rect(track, i, out_edge);
+        if (grip.empty()) continue;
+
+        const double length = out_edge ? clip.fade_out : clip.fade_in;
+        painter.push_clip(box, style.corner_radius);
+        if (length > 0.0) {
+          // From the far corner up to where the fade finishes: the shape of the
+          // level coming up or going down, which is what a fade is.
+          const double tip = grip.x + grip.width * 0.5;
+          const double corner = out_edge ? box.right() : box.x;
+          painter.line(corner, box.bottom() - 1.0, tip, box.y + 1.0, style.text, 1.0);
+        }
+        painter.fill(grip.inset(1.0), 2.0, Fill::solid(style.text));
         painter.pop_clip();
       }
 
@@ -1256,6 +1313,27 @@ void TimelineView::drag_to(double x) {
       refresh_bounds();
       return;
 
+    case DragMode::FadeIn:
+    case DragMode::FadeOut: {
+      // How far the handle is from the edge it belongs to. Not snapped to other
+      // clips: a fade is a length rather than a position, and sticking it to a
+      // neighbour's edge would mean nothing.
+      const Rect box = block_rect(drag_->track, drag_->block);
+      const double from_edge =
+          mode_ == DragMode::FadeIn ? x - box.x : box.right() - x;
+      const double seconds = core::snap_to_frame(
+          std::max(0.0, from_edge / scale_.pixels_per_second), model_.fps);
+      // Never more than the clip: the model clamps the pair together anyway, and
+      // a handle that could be dragged past the far end would spring back.
+      const double longest = origin_.duration();
+      if (mode_ == DragMode::FadeIn) {
+        blocks[drag_->block].fade_in = std::clamp(seconds, 0.0, longest);
+      } else {
+        blocks[drag_->block].fade_out = std::clamp(seconds, 0.0, longest);
+      }
+      return;
+    }
+
     case DragMode::Slip:
       // Nothing moves. The clip stays exactly where it is — that is what a slip
       // means — and the distance dragged is reported at the end. There is
@@ -1356,11 +1434,21 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
     return true;
   }
 
-  select(hit);
-  if (on_select_) {
-    const std::vector<BlockRef> chosen =
-        hit.has_value() ? std::vector<BlockRef>{*hit} : std::vector<BlockRef>{};
-    on_select_(chosen);
+  // A press on a clip that is *already* selected leaves the selection alone.
+  //
+  // Without this, taking hold of one clip of a selection to drag it threw the
+  // rest away before the drag began — so a multiple selection could be made and
+  // never moved, which is most of what one is for. Pressing something outside
+  // the selection still replaces it, which is how a selection is abandoned.
+  const bool already_selected =
+      hit.has_value() && model_.tracks[hit->track].blocks[hit->block].selected;
+  if (!already_selected) {
+    select(hit);
+    if (on_select_) {
+      const std::vector<BlockRef> chosen =
+          hit.has_value() ? std::vector<BlockRef>{*hit} : std::vector<BlockRef>{};
+      on_select_(chosen);
+    }
   }
 
   if (hit.has_value()) {
@@ -1489,6 +1577,21 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
 bool TimelineView::on_mouse_up(const MouseEvent& event) {
   if (event.button != MouseButton::Left || mode_ == DragMode::None) return false;
 
+  // A press on an already-selected clip that turned out not to be a drag
+  // collapses the selection onto it.
+  //
+  // The press had to leave the selection alone in case a drag was coming; this
+  // is where it turns out none was. Without it there is no way back from a
+  // selection of several to one of them without clicking away first.
+  if (!moved_ && drag_.has_value() && mode_ == DragMode::Move &&
+      !event.modifiers.shift && selection().size() > 1) {
+    select(drag_);
+    if (on_select_) {
+      const std::vector<BlockRef> chosen{*drag_};
+      on_select_(chosen);
+    }
+  }
+
   // A sweep has already reported everything it gathered, on every move. There
   // is no edit at the end of it — nothing about the project changed.
   if (mode_ == DragMode::Marquee) {
@@ -1526,6 +1629,22 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
     moved_ = false;
     gain_segment_.clear();
     gain_segment_origin_.clear();
+    return true;
+  }
+
+  if (moved_ && drag_.has_value() && on_edit_ &&
+      (mode_ == DragMode::FadeIn || mode_ == DragMode::FadeOut)) {
+    const std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
+    if (drag_->block < blocks.size()) {
+      const TimelineBlock& clip = blocks[drag_->block];
+      on_edit_(TimelineEdit{.block = *drag_,
+                            .mode = mode_,
+                            .result = clip,
+                            .fade = mode_ == DragMode::FadeIn ? clip.fade_in : clip.fade_out});
+    }
+    mode_ = DragMode::None;
+    drag_.reset();
+    moved_ = false;
     return true;
   }
 

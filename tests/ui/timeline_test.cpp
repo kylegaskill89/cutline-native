@@ -502,7 +502,9 @@ TEST(Timeline, TheEdgesOfAClipTrimAndTheMiddleMoves) {
   // scrolled out cannot be hit tested there at all.
   const Rect box = fixture.view->block_rect(1, 0);
   ASSERT_LT(box.right(), fixture.view->time_area().right());
-  const double y = box.y + 5.0;
+  // Below the fade handles, which own the top of each corner. See
+  // `Fades.TheCornerFadesAndEverythingBelowItTrims`.
+  const double y = box.y + box.height * 0.5;
 
   EXPECT_EQ(fixture.view->zone_at(box.x + 2.0, y), DragMode::TrimStart);
   EXPECT_EQ(fixture.view->zone_at(box.right() - 2.0, y), DragMode::TrimEnd);
@@ -1839,6 +1841,27 @@ TEST(GainBand, DraggingAStretchKeepsItsShape) {
   EXPECT_EQ(last->gain_moved.size(), 2u);
 }
 
+// The complaint that prompted this: dragging a stretch looked like it moved the
+// whole band. With three points it plainly does not — the far one stays put.
+TEST(GainBand, AStretchLeavesThePointsOutsideItAlone) {
+  BandFixture fixture{GainBand{.points = {{1.0, 1.0}, {3.0, 0.5}, {6.0, 0.75}}}};
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  // Between the second and third points, at 4.5s — halfway along the ramp from
+  // 0.5 at 3s to 0.75 at 6s is 0.625.
+  const double x = box.x + 450.0;
+  const double y = fixture.view->gain_to_y(1, 0, 0.625);
+  fixture.host->mouse_down(press(x, y));
+  fixture.host->mouse_move(press(x, y + 10.0));
+  fixture.host->mouse_up(press(x, y + 10.0));
+
+  const std::vector<GainPoint>& points = fixture.band().points;
+  ASSERT_EQ(points.size(), 3u);
+  EXPECT_DOUBLE_EQ(points[0].v, 1.0) << "the point outside the stretch moved";
+  EXPECT_LT(points[1].v, 0.5);
+  EXPECT_LT(points[2].v, 0.75);
+}
+
 TEST(GainBand, DraggingTheFlatRunBeforeTheFirstPointCarriesOnlyThatPoint) {
   BandFixture fixture{GainBand{.points = {{4.0, 1.0}, {6.0, 0.5}}}};
   std::optional<TimelineEdit> last;
@@ -2316,6 +2339,131 @@ TEST(Filmstrip, ScrollingSlidesTheStripRatherThanReshufflingIt) {
   }
 }
 
+// ---------------------------------------------------------- the fade handles --
+
+TEST(Fades, TheHandleSitsWhereTheFadeFinishes) {
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].fade_in = 1.0;  // one second at 100 px/s
+  Fixture fixture;
+  fixture.view->set_model(model);
+  fixture.host->resize(Rect{0.0, 0.0, 1000.0, 400.0}, flat_context());
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  const Rect grip = fixture.view->fade_handle_rect(1, 0, false);
+  ASSERT_FALSE(grip.empty());
+
+  EXPECT_NEAR(grip.x + grip.width * 0.5, box.x + 100.0, 0.01);
+  EXPECT_NEAR(grip.y, box.y, 0.01) << "it rides the top edge";
+}
+
+TEST(Fades, WithNoFadeTheHandleIsAtTheCorner) {
+  const Fixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+
+  const Rect in = fixture.view->fade_handle_rect(1, 0, false);
+  const Rect out = fixture.view->fade_handle_rect(1, 0, true);
+  ASSERT_FALSE(in.empty());
+  ASSERT_FALSE(out.empty());
+  EXPECT_NEAR(in.x + in.width * 0.5, box.x, 0.01);
+  EXPECT_NEAR(out.x + out.width * 0.5, box.right(), 0.01);
+}
+
+// The handles share a corner with the trim handles, so one of them has to win
+// there. It is the fade: the trims are reachable everywhere below it, and a
+// corner that trimmed instead would leave the fades unreachable at zero.
+TEST(Fades, TheCornerFadesAndEverythingBelowItTrims) {
+  const Fixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+
+  EXPECT_EQ(fixture.view->zone_at(box.x + 1.0, box.y + 2.0), DragMode::FadeIn);
+  EXPECT_EQ(fixture.view->zone_at(box.right() - 1.0, box.y + 2.0), DragMode::FadeOut);
+  EXPECT_EQ(fixture.view->zone_at(box.x + 1.0, box.y + box.height * 0.5), DragMode::TrimStart);
+  EXPECT_EQ(fixture.view->zone_at(box.right() - 1.0, box.y + box.height * 0.5),
+            DragMode::TrimEnd);
+}
+
+TEST(Fades, DraggingTheHandleInwardsMakesTheFadeLonger) {
+  Fixture fixture;
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.x + 1.0, box.y + 2.0));
+  fixture.host->mouse_move(press(box.x + 150.0, box.y + 2.0));
+  fixture.host->mouse_up(press(box.x + 150.0, box.y + 2.0));
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::FadeIn);
+  EXPECT_NEAR(last->fade, 1.5, 1.0 / kFps);
+  EXPECT_NEAR(fixture.view->model().tracks[1].blocks[0].fade_in, 1.5, 1.0 / kFps);
+}
+
+TEST(Fades, TheOutFadeIsMeasuredFromTheFarEnd) {
+  Fixture fixture;
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.right() - 1.0, box.y + 2.0));
+  fixture.host->mouse_move(press(box.right() - 200.0, box.y + 2.0));
+  fixture.host->mouse_up(press(box.right() - 200.0, box.y + 2.0));
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::FadeOut);
+  EXPECT_NEAR(last->fade, 2.0, 1.0 / kFps);
+}
+
+// Dragging the wrong way is a fade of nothing rather than a negative one.
+TEST(Fades, AHandleDraggedPastItsOwnEdgeStopsAtNothing) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+
+  fixture.host->mouse_down(press(box.x + 1.0, box.y + 2.0));
+  fixture.host->mouse_move(press(box.x - 300.0, box.y + 2.0));
+
+  EXPECT_DOUBLE_EQ(fixture.view->model().tracks[1].blocks[0].fade_in, 0.0);
+}
+
+TEST(Fades, AFadeNeverOutgrowsItsClip) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);  // 0s to 5s
+
+  fixture.host->mouse_down(press(box.x + 1.0, box.y + 2.0));
+  fixture.host->mouse_move(press(box.x + 4000.0, box.y + 2.0));
+
+  EXPECT_LE(fixture.view->model().tracks[1].blocks[0].fade_in, 5.0);
+}
+
+TEST(Fades, TheHandleIsDrawnEvenWithNoFadeSet) {
+  // A control that only appears once it has been used is one nobody finds.
+  const Fixture fixture;
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+
+  const Rect grip = fixture.view->fade_handle_rect(1, 0, false);
+  ASSERT_FALSE(grip.empty());
+  const bool drew_it = std::ranges::any_of(painter.calls(), [&](const DrawCall& call) {
+    return call.kind == DrawCall::Kind::Fill &&
+           std::abs(call.bounds.x - grip.inset(1.0).x) < 0.01 &&
+           std::abs(call.bounds.width - grip.inset(1.0).width) < 0.01;
+  });
+  EXPECT_TRUE(drew_it);
+}
+
+TEST(Fades, AClipTooSmallToHoldHandlesHasNone) {
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].end = 0.1;  // ten pixels at 100 px/s
+  Fixture fixture;
+  fixture.view->set_model(model);
+  fixture.host->resize(Rect{0.0, 0.0, 1000.0, 400.0}, flat_context());
+
+  EXPECT_TRUE(fixture.view->fade_handle_rect(1, 0, false).empty());
+  // And the clip can still be moved, which is what two handles on a ten-pixel
+  // block would have swallowed.
+  const Rect box = fixture.view->block_rect(1, 0);
+  EXPECT_EQ(fixture.view->zone_at(box.x + box.width * 0.5, box.y + 2.0), DragMode::Move);
+}
+
 // -------------------------------------------------- selecting more than one --
 //
 // Everything above the timeline has always taken a list — the session, the
@@ -2367,18 +2515,79 @@ TEST(MultiSelect, ShiftClickingDoesNotStartADrag) {
   EXPECT_DOUBLE_EQ(fixture.view->model().tracks[1].blocks[0].start, before.start);
 }
 
-TEST(MultiSelect, APlainClickGoesBackToOneClip) {
+// Taking hold of one clip of a selection must not throw the rest away, or a
+// multiple selection can be made and never moved — which is most of what one is
+// for. This was the bug: the group vanished on the press, before the drag.
+TEST(MultiSelect, PressingAnAlreadySelectedClipKeepsTheSelection) {
   Fixture fixture;
   const Rect first = fixture.view->block_rect(1, 0);
   const Rect second = fixture.view->block_rect(1, 1);
 
-  fixture.host->mouse_down(press(first.x + 10.0, first.y + 10.0));
-  fixture.host->mouse_up(press(first.x + 10.0, first.y + 10.0));
-  fixture.host->mouse_down(shift_press(second.x + 10.0, second.y + 10.0));
-  fixture.host->mouse_up(shift_press(second.x + 10.0, second.y + 10.0));
+  fixture.host->mouse_down(press(first.x + 10.0, first.y + first.height * 0.5));
+  fixture.host->mouse_up(press(first.x + 10.0, first.y + first.height * 0.5));
+  fixture.host->mouse_down(shift_press(second.x + 10.0, second.y + second.height * 0.5));
+  fixture.host->mouse_up(shift_press(second.x + 10.0, second.y + second.height * 0.5));
+  ASSERT_EQ(fixture.view->selection().size(), 2u);
 
-  fixture.host->mouse_down(press(first.x + 10.0, first.y + 10.0));
+  // Press the first one again, as a drag would.
+  fixture.host->mouse_down(press(first.x + 40.0, first.y + first.height * 0.5));
+  EXPECT_EQ(fixture.view->selection().size(), 2u) << "the press threw the selection away";
+  EXPECT_EQ(fixture.view->drag_mode(), DragMode::Move) << "and it still starts a move";
+}
+
+TEST(MultiSelect, PressingOutsideTheSelectionReplacesIt) {
+  Fixture fixture;
+  const Rect first = fixture.view->block_rect(1, 0);
+  const Rect second = fixture.view->block_rect(1, 1);
+  const Rect other = fixture.view->block_rect(0, 0);
+
+  fixture.host->mouse_down(press(first.x + 10.0, first.y + first.height * 0.5));
+  fixture.host->mouse_up(press(first.x + 10.0, first.y + first.height * 0.5));
+  fixture.host->mouse_down(shift_press(second.x + 10.0, second.y + second.height * 0.5));
+  fixture.host->mouse_up(shift_press(second.x + 10.0, second.y + second.height * 0.5));
+
+  fixture.host->mouse_down(press(other.x + 10.0, other.y + other.height * 0.5));
+  EXPECT_EQ(fixture.view->selection(), (std::vector<BlockRef>{{0, 0}}));
+}
+
+// Clicking a selected clip and letting go without dragging collapses onto it.
+// The press has to leave the selection alone in case a drag is coming; this is
+// where it turns out none was, and it is the way back from several to one.
+TEST(MultiSelect, AClickThatWasNotADragCollapsesOntoTheClip) {
+  Fixture fixture;
+  const Rect first = fixture.view->block_rect(1, 0);
+  const Rect second = fixture.view->block_rect(1, 1);
+  const double y = first.y + first.height * 0.5;
+
+  fixture.host->mouse_down(press(first.x + 10.0, y));
+  fixture.host->mouse_up(press(first.x + 10.0, y));
+  fixture.host->mouse_down(shift_press(second.x + 10.0, y));
+  fixture.host->mouse_up(shift_press(second.x + 10.0, y));
+  ASSERT_EQ(fixture.view->selection().size(), 2u);
+
+  fixture.host->mouse_down(press(first.x + 40.0, y));
+  fixture.host->mouse_up(press(first.x + 40.0, y));
   EXPECT_EQ(fixture.view->selection(), (std::vector<BlockRef>{{1, 0}}));
+}
+
+// But a drag keeps the group, which is the whole point of selecting several.
+TEST(MultiSelect, ADragKeepsTheSelectionItWasCarrying) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect first = fixture.view->block_rect(1, 0);
+  const Rect second = fixture.view->block_rect(1, 1);
+  const double y = first.y + first.height * 0.5;
+
+  fixture.host->mouse_down(press(first.x + 10.0, y));
+  fixture.host->mouse_up(press(first.x + 10.0, y));
+  fixture.host->mouse_down(shift_press(second.x + 10.0, y));
+  fixture.host->mouse_up(shift_press(second.x + 10.0, y));
+
+  fixture.host->mouse_down(press(first.x + 40.0, y));
+  fixture.host->mouse_move(press(first.x + 140.0, y));
+  fixture.host->mouse_up(press(first.x + 140.0, y));
+
+  EXPECT_EQ(fixture.view->selection().size(), 2u);
 }
 
 // ------------------------------------------------------------- the marquee --

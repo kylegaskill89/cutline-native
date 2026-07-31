@@ -208,6 +208,17 @@ TEST(Binding, SoloingOneAudioTrackMutesTheOthers) {
                        .result = ui::TimelineBlock{.start = start, .end = end}});
 }
 
+/// The same, with a selection the gesture should carry along.
+[[nodiscard]] Project drag_selected(const Project& project, std::string_view clip_id,
+                                    std::span<const std::string> selection, double start,
+                                    double end) {
+  return apply_timeline_edit(
+      project, clip_id,
+      ui::TimelineEdit{.mode = ui::DragMode::Move,
+                       .result = ui::TimelineBlock{.start = start, .end = end}},
+      selection);
+}
+
 TEST(Binding, MovingABlockMovesTheClip) {
   const Project before = sample_project();
   const Project after = drag(before, "title", ui::DragMode::Move, 9.0, 12.0);
@@ -632,6 +643,76 @@ TEST(Binding, WhatIsDrawnAfterAVolumeEditIsWhatWasAskedFor) {
   ASSERT_EQ(points.size(), 1u);
   EXPECT_DOUBLE_EQ(points[0].t, 4.0);
   EXPECT_DOUBLE_EQ(points[0].v, 0.9);
+}
+
+// ------------------------------------------------- moving a whole selection --
+
+TEST(Binding, MovingOneOfASelectionMovesAllOfIt) {
+  // Selecting several clips and having only the one under the pointer move
+  // makes the selection a decoration.
+  const std::vector<std::string> selection{"c1", "c2"};
+  // c1 runs 0 to 5, so landing it at 3 is a move of three seconds.
+  const Project after = drag_selected(sample_project(), "c1", selection, 3.0, 8.0);
+
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "c1")->start, 3.0);
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "c2")->start, 8.0) << "it started at 5";
+}
+
+TEST(Binding, MovingAClipOutsideTheSelectionLeavesTheSelectionAlone) {
+  // Dragging something that is not selected must not sweep up whatever happened
+  // to be highlighted elsewhere.
+  const std::vector<std::string> selection{"c2"};
+  const Project after = drag_selected(sample_project(), "c1", selection, 3.0, 8.0);
+
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "c1")->start, 3.0);
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "c2")->start, 5.0) << "it should not have moved";
+}
+
+// One clip stopped at the start of the timeline has to stop the rest with it,
+// or the shape of the selection changes as it hits the edge.
+TEST(Binding, ASelectionKeepsItsShapeAgainstTheStartOfTheTimeline) {
+  const std::vector<std::string> selection{"c1", "c2"};
+  // c1 already starts at zero, so a move backwards is refused for the whole set
+  // rather than for c1 alone — which would have slid c2 under it.
+  const Project after = drag_selected(sample_project(), "c1", selection, -10.0, -5.0);
+
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "c1")->start, 0.0);
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "c2")->start, 5.0) << "the gap between them changed";
+}
+
+TEST(Binding, WithNoSelectionOnlyTheDraggedClipMoves) {
+  const Project after = drag(sample_project(), "c1", ui::DragMode::Move, 3.0, 8.0);
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "c1")->start, 3.0);
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "c2")->start, 5.0);
+}
+
+// -------------------------------------------------------- the fade handles --
+
+TEST(Binding, ABlockCarriesItsFades) {
+  Project project = core::set_clip_fade(sample_project(), "c1", core::ClipEdge::In, 1.5);
+  project = core::set_clip_fade(std::move(project), "c1", core::ClipEdge::Out, 0.5);
+
+  const ui::TimelineModel model = timeline_model(project);
+  EXPECT_DOUBLE_EQ(model.tracks[1].blocks[0].fade_in, 1.5);
+  EXPECT_DOUBLE_EQ(model.tracks[1].blocks[0].fade_out, 0.5);
+}
+
+TEST(Binding, DraggingAFadeHandleSetsTheFade) {
+  const Project after = apply_timeline_edit(
+      sample_project(), "c1", ui::TimelineEdit{.mode = ui::DragMode::FadeIn, .fade = 1.25});
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "c1")->fade_in, 1.25);
+
+  const Project out = apply_timeline_edit(
+      sample_project(), "c1", ui::TimelineEdit{.mode = ui::DragMode::FadeOut, .fade = 2.0});
+  EXPECT_DOUBLE_EQ(core::find_clip(out, "c1")->fade_out, 2.0);
+}
+
+// The model owns the rule that the two fades together cannot exceed the clip;
+// the handle is a convenience, not a second opinion about it.
+TEST(Binding, TheModelStillBoundsAFadeDraggedTooFar) {
+  const Project after = apply_timeline_edit(
+      sample_project(), "c1", ui::TimelineEdit{.mode = ui::DragMode::FadeIn, .fade = 500.0});
+  EXPECT_LE(core::find_clip(after, "c1")->fade_in, core::clip_duration(*core::find_clip(after, "c1")));
 }
 
 // ---------------------------------------------------------- the waveform --

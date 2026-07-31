@@ -29,7 +29,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1704** under the `ui` preset; 1441 of them need no GPU, no window, no FFmpeg |
+| Tests | **1724** under the `ui` preset; 1461 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +50,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1441 of the 1704 tests.
+binding between them — 1461 of the 1724 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -121,7 +121,7 @@ tools    executables.
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1441 tests run with
+place that knows both, and it is pure too. That is what makes 1461 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -266,7 +266,6 @@ here.**
 |---|---|---|
 | **Renaming a track** | `set_track_label` in core | no way to type one in |
 | **Snapshot to PNG** | the whole path (`render_frame` does it) | no button |
-| **Fade handles** | fades work, through inspector sliders | not draggable on the clip |
 
 ### B. Not built anywhere
 
@@ -444,6 +443,12 @@ not a shadowing.** `tests/app` links every file into `cutline_app_tests`, and a
 second `WithFootage` in an anonymous namespace still collides — the suite is keyed
 by name. It fails at run time with "all tests in the same test suite must use the
 same test fixture class", which reads like a compiler problem and is not.
+
+**A press must not rewrite the selection it might be about to drag.** Taking
+hold of one clip of a multiple selection threw the rest away before the drag
+began, so a selection could be made and never moved. A press on something
+already selected leaves the selection alone; the *release* collapses onto it
+when no drag happened, which is the way back from several to one.
 
 **A drag threshold measured along one axis stops a vertical gesture starting.**
 The timeline's drags were all horizontal until the volume band, so `moved_` was
