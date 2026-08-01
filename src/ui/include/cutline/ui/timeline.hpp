@@ -541,6 +541,28 @@ class TimelineView : public Widget {
   /// Snapped to a frame, and never negative.
   void set_playhead(double seconds);
 
+  /// How much of the view the playhead may cross before it is followed, as a
+  /// fraction of the visible span either side. A tenth in from each edge, so
+  /// there is somewhere to look ahead to rather than a playhead pinned to the
+  /// middle of the screen.
+  static constexpr double kFollowMargin = 0.1;
+
+  /// Scrolls, if the playhead has left the comfortable part of the view.
+  ///
+  /// Reports whether it moved, so a caller can skip a repaint it does not need
+  /// — which is most frames of a playback, since the playhead spends nearly all
+  /// of its time somewhere already visible.
+  ///
+  /// Pages rather than creeps: once it has gone past the trailing margin the
+  /// view jumps so the playhead sits at the *leading* one, giving a screen's
+  /// worth of what is coming. Scrolling by the frame instead would mean the
+  /// picture never stops moving, which is far harder to read than a jump.
+  ///
+  /// Not called from `set_playhead`. Scrubbing deliberately does not scroll —
+  /// the pointer is already where the answer is, and moving the view out from
+  /// under a drag makes it impossible to aim.
+  bool follow_playhead();
+
   /// Called while the playhead is dragged, and once when it is clicked.
   void set_on_scrub(std::function<void(double)> on_scrub) { on_scrub_ = std::move(on_scrub); }
   /// Called when the selection changes. Empty means everything was deselected.

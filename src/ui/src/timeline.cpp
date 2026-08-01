@@ -234,6 +234,30 @@ void TimelineView::set_playhead(double seconds) {
   playhead_ = std::max(0.0, core::snap_to_frame(seconds, model_.fps));
 }
 
+bool TimelineView::follow_playhead() {
+  const double width = time_area().width;
+  if (width <= 0.0) return false;
+
+  const double visible = scale_.visible_duration(width);
+  if (visible <= 0.0) return false;
+
+  const double margin = visible * kFollowMargin;
+  const double first = scale_.start;
+  const double last = first + visible;
+
+  // Inside the comfortable part, which is where it is nearly all the time.
+  if (playhead_ >= first + margin && playhead_ <= last - margin) return false;
+
+  // To the leading margin, so a page of what is coming is on screen. Backwards
+  // too: scrubbing to the head of a sequence and pressing play should not leave
+  // the playhead off the left edge.
+  const double start = playhead_ - margin;
+  const double before = scale_.start;
+  scale_.start = std::max(0.0, start);
+  scale_.clamp_start(model_.content_duration());
+  return scale_.start != before;
+}
+
 void TimelineView::refresh_bounds() {
   scale_.clamp_start(model_.content_duration());
 

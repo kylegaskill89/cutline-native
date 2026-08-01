@@ -2931,5 +2931,75 @@ TEST(Marquee, TheOtherToolsDoNotSweep) {
   EXPECT_TRUE(fixture.view->marquee().empty());
 }
 
+// ------------------------------------------------------- following playback --
+
+TEST(TimelineFollow, StaysPutWhileThePlayheadIsComfortablyInView) {
+  // Which is nearly every frame of a playback. A scroll per frame would mean a
+  // repaint per frame for nothing.
+  Fixture test;
+  test.view->set_scale(TimeScale{.pixels_per_second = 40.0, .start = 0.0});
+  test.view->set_playhead(5.0);
+  EXPECT_FALSE(test.view->follow_playhead());
+  EXPECT_DOUBLE_EQ(test.view->scale().start, 0.0);
+}
+
+TEST(TimelineFollow, PagesOnceThePlayheadPassesTheTrailingMargin) {
+  // Zoomed far enough in that the sequence is several screens long, so the
+  // scroll is not stopped by the end of the content before it has moved.
+  Fixture test;
+  test.view->set_scale(TimeScale{.pixels_per_second = 400.0, .start = 0.0});
+  const double visible = test.view->scale().visible_duration(test.view->time_area().width);
+  ASSERT_LT(visible * 2.0, test.view->model().content_duration());
+
+  // Just past the far margin.
+  test.view->set_playhead(visible - visible * TimelineView::kFollowMargin * 0.5);
+  ASSERT_TRUE(test.view->follow_playhead());
+
+  // Landed at the *leading* margin, so a screen of what is coming is visible.
+  const double margin = visible * TimelineView::kFollowMargin;
+  EXPECT_NEAR(test.view->scale().start, test.view->playhead() - margin, 1e-6);
+}
+
+TEST(TimelineFollow, TheScrollStopsAtTheEndOfTheContent) {
+  // Past the last clip there is nothing to look at, so the view stays where it
+  // is rather than following the playhead out into empty space.
+  Fixture test;
+  const double content = test.view->model().content_duration();
+  test.view->set_scale(TimeScale{.pixels_per_second = 40.0, .start = 0.0});
+  test.view->set_playhead(content + 30.0);
+  test.view->follow_playhead();
+
+  EXPECT_LE(test.view->scale().start, content);
+}
+
+TEST(TimelineFollow, FollowsBackwardsToo) {
+  // Scrubbing to the head of a sequence and pressing play should not leave the
+  // playhead off the left edge.
+  Fixture test;
+  test.view->set_scale(TimeScale{.pixels_per_second = 40.0, .start = 20.0});
+  test.view->set_playhead(1.0);
+
+  EXPECT_TRUE(test.view->follow_playhead());
+  EXPECT_LT(test.view->scale().start, 20.0);
+  EXPECT_GE(test.view->scale().start, 0.0);
+}
+
+TEST(TimelineFollow, NeverScrollsBeforeTheStartOfTheSequence) {
+  Fixture test;
+  test.view->set_scale(TimeScale{.pixels_per_second = 40.0, .start = 5.0});
+  test.view->set_playhead(0.0);
+  EXPECT_TRUE(test.view->follow_playhead());
+  EXPECT_DOUBLE_EQ(test.view->scale().start, 0.0);
+}
+
+TEST(TimelineFollow, ScrubbingDoesNotScroll) {
+  // The pointer is already where the answer is, and moving the view out from
+  // under a drag makes it impossible to aim. `set_playhead` must not follow.
+  Fixture test;
+  test.view->set_scale(TimeScale{.pixels_per_second = 40.0, .start = 0.0});
+  test.view->set_playhead(500.0);
+  EXPECT_DOUBLE_EQ(test.view->scale().start, 0.0);
+}
+
 }  // namespace
 }  // namespace cutline::ui

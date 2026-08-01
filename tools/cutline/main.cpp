@@ -875,6 +875,20 @@ void step_to_keyframe(App& app, const std::string& clip_id,
   app.inspector_stale = true;
 }
 
+/// Scrolls the timeline to keep the playhead in view.
+///
+/// Only from playback and the shuttle. Scrubbing deliberately does not scroll:
+/// the pointer is already where the answer is, and moving the view out from
+/// under a drag makes it impossible to aim.
+void scroll_to_playhead(App& app) {
+  if (app.timeline == nullptr) return;
+  // The view is asked whether it moved rather than told to repaint, because the
+  // playhead spends nearly every frame of a playback somewhere already visible
+  // and a repaint per frame for nothing is the difference this loop is careful
+  // about everywhere else.
+  if (app.timeline->follow_playhead()) mark_dirty(app);
+}
+
 /// Rebuilds the inspector when moving the playhead changes what it shows.
 ///
 /// Which is only when the selected clip animates something: an animated row
@@ -2809,6 +2823,7 @@ void advance_shuttle(App& app) {
   }
   follow_playhead(app);
   refresh_timeline(app);
+  scroll_to_playhead(app);
   invalidate_preview(app);
 }
 
@@ -2972,6 +2987,8 @@ void advance_playback(App& app) {
   }
   follow_playhead(app);
   refresh_timeline(app);
+  // After the refresh, which is what puts the new time on the view.
+  scroll_to_playhead(app);
   invalidate_preview(app);
 #else
   (void)app;

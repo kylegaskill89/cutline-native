@@ -325,13 +325,96 @@ unlike Motion sits in the stack and can be reordered).
 
 ---
 
+## 2. Timeline
+
+The panel with the most in it already, and the one where what is missing is
+hardest to see: everything here works, and the gaps are all *other ways of doing
+the same thing* that turn out to be the fast ways.
+
+### 2.1 Track targeting, and the whole of three-point editing
+
+Premiere's track headers carry **source patching** — which video and audio track
+the next edit lands on — and **targeting**, which decides what a keyboard edit
+applies to. Neither exists here. Ours have mute, solo, lock and hide, which is
+the *state* half of a header and none of the routing half.
+
+This is not a small omission dressed up. It is the thing the next section is
+built on: without a target, "insert" and "overwrite" have nowhere to go, and
+without those two there is no three-point editing at all.
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Source patch (V1/A1 indicators) | drag to choose which track receives | none | control |
+| Track targeting for keyboard edits | per track, toggled | none | control |
+| Insert (`,`) and Overwrite (`.`) | from the source monitor at the playhead | none | machinery |
+| Three- and four-point editing | in/out on source and sequence | none | machinery |
+| Sync lock | which tracks ripple together | none | model + control |
+| Mute / solo / lock / hide | yes | **done** | — |
+
+### 2.2 Trimming
+
+We have slip, slide and rate stretch as **tools** — pick the tool, then drag.
+Premiere has them as tools *and* as gestures on an edge with a modifier held,
+and the second is what anybody actually uses: the tool palette is for the times
+you want the mode to stay.
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Drag an edge to trim | yes | **done** | — |
+| Slip, slide, rate stretch | tool **and** modifier gesture | tool only | wiring |
+| Ripple trim (edge drag that closes the gap) | yes | none — a trim leaves a gap | wiring |
+| Rolling edit (both sides of a cut at once) | yes | none | wiring |
+| Trim to playhead (`Q` / `W`) | yes | none | wiring |
+| The trim monitor (two-up while trimming) | yes | none | machinery |
+| Nudge by frame | yes | **done** | — |
+
+Ripple and roll are the two that matter. Both are edits the core can already
+express — they are `set_clip_edge` plus an arrangement pass — and neither has a
+gesture reaching them.
+
+### 2.3 Clips on the timeline
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Drag from the pool onto a track | yes | **done**, at the point of release | — |
+| Drag a clip to move it | yes | **done** | — |
+| Copy and paste clips | Ctrl+C / Ctrl+V, and paste-insert | **none at all** | wiring |
+| Duplicate (alt-drag a copy) | yes | none | wiring |
+| Label colours | eight, set per clip and per bin | none | model + control |
+| Enable / disable a clip | yes | in the model, no control on the timeline | wiring |
+| Speed / duration dialogue | a box with both and a ripple option | Speed and Reverse in the inspector | control |
+| Nesting | a sequence inside a sequence | none | machinery |
+| Multi-camera | none | none | machinery |
+
+**Copy and paste is the surprise.** There is a clipboard for effects and a
+clipboard for keyframes, and none for clips — the single most-used pair of keys
+in any editor does nothing on the timeline. It is wiring: `core` can already
+place a clip anywhere, and `Session` already records one entry per gesture.
+
+### 2.4 Reading the timeline
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Waveforms and filmstrips on clips | yes | **done**, cached and drawn on workers | — |
+| Volume rubber band | yes | **done**, with keyframes | — |
+| Keyframe marks on a clip | yes | **done** | — |
+| Snapping | yes | **done** | — |
+| Zoom, and zoom to fit | yes | **done** | — |
+| Track height, per track | dragged, and expand/collapse all | fixed per kind — one height for video, one for audio | control |
+| Markers with duration and comment | yes | a name and a colour, no duration | model + control |
+| Scroll to follow playback | smooth or page | none — the playhead runs off the edge | wiring |
+| Timecode field to type into | yes | a readout only | control |
+
+The last two are small and both are felt every session. A playhead that leaves
+the view during playback is the one on this page most likely to be noticed
+within a minute of using it.
+
+---
+
 ## Sections still to do
 
 The rest of the application, in the order it seems worth walking:
 
-- **Timeline** — track targeting, insert/overwrite from the source monitor,
-  trim modes (ripple, roll, slip, slide as *trim* rather than tools), the
-  program-monitor trim view, sync locks, nesting, multi-camera.
 - **Source monitor** — there is none at all. Premiere's whole three-point
   editing workflow runs through it.
 - **Project panel** — bins, metadata columns, icon view, proxies, relinking.
