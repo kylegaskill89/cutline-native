@@ -161,6 +161,91 @@ TEST(LayerBox, GeometryIsIndependentOfExportResolution) {
   EXPECT_DOUBLE_EQ(uhd.height / 2160.0, hd.height / 1080.0);
 }
 
+// ------------------------------------------------------------ anchor point --
+//
+// The anchor is the point of the layer that Position places and that scale and
+// rotation happen about. Everything below the transform still sees a centred
+// rectangle, so these tests are about one thing: where that centre ends up.
+
+TEST(AnchorPoint, TheMiddleOfTheLayerLeavesEverythingAsItWas) {
+  const Media m = video_media(1920, 1080);
+  Clip plain = clip_at(0.0, 5.0);
+  plain.transform = Transform{.x = 0.3, .scale_x = 0.5, .rotation = 30.0};
+
+  Clip spelt_out = plain;
+  spelt_out.transform.anchor_x = 0.5;
+  spelt_out.transform.anchor_y = 0.5;
+
+  EXPECT_EQ(layer_box(plain, &m, kCanvasW, kCanvasH, 0.0),
+            layer_box(spelt_out, &m, kCanvasW, kCanvasH, 0.0));
+}
+
+TEST(AnchorPoint, PositionPlacesTheAnchorRatherThanTheCentre) {
+  // Anchor at the layer's top left, position in the middle of the frame: the
+  // layer hangs down and to the right of the centre by half its size.
+  const Media m = video_media(1920, 1080);
+  Clip c = clip_at(0.0, 5.0);
+  c.transform = Transform{.scale_x = 0.5, .scale_y = 0.5, .anchor_x = 0.0, .anchor_y = 0.0};
+
+  const LayerBox box = layer_box(c, &m, kCanvasW, kCanvasH, 0.0);
+  EXPECT_DOUBLE_EQ(box.width, 960.0);
+  EXPECT_DOUBLE_EQ(box.height, 540.0);
+  EXPECT_DOUBLE_EQ(box.center_x, 960.0 + 480.0);
+  EXPECT_DOUBLE_EQ(box.center_y, 540.0 + 270.0);
+}
+
+TEST(AnchorPoint, RotationSwingsTheLayerAboutIt) {
+  // A quarter turn about the layer's top left corner. The anchor stays put in
+  // the middle of the frame and the centre, which was down-right of it, comes
+  // round to down-left — which is the thing that could not be expressed at all
+  // before there was an anchor.
+  const Media m = video_media(1920, 1080);
+  Clip c = clip_at(0.0, 5.0);
+  c.transform = Transform{
+      .scale_x = 0.5, .scale_y = 0.5, .rotation = 90.0, .anchor_x = 0.0, .anchor_y = 0.0};
+
+  const LayerBox box = layer_box(c, &m, kCanvasW, kCanvasH, 0.0);
+  EXPECT_NEAR(box.center_x, 960.0 - 270.0, 1e-9);
+  EXPECT_NEAR(box.center_y, 540.0 + 480.0, 1e-9);
+}
+
+TEST(AnchorPoint, ScaleGrowsAwayFromIt) {
+  // Pinned by its left edge, a layer scaled up stays pinned there rather than
+  // spreading both ways.
+  const Media m = video_media(1920, 1080);
+  Clip c = clip_at(0.0, 5.0);
+  c.transform = Transform{.anchor_x = 0.0};
+
+  const LayerBox small = layer_box(c, &m, kCanvasW, kCanvasH, 0.0);
+  c.transform.scale_x = 2.0;
+  const LayerBox large = layer_box(c, &m, kCanvasW, kCanvasH, 0.0);
+
+  const double left = small.center_x - small.width * 0.5;
+  EXPECT_DOUBLE_EQ(large.center_x - large.width * 0.5, left);
+}
+
+TEST(AnchorPoint, IsKeyframeableLikeTheRestOfTheTransform) {
+  const Media m = video_media(1920, 1080);
+  Project p;
+  p.media = {m};
+  Track track;
+  track.id = "v1";
+  track.kind = TrackKind::Video;
+  track.clips = {clip_at(0.0, 4.0)};
+  p.tracks = {track};
+
+  p = set_keyframe(p, "c", AnimProp::AnchorX, 0.0, 0.5);
+  p = set_keyframe(p, "c", AnimProp::AnchorX, 4.0, 0.0);
+  p = set_keyframe_interp(p, "c", AnimProp::AnchorX, Interp::Linear);
+
+  const Clip& c = p.tracks[0].clips[0];
+  // Halfway along, the anchor is a quarter of the way across the layer, so the
+  // centre sits a quarter of the layer's width to the right of it.
+  EXPECT_DOUBLE_EQ(layer_box(c, &m, kCanvasW, kCanvasH, 0.0).center_x, 960.0);
+  EXPECT_DOUBLE_EQ(layer_box(c, &m, kCanvasW, kCanvasH, 2.0).center_x, 960.0 + 480.0);
+  EXPECT_DOUBLE_EQ(layer_box(c, &m, kCanvasW, kCanvasH, 4.0).center_x, 960.0 + 960.0);
+}
+
 TEST(LayerBox, KeyframesAreEvaluatedInClipLocalTime) {
   const Media m = video_media(1920, 1080);
   Project p;

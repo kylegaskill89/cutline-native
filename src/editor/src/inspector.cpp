@@ -3,6 +3,7 @@
 #include "cutline/audio/biquad.hpp"
 #include "cutline/core/animate.hpp"
 #include "cutline/core/keyframe.hpp"
+#include "cutline/core/layout.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 // For `kGainFloorDb`: the timeline's rubber band and this slider are two views
@@ -45,6 +46,8 @@ constexpr double kSliderMaxSpeed = 4.0;
     case ClipParam::ScaleX: return core::AnimProp::ScaleX;
     case ClipParam::ScaleY: return core::AnimProp::ScaleY;
     case ClipParam::Rotation: return core::AnimProp::Rotation;
+    case ClipParam::AnchorX: return core::AnimProp::AnchorX;
+    case ClipParam::AnchorY: return core::AnimProp::AnchorY;
     default: return std::nullopt;
   }
 }
@@ -81,9 +84,43 @@ constexpr double kSliderMaxSpeed = 4.0;
   return extent > 0 ? static_cast<double>(extent) : 1.0;
 }
 
-/// The whole factor for a parameter, canvas included.
-[[nodiscard]] double shown_scale(const core::Project& project, ClipParam param) noexcept {
+/// The clip's aspect-fit size at scale 1, in canvas pixels — the layer the
+/// anchor is a fraction of.
+///
+/// A title's size is measured by the text layer, which is nowhere near here, so
+/// a title falls back to its stored dimensions and its anchor readout is
+/// approximate until it has been laid out. The stored fraction is exact either
+/// way; only the number on screen is affected.
+[[nodiscard]] core::Size layer_size(const core::Project& project,
+                                    const core::Clip& clip) noexcept {
+  const auto found = std::ranges::find(project.media, clip.media_id, &core::Media::id);
+  const core::Media* media = found == project.media.end() ? nullptr : &*found;
+  return core::natural_size(media, static_cast<double>(project.canvas_w),
+                            static_cast<double>(project.canvas_h));
+}
+
+/// Pixels per stored unit for the anchor point, which is the *layer's* own
+/// size rather than the canvas.
+///
+/// Premiere shows the anchor in pixels of the source, defaulting to its middle,
+/// and that is what makes "0, 0 is the top left corner" readable. A layer half
+/// the width of the frame therefore reads a different number for the same
+/// corner than one that fills it, which is correct: the anchor belongs to the
+/// layer, not to the sequence.
+[[nodiscard]] double anchor_scale(const core::Project& project, const core::Clip& clip,
+                                  ClipParam param) noexcept {
+  const core::Size layer = layer_size(project, clip);
+  const double extent = param == ClipParam::AnchorX ? layer.width : layer.height;
+  return extent > 0.0 ? extent : 1.0;
+}
+
+/// The whole factor for a parameter, canvas and layer included.
+[[nodiscard]] double shown_scale(const core::Project& project, const core::Clip& clip,
+                                 ClipParam param) noexcept {
   if (param == ClipParam::X || param == ClipParam::Y) return position_scale(project, param);
+  if (param == ClipParam::AnchorX || param == ClipParam::AnchorY) {
+    return anchor_scale(project, clip, param);
+  }
   return display_scale(param);
 }
 
@@ -143,7 +180,7 @@ void fill_animation(const core::Project& project, ParamSpec& row, const core::Cl
     // What the keyframes are producing, not what is stored: an animated
     // property ignores its stored value, and showing it would put a number on
     // screen that nothing is using.
-    row.value = core::animated_value(clip, *prop, local_t) * shown_scale(project, row.param);
+    row.value = core::animated_value(clip, *prop, local_t) * shown_scale(project, clip, row.param);
     row.keyed_here = keyed_at(clip.keyframes[core::anim_prop_index(*prop)], local_t);
     row.interp = core::keyframe_interp_of(clip, *prop);
   }
@@ -159,6 +196,8 @@ std::string_view to_string(ClipParam param) noexcept {
     case ClipParam::ScaleX: return "scale_x";
     case ClipParam::ScaleY: return "scale_y";
     case ClipParam::Rotation: return "rotation";
+    case ClipParam::AnchorX: return "anchor_x";
+    case ClipParam::AnchorY: return "anchor_y";
     case ClipParam::Speed: return "speed";
     case ClipParam::Gain: return "gain";
     case ClipParam::FadeIn: return "fade_in";
@@ -175,6 +214,9 @@ std::string_view param_name(ClipParam param) noexcept {
     case ClipParam::ScaleX: return "Scale X";
     case ClipParam::ScaleY: return "Scale Y";
     case ClipParam::Rotation: return "Rotation";
+    // Premiere's own words. Two rows rather than one pair, like Position.
+    case ClipParam::AnchorX: return "Anchor Point X";
+    case ClipParam::AnchorY: return "Anchor Point Y";
     case ClipParam::Speed: return "Speed";
     // Volume rather than Gain: it is what the control is called everywhere
     // else, and the row shows decibels.
@@ -273,6 +315,32 @@ std::vector<ParamSpec> clip_parameters(const core::Project& project, std::string
                             .value = clip->transform.rotation,
                             .fallback = 0.0,
                             .suffix = "\xc2\xb0"});  // degree sign, UTF-8
+
+    // The anchor: the point of the layer that Position places, and that scale
+    // and rotation happen about. In pixels of the **layer**, not the canvas,
+    // which is what Premiere shows and what makes the default read as the
+    // middle of the picture rather than the middle of the frame.
+    //
+    // After Rotation, where Premiere puts it. It comes last of the geometry
+    // because it is the one you reach for least often and the one that changes
+    // what the others mean.
+    const core::Size layer = layer_size(project, *clip);
+    const double layer_w = layer.width > 0.0 ? layer.width : 1.0;
+    const double layer_h = layer.height > 0.0 ? layer.height : 1.0;
+
+    out.push_back(ParamSpec{.param = ClipParam::AnchorX,
+                            .name = std::string(param_name(ClipParam::AnchorX)),
+                            // Half a layer either side of it: an anchor well
+                            // outside the picture is a perfectly ordinary way
+                            // to swing a layer in from off screen.
+                            .range = {.minimum = -layer_w * 0.5, .maximum = layer_w * 1.5},
+                            .value = clip->transform.anchor_x * layer_w,
+                            .fallback = layer_w * 0.5});
+    out.push_back(ParamSpec{.param = ClipParam::AnchorY,
+                            .name = std::string(param_name(ClipParam::AnchorY)),
+                            .range = {.minimum = -layer_h * 0.5, .maximum = layer_h * 1.5},
+                            .value = clip->transform.anchor_y * layer_h,
+                            .fallback = layer_h * 0.5});
   } else {
     out.push_back(ParamSpec{.param = ClipParam::Gain,
                             .name = std::string(param_name(ClipParam::Gain)),
@@ -322,7 +390,7 @@ core::Project set_clip_parameter(core::Project project, std::string_view clip_id
   if (const std::optional<core::AnimProp> prop = anim_prop_of(param);
       prop.has_value() && core::is_animated(*clip, *prop)) {
     return core::set_keyframe(std::move(project), clip_id, *prop, local_t,
-                              value / shown_scale(project, param));
+                              value / shown_scale(project, *clip, param));
   }
 
   // Read, change one field, set the whole value back — which is the contract
@@ -348,6 +416,13 @@ core::Project set_clip_parameter(core::Project project, std::string_view clip_id
       return core::set_clip_transform(std::move(project), clip_id, transform);
     case ClipParam::Rotation:
       transform.rotation = value;
+      return core::set_clip_transform(std::move(project), clip_id, transform);
+
+    case ClipParam::AnchorX:
+      transform.anchor_x = value / anchor_scale(project, *clip, param);
+      return core::set_clip_transform(std::move(project), clip_id, transform);
+    case ClipParam::AnchorY:
+      transform.anchor_y = value / anchor_scale(project, *clip, param);
       return core::set_clip_transform(std::move(project), clip_id, transform);
 
     case ClipParam::Speed:
@@ -387,13 +462,13 @@ core::Project set_clip_parameter_animated(core::Project project, std::string_vie
   // three quarters across the frame at a fraction of a pixel from its left edge.
   const double current = gain ? gain_shown(core::gain_at(*clip, local_t))
                               : core::animated_value(*clip, *prop, local_t) *
-                                    shown_scale(project, param);
+                                    shown_scale(project, *clip, param);
 
   if (animated) {
     return gain ? core::set_gain_keyframe(std::move(project), clip_id, local_t,
                                           gain_stored(current))
                 : core::set_keyframe(std::move(project), clip_id, *prop, local_t,
-                                     current / shown_scale(project, param));
+                                     current / shown_scale(project, *clip, param));
   }
 
   project = gain ? core::clear_gain_keyframes(std::move(project), clip_id)

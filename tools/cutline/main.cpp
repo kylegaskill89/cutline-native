@@ -831,6 +831,32 @@ bool save_project(App& app, bool ask_where);
   return std::nullopt;
 }
 
+/// The other component of a two-part property, given its first.
+///
+/// Premiere's Position and Anchor Point are each one property with an x and a y,
+/// and both halves belong on one row with one stopwatch. Scale is deliberately
+/// not in here: Premiere keeps Scale and Scale Width apart too, because Uniform
+/// Scale is what joins them.
+[[nodiscard]] std::optional<cutline::editor::ClipParam> paired_axis(
+    cutline::editor::ClipParam param) noexcept {
+  using cutline::editor::ClipParam;
+  if (param == ClipParam::X) return ClipParam::Y;
+  if (param == ClipParam::AnchorX) return ClipParam::AnchorY;
+  return std::nullopt;
+}
+
+/// Whether a row is the *second* half of a pair, and so has no row of its own.
+[[nodiscard]] bool is_paired_follower(cutline::editor::ClipParam param) noexcept {
+  using cutline::editor::ClipParam;
+  return param == ClipParam::Y || param == ClipParam::AnchorY;
+}
+
+/// What a paired row is called, which is neither half's name.
+[[nodiscard]] std::string_view pair_name(cutline::editor::ClipParam param) noexcept {
+  using cutline::editor::ClipParam;
+  return param == ClipParam::AnchorX ? "Anchor Point" : "Position";
+}
+
 /// A heading inside the inspector, over the group of controls it names.
 void inspector_heading(App& app, std::string text) {
   auto& label = app.inspector->emplace<Label>(std::move(text));
@@ -1089,9 +1115,16 @@ void build_param_row(App& app, const ParamRow& row, ParamHandlers handlers) {
   // Premiere's reset, a circular arrow at the end of the row. Double-clicking
   // the number does the same thing and always has, but nothing on screen said
   // so — an affordance nobody can see is one nobody uses.
+  //
+  // Not while the property is animated. Two reasons, and either would do. The
+  // room: an animated paired row also carries ◀ ◆ ▶, and with the reset as well
+  // it does not fit a narrow panel — the property's own name was squeezed away
+  // to nothing. And the meaning: on an animated property this button writes a
+  // keyframe at the playhead holding the default, which is not what anybody
+  // reads "reset" as. Premiere's reset is per effect, not per keyframe.
   const bool moved = row.value != row.fallback ||
                      (row.partner.has_value() && row.partner->value != row.partner->fallback);
-  if (!row.governed && moved) {
+  if (!row.governed && !row.animated && moved) {
     auto& reset = head.emplace<IconButton>(IconButton::Icon::Reset);
     reset.set_name("reset");
     reset.set_on_click([commit = handlers.commit, fallback = row.fallback,
@@ -1113,15 +1146,23 @@ void build_param_row(App& app, const ParamRow& row, ParamHandlers handlers) {
     // Premiere's ◀ ◆ ▶. The marker alone says a keyframe is here; these are
     // what get to one that is not, and without them a keyframe placed off the
     // playhead can only be found by scrubbing until the diamond lights up.
+    //
+    // All three narrow, the way Premiere draws them: one navigator rather than
+    // three controls. Three square buttons here plus a stopwatch, a triangle
+    // and two numbers do not fit a parameter row, and what got dropped to make
+    // room was the property's own name.
     auto& previous = head.emplace<IconButton>(IconButton::Icon::ArrowLeft);
+    previous.set_narrow(true);
     previous.set_enabled(row.has_previous);
     if (handlers.step) previous.set_on_click([step = handlers.step] { step(-1); });
 
     auto& mark =
         head.emplace<IconButton>(IconButton::Icon::Diamond, std::move(handlers.keyframe));
+    mark.set_narrow(true);
     mark.set_selected(row.keyed_here);
 
     auto& next = head.emplace<IconButton>(IconButton::Icon::ArrowRight);
+    next.set_narrow(true);
     next.set_enabled(row.has_next);
     if (handlers.step) next.set_on_click([step = std::move(handlers.step)] { step(1); });
   }
@@ -2164,11 +2205,10 @@ void refresh_inspector(App& app) {
                                        local_playhead(app, clip_id));
 
   for (const cutline::editor::ParamSpec& spec : specs) {
-    // Position Y has no row of its own: it rides on Position X's, the way
-    // Premiere's Position is one property with two components. Scale is
-    // deliberately *not* paired — Premiere keeps Scale and Scale Width apart
-    // too, because Uniform Scale is what joins them.
-    if (spec.param == cutline::editor::ClipParam::Y) continue;
+    // The second half of a pair has no row of its own: it rides on the first
+    // half's, the way Premiere's Position and Anchor Point are each one
+    // property with two components.
+    if (is_paired_follower(spec.param)) continue;
 
     const cutline::editor::ParamRef ref{.param = spec.param};
     const std::vector<cutline::core::Keyframe> keys =
@@ -2176,39 +2216,43 @@ void refresh_inspector(App& app) {
     const double here = local_playhead(app, clip_id);
 
     // The paired half, when there is one.
-    bool paired = false;
+    const std::optional<cutline::editor::ClipParam> mate = paired_axis(spec.param);
     std::optional<ParamRow::Partner> partner;
-    if (spec.param == cutline::editor::ClipParam::X) {
-      const auto found = std::ranges::find(specs, cutline::editor::ClipParam::Y,
-                                           &cutline::editor::ParamSpec::param);
+    if (mate.has_value()) {
+      const auto found =
+          std::ranges::find(specs, *mate, &cutline::editor::ParamSpec::param);
       if (found != specs.end()) {
-        paired = true;
         partner = ParamRow::Partner{
             .suffix = found->suffix,
             .range = found->range,
             .value = found->value,
             .fallback = found->fallback,
             .commit =
-                [&app, clip_id](double value) {
+                [&app, clip_id, mate = *mate](double value) {
                   app.session.apply(cutline::editor::set_clip_parameter(
-                      app.session.project(), clip_id, cutline::editor::ClipParam::Y, value,
+                      app.session.project(), clip_id, mate, value,
                       local_playhead(app, clip_id)));
                   refresh_timeline(app);
                   invalidate_preview(app);
                   app.inspector_stale = true;
                 },
             .preview =
-                [&app, clip_id](double value) {
+                [&app, clip_id, mate = *mate](double value) {
                   return cutline::editor::set_clip_parameter(
-                      app.session.project(), clip_id, cutline::editor::ClipParam::Y, value,
+                      app.session.project(), clip_id, mate, value,
                       local_playhead(app, clip_id));
                 }};
       }
     }
+    // Only once the other half was actually found: a pair with a missing mate
+    // is a single row, and the callbacks below must not reach for it.
+    const std::optional<cutline::editor::ClipParam> paired =
+        partner.has_value() ? mate : std::nullopt;
 
     const ParamRow line{// "Position" rather than "Position X", now that both
                         // numbers are on the row.
-                        .name = partner.has_value() ? "Position" : spec.name,
+                        .name = partner.has_value() ? std::string(pair_name(spec.param))
+                                                    : spec.name,
                         // The unit, on every one of these. It was left off
                         // originally on the grounds that the names carried it,
                         // which was never true — "Scale X" does not say percent
@@ -2275,9 +2319,9 @@ void refresh_inspector(App& app) {
                const double here = local_playhead(app, clip_id);
                cutline::core::Project next = cutline::editor::set_clip_parameter_animated(
                    app.session.project(), clip_id, param, animated, here);
-               if (paired) {
+               if (paired.has_value()) {
                  next = cutline::editor::set_clip_parameter_animated(
-                     std::move(next), clip_id, cutline::editor::ClipParam::Y, animated, here);
+                     std::move(next), clip_id, *paired, animated, here);
                }
                app.session.apply(std::move(next));
                refresh_timeline(app);
@@ -2289,9 +2333,9 @@ void refresh_inspector(App& app) {
                const double here = local_playhead(app, clip_id);
                cutline::core::Project next = cutline::editor::toggle_clip_parameter_keyframe(
                    app.session.project(), clip_id, param, here);
-               if (paired) {
+               if (paired.has_value()) {
                  next = cutline::editor::toggle_clip_parameter_keyframe(
-                     std::move(next), clip_id, cutline::editor::ClipParam::Y, here);
+                     std::move(next), clip_id, *paired, here);
                }
                app.session.apply(std::move(next));
                refresh_timeline(app);
@@ -2302,9 +2346,9 @@ void refresh_inspector(App& app) {
              [&app, clip_id, param = spec.param, paired](cutline::core::Interp mode) {
                cutline::core::Project next = cutline::editor::set_clip_parameter_interp(
                    app.session.project(), clip_id, param, mode);
-               if (paired) {
+               if (paired.has_value()) {
                  next = cutline::editor::set_clip_parameter_interp(
-                     std::move(next), clip_id, cutline::editor::ClipParam::Y, mode);
+                     std::move(next), clip_id, *paired, mode);
                }
                app.session.apply(std::move(next));
                invalidate_preview(app);
@@ -6374,6 +6418,19 @@ template <typename T>
         // leave that half of every row untested.
         app.session.apply(cutline::editor::set_clip_parameter_animated(
             app.session.project(), clip_id, cutline::editor::ClipParam::Opacity, true, 0.0));
+        // And a *paired* one, which is the widest row the panel ever builds: a
+        // name, two numbers, a reset and the three keyframe controls. Animating
+        // only Opacity left that arrangement untested, and it did not fit — the
+        // property's own name was squeezed away to nothing on screen while this
+        // check reported everything well.
+        //
+        // Anchor Point rather than Position, because it is the same shape of
+        // row with the longer name on it, and the longer name is what decides
+        // whether the arrangement fits.
+        app.session.apply(cutline::editor::set_clip_parameter_animated(
+            app.session.project(), clip_id, cutline::editor::ClipParam::AnchorX, true, 0.0));
+        app.session.apply(cutline::editor::set_clip_parameter_animated(
+            app.session.project(), clip_id, cutline::editor::ClipParam::AnchorY, true, 0.0));
         app.session.apply(cutline::editor::set_effect_parameter_animated(
             app.session.project(), clip_id, 0, "amount", true, 0.0));
       }

@@ -413,6 +413,81 @@ TEST(Position, ACanvasOfNothingIsNotADivisionByZero) {
   EXPECT_DOUBLE_EQ(written.tracks.front().clips.front().transform.x, 0.25);
 }
 
+// ---------------------------------------------------------- anchor point --
+//
+// In pixels of the **layer**, not of the canvas: the anchor belongs to the
+// picture being placed rather than to the sequence it is placed in, which is
+// what makes "0, 0 is its top left corner" mean anything.
+
+TEST(AnchorPoint, DefaultsToTheMiddleOfTheLayer) {
+  Project p = sample_project();
+  p.media.front().width = 1280;
+  p.media.front().height = 720;
+
+  // 1280x720 fitted to a 1920x1080 canvas is the whole frame, so the middle of
+  // the layer is 960, 540 here as well — and it will not be for a layer that
+  // does not fill the frame, which is the next test.
+  const std::vector<ParamSpec> specs = clip_parameters(p, "c1");
+  EXPECT_DOUBLE_EQ(find(specs, ClipParam::AnchorX)->value, 960.0);
+  EXPECT_DOUBLE_EQ(find(specs, ClipParam::AnchorY)->value, 540.0);
+  EXPECT_DOUBLE_EQ(find(specs, ClipParam::AnchorX)->fallback, 960.0);
+}
+
+TEST(AnchorPoint, IsMeasuredInPixelsOfTheLayerRatherThanTheCanvas) {
+  Project p = sample_project();
+  // A square source letterboxes into 1080x1080 on a 1920x1080 canvas.
+  p.media.front().width = 500;
+  p.media.front().height = 500;
+
+  const std::vector<ParamSpec> specs = clip_parameters(p, "c1");
+  EXPECT_DOUBLE_EQ(find(specs, ClipParam::AnchorX)->value, 540.0);
+  EXPECT_DOUBLE_EQ(find(specs, ClipParam::AnchorY)->value, 540.0);
+}
+
+TEST(AnchorPoint, WritesTheFractionTheModelStores) {
+  Project p = sample_project();
+  p.media.front().width = 1920;
+  p.media.front().height = 1080;
+
+  // The layer's top left corner.
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::AnchorX, 0.0);
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::AnchorY, 0.0);
+  EXPECT_DOUBLE_EQ(p.tracks.front().clips.front().transform.anchor_x, 0.0);
+
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::AnchorX, 1920.0);
+  EXPECT_DOUBLE_EQ(p.tracks.front().clips.front().transform.anchor_x, 1.0);
+}
+
+TEST(AnchorPoint, CanBeAnimated) {
+  Project p = sample_project();
+  p.media.front().width = 1920;
+  p.media.front().height = 1080;
+  p = set_clip_parameter_animated(std::move(p), "c1", ClipParam::AnchorX, true, 0.0);
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::AnchorX, 0.0, 4.0);
+
+  const std::optional<ParamSpec> row = find(clip_parameters(p, "c1", 2.0), ClipParam::AnchorX);
+  ASSERT_TRUE(row.has_value());
+  EXPECT_TRUE(row->animated);
+  EXPECT_DOUBLE_EQ(row->value, 480.0) << "halfway from the middle to the left edge";
+}
+
+TEST(AnchorPoint, ComesAfterRotation) {
+  // Premiere's order, and the order that reads best: the one you reach for
+  // least often, and the one that changes what the others mean.
+  const std::vector<ParamSpec> specs = clip_parameters(sample_project(), "c1");
+  const auto index = [&specs](ClipParam param) {
+    return std::ranges::find(specs, param, &ParamSpec::param) - specs.begin();
+  };
+  EXPECT_GT(index(ClipParam::AnchorX), index(ClipParam::Rotation));
+  EXPECT_LT(index(ClipParam::AnchorX), index(ClipParam::AnchorY));
+}
+
+TEST(AnchorPoint, IsNotOfferedForAudio) {
+  const std::vector<ParamSpec> specs = clip_parameters(sample_project(), "a1c");
+  EXPECT_FALSE(has(specs, ClipParam::AnchorX));
+  EXPECT_FALSE(has(specs, ClipParam::AnchorY));
+}
+
 TEST(Inspector, TurningTheStopwatchOffKeepsTheValueAtThatTime) {
   Project p = set_clip_parameter(sample_project(), "c1", ClipParam::Opacity, 0.0);
   p = set_clip_parameter_animated(std::move(p), "c1", ClipParam::Opacity, true, 0.0);

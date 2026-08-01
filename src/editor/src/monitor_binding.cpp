@@ -33,6 +33,22 @@ namespace {
   return {natural.width / canvas_w, natural.height / canvas_h};
 }
 
+/// The anchor-to-centre offset in the units the overlay is in: canvas
+/// fractions, where `core::anchor_offset` works in canvas pixels because a
+/// rotation is only a rotation in square units. Converted here, once, rather
+/// than at each of the two places that need it.
+[[nodiscard]] core::Offset anchor_shift(const core::Project& project,
+                                        const core::Transform& transform,
+                                        core::Size drawn_fraction) noexcept {
+  const auto canvas_w = static_cast<double>(project.canvas_w);
+  const auto canvas_h = static_cast<double>(project.canvas_h);
+  if (canvas_w <= 0.0 || canvas_h <= 0.0) return {};
+
+  const core::Offset px = core::anchor_offset(
+      transform, {drawn_fraction.width * canvas_w, drawn_fraction.height * canvas_h});
+  return {.dx = px.dx / canvas_w, .dy = px.dy / canvas_h};
+}
+
 }  // namespace
 
 std::optional<ui::MonitorBox> monitor_box(const core::Project& project,
@@ -57,11 +73,17 @@ std::optional<ui::MonitorBox> monitor_box(const core::Project& project,
   if (natural.width <= 0.0 || natural.height <= 0.0) return std::nullopt;
 
   const core::Transform transform = core::animated_transform(*clip, t - clip->start);
+  const core::Size drawn{natural.width * transform.scale_x,
+                         natural.height * transform.scale_y};
+  const core::Offset shift = anchor_shift(project, transform, drawn);
   return ui::MonitorBox{
-      .x = transform.x,
-      .y = transform.y,
-      .width = natural.width * transform.scale_x,
-      .height = natural.height * transform.scale_y,
+      // The box is drawn about its centre, and position names the anchor. The
+      // same conversion the compositor makes, so the handles land on the
+      // picture rather than beside it whenever an anchor has been moved.
+      .x = transform.x + shift.dx,
+      .y = transform.y + shift.dy,
+      .width = drawn.width,
+      .height = drawn.height,
       .rotation = transform.rotation,
   };
 }
@@ -88,10 +110,31 @@ core::Project apply_monitor_box(core::Project project, std::string_view clip_id,
   const auto canvas = [&project](int extent) {
     return extent > 0 ? static_cast<double>(extent) : 1.0;
   };
+
+  // The box gives a centre; position stores where the anchor goes. Taking the
+  // offset back off is what makes the two agree — and it is computed from the
+  // box's *own* rotation and size, the ones the drag has just produced, so
+  // whatever the overlay showed while the button was down is what gets stored.
+  //
+  // One consequence worth naming: the overlay turns a layer about the box's
+  // centre, and the number in the inspector turns it about the anchor. For a
+  // layer left at the default anchor those are the same point and there is
+  // nothing to tell apart. For one whose anchor has been moved they are not,
+  // and the handle behaves as the handle looks — the corner you are dragging
+  // goes where you drag it — while the anchor slides along the canvas to suit.
+  // Premiere pivots the handle about the anchor as well; that is a change to
+  // the overlay rather than to this, and it is not made here.
+  const core::Transform current = core::animated_transform(*clip, local_t);
+  const core::Offset shift = anchor_shift(
+      project, core::Transform{.rotation = box.rotation,
+                               .anchor_x = current.anchor_x,
+                               .anchor_y = current.anchor_y},
+      {box.width, box.height});
+
   project = set_clip_parameter(std::move(project), clip_id, ClipParam::X,
-                               box.x * canvas(project.canvas_w), local_t);
+                               (box.x - shift.dx) * canvas(project.canvas_w), local_t);
   project = set_clip_parameter(std::move(project), clip_id, ClipParam::Y,
-                               box.y * canvas(project.canvas_h), local_t);
+                               (box.y - shift.dy) * canvas(project.canvas_h), local_t);
   project = set_clip_parameter(std::move(project), clip_id, ClipParam::ScaleX,
                                box.width / natural.width * kPercent, local_t);
   project = set_clip_parameter(std::move(project), clip_id, ClipParam::ScaleY,

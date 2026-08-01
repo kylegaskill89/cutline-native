@@ -30,6 +30,8 @@ enum class ClipParam {
   ScaleX,
   ScaleY,
   Rotation,
+  AnchorX,
+  AnchorY,
   Speed,
   Gain,
   FadeIn,

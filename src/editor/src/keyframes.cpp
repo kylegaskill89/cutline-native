@@ -23,9 +23,9 @@ constexpr double kApart = core::kKeyframeRemoveEps;
 
 /// The transform properties a lane can exist for, in the order the inspector
 /// lists them. Not `kAnimProps`, which is in storage order.
-constexpr std::array<ClipParam, 6> kMotionParams{
-    ClipParam::Opacity, ClipParam::X,        ClipParam::Y,
-    ClipParam::ScaleX,  ClipParam::ScaleY,   ClipParam::Rotation,
+constexpr std::array<ClipParam, 8> kMotionParams{
+    ClipParam::Opacity, ClipParam::X,       ClipParam::Y,       ClipParam::ScaleX,
+    ClipParam::ScaleY,  ClipParam::Rotation, ClipParam::AnchorX, ClipParam::AnchorY,
 };
 
 [[nodiscard]] std::optional<core::AnimProp> anim_prop_of(ClipParam param) noexcept {
@@ -36,6 +36,8 @@ constexpr std::array<ClipParam, 6> kMotionParams{
     case ClipParam::ScaleX: return core::AnimProp::ScaleX;
     case ClipParam::ScaleY: return core::AnimProp::ScaleY;
     case ClipParam::Rotation: return core::AnimProp::Rotation;
+    case ClipParam::AnchorX: return core::AnimProp::AnchorX;
+    case ClipParam::AnchorY: return core::AnimProp::AnchorY;
     default: return std::nullopt;
   }
 }

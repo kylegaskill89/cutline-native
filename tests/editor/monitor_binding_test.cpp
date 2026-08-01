@@ -139,6 +139,42 @@ TEST(MonitorBinding, ABoxAppliedAndReadBackIsTheSameBox) {
   EXPECT_NEAR(read->rotation, wanted.rotation, 1e-9);
 }
 
+// The handles are drawn round a centre; position names the anchor. When the two
+// are the same point there is nothing to get wrong, so both of these move it.
+
+TEST(MonitorBinding, TheBoxSurroundsTheLayerWhenTheAnchorHasBeenMoved) {
+  core::Project p = project_with(1920, 1080);
+  // Anchored at its top left corner and placed in the middle of the frame, the
+  // layer hangs down and to the right — so its centre, which is what the
+  // handles go round, is half a layer past the middle on each axis.
+  p.tracks.front().clips.front().transform.anchor_x = 0.0;
+  p.tracks.front().clips.front().transform.anchor_y = 0.0;
+
+  const auto box = monitor_box(p, "c1", 2.0);
+  ASSERT_TRUE(box.has_value());
+  EXPECT_NEAR(box->x, 1.0, 1e-9);
+  EXPECT_NEAR(box->y, 1.0, 1e-9);
+}
+
+TEST(MonitorBinding, ADraggedBoxComesBackTheSameWithAMovedAnchor) {
+  core::Project p = project_with(1000, 1000);
+  p.tracks.front().clips.front().transform.anchor_x = 0.2;
+  p.tracks.front().clips.front().transform.anchor_y = 0.9;
+
+  const ui::MonitorBox wanted{
+      .x = 0.3, .y = 0.6, .width = 0.4, .height = 0.8, .rotation = -45.0};
+  p = apply_monitor_box(std::move(p), "c1", wanted, 2.0);
+
+  const auto read = monitor_box(p, "c1", 2.0);
+  ASSERT_TRUE(read.has_value());
+  EXPECT_NEAR(read->x, wanted.x, 1e-9);
+  EXPECT_NEAR(read->y, wanted.y, 1e-9);
+  EXPECT_NEAR(read->rotation, wanted.rotation, 1e-9);
+  // And the anchor itself is left where it was: a drag on the handles moves the
+  // layer, never the point it turns about.
+  EXPECT_DOUBLE_EQ(only_clip(p).transform.anchor_x, 0.2);
+}
+
 TEST(MonitorBinding, TheScaleWrittenIsRelativeToTheAspectFitSize) {
   core::Project p = project_with(1000, 1000);
   // Square footage fits to 1080x1080, which is 0.5625 of the canvas width. A

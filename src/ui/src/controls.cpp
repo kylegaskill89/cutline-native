@@ -335,7 +335,21 @@ LayoutItem NumericField::sizing(Axis axis, const LayoutContext& context) const {
   // the label and the number ended up drawn on top of each other, which neither
   // `--check`'s empty-widget test nor its clipping test can see.
   const double widest = std::max(width_of(range_.minimum), width_of(range_.maximum));
-  return LayoutItem::fixed(widest + metrics.padding_y * 2.0);
+
+  // It will give up room before the label beside it does, down to a floor.
+  //
+  // A parameter row with two numbers on it, a reset and the three keyframe
+  // controls does not fit a narrow panel, and something has to give. The name
+  // is what must not: a number with its tail cut off can be read by widening
+  // the panel, whereas a row with no name on it is a mystery — which is what
+  // was on screen, an animated Position showing two numbers and nothing saying
+  // what they were.
+  const double floor = width_of(0.0) + metrics.padding_y * 2.0;
+  return LayoutItem{.basis = widest + metrics.padding_y * 2.0,
+                    .grow = 0.0,
+                    .shrink = 1.0,
+                    .min = std::min(floor, widest + metrics.padding_y * 2.0),
+                    .max = kUnbounded};
 }
 
 void NumericField::layout(const LayoutContext& context) {
@@ -358,7 +372,14 @@ void NumericField::paint_content(Painter& painter, const Theme& theme) const {
   // can be done to it, and there is no other hint that this one can be dragged.
   TextRun run = text_run(where, display_text(), style, font_size_, TextAlign::Left);
   if (enabled()) run.color = theme.accent;
+
+  // Clipped when it has been squeezed, for the same reason a label is: without
+  // this a short number simply draws over whatever is beside it, which reads as
+  // two controls overlapping rather than as one that ran out of room.
+  const bool fits = painter.measure(display_text(), font_size_, false) <= where.width + 0.5;
+  if (!fits) painter.push_clip(area, 0.0);
   painter.text(run);
+  if (!fits) painter.pop_clip();
 
   // Underlined under the pointer, which is the second half of the same
   // affordance and the part that says *this* number rather than the row.
@@ -1216,6 +1237,13 @@ void TextField::paint_content(Painter& painter, const Theme& theme) const {
 IconButton::IconButton(Icon icon, std::function<void()> on_click)
     : Button({}, std::move(on_click)), icon_(icon) {
   set_part(Part::ToolButton);
+}
+
+LayoutItem IconButton::sizing(Axis axis, const LayoutContext& context) const {
+  if (!narrow_ || axis == Axis::Vertical) return Button::sizing(axis, context);
+  // Three quarters. Enough to still be an easy target, little enough that three
+  // of them together cost about what two square ones would.
+  return LayoutItem::fixed(std::round(context.metrics().control_height * 0.75));
 }
 
 void IconButton::paint_content(Painter& painter, const Theme& theme) const {

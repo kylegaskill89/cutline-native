@@ -52,13 +52,15 @@ enum class ClipEdge { In, Out };
 
 /// Properties that can be animated with keyframes over a clip's duration.
 /// The enumerators double as indices into `Clip::keyframes`.
-enum class AnimProp { X, Y, ScaleX, ScaleY, Rotation, Opacity };
+/// New enumerators go on the *end*: a saved file names its keyframe lists
+/// rather than numbering them, but everything in memory indexes by position.
+enum class AnimProp { X, Y, ScaleX, ScaleY, Rotation, Opacity, AnchorX, AnchorY };
 
-inline constexpr std::size_t kAnimPropCount = 6;
+inline constexpr std::size_t kAnimPropCount = 8;
 
 inline constexpr std::array<AnimProp, kAnimPropCount> kAnimProps{
-    AnimProp::X,        AnimProp::Y,        AnimProp::ScaleX,
-    AnimProp::ScaleY,   AnimProp::Rotation, AnimProp::Opacity,
+    AnimProp::X,       AnimProp::Y,        AnimProp::ScaleX,  AnimProp::ScaleY,
+    AnimProp::Rotation, AnimProp::Opacity, AnimProp::AnchorX, AnimProp::AnchorY,
 };
 
 [[nodiscard]] constexpr std::size_t anim_prop_index(AnimProp prop) noexcept {
@@ -151,18 +153,26 @@ struct Media {
 
 // -------------------------------------------------------------------- clip --
 
-/// Visual transform for a clip on a video track. Position is the clip centre as
-/// a fraction of the output canvas, so (0.5, 0.5) is centred. `scale_x`/`scale_y`
-/// are relative to the aspect-preserving fit-to-canvas size, where 1 fills that
-/// axis, and may differ for non-proportional scaling. Rotation is in degrees,
-/// clockwise. Expressing this in canvas fractions keeps it independent of the
-/// export resolution.
+/// Visual transform for a clip on a video track. Position is where the layer's
+/// *anchor point* lands, as a fraction of the output canvas, so (0.5, 0.5) is
+/// the middle of the frame. `scale_x`/`scale_y` are relative to the
+/// aspect-preserving fit-to-canvas size, where 1 fills that axis, and may differ
+/// for non-proportional scaling. Rotation is in degrees, clockwise. Expressing
+/// this in canvas fractions keeps it independent of the export resolution.
+///
+/// The anchor is the point of the layer that position places and that scale and
+/// rotation happen about, as a fraction of the layer itself: (0.5, 0.5) is its
+/// middle, (0, 0) its top left corner. A layer left at the default therefore
+/// behaves exactly as it did before there was an anchor at all, which is what
+/// keeps every project written without one reading the same.
 struct Transform {
   double x = 0.5;
   double y = 0.5;
   double scale_x = 1.0;
   double scale_y = 1.0;
   double rotation = 0.0;
+  double anchor_x = 0.5;
+  double anchor_y = 0.5;
 
   friend bool operator==(const Transform&, const Transform&) = default;
 };

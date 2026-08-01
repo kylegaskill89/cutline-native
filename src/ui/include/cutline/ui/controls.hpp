@@ -576,10 +576,22 @@ class IconButton : public Button {
   [[nodiscard]] Icon icon() const noexcept { return icon_; }
   void set_icon(Icon icon) noexcept { icon_ = icon; }
 
+  /// Narrower than it is tall, for a run of buttons that belong together.
+  ///
+  /// Premiere's keyframe navigator is three small arrows occupying about the
+  /// room one control would take, not three square controls side by side. Three
+  /// of those, a stopwatch, a disclosure triangle and two numbers do not fit a
+  /// parameter row, and the property's own name is what was dropped to make
+  /// them fit. Off by default: a button on its own wants a square target.
+  [[nodiscard]] bool narrow() const noexcept { return narrow_; }
+  void set_narrow(bool narrow) noexcept { narrow_ = narrow; }
+
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
   void paint_content(Painter& painter, const Theme& theme) const override;
 
  private:
   Icon icon_;
+  bool narrow_ = false;
 };
 
 /// A bar that fills as something finishes.

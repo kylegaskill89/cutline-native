@@ -65,7 +65,13 @@ Project rich_project() {
   c.opacity = 0.9;
   c.fade_in = 0.5;
   c.fade_out = 0.25;
-  c.transform = {.x = 0.4, .y = 0.6, .scale_x = 1.5, .scale_y = 2.0, .rotation = 30.0};
+  c.transform = {.x = 0.4,
+                 .y = 0.6,
+                 .scale_x = 1.5,
+                 .scale_y = 2.0,
+                 .rotation = 30.0,
+                 .anchor_x = 0.25,
+                 .anchor_y = 0.75};
   c.speed = 1.5;
   c.reverse = true;
   c.transition_out = Transition{.kind = TransitionKind::Slide, .duration = 1.25};
@@ -74,6 +80,7 @@ Project rich_project() {
   c.keyframes[anim_prop_index(AnimProp::X)] = {{.t = 0.0, .v = 0.0, .e = Interp::Hold},
                                                {.t = 2.0, .v = 1.0}};
   c.keyframes[anim_prop_index(AnimProp::Opacity)] = {{.t = 1.0, .v = 0.5}};
+  c.keyframes[anim_prop_index(AnimProp::AnchorY)] = {{.t = 0.0, .v = 0.5}, {.t = 3.0, .v = 0.0}};
 
   ClipEffect blur;
   blur.type = "blur";
@@ -156,6 +163,28 @@ TEST(Serialize, AbsentFieldsFallBackToDefaults) {
   EXPECT_EQ(c.blend, BlendMode::Normal);
   EXPECT_FALSE(c.group_id.has_value());
   EXPECT_EQ(c.transform, Transform{});
+}
+
+TEST(Serialize, ATransformWrittenBeforeThereWasAnAnchorIsCentred) {
+  // Every project saved by an earlier build has a transform with five fields in
+  // it. Read back with the anchor at the middle of the layer, those files mean
+  // exactly what they meant when they were written.
+  const auto loaded = from_json(R"({
+    "version": 1,
+    "project": {
+      "tracks": [{"id": "v1", "kind": "video", "clips": [
+        {"id": "c1", "media_id": "m1",
+         "transform": {"x": 0.25, "y": 0.5, "scale_x": 1.0, "scale_y": 1.0, "rotation": 45.0}}
+      ]}]
+    }
+  })");
+
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  const Transform& t = loaded->project.tracks[0].clips[0].transform;
+  EXPECT_DOUBLE_EQ(t.x, 0.25);
+  EXPECT_DOUBLE_EQ(t.rotation, 45.0);
+  EXPECT_DOUBLE_EQ(t.anchor_x, 0.5);
+  EXPECT_DOUBLE_EQ(t.anchor_y, 0.5);
 }
 
 TEST(Serialize, RejectsMalformedInput) {

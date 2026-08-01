@@ -43,8 +43,33 @@ struct LayerBox {
   friend bool operator==(const LayerBox&, const LayerBox&) = default;
 };
 
+/// How far a layer's centre sits from its anchor point, in canvas pixels.
+///
+/// Position places the *anchor*, and the compositor draws a rectangle about its
+/// centre, so something has to convert between the two. That something is this,
+/// in one place, because three callers need the answer: the compositor's box,
+/// the monitor's handles, and the drag that writes a position back.
+///
+/// `drawn` is the layer at the size it is actually drawn — scale already in it.
+/// Rotation turns the offset, which is what makes the anchor the point the
+/// layer spins about: the anchor stays where it was put and the rest swings
+/// around it.
+///
+/// Pixels rather than canvas fractions on purpose. A rotation is only a
+/// rotation in square units; the same turn applied to an offset expressed in
+/// fractions of a 16:9 canvas shears it instead.
+struct Offset {
+  double dx = 0.0;
+  double dy = 0.0;
+
+  friend bool operator==(const Offset&, const Offset&) = default;
+};
+
+[[nodiscard]] Offset anchor_offset(const Transform& transform, Size drawn) noexcept;
+
 /// The box a clip draws into at timeline time `t`, with keyframed transform
-/// applied. Stored `x, y` are canvas fractions where (0.5, 0.5) is centred.
+/// applied. Stored `x, y` are canvas fractions naming where the anchor lands,
+/// so (0.5, 0.5) puts the anchor in the middle of the frame.
 [[nodiscard]] LayerBox layer_box(const Clip& clip, const Media* media, double canvas_w,
                                  double canvas_h, double t, Size measured_text = {}) noexcept;
 

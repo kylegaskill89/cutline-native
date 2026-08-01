@@ -54,7 +54,7 @@ namespace {
 /// Keyframe lists are stored under property names rather than array positions,
 /// so reordering the AnimProp enumerators cannot silently reinterpret a file.
 constexpr std::array<const char*, kAnimPropCount> kAnimPropNames{
-    "x", "y", "scale_x", "scale_y", "rotation", "opacity",
+    "x", "y", "scale_x", "scale_y", "rotation", "opacity", "anchor_x", "anchor_y",
 };
 
 // ------------------------------------------------------------------ writing --
@@ -88,7 +88,9 @@ json write(const Transform& t) {
           {"y", t.y},
           {"scale_x", t.scale_x},
           {"scale_y", t.scale_y},
-          {"rotation", t.rotation}};
+          {"rotation", t.rotation},
+          {"anchor_x", t.anchor_x},
+          {"anchor_y", t.anchor_y}};
 }
 
 json write(const MatteGradient& g) { return {{"color2", g.color2}, {"angle", g.angle}}; }
@@ -276,6 +278,10 @@ Transform read_transform(const json& j) {
   t.scale_x = read_or(j, "scale_x", t.scale_x);
   t.scale_y = read_or(j, "scale_y", t.scale_y);
   t.rotation = read_or(j, "rotation", t.rotation);
+  // Absent in every file written before there was an anchor, and the default is
+  // the middle of the layer, which is what those files meant.
+  t.anchor_x = read_or(j, "anchor_x", t.anchor_x);
+  t.anchor_y = read_or(j, "anchor_y", t.anchor_y);
   return t;
 }
 

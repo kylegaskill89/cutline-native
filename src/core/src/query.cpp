@@ -82,6 +82,8 @@ Transform animated_transform(const Clip& c, double local_t) noexcept {
       .scale_x = value(AnimProp::ScaleX, base.scale_x),
       .scale_y = value(AnimProp::ScaleY, base.scale_y),
       .rotation = value(AnimProp::Rotation, base.rotation),
+      .anchor_x = value(AnimProp::AnchorX, base.anchor_x),
+      .anchor_y = value(AnimProp::AnchorY, base.anchor_y),
   };
 }
 
@@ -105,6 +107,10 @@ double animated_value(const Clip& c, AnimProp prop, double local_t) noexcept {
       return tr.scale_y;
     case AnimProp::Rotation:
       return tr.rotation;
+    case AnimProp::AnchorX:
+      return tr.anchor_x;
+    case AnimProp::AnchorY:
+      return tr.anchor_y;
     case AnimProp::Opacity:
       break;
   }

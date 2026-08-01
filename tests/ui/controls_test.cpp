@@ -584,6 +584,20 @@ TEST(NumericField, IsAsWideAsItsWidestValueRatherThanItsCurrentOne) {
   EXPECT_DOUBLE_EQ(narrow.basis, wide.sizing(Axis::Horizontal, flat_context()).basis);
 }
 
+TEST(NumericField, GivesUpRoomBeforeTheLabelBesideItDoes) {
+  // A parameter row with two numbers, a reset and three keyframe controls does
+  // not fit a narrow panel, and something has to give. It is this: a number cut
+  // short can be read by widening the panel, whereas a row with no name on it
+  // says nothing at all. That was on screen — an animated Position showing two
+  // numbers and no word to say what they were.
+  const NumericField field(ValueRange{.minimum = 0.0, .maximum = 1000.0}, 1.0);
+  const LayoutItem item = field.sizing(Axis::Horizontal, flat_context());
+
+  EXPECT_GT(item.shrink, 0.0);
+  EXPECT_GT(item.min, 0.0) << "but not to nothing";
+  EXPECT_LT(item.min, item.basis);
+}
+
 TEST(NumericField, ADisabledFieldStillShowsItsValue) {
   // A governed property — Scale Y under a locked aspect — has to stay readable.
   // Hiding it would leave nowhere to read the number the picture is at.
@@ -1419,6 +1433,20 @@ TEST(IconButton, IsSquareWhateverTheTheme) {
   const LayoutContext context = flat_context();
   EXPECT_DOUBLE_EQ(button.sizing(Axis::Horizontal, context).basis,
                    button.sizing(Axis::Vertical, context).basis);
+}
+
+TEST(IconButton, ANarrowOneKeepsItsHeightAndGivesUpWidth) {
+  // Premiere's keyframe navigator is three small arrows in about the room one
+  // control takes. Three square ones on a parameter row, beside a stopwatch, a
+  // triangle and two numbers, left no space for the property's own name.
+  IconButton button(IconButton::Icon::ArrowLeft);
+  const LayoutContext context = flat_context();
+  const double square = button.sizing(Axis::Horizontal, context).basis;
+
+  button.set_narrow(true);
+  EXPECT_LT(button.sizing(Axis::Horizontal, context).basis, square);
+  EXPECT_DOUBLE_EQ(button.sizing(Axis::Vertical, context).basis,
+                   IconButton(IconButton::Icon::ArrowLeft).sizing(Axis::Vertical, context).basis);
 }
 
 TEST(IconButton, ClicksLikeAnyOtherButton) {

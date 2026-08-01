@@ -161,7 +161,15 @@ std::vector<Workspace> built_in_workspaces() {
             {tabs({"project", "effects", "library"}),
              split(Axis::Vertical, {tabs({"monitor", "scopes", "audio"}), tabs({"timeline"})},
                    {0.58, 0.42})},
-            {0.26, 0.74});
+            // Wide enough for the widest row the inspector builds: an animated
+            // Anchor Point carries a name, two numbers, a stopwatch, a
+            // disclosure triangle and the three keyframe controls. At a quarter
+            // of the window that row ran out of room and dropped the name,
+            // leaving two numbers with nothing to say what they were. Narrowing
+            // the keyframe controls recovered most of it and this recovers the
+            // rest; the picture and the timeline can spare fifty pixels, and a
+            // row with no name on it cannot be read at all.
+            {0.30, 0.70});
 
   // Colour: the picture as large as it will go, the controls beside it, and
   // the timeline reduced to what is needed to move between shots. The scopes

@@ -3,6 +3,8 @@
 #include "cutline/core/query.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <numbers>
 #include <optional>
 
 namespace cutline::core {
@@ -27,16 +29,33 @@ Size natural_size(const Media* media, double canvas_w, double canvas_h,
   return {media_w * fit, media_h * fit};
 }
 
+Offset anchor_offset(const Transform& transform, Size drawn) noexcept {
+  // From the anchor to the centre, before the layer is turned.
+  const double dx = (0.5 - transform.anchor_x) * drawn.width;
+  const double dy = (0.5 - transform.anchor_y) * drawn.height;
+
+  const double radians = transform.rotation * std::numbers::pi / 180.0;
+  const double c = std::cos(radians);
+  const double s = std::sin(radians);
+  return {.dx = dx * c - dy * s, .dy = dx * s + dy * c};
+}
+
 LayerBox layer_box(const Clip& clip, const Media* media, double canvas_w, double canvas_h,
                    double t, Size measured_text) noexcept {
   const Size natural = natural_size(media, canvas_w, canvas_h, measured_text);
   const Transform transform = animated_transform(clip, t - clip.start);
 
+  const Size drawn{natural.width * transform.scale_x, natural.height * transform.scale_y};
+  const Offset shift = anchor_offset(transform, drawn);
+
+  // The anchor is what position names; the compositor wants a centre. Nothing
+  // below this line knows an anchor exists, which is why the shader and the
+  // preview were untouched by the whole feature.
   return {
-      .center_x = transform.x * canvas_w,
-      .center_y = transform.y * canvas_h,
-      .width = natural.width * transform.scale_x,
-      .height = natural.height * transform.scale_y,
+      .center_x = transform.x * canvas_w + shift.dx,
+      .center_y = transform.y * canvas_h + shift.dy,
+      .width = drawn.width,
+      .height = drawn.height,
       .rotation_deg = transform.rotation,
   };
 }
