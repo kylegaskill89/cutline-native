@@ -420,6 +420,14 @@ struct App {
   /// locked clip with unequal scales means.
   bool aspect_locked = false;
 
+  /// The lane view, while the inspector is showing one.
+  ///
+  /// Held because the context menu has to read the selection at the moment it
+  /// is chosen from, not at the moment it was opened — and because the panel is
+  /// rebuilt from nothing on every edit, so this is null far more often than it
+  /// is not. Cleared by `refresh_inspector` before anything is built.
+  cutline::ui::KeyframeView* keyframes = nullptr;
+
   /// Which parameters are showing their slider, by the key `ParamRow` carries.
   ///
   /// Premiere's arrangement: the number is always there and the slider is
@@ -1423,6 +1431,63 @@ void build_keyframe_lanes(App& app, const std::string& clip_id) {
     refresh_handles(app);
   });
 
+  // What the right-click menu offers, and what each entry does to one keyframe.
+  // Applied across the whole selection in one go, which is the point of being
+  // able to select several: ease out of the first, hold through the middle,
+  // ease into the last is three menu choices rather than thirty.
+  struct KeyframeAction {
+    std::string name;
+    cutline::core::Interp mode = cutline::core::Interp::Linear;
+    bool removes = false;
+  };
+  static const std::vector<KeyframeAction> kActions{
+      {.name = "Linear", .mode = cutline::core::Interp::Linear},
+      {.name = "Hold", .mode = cutline::core::Interp::Hold},
+      {.name = "Ease", .mode = cutline::core::Interp::Ease},
+      {.name = "Delete", .removes = true}};
+
+  // One project, edited once per selected keyframe, applied once. Applying each
+  // separately would put one entry in the undo stack per keyframe, and undoing
+  // "ease these five" would take five presses.
+  const auto apply_to_selection = [&app, clip_id, lanes](const KeyframeAction& action) {
+    if (app.keyframes == nullptr) return;
+    cutline::core::Project next = app.session.project();
+    for (const cutline::ui::KeyframeHit& hit : app.keyframes->selection()) {
+      if (!hit.found || hit.lane >= lanes.size()) continue;
+      const cutline::editor::KeyframeLane& lane = lanes[hit.lane];
+      if (hit.index >= lane.keys.size()) continue;
+      const double at = lane.keys[hit.index].t;
+      next = action.removes
+                 ? cutline::editor::remove_keyframe(std::move(next), clip_id, lane.ref, at)
+                 : cutline::editor::set_keyframe_interp(std::move(next), clip_id, lane.ref, at,
+                                                        action.mode);
+    }
+    app.session.apply(std::move(next));
+    refresh_timeline(app);
+    invalidate_preview(app);
+    app.inspector_stale = true;
+  };
+
+  app.keyframes = &view;
+
+  view.set_on_context_menu([&app, apply_to_selection](double x, double y) {
+    if (app.main.host == nullptr) return;
+    std::vector<std::string> names;
+    names.reserve(kActions.size());
+    for (const KeyframeAction& action : kActions) names.push_back(action.name);
+
+    auto list = std::make_unique<MenuList>(std::move(names));
+    list->set_on_choose([&app, apply_to_selection](std::size_t index) {
+      if (app.main.host != nullptr) app.main.host->close_popup();
+      if (index < kActions.size()) apply_to_selection(kActions[index]);
+    });
+    // Anchored on the pointer rather than on a control: there is no widget
+    // under a right-click to hang a menu from, only a position.
+    app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
+  });
+
+  view.set_on_delete([apply_to_selection] { apply_to_selection(kActions.back()); });
+
   view.set_on_move_commit(
       [&app, clip_id, lanes](std::size_t lane, std::size_t index, double, double to) {
         if (lane >= lanes.size()) return;
@@ -1722,6 +1787,7 @@ void refresh_inspector(App& app) {
   // Rebuilt from nothing each time. `clear_children` tells the host to drop
   // hover, focus and capture first, so a slider that was mid-drag when the
   // selection changed is not freed underneath the drag.
+  app.keyframes = nullptr;
   app.inspector->clear_children();
 
   const auto selection = app.session.selection();
@@ -5068,6 +5134,29 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       ReleaseCapture();
       shell->host->mouse_up(mouse_from(lparam, MouseButton::Left));
       if (shell->host->needs_paint()) shell->dirty = true;
+      return 0;
+
+    // The right button, which until now reached nothing at all: `MouseEvent`
+    // has carried a button since the first widget and this layer only ever
+    // translated the left one, so every context menu in the application was
+    // blocked on three lines that were never written.
+    //
+    // No `SetCapture`. A right-click is a single event rather than a gesture —
+    // there is no right-drag anywhere — and holding the pointer for one would
+    // only mean the release goes somewhere surprising. The host does not
+    // capture on it either, for the same reason.
+    case WM_RBUTTONDOWN:
+      shell->host->mouse_down(mouse_from(lparam, MouseButton::Right));
+      if (shell->host->needs_paint()) shell->dirty = true;
+      return 0;
+    case WM_RBUTTONUP:
+      shell->host->mouse_up(mouse_from(lparam, MouseButton::Right));
+      if (shell->host->needs_paint()) shell->dirty = true;
+      return 0;
+
+    // Swallowed. Windows sends this after the release, and letting it through
+    // to `DefWindowProc` puts the system's own menu up over ours.
+    case WM_CONTEXTMENU:
       return 0;
 
     case WM_MOUSEWHEEL: {

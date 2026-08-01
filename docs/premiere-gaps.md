@@ -87,11 +87,11 @@ length across its width, which is what Premiere's does before anybody zooms.
 | Keyframe lane per property | yes | **done** | — |
 | Drag a keyframe in time | yes | **done** — the picture follows, one undo entry for the drag | — |
 | Previous / next keyframe buttons | ◀ ◆ ▶ on every animated row | **done**, greyed at the ends of the list | — |
-| Select several keyframes | click, shift-click, marquee | click and shift-click; no marquee | control |
-| Right-click a selection | a context menu on it | **no right-click anywhere in the application** | wiring |
-| Interpolation per keyframe | Linear, Bezier, Auto Bezier, Continuous, Hold, Ease In, Ease Out | `set_keyframe_interp` does it; nothing calls it yet | wiring |
-| Zoom and scroll the lanes | yes | the clip's whole length, always | control |
-| Delete a selected keyframe | Delete | `remove_keyframe` does it; no key is bound | wiring |
+| Select several keyframes | click, shift-click, marquee | **done** — all three | — |
+| Right-click a selection | a context menu on it | **done**, and it is the first right-click the application has ever had | — |
+| Interpolation per keyframe | Linear, Bezier, Auto Bezier, Continuous, Hold, Ease In, Ease Out | **done** for our three modes, across a whole selection at once | — |
+| Zoom and scroll the lanes | yes | **done** — wheel zooms about the pointer, shift-wheel scrolls | — |
+| Delete a selected keyframe | Delete | **done**, and on the menu | — |
 | Velocity graph | expandable value and speed curves | no | machinery |
 | Copy and paste keyframes | yes | no | wiring |
 
@@ -141,19 +141,22 @@ anybody describes it and the way Premiere presents it. The three modes we have
 are Linear, Hold and Ease; Premiere's seven are a superset, and Bezier with
 draggable handles is the one that needs the velocity graph to be worth having.
 
-#### Nothing in this application has ever seen a right-click
+#### The right-click, which the application had never had
 
-Worth stating on its own, because it blocks the context menu above and is
-invisible until something needs it. `MouseEvent` carries a button and
-`MouseButton::Right` exists, but the Win32 layer only translates
-`WM_LBUTTONDOWN` — there is no `WM_RBUTTONDOWN` case at all, so a right-click
-reaches no widget anywhere in the editor.
+Worth recording, because it blocked every context menu in this document and was
+invisible until something needed one. `MouseEvent` had carried a button since
+the first widget and `MouseButton::Right` had always existed, but the Win32
+layer only ever translated `WM_LBUTTONDOWN` — so a right-click reached no widget
+anywhere in the editor.
 
-The popup machinery it would feed is already there and already used by five
-different controls (`open_popup` takes any widget, `MenuList` is the menu). The
-missing part is three message cases and the routing, plus deciding what a
-right-click means where there is no menu for it — which should be nothing,
-rather than falling through to a left-click.
+It was three message cases. `WidgetHost` needed nothing at all: it had always
+routed by button and only ever gated *capture* on the left one, which turns out
+to be exactly right — a right-click is a single event rather than a gesture, and
+holding the pointer for one only means the release goes somewhere surprising.
+`WM_CONTEXTMENU` is swallowed, or the system puts its own menu up over ours.
+
+Where there is nothing to offer, a right-click is left unhandled and carries on
+to whatever is behind, rather than opening an empty menu.
 
 ### 1.3 The effects library
 

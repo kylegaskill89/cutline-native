@@ -19,6 +19,12 @@ constexpr double kShortest = 1e-6;
 /// clip's own seconds — so a ruler in whole seconds is the honest answer.
 constexpr double kRulerFps = 1.0;
 
+/// How much one notch of the wheel zooms, and how much of the visible span one
+/// notch scrolls by. A fifth of a screen per notch is far enough to get
+/// somewhere and short enough to keep your place.
+constexpr double kZoomNotch = 1.25;
+constexpr double kScrollNotch = 0.2;
+
 /// Time as a ruler label. Minutes appear only once there are any, so a
 /// four-second clip is not labelled `0:01`.
 [[nodiscard]] std::string label_for(double t, double duration) {
@@ -29,9 +35,18 @@ constexpr double kRulerFps = 1.0;
 
 }  // namespace
 
-KeyframeView::KeyframeView() { set_clips_children(true); }
+KeyframeView::KeyframeView() {
+  set_clips_children(true);
+  // Focusable so Delete reaches it. Nothing else here takes the keyboard, and
+  // a selection that could only be removed with the mouse would be the one
+  // gesture in the application with no key behind it.
+  set_focusable(true);
+}
 
 void KeyframeView::set_model(Model model) {
+  // A different clip is a different axis. Keeping the zoom would show the new
+  // one's first two seconds because the old one happened to be looked at there.
+  if (std::abs(model.duration - model_.duration) > kShortest) reset_view();
   model_ = std::move(model);
   // Indices into the old model mean nothing in the new one, and a selection
   // kept across a rebuild is how a right-click ends up acting on a keyframe
@@ -46,6 +61,12 @@ void KeyframeView::nudge(std::size_t lane, std::size_t index, double t) {
   if (lane >= model_.lanes.size()) return;
   if (index >= model_.lanes[lane].times.size()) return;
   model_.lanes[lane].times[index] = std::clamp(t, 0.0, model_.duration);
+}
+
+/// Asks for a fresh frame without asking for a fresh layout. Zooming moves
+/// nothing in the tree — only what this widget draws inside its own bounds.
+void KeyframeView::repaint() {
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
 }
 
 void KeyframeView::set_playhead(double t) noexcept {
@@ -104,16 +125,51 @@ double KeyframeView::axis_width() const {
   return std::max(0.0, bounds().width - std::min(kNameWidth, bounds().width) - kEdgeInset * 2.0);
 }
 
+double KeyframeView::view_span() const noexcept {
+  return view_span_ > 0.0 ? view_span_ : model_.duration;
+}
+
+void KeyframeView::set_view(double start, double span) {
+  if (model_.duration < kShortest) {
+    view_start_ = 0.0;
+    view_span_ = 0.0;
+    return;
+  }
+
+  view_span_ = std::clamp(span, model_.duration * kMinSpan, model_.duration);
+  // Never past either end. There is nothing before a clip starts or after it
+  // finishes, and scrolling into it only produces empty space nobody asked for.
+  view_start_ = std::clamp(start, 0.0, model_.duration - view_span_);
+}
+
+void KeyframeView::reset_view() noexcept {
+  view_start_ = 0.0;
+  view_span_ = 0.0;
+}
+
+void KeyframeView::zoom_about(double x, double factor) {
+  if (factor <= 0.0 || model_.duration < kShortest) return;
+  const double anchor = time_at(x);
+  const double span = view_span() / factor;
+  // The anchor keeps its place along the axis, so what is under the pointer
+  // stays under it.
+  const double fraction =
+      axis_width() > 0.0 ? std::clamp((x - axis_x()) / axis_width(), 0.0, 1.0) : 0.0;
+  set_view(anchor - fraction * span, span);
+}
+
 double KeyframeView::x_of(double t) const {
   const double width = axis_width();
-  if (model_.duration < kShortest || width <= 0.0) return axis_x();
-  return axis_x() + std::clamp(t / model_.duration, 0.0, 1.0) * width;
+  const double span = view_span();
+  if (span < kShortest || width <= 0.0) return axis_x();
+  return axis_x() + (t - view_start_) / span * width;
 }
 
 double KeyframeView::time_at(double x) const {
   const double width = axis_width();
-  if (model_.duration < kShortest || width <= 0.0) return 0.0;
-  return std::clamp((x - axis_x()) / width, 0.0, 1.0) * model_.duration;
+  const double span = view_span();
+  if (span < kShortest || width <= 0.0) return 0.0;
+  return std::clamp(view_start_ + (x - axis_x()) / width * span, 0.0, model_.duration);
 }
 
 Rect KeyframeView::keyframe_rect(std::size_t lane, std::size_t index) const {
@@ -142,9 +198,14 @@ KeyframeHit KeyframeView::keyframe_at(double x, double y) const {
   // pointer is actually closest to instead of whichever came first in the list.
   KeyframeHit best;
   double closest = kGrabReach;
+  const Rect track = track_rect(lane);
   const Lane& row = model_.lanes[lane];
   for (std::size_t i = 0; i < row.times.size(); ++i) {
-    const double distance = std::abs(x_of(row.times[i]) - x);
+    const double at = x_of(row.times[i]);
+    // Scrolled out of the view is out of reach. Without this a keyframe just
+    // past the left edge can be grabbed by pressing on the property's name.
+    if (at < track.x || at > track.right()) continue;
+    const double distance = std::abs(at - x);
     if (distance <= closest) {
       closest = distance;
       best = KeyframeHit{.lane = lane, .index = i, .found = true};
@@ -189,9 +250,15 @@ void KeyframeView::paint_content(Painter& painter, const Theme& theme) const {
 
   // The marks, across the track area only — the gutter is names, and a tick
   // drawn through them reads as a strikethrough.
+  // Against the *visible* span rather than the whole clip, so zooming in gives
+  // finer marks instead of the same six spread further apart.
   TimeScale scale;
-  scale.fit(model_.duration, std::max(1.0, axis_width()));
-  for (const Tick& tick : ruler_ticks(scale, 0.0, model_.duration, kRulerFps)) {
+  scale.fit(view_span(), std::max(1.0, axis_width()));
+  const Rect strip_track{axis_x() - kEdgeInset, strip.y,
+                         axis_width() + kEdgeInset * 2.0, strip.height};
+  painter.push_clip(strip_track, 0.0);
+  for (const Tick& tick :
+       ruler_ticks(scale, view_start_, view_start_ + view_span(), kRulerFps)) {
     const double x = x_of(tick.time);
     const double height = tick.major ? strip.height * 0.5 : strip.height * 0.25;
     painter.line(x, strip.bottom() - height, x, strip.bottom(), ruler_style.text, 1.0);
@@ -199,6 +266,7 @@ void KeyframeView::paint_content(Painter& painter, const Theme& theme) const {
     painter.text(text_run(Rect{x + 3.0, strip.y, kNameWidth, strip.height * 0.7},
                           label_for(tick.time, model_.duration), ruler_style, font_size_));
   }
+  painter.pop_clip();
 
   for (std::size_t lane = 0; lane < model_.lanes.size(); ++lane) {
     const Rect row = lane_rect(lane);
@@ -220,6 +288,9 @@ void KeyframeView::paint_content(Painter& painter, const Theme& theme) const {
                                                          panel.text.b, 0.25},
                  1.0);
 
+    // Zoomed in, most of a lane's keyframes are off the ends of the axis.
+    // Clipped rather than skipped, so one that is half in view is drawn half.
+    painter.push_clip(track, 0.0);
     for (std::size_t i = 0; i < model_.lanes[lane].times.size(); ++i) {
       const Rect mark = keyframe_rect(lane, i);
       const double cx = mark.x + mark.width * 0.5;
@@ -232,23 +303,80 @@ void KeyframeView::paint_content(Painter& painter, const Theme& theme) const {
       painter.line(cx, cy + kDiamond, cx - kDiamond, cy, colour, 1.5);
       painter.line(cx - kDiamond, cy, cx, cy - kDiamond, colour, 1.5);
     }
+    painter.pop_clip();
   }
 
-  // Last, so it is never hidden under a lane's fill or a diamond.
+  // Last, so it is never hidden under a lane's fill or a diamond. Only when it
+  // is in view: a line drawn at the playhead's off-screen x would run down the
+  // property names, or outside the widget altogether.
   const double head = x_of(playhead_);
-  painter.line(head, strip.y, head, bounds().bottom(), theme.accent, 1.0);
+  if (head >= axis_x() - kEdgeInset && head <= axis_x() + axis_width() + kEdgeInset) {
+    painter.line(head, strip.y, head, bounds().bottom(), theme.accent, 1.0);
+  }
+
+  if (!marquee_.empty()) {
+    painter.fill(marquee_, 0.0,
+                 Fill::solid(Color{theme.accent.r, theme.accent.g, theme.accent.b, 0.15}));
+    painter.stroke(marquee_, 0.0, theme.accent, 1.0);
+  }
 }
 
 // ------------------------------------------------------------------ input --
 
+void KeyframeView::select_within(const Rect& band, bool add) {
+  selection_ = add ? before_band_ : std::vector<KeyframeHit>{};
+
+  for (std::size_t lane = 0; lane < model_.lanes.size(); ++lane) {
+    // By the lane's *row*, not by the diamond's own few pixels. A band swept
+    // across a row is meant to take everything on it, and asking anybody to
+    // drag through the vertical middle of a diamond would make the gesture
+    // useless.
+    const Rect row = lane_rect(lane);
+    if (row.bottom() <= band.y || row.y >= band.bottom()) continue;
+
+    for (std::size_t i = 0; i < model_.lanes[lane].times.size(); ++i) {
+      const double x = x_of(model_.lanes[lane].times[i]);
+      if (x < band.x || x > band.right()) continue;
+      const KeyframeHit hit{.lane = lane, .index = i, .found = true};
+      if (!is_selected(lane, i)) selection_.push_back(hit);
+    }
+  }
+}
+
 bool KeyframeView::on_mouse_down(const MouseEvent& event) {
+  const KeyframeHit hit = keyframe_at(event.x, event.y);
+
+  if (event.button == MouseButton::Right) {
+    // A right-click on an unselected keyframe takes it first, the way every
+    // context menu everywhere does. On one that is already selected it leaves
+    // the selection alone, so a menu can act on all of them.
+    if (hit.found && !is_selected(hit.lane, hit.index)) {
+      select_only(hit);
+      if (on_select_) on_select_();
+    }
+    // Nothing selected means nothing to offer, and an empty menu is worse than
+    // none. Unhandled, so it carries on to whatever is behind.
+    if (selection_.empty()) return false;
+    if (on_context_menu_) on_context_menu_(event.x, event.y);
+    return true;
+  }
+
   if (event.button != MouseButton::Left) return false;
 
-  const KeyframeHit hit = keyframe_at(event.x, event.y);
+  // The ruler scrubs. It is the one part of the view that is about the
+  // playhead rather than about keyframes.
+  if (event.y < ruler().bottom()) {
+    dragging_ = {};
+    banding_ = false;
+    pressed_ = false;
+    if (on_scrub_) on_scrub_(time_at(event.x));
+    return true;
+  }
+
   if (hit.found) {
     // Shift adds to the selection; a plain click replaces it — but only when
-    // the keyframe pressed is not already in it, so dragging several at once
-    // stays possible once that lands.
+    // the keyframe pressed is not already in it, so pressing on one of several
+    // to drag them all does not throw the rest away first.
     if (event.modifiers.shift) {
       toggle(hit);
     } else if (!is_selected(hit.lane, hit.index)) {
@@ -257,33 +385,52 @@ bool KeyframeView::on_mouse_down(const MouseEvent& event) {
     if (on_select_) on_select_();
 
     dragging_ = hit;
+    banding_ = false;
     pressed_ = true;
     moved_ = false;
     press_x_ = event.x;
+    press_y_ = event.y;
     drag_from_ = model_.lanes[hit.lane].times[hit.index];
     return true;
   }
 
-  // Empty space clears the selection and scrubs, which is what the ruler and
-  // the gaps between keyframes are for.
-  if (!event.modifiers.shift && !selection_.empty()) {
-    selection_.clear();
-    if (on_select_) on_select_();
-  }
+  // Empty lane space begins a rubber band. A press that never moves is a click,
+  // and a click on nothing clears the selection — decided at the release, since
+  // until then it could still become a sweep.
   dragging_ = {};
-  pressed_ = false;
-  if (on_scrub_) on_scrub_(time_at(event.x));
+  banding_ = true;
+  band_adds_ = event.modifiers.shift;
+  before_band_ = selection_;
+  pressed_ = true;
+  moved_ = false;
+  press_x_ = event.x;
+  press_y_ = event.y;
+  marquee_ = Rect{};
   return true;
 }
 
 bool KeyframeView::on_mouse_move(const MouseEvent& event) {
-  if (!pressed_ || !dragging_.found) return false;
+  if (!pressed_) return false;
 
   if (!moved_) {
-    if (std::abs(event.x - press_x_) < kDragThreshold) return true;
+    // Vertically too, for the band: a sweep straight down a column of lanes is
+    // a perfectly ordinary gesture and moves the pointer no distance sideways.
+    const double travelled = banding_ ? std::max(std::abs(event.x - press_x_),
+                                                 std::abs(event.y - press_y_))
+                                      : std::abs(event.x - press_x_);
+    if (travelled < kDragThreshold) return true;
     moved_ = true;
   }
 
+  if (banding_) {
+    marquee_ = Rect{std::min(press_x_, event.x), std::min(press_y_, event.y),
+                    std::abs(event.x - press_x_), std::abs(event.y - press_y_)};
+    select_within(marquee_, band_adds_);
+    if (on_select_) on_select_();
+    return true;
+  }
+
+  if (!dragging_.found) return true;
   if (on_move_) on_move_(dragging_.lane, dragging_.index, time_at(event.x));
   return true;
 }
@@ -291,6 +438,19 @@ bool KeyframeView::on_mouse_move(const MouseEvent& event) {
 bool KeyframeView::on_mouse_up(const MouseEvent& event) {
   if (event.button != MouseButton::Left || !pressed_) return false;
   pressed_ = false;
+
+  if (banding_) {
+    banding_ = false;
+    marquee_ = Rect{};
+    // It never moved, so it was a click on nothing, and that clears.
+    if (!moved_ && !event.modifiers.shift && !selection_.empty()) {
+      selection_.clear();
+      if (on_select_) on_select_();
+    }
+    moved_ = false;
+    return true;
+  }
+
   if (!moved_ || !dragging_.found) return true;
 
   moved_ = false;
@@ -298,6 +458,30 @@ bool KeyframeView::on_mouse_up(const MouseEvent& event) {
   if (on_move_commit_ && to != drag_from_) {
     on_move_commit_(dragging_.lane, dragging_.index, drag_from_, to);
   }
+  return true;
+}
+
+bool KeyframeView::on_key_down(const KeyEvent& event) {
+  if (event.key != Key::Delete || selection_.empty()) return false;
+  if (on_delete_) on_delete_();
+  return true;
+}
+
+bool KeyframeView::on_wheel(const WheelEvent& event) {
+  if (model_.duration < kShortest || event.delta_y == 0.0) return false;
+
+  // Shift scrolls, everything else zooms. The opposite way round from a
+  // document, and the right way round here: the axis is the whole point of the
+  // view, and there is nothing to scroll to until it has been zoomed into.
+  if (event.modifiers.shift) {
+    if (view_span_ <= 0.0) return false;  // the whole clip is showing
+    set_view(view_start_ + event.delta_y * view_span() * kScrollNotch, view_span());
+    repaint();
+    return true;
+  }
+
+  zoom_about(event.x, event.delta_y < 0.0 ? kZoomNotch : 1.0 / kZoomNotch);
+  repaint();
   return true;
 }
 
