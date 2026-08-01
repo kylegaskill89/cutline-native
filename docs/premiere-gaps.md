@@ -30,7 +30,7 @@ Reverse sits beside Speed and nowhere else, because they are one operation in
 the model: `set_clip_speed` takes both, and a clip played backwards at half rate
 is one retime rather than two.
 
-### 1.1 How a parameter is shown and set — **done**
+### 1.1 How a parameter is shown and set
 
 Premiere shows a **number**, in blue, that can be dragged to scrub the value or
 clicked to type an exact one. A disclosure triangle beside it reveals a slider
@@ -56,6 +56,9 @@ still opens the field rather than nudging the value somewhere nobody asked for.
 | Click the number to type | yes | **done**, and the unit may be typed back in | — |
 | Slider | behind a disclosure triangle | **done** | — |
 | Paired X/Y on one row | Position and Anchor Point are one row of two numbers | two separate rows | control |
+| **Anchor Point** | a property of its own; scale and rotation happen about it | **absent from the model** — `Transform` has position, scale and rotation, and both happen about the clip's centre | model + compositor |
+| Time remapping | Speed keyframed, in Effect Controls | Speed is explicitly not animatable | model |
+| Anti-flicker filter | a slider under Motion | none | model + shader |
 | Per-row reset button | a visible circular arrow | double-click the number, with no affordance saying so | control |
 | Per-section reset | one per `fx` group | none | wiring |
 | Greying a property another one governs | Uniform Scale greys Scale Width | Lock aspect ties them but leaves both live | wiring |
@@ -211,7 +214,7 @@ folders and never learns the difference between them.
 | A dockable panel | yes | **done** — "Effects Library", in every built-in workspace | — |
 | Search by name | filters the whole tree as you type | **done**, and a folder whose name matches keeps its contents | — |
 | Folder tree | Presets, Lumetri Presets, Audio Effects, Audio Transitions, Video Effects (18 categories), Video Transitions | **done** — one level, qualified: `Video · Colour`, `Audio`, `Video Transitions` | — |
-| Double-click to apply to the selection | yes | **done**, and Enter does the same from the keyboard | — |
+| Double-click to apply to the selection | yes | **done** — but only to the *first* clip selected, not all of them | wiring |
 | Transitions in the same panel | Video and Audio Transitions are folders in it | **done** — and refused where nothing abuts the clip | — |
 | Drag an effect onto a clip | onto the timeline or the program monitor | **done** for the timeline; not the monitor | control |
 | Nested folders | Video Effects › Blur & Sharpen › Gaussian Blur | one level, with the parent folded into the name | control |
@@ -322,6 +325,60 @@ Color** (or an equivalent grading control — curves, wheels, HSL secondaries),
 **Lens Distortion**, **Drop Shadow**, **Track Matte Key**, **Ultra Key** (ours
 is a simple chroma key), **Warp Stabilizer**, **Transform** (the effect, which
 unlike Motion sits in the stack and can be reordered).
+
+### 1.6 Audit: what section 1 is still missing
+
+Written by walking the code rather than this document, because two entries here
+have already turned out to be wrong when checked that way. Everything below was
+confirmed against the source.
+
+**Not in this document until now.** These are the finds, in rough order of how
+much they cost somebody:
+
+1. **No anchor point.** `core::Transform` is position, scale and rotation, and
+   the compositor rotates and scales about the quad's centre. There is no way to
+   spin a layer about its corner, which is most of what an anchor point is for.
+   Model, shader and control.
+2. **No panner.** Nothing in the model carries pan. Premiere has one on every
+   audio clip, and it is not an effect — it is part of what a clip *is*.
+3. **Audio effect parameters cannot be keyframed at all.** `AudioClipEffect`
+   holds a type, an enabled flag and a map of numbers. Clip gain is automatable
+   and nothing else about the sound is. The video side has had per-parameter
+   keyframes since phase 1.
+4. **An effect applies to one clip, not the selection.** Both the double-click
+   and the drop take `selection.front()`. Premiere applies to every selected
+   clip, which is the whole reason to select several.
+5. **Effects cannot be reordered by dragging** — only by the up and down
+   buttons. The buttons were the right first answer: they work from the
+   keyboard and can be tested without a pointer. They are not the last answer.
+6. **Only the whole stack can be copied**, not one effect off it.
+7. **Effect Controls never says which clip it is showing.** Premiere titles the
+   panel with the clip and the sequence. With one clip selected it is obvious;
+   with a timeline full of similar takes it is not.
+
+**Already listed, and still open.** Carried forward so this is one list rather
+than four:
+
+| | Where | Size |
+|---|---|---|
+| Paired X/Y on one row | §1.1 | control |
+| A visible reset control per row | §1.1 — double-click works, nothing says so | control |
+| Reset a whole effect at once | §1.1 | wiring |
+| Greying a property another governs (Lock aspect) | §1.1 | wiring |
+| Bezier handles on the velocity graph | §1.2 | **model** |
+| Drag an effect onto the program monitor | §1.3 | control |
+| Nested folders in the library | §1.3 | control |
+| User bins, and named presets | §1.3 | machinery |
+| Masks | §1.4 | **decision, then machinery** |
+| Catalogue depth | §1.5 | **blocked on the root-constant budget** |
+
+**The shape of what is left.** Of the seventeen items above, eleven are wiring
+or a control and could be done in any order. The other six are not independent:
+masks, catalogue depth and per-effect anything all wait on effects becoming
+passes rather than fields, and bezier handles, anchor point, panner and audio
+keyframes are each a change to the model with a serialiser and a compatibility
+question attached. Those two clusters are the real remaining work in section 1;
+everything else is an afternoon.
 
 ---
 
