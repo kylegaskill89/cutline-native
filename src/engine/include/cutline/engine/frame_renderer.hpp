@@ -30,6 +30,24 @@
 
 namespace cutline::engine {
 
+/// Whether this build can rasterise a title.
+///
+/// The text layer is Skia, and the presets that carry no Skia build the whole
+/// renderer without it: a title clip is then planned, laid out and composited
+/// as nothing at all. That is deliberate — the `media` preset exports
+/// everything else and does not pay a Skia build for it — but it means "a title
+/// drew no pixels" is the correct answer in one build and a bug in another, and
+/// nothing could tell the two apart from outside.
+///
+/// It is asked at run time rather than by a macro so that whoever needs the
+/// answer does not have to be compiled with the same definitions the engine
+/// was. The tests are what needed it: five of them asserted that a title draws
+/// its glyphs, and under the `media` preset they had been failing CI for weeks
+/// for the one reason that is not a defect. A sixth — that a title is
+/// transparent around its glyphs — was passing, which is worse: it is true of a
+/// title that drew nothing at all.
+[[nodiscard]] bool can_draw_text() noexcept;
+
 class FrameRenderer {
  public:
   /// Creates a renderer for a canvas of the given size. The compositor is

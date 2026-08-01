@@ -15,6 +15,15 @@
 #include <vector>
 
 namespace cutline::engine {
+
+bool can_draw_text() noexcept {
+#if CUTLINE_HAVE_TEXT
+  return true;
+#else
+  return false;
+#endif
+}
+
 namespace {
 
 using gpu::BlendMode;

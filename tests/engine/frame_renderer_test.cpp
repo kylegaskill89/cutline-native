@@ -188,7 +188,28 @@ Media titled(std::string id, core::TextSpec spec) {
   return count;
 }
 
-TEST_F(FrameRendererTest, ATitleDrawsItsText) {
+/// The tests that need glyphs on the screen.
+///
+/// A fixture of their own rather than a skip repeated six times, because what
+/// they have in common is a *capability* and not a condition — and because the
+/// grouping is what says which tests are about titles and which are about a
+/// renderer that happens to have one on it.
+///
+/// Under the `media` preset there is no Skia and therefore no text layer, so a
+/// title composites as nothing at all. That is deliberate; these five had been
+/// failing CI for weeks because of it, which is the one reason a red test is
+/// not a defect. A sixth was passing, which was worse — "a title is transparent
+/// around its glyphs" is true of a title that drew no glyphs.
+class TitleRendererTest : public FrameRendererTest {
+ protected:
+  void SetUp() override {
+    FrameRendererTest::SetUp();
+    if (IsSkipped()) return;
+    if (!can_draw_text()) GTEST_SKIP() << "this build has no text layer";
+  }
+};
+
+TEST_F(TitleRendererTest, ATitleDrawsItsText) {
   Project p = canvas_project();
   p.media = {titled("t", big_text())};
   p.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
@@ -203,7 +224,7 @@ TEST_F(FrameRendererTest, ATitleDrawsItsText) {
   EXPECT_LT(drawn, kWidth * kHeight * 3 / 4) << "that looks like a solid block";
 }
 
-TEST_F(FrameRendererTest, ATitleIsTransparentAroundItsGlyphs) {
+TEST_F(TitleRendererTest, ATitleIsTransparentAroundItsGlyphs) {
   Project p = canvas_project();
   // A single narrow letter in the middle: the corners of the canvas cannot be
   // part of it.
@@ -215,7 +236,7 @@ TEST_F(FrameRendererTest, ATitleIsTransparentAroundItsGlyphs) {
   EXPECT_EQ(pixel_at(image, kWidth - 2, kHeight - 2).a, 0);
 }
 
-TEST_F(FrameRendererTest, ATitleWithABackgroundCoversItsBox) {
+TEST_F(TitleRendererTest, ATitleWithABackgroundCoversItsBox) {
   core::TextSpec spec = big_text();
   spec.background = "#0000ff";
 
@@ -228,7 +249,7 @@ TEST_F(FrameRendererTest, ATitleWithABackgroundCoversItsBox) {
   EXPECT_EQ(centre.a, 255);
 }
 
-TEST_F(FrameRendererTest, ATitleIsSizedToItsTextRatherThanToTheCanvas) {
+TEST_F(TitleRendererTest, ATitleIsSizedToItsTextRatherThanToTheCanvas) {
   // Two titles of very different lengths at the same font size cover very
   // different areas. If the quad were the canvas either way, the shorter one
   // would simply be stretched and the coverage would match.
@@ -245,7 +266,7 @@ TEST_F(FrameRendererTest, ATitleIsSizedToItsTextRatherThanToTheCanvas) {
   EXPECT_GT(fat, thin * 2) << "both titles covered about the same area";
 }
 
-TEST_F(FrameRendererTest, AnEditedTitleIsRedrawnRatherThanCached) {
+TEST_F(TitleRendererTest, AnEditedTitleIsRedrawnRatherThanCached) {
   Project p = canvas_project();
   p.media = {titled("t", big_text("l"))};
   p.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
@@ -259,7 +280,7 @@ TEST_F(FrameRendererTest, AnEditedTitleIsRedrawnRatherThanCached) {
   EXPECT_GT(after, before * 2);
 }
 
-TEST_F(FrameRendererTest, ATitleTakesTheEffectsOnItsClip) {
+TEST_F(TitleRendererTest, ATitleTakesTheEffectsOnItsClip) {
   Project p = canvas_project();
   core::TextSpec spec = big_text();
   spec.background = "#ff0000";
