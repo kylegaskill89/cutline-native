@@ -161,10 +161,29 @@ using cutline::ui::Widget;
 using cutline::ui::WidgetHost;
 using cutline::ui::built_in_themes;
 
-/// A project for the timeline to show. Built rather than loaded: the point is
-/// to exercise the real model and the real edit operations without needing any
-/// media on disk to decode.
-[[nodiscard]] cutline::core::Project sample_project() {
+/// What a new document is: an empty sequence with somewhere to put things.
+///
+/// One video track and one audio track rather than none. A timeline with no
+/// tracks has nowhere to drop the first import, and "add a track before you can
+/// do anything" is a step no editor asks for. More are a menu away.
+[[nodiscard]] cutline::core::Project new_project_model() {
+  cutline::core::Project project;
+  project.fps = 30.0;
+  project.tracks = {
+      cutline::core::Track{.id = "v1", .kind = cutline::core::TrackKind::Video},
+      cutline::core::Track{.id = "a1", .kind = cutline::core::TrackKind::Audio},
+  };
+  return project;
+}
+
+/// A project with something in it, for the headless check only.
+///
+/// `--check` lays out and paints every panel in every theme, and a panel with
+/// nothing in it proves nothing: an empty pool has no rows to be too tall, and
+/// an empty timeline has no clip to be clipped by the edge of its track. This
+/// is the only caller — the application itself starts empty, the way every
+/// other editor does.
+[[nodiscard]] cutline::core::Project check_project() {
   using namespace cutline::core;
 
   Project project;
@@ -371,7 +390,7 @@ struct App {
 
   /// The document being edited. Everything the timeline shows is derived from
   /// it, and everything a drag does goes back through it.
-  cutline::editor::Session session{sample_project()};
+  cutline::editor::Session session{new_project_model()};
   TimelineView* timeline = nullptr;
 
   /// Where the timeline's envelopes and filmstrips come from.
@@ -589,8 +608,13 @@ struct App {
   /// it. Deferred like the preview is, so scrubbing across ten frames measures
   /// the one that is finally shown rather than all ten.
   bool scopes_stale = true;
-  /// Shown when there is nothing to decode — which is always under the skia
-  /// preset, and until something is imported under the ui one.
+  /// Shown by builds that cannot decode anything at all — the skia preset,
+  /// where there is no media layer and the point of the monitor is the chrome
+  /// around it.
+  ///
+  /// Deliberately *not* shown by a build that renders. An empty sequence there
+  /// shows an empty frame: colour bars would read as something somebody put on
+  /// the timeline rather than as "there is nothing here yet".
   TestPattern pattern;
 
 #if CUTLINE_HAVE_PREVIEW
@@ -3363,7 +3387,7 @@ bool save_project(App& app, bool ask_where) {
 void new_project(App& app) {
   if (!confirm_discard(app)) return;
   clear_autosave(app, app.session.path());
-  app.session.reset(sample_project());
+  app.session.reset(new_project_model());
   refresh_all(app);
 }
 
@@ -3592,7 +3616,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     // pool anyway is what makes it lay out and paint real rows in every theme,
     // which is the only thing that would catch a row too tall for the one
     // theme whose lists are roomier.
-    pool.set_items(cutline::editor::browser_items(sample_project()));
+    pool.set_items(cutline::editor::browser_items(check_project()));
   }
 
   // Under the pool rather than in the toolbar above it. It was in the toolbar
@@ -3621,7 +3645,12 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   auto& picture = panel->emplace<MonitorView>();
   if (app != nullptr) {
     app->monitor = &picture;
+#if !CUTLINE_HAVE_PREVIEW
+    // Only where nothing can be decoded at all. In a build that renders, an
+    // empty sequence shows an empty frame — colour bars there read as content
+    // somebody put on the timeline rather than as "there is nothing here yet".
     picture.set_frame(app->pattern.view());
+#endif
     // Pushed rather than defaulted, for the same reason snapping is: the panel
     // is rebuilt by a rearrangement and the setting is not.
     picture.set_aspect_locked(app->aspect_locked);
@@ -3948,7 +3977,15 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     invalidate_preview(*app);
   });
 
-  if (app != nullptr) refresh_timeline(*app);
+  if (app != nullptr) {
+    refresh_timeline(*app);
+  } else {
+    // The headless check builds this with no session behind it, and an empty
+    // timeline paints no clips at all — so a block too tall for its track in
+    // one theme, or a label running past a block's edge, would never be seen.
+    // The same reasoning as the pool's fallback above.
+    tracks.set_model(cutline::editor::timeline_model(check_project(), {}, {}));
+  }
   return panel;
 }
 
@@ -5942,6 +5979,10 @@ template <typename T>
     // of parameter row — slider, toggle, colour — is laid out in every theme.
     {
       App app;
+      // Given a project rather than inheriting one. A new document is empty —
+      // the way every editor's is — so the panels this pass exists to lay out
+      // would have nothing in them and prove nothing.
+      app.session.reset(check_project());
       // Marked, so the ruler draws its span. Nothing else in the check would
       // put a mark on the sequence, and the bar is painted in the one place a
       // theme has never otherwise been asked about.
