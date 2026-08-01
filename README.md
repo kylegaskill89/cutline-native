@@ -14,6 +14,17 @@ The native version replaces that with sequential hardware decode and a GPU
 compositor, so export renders real frames at real speed and preview and export
 agree by construction rather than by careful maintenance.
 
+## Download
+
+**[Cutline 0.1.0 for Windows](https://github.com/kylegaskill89/cutline-native/releases/latest)**
+— an installer, about 12 MB.
+
+It is not code-signed, so Windows will show a SmartScreen warning the first
+time: "More info", then "Run anyway". That is a deliberate omission rather than
+an oversight, and `docs/releasing.md` says why. The editor checks for its own
+updates when asked, and verifies what it downloads against a published
+SHA-256 before running it.
+
 ## Design
 
 - [`docs/handoff.md`](docs/handoff.md) — **start here if you are picking this
@@ -24,6 +35,8 @@ agree by construction rather than by careful maintenance.
 - [`docs/spec.md`](docs/spec.md) — the product specification: data model,
   algorithms, effect semantics, and UI. Carried over from the TypeScript
   version, which remains the reference for exact numeric behaviour.
+- [`docs/releasing.md`](docs/releasing.md) — how a tag becomes an installer,
+  and what the update check refuses.
 
 ## Status
 
