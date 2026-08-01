@@ -508,5 +508,29 @@ TEST(Toolbar, ATypicalRowOfControlsLandsWhereItShould) {
   EXPECT_EQ(host.focused(), &cut) << "Tab should wrap past the spacer, not stop on it";
 }
 
+TEST(Label, ClipsItsTextWhenItHasBeenSqueezed) {
+  // A label declares itself shrinkable so it gives way before a panel is forced
+  // wider — and for a long time nothing made the second half of that true, so a
+  // squeezed one simply drew across whatever was beside it. A parameter row
+  // came out reading "Opacity100.0%".
+  Label label("A title too long for the room it was given");
+  label.arrange(Rect{0.0, 0.0, 20.0, 20.0}, flat_context());
+
+  RecordingPainter painter;
+  label.paint(painter, default_theme());
+  EXPECT_TRUE(painter.clips_balanced());
+  EXPECT_EQ(painter.count(DrawCall::Kind::PushClip), 1u);
+}
+
+TEST(Label, DoesNotClipWhenItFits) {
+  // A clip costs a save and a restore, and nearly every label has its room.
+  Label label("ok");
+  label.arrange(Rect{0.0, 0.0, 400.0, 20.0}, flat_context());
+
+  RecordingPainter painter;
+  label.paint(painter, default_theme());
+  EXPECT_EQ(painter.count(DrawCall::Kind::PushClip), 0u);
+}
+
 }  // namespace
 }  // namespace cutline::ui

@@ -6114,6 +6114,7 @@ template <typename T>
     int empty = 0;
     int escaped = 0;
     int clipped = 0;
+    int squeezed = 0;
     int counted = 0;
 
     /// Walks a subtree, carrying the nearest ancestor that clips its children.
@@ -6135,6 +6136,30 @@ template <typename T>
       // the right answer there, not a layout that went wrong.
       if (widget.bounds().empty() && dynamic_cast<const Spacer*>(&widget) == nullptr) ++empty;
       if (widget.bounds().x < -0.5 || widget.bounds().right() > kWidth + 0.5) ++escaped;
+
+      // A widget narrower than it asked to be.
+      //
+      // This is the fault the two tests above cannot see, and it has now caused
+      // three bugs: a label drawn on top of the number beside it, a tab's close
+      // button drawn over the last letter of its title, and a row of generator
+      // buttons sliced by a panel edge. In every case the widget was neither
+      // empty nor outside its clip — it had simply been given less room than its
+      // content needs, and drew outside itself.
+      //
+      // Anything that does not *grow* is checked against the width it asked
+      // for. A widget with `grow` is meant to take whatever is going and has no
+      // natural size to be short of; everything else stated one, and getting
+      // less than it stated is the fault.
+      //
+      // Shrinkability is deliberately not an excuse. A label declares itself
+      // shrinkable so that it gives way before a panel is forced wider, and
+      // being cut off is still a thing somebody needs to be told about — it is
+      // a title nobody can read.
+      if (const cutline::ui::LayoutItem wanted = widget.sizing(Axis::Horizontal, context);
+          wanted.grow == 0.0 && !widget.bounds().empty() &&
+          widget.bounds().width + 0.5 < wanted.basis) {
+        ++squeezed;
+      }
 
       if (clipper != nullptr && !widget.bounds().empty() &&
           dynamic_cast<const ScrollView*>(clipper) == nullptr &&
@@ -6360,9 +6385,10 @@ template <typename T>
       }
     }
 
-    std::println("{:<10} {:>3} widgets, {} empty, {} outside the window, {} clipped away",
-                 theme.id, counted, empty, escaped, clipped);
-    if (empty > 0 || escaped > 0 || clipped > 0) ++failures;
+    std::println(
+        "{:<10} {:>3} widgets, {} empty, {} outside the window, {} clipped away, {} squeezed",
+        theme.id, counted, empty, escaped, clipped, squeezed);
+    if (empty > 0 || escaped > 0 || clipped > 0 || squeezed > 0) ++failures;
   }
 
   for (std::size_t i = 0; i < fingerprints.size(); ++i) {

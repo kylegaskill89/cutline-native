@@ -21,7 +21,10 @@ LayoutItem Label::sizing(Axis axis, const LayoutContext& context) const {
   if (axis == Axis::Vertical) return LayoutItem::fixed(size * metrics.line_height);
 
   // Text does not grow, but it will shrink and be clipped rather than force a
-  // panel wider than it has room to be.
+  // panel wider than it has room to be. `paint_content` is what makes the
+  // second half of that true — without the clip a squeezed label simply draws
+  // over whatever is beside it, which is how a parameter row came to read
+  // "Opacity100.0%".
   const double width = context.text.measure(text_, size, bold_);
   return LayoutItem{.basis = width, .grow = 0.0, .shrink = 1.0, .min = 0.0, .max = kUnbounded};
 }
@@ -29,7 +32,16 @@ LayoutItem Label::sizing(Axis axis, const LayoutContext& context) const {
 void Label::paint_content(Painter& painter, const Theme& theme) const {
   if (text_.empty()) return;
   const SurfaceStyle& style = theme.style(part_, state());
-  painter.text(text_run(bounds(), text_, style, font_size(theme.metrics), align_, bold_));
+  const double size = font_size(theme.metrics);
+
+  // Clipped only when it has to be. A clip costs a save and restore in the
+  // backend, and nearly every label in the application has the room it asked
+  // for — but the one that does not must be cut off at its own edge rather than
+  // drawn across whatever is beside it.
+  const bool fits = painter.measure(text_, size, bold_) <= bounds().width + 0.5;
+  if (!fits) painter.push_clip(bounds(), 0.0);
+  painter.text(text_run(bounds(), text_, style, size, align_, bold_));
+  if (!fits) painter.pop_clip();
 }
 
 // ------------------------------------------------------------------ button --
