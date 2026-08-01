@@ -36,6 +36,25 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      # First, before anything expensive. This is the step most likely to fail
+      # and the cheapest to run, and the whole dependency build sits behind it.
+      #
+      # The tag against what CMake will compile in. A release whose manifest
+      # says 0.3.0 while the binary reports 0.2.0 is an editor that offers the
+      # same update every time it is asked, and installs it to no effect.
+      - name: Check the tag matches the project version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          $declared = (Select-String -Path CMakeLists.txt -Pattern '^\s*VERSION\s+(\S+)' |
+                       Select-Object -First 1).Matches.Groups[1].Value
+          "tag: $version, CMakeLists: $declared"
+          if ($version -ne $declared) {
+            throw "The tag says $version and CMakeLists.txt says $declared. Bump one of them."
+          }
+          echo "CUTLINE_VERSION=$version" >> $env:GITHUB_ENV
+
       # Split restore and save, so a failure later still leaves the dependency
       # build cached. The same reasoning as the nightly job, and the same key,
       # so a release cut after a nightly starts warm.
@@ -62,22 +81,6 @@ jobs:
         with:
           path: ~/AppData/Local/vcpkg/archives
           key: vcpkg-full-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-
-      # The tag against what CMake will compile in. A release whose manifest
-      # says 0.3.0 while the binary reports 0.2.0 is an editor that offers the
-      # same update every time it is asked, and installs it to no effect.
-      - name: Check the tag matches the project version
-        shell: pwsh
-        run: |
-          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          $version = $tag -replace '^v', ''
-          $declared = (Select-String -Path CMakeLists.txt -Pattern '^\s*VERSION\s+(\S+)' |
-                       Select-Object -First 1).Matches.Groups[1].Value
-          "tag: $version, CMakeLists: $declared"
-          if ($version -ne $declared) {
-            throw "The tag says $version and CMakeLists.txt says $declared. Bump one of them."
-          }
-          echo "CUTLINE_VERSION=$version" >> $env:GITHUB_ENV
 
       - name: Build
         run: cmake --build --preset ui
