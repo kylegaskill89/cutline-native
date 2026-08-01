@@ -44,6 +44,7 @@ add_executable(cutline_core_tests
   ui/controls_test.cpp
   ui/dock_test.cpp
   ui/dock_view_test.cpp
+  ui/effects_browser_test.cpp
   ui/keyframe_view_test.cpp
   ui/layout_test.cpp
   ui/meter_view_test.cpp

@@ -4,6 +4,7 @@ add_library(cutline_ui
   src/controls.cpp
   src/dock.cpp
   src/dock_view.cpp
+  src/effects_browser.cpp
   src/keyframe_view.cpp
   src/layout.cpp
   src/meter_view.cpp

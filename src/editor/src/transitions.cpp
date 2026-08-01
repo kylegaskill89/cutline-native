@@ -5,6 +5,7 @@
 #include "cutline/core/segments.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -72,6 +73,32 @@ std::string_view transition_name(core::TransitionKind kind) noexcept {
     case core::TransitionKind::Slide: return "Slide";
   }
   return "Cross Dissolve";
+}
+
+std::span<const core::TransitionKind> transition_kinds() noexcept {
+  static constexpr std::array kKinds{core::TransitionKind::Dissolve,
+                                     core::TransitionKind::DipBlack,
+                                     core::TransitionKind::Push, core::TransitionKind::Slide};
+  return kKinds;
+}
+
+std::string_view transition_id(core::TransitionKind kind) noexcept {
+  // The same words the document format writes, so an id that ends up in a file
+  // or a preset means the same thing on both sides.
+  switch (kind) {
+    case core::TransitionKind::Dissolve: return "dissolve";
+    case core::TransitionKind::DipBlack: return "dip-black";
+    case core::TransitionKind::Push: return "push";
+    case core::TransitionKind::Slide: return "slide";
+  }
+  return "dissolve";
+}
+
+std::optional<core::TransitionKind> transition_from_id(std::string_view id) noexcept {
+  for (const core::TransitionKind kind : transition_kinds()) {
+    if (transition_id(kind) == id) return kind;
+  }
+  return std::nullopt;
 }
 
 double longest_transition(const core::Project& project, std::string_view clip_id,

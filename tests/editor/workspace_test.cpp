@@ -23,8 +23,9 @@ namespace {
 
 /// The panels this "build" has.
 const std::vector<ui::PanelId>& known_panels() {
-  static const std::vector<ui::PanelId> panels{"project", "effects", "monitor",
-                                               "timeline", "scopes",  "audio"};
+  static const std::vector<ui::PanelId> panels{"project", "effects", "library",
+                                               "monitor", "timeline", "scopes",
+                                               "audio"};
   return panels;
 }
 

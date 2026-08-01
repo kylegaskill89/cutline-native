@@ -666,5 +666,125 @@ TEST(EffectClipboard, PastingWhatIsAlreadyThereChangesNothing) {
   EXPECT_EQ(paste_effects(p, onto, clipboard), p);
 }
 
+// ---------------------------------------------------------------- library --
+
+/// A video clip and an audio clip, so the library has both kinds to refuse.
+[[nodiscard]] Project both_kinds() {
+  Project p = one_clip();
+  Clip a;
+  a.id = "a1";
+  a.media_id = "m2";
+  a.kind = TrackKind::Audio;
+  a.source_out = 5.0;
+
+  Track t;
+  t.id = "a-track";
+  t.kind = TrackKind::Audio;
+  t.clips = {std::move(a)};
+  p.tracks.push_back(std::move(t));
+  return p;
+}
+
+TEST(EffectLibrary, HoldsVideoEffectsAudioEffectsAndTransitionsTogether) {
+  // Premiere's Effects panel holds all three, and the person reaching for one
+  // does not think of them as three catalogues.
+  const std::vector<LibraryEntry> library = effect_library();
+
+  const auto has_prefix = [&library](std::string_view prefix) {
+    return std::ranges::any_of(library, [prefix](const LibraryEntry& entry) {
+      return entry.id.starts_with(prefix);
+    });
+  };
+  EXPECT_TRUE(has_prefix("video:"));
+  EXPECT_TRUE(has_prefix("audio:"));
+  EXPECT_TRUE(has_prefix("transition:"));
+}
+
+TEST(EffectLibrary, EveryEntryHasAFolderAndAName) {
+  for (const LibraryEntry& entry : effect_library()) {
+    EXPECT_FALSE(entry.id.empty());
+    EXPECT_FALSE(entry.name.empty()) << entry.id;
+    EXPECT_FALSE(entry.folder.empty()) << entry.id;
+  }
+}
+
+TEST(EffectLibrary, EveryEntryCanBeApplied) {
+  // The catalogue and the thing that applies from it are two lists that could
+  // drift. This is what notices.
+  const Project p = both_kinds();
+  for (const LibraryEntry& entry : effect_library()) {
+    const bool video = entry.id.starts_with("video:");
+    const bool audio = entry.id.starts_with("audio:");
+    if (!video && !audio) continue;  // transitions need a join, tested below
+    const std::string_view clip = video ? "c1" : "a1";
+    EXPECT_NE(apply_library_entry(p, clip, entry.id), p) << entry.id;
+  }
+}
+
+TEST(ApplyLibraryEntry, RefusesAVideoEffectOnAnAudioClip) {
+  const Project p = both_kinds();
+  EXPECT_EQ(apply_library_entry(p, "a1", "video:blur"), p);
+  EXPECT_FALSE(library_entry_fits(p, "a1", "video:blur"));
+}
+
+TEST(ApplyLibraryEntry, RefusesAnAudioEffectOnAVideoClip) {
+  const Project p = both_kinds();
+  EXPECT_EQ(apply_library_entry(p, "c1", "audio:lowpass"), p);
+}
+
+TEST(ApplyLibraryEntry, RefusesATransitionWhereNothingAbutsTheClip) {
+  // A transition needs a cut to sit on. Offering one at the end of a track
+  // would be a control that silently did nothing.
+  const Project p = one_clip();
+  EXPECT_FALSE(library_entry_fits(p, "c1", "transition:dissolve"));
+  EXPECT_EQ(apply_library_entry(p, "c1", "transition:dissolve"), p);
+}
+
+/// Two clips meeting at a cut, both trimmed to the whole of their source — so
+/// there are no handles for an overlapping transition to borrow.
+[[nodiscard]] Project abutting() {
+  Project p = one_clip();
+  Clip next;
+  next.id = "c2";
+  next.media_id = "m1";
+  next.source_out = 5.0;
+  next.start = 5.0;
+  p.tracks.front().clips.push_back(std::move(next));
+  return p;
+}
+
+TEST(ApplyLibraryEntry, AddsADipToBlackWhereThereIsAJoin) {
+  // Dip to black fades out and then in, sequentially, so it needs no handles
+  // and always works where there is a cut.
+  const Project p = abutting();
+  ASSERT_TRUE(library_entry_fits(p, "c1", "transition:dip-black"));
+
+  const Project after = apply_library_entry(p, "c1", "transition:dip-black");
+  ASSERT_TRUE(only_clip(after).transition_out.has_value());
+  EXPECT_GT(only_clip(after).transition_out->duration, 0.0);
+}
+
+TEST(ApplyLibraryEntry, RefusesAnOverlappingTransitionWithNoHandlesToBorrow) {
+  // Both clips use the whole of their footage, so a dissolve has nothing to
+  // overlap into and would resolve to nothing at all. The library greys it
+  // rather than offering a control that silently does nothing.
+  const Project p = abutting();
+  EXPECT_FALSE(library_entry_fits(p, "c1", "transition:dissolve"));
+  EXPECT_EQ(apply_library_entry(p, "c1", "transition:dissolve"), p);
+}
+
+TEST(ApplyLibraryEntry, AnIdThisBuildDoesNotKnowChangesNothing) {
+  // Which is what a library written by a newer version looks like.
+  const Project p = both_kinds();
+  EXPECT_EQ(apply_library_entry(p, "c1", "video:not-an-effect"), p);
+  EXPECT_EQ(apply_library_entry(p, "c1", "nonsense"), p);
+  EXPECT_EQ(apply_library_entry(p, "c1", ""), p);
+}
+
+TEST(ApplyLibraryEntry, AClipThatIsNotThereChangesNothing) {
+  const Project p = both_kinds();
+  EXPECT_EQ(apply_library_entry(p, "nope", "video:blur"), p);
+}
+
 }  // namespace
 }  // namespace cutline::editor

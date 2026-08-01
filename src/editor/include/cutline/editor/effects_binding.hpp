@@ -182,6 +182,47 @@ struct EffectChoice {
 [[nodiscard]] core::Project add_audio_effect(core::Project project, std::string_view clip_id,
                                              std::string_view type);
 
+// ---------------------------------------------------------------- library --
+
+/// One entry in the effects library: everything that can be applied to a clip,
+/// in one list, whatever kind of thing it is.
+///
+/// Premiere's Effects panel holds video effects, audio effects and transitions
+/// together, and the person reaching for one does not think of them as three
+/// catalogues. Which of the three an entry is lives in its `id` rather than in
+/// a field, so the browser showing it stays a list of names and folders and
+/// never learns the difference.
+struct LibraryEntry {
+  /// `video:blur`, `audio:eq`, `transition:dissolve`. Round-tripped through
+  /// `apply_library_entry`, which is the only thing that takes it apart.
+  std::string id;
+  std::string name;
+  /// The folder it sits under, already qualified: the tree is one level deep
+  /// and "Colour" alone would not say whether it held pictures or sound.
+  std::string folder;
+
+  friend bool operator==(const LibraryEntry&, const LibraryEntry&) = default;
+};
+
+/// The whole library, in the order a panel should show it: video effects by
+/// category, then audio effects, then transitions.
+[[nodiscard]] std::vector<LibraryEntry> effect_library();
+
+/// Applies whatever `id` names to a clip.
+///
+/// Refuses what does not fit rather than doing something else: a video effect
+/// on an audio clip, an audio effect on a picture, a transition on a clip with
+/// nothing abutting it. Returns the project unchanged in every one of those
+/// cases, like everything else that edits, so the session can skip the entry.
+[[nodiscard]] core::Project apply_library_entry(core::Project project,
+                                                std::string_view clip_id,
+                                                std::string_view id);
+
+/// Whether `id` could be applied to `clip_id` as things stand — what greys the
+/// panel's Apply button, and what a double-click checks before doing nothing.
+[[nodiscard]] bool library_entry_fits(const core::Project& project, std::string_view clip_id,
+                                      std::string_view id);
+
 // ------------------------------------------------------------- copy/paste --
 
 /// One clip's effects, taken off it and held.

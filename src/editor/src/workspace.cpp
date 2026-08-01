@@ -158,7 +158,7 @@ std::vector<Workspace> built_in_workspaces() {
   editing.name = "Editing";
   editing.layout.root =
       split(Axis::Horizontal,
-            {tabs({"project", "effects"}),
+            {tabs({"project", "effects", "library"}),
              split(Axis::Vertical, {tabs({"monitor", "scopes", "audio"}), tabs({"timeline"})},
                    {0.58, 0.42})},
             {0.26, 0.74});
@@ -172,7 +172,7 @@ std::vector<Workspace> built_in_workspaces() {
   colour.layout.root =
       split(Axis::Horizontal,
             {split(Axis::Vertical, {tabs({"monitor"}), tabs({"timeline"})}, {0.74, 0.26}),
-             split(Axis::Vertical, {tabs({"scopes"}), tabs({"effects", "project", "audio"})},
+             split(Axis::Vertical, {tabs({"scopes"}), tabs({"effects", "library", "project", "audio"})},
                    {0.5, 0.5})},
             {0.72, 0.28});
 
@@ -185,7 +185,7 @@ std::vector<Workspace> built_in_workspaces() {
   audio.layout.root =
       split(Axis::Vertical,
             {split(Axis::Horizontal,
-                   {tabs({"project", "effects", "scopes"}), tabs({"monitor"}), tabs({"audio"})},
+                   {tabs({"project", "effects", "library", "scopes"}), tabs({"monitor"}), tabs({"audio"})},
                    {0.32, 0.54, 0.14}),
              tabs({"timeline"})},
             {0.42, 0.58});

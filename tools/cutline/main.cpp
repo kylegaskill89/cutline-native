@@ -45,6 +45,7 @@
 #include "cutline/ui/controls.hpp"
 #include "cutline/ui/dock.hpp"
 #include "cutline/ui/dock_view.hpp"
+#include "cutline/ui/effects_browser.hpp"
 #include "cutline/ui/keyframe_view.hpp"
 #include "cutline/ui/meter_view.hpp"
 #include "cutline/ui/monitor.hpp"
@@ -208,9 +209,14 @@ using cutline::ui::built_in_themes;
 /// A panel is a name from here plus whatever `make_panel` builds for it. The
 /// layout only ever moves the name around, which is what lets an arrangement be
 /// saved and restored without saving any widgets.
-constexpr std::array<std::pair<std::string_view, std::string_view>, 6> kPanels{{
+constexpr std::array<std::pair<std::string_view, std::string_view>, 7> kPanels{{
     {"project", "Project"},
     {"effects", "Effect Controls"},
+    // Premiere's Effects panel, under its own name: this one holds the things
+    // you can apply, and "Effect Controls" holds what one you applied is doing.
+    // Two panels with almost the same name is Premiere's own confusion, and
+    // "Effects Library" is the clearer of the two words.
+    {"library", "Effects Library"},
     {"monitor", "Program Monitor"},
     {"timeline", "Timeline"},
     {"audio", "Audio Master"},
@@ -427,6 +433,9 @@ struct App {
   /// rebuilt from nothing on every edit, so this is null far more often than it
   /// is not. Cleared by `refresh_inspector` before anything is built.
   cutline::ui::KeyframeView* keyframes = nullptr;
+
+  /// The effects library, while a window is showing one.
+  cutline::ui::EffectsBrowser* library = nullptr;
 
   /// Keyframes copied out of a lane, waiting to go back somewhere.
   ///
@@ -3958,6 +3967,58 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   return panel;
 }
 
+/// The effects library: everything that can be applied, searchable.
+///
+/// Premiere has a panel for this, and it is the right shape. A menu was the
+/// right answer while there were eleven effects and no panel machinery; it
+/// stopped being the right answer as soon as transitions wanted to live beside
+/// them, and it was already why the video and audio stacks needed separate
+/// buttons opening separate menus.
+[[nodiscard]] std::unique_ptr<Widget> make_library_panel(App* app) {
+  auto panel = std::make_unique<Panel>();
+
+  // The search field above the tree, which is where every search field in every
+  // application of this kind is.
+  auto& search = panel->emplace<TextField>();
+  search.set_placeholder("Search effects");
+
+  auto& browser = panel->emplace<cutline::ui::EffectsBrowser>();
+  browser.set_items([] {
+    std::vector<cutline::ui::EffectEntry> entries;
+    for (const cutline::editor::LibraryEntry& entry : cutline::editor::effect_library()) {
+      entries.push_back(cutline::ui::EffectEntry{
+          .id = entry.id, .name = entry.name, .folder = entry.folder});
+    }
+    return entries;
+  }());
+
+  // As you type rather than on Enter. A library is read by narrowing it, and
+  // having to commit each guess makes finding something a slower job than
+  // scrolling would have been.
+  search.set_on_change([control = &browser](const std::string& text) {
+    control->set_filter(text);
+  });
+
+  if (app != nullptr) {
+    app->library = &browser;
+    browser.set_on_choose([app](const std::string& id) {
+      const auto selection = app->session.selection();
+      if (selection.empty()) return;
+      const std::string clip_id{selection.front()};
+      // Refused rather than silently doing nothing: an audio effect on a
+      // picture, or a transition where nothing abuts the clip, is a
+      // double-click that should say so instead of appearing to work.
+      if (!cutline::editor::library_entry_fits(app->session.project(), clip_id, id)) return;
+      app->session.apply(
+          cutline::editor::apply_library_entry(app->session.project(), clip_id, id));
+      refresh_timeline(*app);
+      invalidate_preview(*app);
+      app->inspector_stale = true;
+    });
+  }
+  return panel;
+}
+
 /// The master fader and the meter it is set against.
 ///
 /// The two belong together: a fader is moved by ear and by eye, and the eye
@@ -4059,6 +4120,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   if (id == "monitor") return make_monitor_panel(app);
   if (id == "timeline") return make_timeline_panel(app);
   if (id == "effects") return make_effects_panel(app);
+  if (id == "library") return make_library_panel(app);
   if (id == "audio") return make_audio_panel(app);
 
   // A layout naming a panel this build does not have. Saying so beats an empty

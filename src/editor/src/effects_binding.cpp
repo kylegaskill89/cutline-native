@@ -4,10 +4,13 @@
 #include "cutline/core/effects.hpp"
 #include "cutline/core/keyframe.hpp"
 #include "cutline/core/query.hpp"
+#include "cutline/editor/transitions.hpp"
+#include "cutline/render/effect_catalog.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <optional>
 #include <utility>
 
 namespace cutline::editor {
@@ -303,6 +306,91 @@ core::Project paste_effects(core::Project project, std::span<const std::string> 
       project = core::clear_audio_effects(std::move(project), clip_id);
       project = core::append_audio_effects(std::move(project), clip_id, clipboard.audio);
     }
+  }
+  return project;
+}
+
+// ---------------------------------------------------------------- library --
+
+namespace {
+
+/// The three prefixes an id can carry, and what each one means.
+constexpr std::string_view kVideoPrefix = "video:";
+constexpr std::string_view kAudioPrefix = "audio:";
+constexpr std::string_view kTransitionPrefix = "transition:";
+
+/// Splits `id` into its prefix and the type behind it. An id with no prefix
+/// this build knows names nothing, which is what a library written by a newer
+/// version looks like.
+[[nodiscard]] std::optional<std::string_view> behind(std::string_view id,
+                                                     std::string_view prefix) {
+  if (!id.starts_with(prefix)) return std::nullopt;
+  return id.substr(prefix.size());
+}
+
+}  // namespace
+
+std::vector<LibraryEntry> effect_library() {
+  std::vector<LibraryEntry> out;
+
+  // Qualified folder names, because the tree is one level deep: "Colour" alone
+  // would not say whether it held pictures or sound.
+  for (const EffectChoice& choice : addable_effects()) {
+    out.push_back(LibraryEntry{.id = std::string(kVideoPrefix) + choice.type,
+                               .name = choice.name,
+                               .folder = "Video · " + choice.category});
+  }
+  for (const EffectChoice& choice : addable_audio_effects()) {
+    out.push_back(LibraryEntry{
+        .id = std::string(kAudioPrefix) + choice.type, .name = choice.name, .folder = "Audio"});
+  }
+  // Transitions last, and in the same panel, because that is where somebody
+  // reaching for a cross-dissolve looks — not in a dropdown three sections down
+  // an inspector.
+  for (const core::TransitionKind kind : transition_kinds()) {
+    out.push_back(LibraryEntry{.id = std::string(kTransitionPrefix) +
+                                     std::string(transition_id(kind)),
+                               .name = std::string(transition_name(kind)),
+                               .folder = "Video Transitions"});
+  }
+  return out;
+}
+
+bool library_entry_fits(const core::Project& project, std::string_view clip_id,
+                        std::string_view id) {
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr) return false;
+
+  if (const auto type = behind(id, kVideoPrefix)) {
+    return clip->kind == core::TrackKind::Video && render::find_effect_spec(*type) != nullptr;
+  }
+  if (const auto type = behind(id, kAudioPrefix)) {
+    return clip->kind == core::TrackKind::Audio && audio::audio_effect_def(*type) != nullptr;
+  }
+  if (const auto type = behind(id, kTransitionPrefix)) {
+    const std::optional<core::TransitionKind> kind = transition_from_id(*type);
+    // A transition needs a cut to sit on. Offering one where nothing abuts the
+    // clip would be a control that silently did nothing.
+    return kind.has_value() && longest_transition(project, clip_id, *kind) > 0.0;
+  }
+  return false;
+}
+
+core::Project apply_library_entry(core::Project project, std::string_view clip_id,
+                                  std::string_view id) {
+  if (!library_entry_fits(project, clip_id, id)) return project;
+
+  if (const auto type = behind(id, kVideoPrefix)) {
+    return add_effect(std::move(project), clip_id, *type);
+  }
+  if (const auto type = behind(id, kAudioPrefix)) {
+    return add_audio_effect(std::move(project), clip_id, *type);
+  }
+  if (const auto type = behind(id, kTransitionPrefix)) {
+    const std::optional<core::TransitionKind> kind = transition_from_id(*type);
+    if (!kind.has_value()) return project;
+    return set_transition(std::move(project), clip_id, *kind,
+                          default_transition_length(project, clip_id, *kind));
   }
   return project;
 }

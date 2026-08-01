@@ -20,6 +20,7 @@
 #include "cutline/core/model.hpp"
 
 #include <optional>
+#include <span>
 #include <string_view>
 
 namespace cutline::editor {
@@ -27,6 +28,20 @@ namespace cutline::editor {
 /// The name a person reads. Premiere's, because these are Premiere's
 /// transitions and calling a cross dissolve something else helps nobody.
 [[nodiscard]] std::string_view transition_name(core::TransitionKind kind) noexcept;
+
+/// The kinds a control should offer, in the order it should offer them.
+///
+/// Its own list rather than one written out at each call site: there were two
+/// already — the inspector's dropdown and the effects library — and a third
+/// would eventually disagree with the other two about the order.
+[[nodiscard]] std::span<const core::TransitionKind> transition_kinds() noexcept;
+
+/// The stable identifier, matching what the document format writes. Round-trips
+/// through `transition_from_id`, which answers nothing for a kind this build
+/// does not have.
+[[nodiscard]] std::string_view transition_id(core::TransitionKind kind) noexcept;
+[[nodiscard]] std::optional<core::TransitionKind> transition_from_id(
+    std::string_view id) noexcept;
 
 /// A clip's out-edge transition, as the panel shows it.
 struct TransitionRow {

@@ -193,29 +193,50 @@ to whatever is behind, rather than opening an empty menu.
 ### 1.3 The effects library
 
 Premiere has a **panel**: a search box, a folder tree, and drag-and-drop onto
-clips. Ours has a button that opens a menu of eleven items.
+clips. Ours had a button that opened a menu of eleven items.
 
 The menu was the right answer when there were eleven effects and no panel
-machinery. It stops being the right answer at about twenty, and it is already
-the reason the audio and video stacks have separate buttons that open separate
-menus.
+machinery. It stopped being the right answer as soon as transitions wanted to
+live beside them, and it was already the reason the audio and video stacks had
+separate buttons opening separate menus.
+
+`ui::EffectsBrowser` is the panel, and `editor::effect_library` is what fills
+it: video effects by category, then audio effects, then transitions, in one
+list. Which of the three an entry is lives in its id — `video:blur`,
+`audio:lowpass`, `transition:dissolve` — so the widget stays a tree of names and
+folders and never learns the difference between them.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| A dockable panel | yes | a popup menu from a button | panel |
-| Search by name | filters the whole tree as you type | no | wiring |
-| Folder tree | Presets, Lumetri Presets, Audio Effects, Audio Transitions, Video Effects (18 categories), Video Transitions | five flat video categories, eight audio effects, no tree | wiring |
+| A dockable panel | yes | **done** — "Effects Library", in every built-in workspace | — |
+| Search by name | filters the whole tree as you type | **done**, and a folder whose name matches keeps its contents | — |
+| Folder tree | Presets, Lumetri Presets, Audio Effects, Audio Transitions, Video Effects (18 categories), Video Transitions | **done** — one level, qualified: `Video · Colour`, `Audio`, `Video Transitions` | — |
+| Double-click to apply to the selection | yes | **done**, and Enter does the same from the keyboard | — |
+| Transitions in the same panel | Video and Audio Transitions are folders in it | **done** — and refused where nothing abuts the clip | — |
 | Drag an effect onto a clip | onto the timeline or the program monitor | no | machinery |
-| Double-click to apply to the selection | yes | the menu applies to the selected clip | wiring |
-| Transitions in the same panel | Video and Audio Transitions are folders in it | set from a dropdown in the inspector | wiring |
+| Nested folders | Video Effects › Blur & Sharpen › Gaussian Blur | one level, with the parent folded into the name | control |
 | User bins | new bin / delete, to gather favourites | no | machinery |
 | Named presets | save a configured stack, apply it by name | copy and paste only, one clipboard, not saved | machinery |
 | Capability badges | accelerated / 32-bit / YUV, and filters for them | every effect is a GPU shader, so the distinction does not exist here | not applicable |
 
-The panel itself is cheap — `MediaBrowser` is a tree of rows with a search
-already, and the dock takes a new panel by adding one line to `kPanels`. What is
-not cheap is drag-and-drop onto a clip, and presets, which is a new persisted
-thing with its own file.
+Two rules the panel enforces that a menu never could.
+
+**Nothing is offered where it would do nothing.** `library_entry_fits` refuses a
+video effect on an audio clip, an audio effect on a picture, and a transition on
+a clip with nothing abutting it — including the case that is easy to miss, an
+overlapping transition at a join where neither clip has handles to lend. A
+cross-dissolve there resolves to nothing at all, and dip-to-black is the one
+that always works because it is sequential rather than overlapping.
+
+**A search never hides its own results.** Every folder is drawn open while a
+filter is running, whatever was collapsed before, and a folder left with nothing
+in it is not drawn at all. Both were easy to get wrong in the direction that
+makes a search appear to find nothing.
+
+The remaining items are the expensive ones, and they are expensive for different
+reasons. Drag-and-drop needs a drag that crosses panels, which nothing in this
+application does yet. Presets need a new persisted thing with its own file and
+its own format questions. Nested folders are a widget problem only.
 
 ### 1.4 Masks
 
