@@ -284,9 +284,6 @@ Checked against `docs/spec.md` §21 (the parity checklist) and §18 (the UI spec
 - **Dragging keyframes in time.** They can be added, removed, retimed by
   changing the clip's speed, and given a curve — but not slid along the clip.
   The diamonds are drawn; the gesture is not.
-- **Signing the installer.** Unsigned, so Windows shows SmartScreen the first
-  time. Nothing technical stands in the way; a certificate costs money and is
-  the user's decision to make.
 - **A menu bar.** Every command is on a button or a key, and a few are on
   neither — there is no way to reach "reset this workspace" without knowing the
   Reset button does it.

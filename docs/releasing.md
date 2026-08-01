@@ -111,6 +111,24 @@ after an update rather than leaving the user staring at a desktop.
 
 ---
 
+## The installer is not signed, on purpose
+
+Windows will show a SmartScreen warning the first time somebody runs it, and
+they will have to press "More info" and then "Run anyway". That is expected.
+
+This is a decision rather than an omission. Signing needs a code-signing
+certificate, which costs money annually and has to be renewed, and the people
+who run this are the people who built it. Nothing in the build stands in the
+way: signing is one `signtool` step after `cpack` and one before the digest is
+computed, and it has to be in that order — sign first, hash second, or the
+manifest describes a file that no longer exists.
+
+The update path does not depend on it. The manifest's SHA-256 is what says the
+download is the file that was published, and that check is the one this
+actually relies on.
+
+---
+
 ## Cutting a release by hand
 
 Sometimes the workflow is not what you want — a rebuild of an existing tag, or

@@ -497,6 +497,12 @@ Nothing checks on its own. The version at the foot of the project panel is the
 button, and an editor that phoned home the moment it opened would have decided
 on the user's behalf that it may.
 
+The installer is deliberately unsigned, so Windows shows SmartScreen the first
+time. A certificate costs money annually and the people who run this are the
+people who built it; the update path does not depend on it either way, because
+what says a download is the file that was published is the SHA-256 in the
+manifest.
+
 ## Building
 
 Requires Visual Studio 2022 with the C++ toolset, CMake 3.28+, and
