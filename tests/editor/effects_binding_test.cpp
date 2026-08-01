@@ -734,6 +734,34 @@ TEST(ResetAudioEffect, PutsEveryParameterBackToItsDefault) {
   EXPECT_DOUBLE_EQ(row.value, row.fallback);
 }
 
+TEST(CopyOneEffect, TakesJustThatEffect) {
+  Project p = add_effect(one_clip(), "c1", "blur");
+  p = add_effect(std::move(p), "c1", "vignette");
+
+  const EffectClipboard clipboard = copy_one_effect(p, "c1", 1);
+  ASSERT_EQ(clipboard.size(), 1u);
+  EXPECT_EQ(clipboard.video.front().type, "vignette");
+  EXPECT_FALSE(clipboard.empty());
+}
+
+TEST(CopyOneEffect, KeepsItsKeyframes) {
+  Project p = add_effect(one_clip(), "c1", "blur");
+  p = set_effect_parameter_animated(std::move(p), "c1", 0, "amount", true, 0.0);
+  p = set_effect_parameter(std::move(p), "c1", 0, "amount", 20.0, 2.0);
+
+  const EffectClipboard clipboard = copy_one_effect(p, "c1", 0);
+  ASSERT_EQ(clipboard.size(), 1u);
+  EXPECT_FALSE(clipboard.video.front().keyframes.empty());
+}
+
+TEST(CopyOneEffect, AnIndexThatNamesNothingLeavesTheClipboardAlone) {
+  // Empty rather than filled, so a paste after a failed copy puts nothing
+  // anywhere instead of clearing a stack.
+  const Project p = add_effect(one_clip(), "c1", "blur");
+  EXPECT_TRUE(copy_one_effect(p, "c1", 9).empty());
+  EXPECT_TRUE(copy_one_effect(p, "nope", 0).empty());
+}
+
 // ---------------------------------------------------------------- library --
 
 /// A video clip and an audio clip, so the library has both kinds to refuse.

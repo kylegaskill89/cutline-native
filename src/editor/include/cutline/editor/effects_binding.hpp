@@ -268,6 +268,19 @@ struct EffectClipboard {
   friend bool operator==(const EffectClipboard&, const EffectClipboard&) = default;
 };
 
+/// Takes a copy of *one* effect off a stack, keyframes and all.
+///
+/// The same clipboard the whole-stack copy fills, holding one entry. Pasting is
+/// therefore the same operation and has the same meaning: it *replaces* what is
+/// on the clip it lands on. Copying one effect to add it to another stack
+/// without disturbing what is there is a different operation and does not exist
+/// yet.
+///
+/// Empty when the index names nothing, which leaves whatever was copied before
+/// alone rather than clearing it.
+[[nodiscard]] EffectClipboard copy_one_effect(const core::Project& project,
+                                              std::string_view clip_id, std::size_t index);
+
 /// Takes a copy of what is on `clip_id`, keyframes and all.
 ///
 /// A clip with nothing on it gives a *filled* clipboard holding nothing, which

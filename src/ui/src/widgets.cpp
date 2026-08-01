@@ -182,6 +182,61 @@ LayoutItem Box::sizing(Axis axis, const LayoutContext& context) const {
                     .max = kUnbounded};
 }
 
+// ----------------------------------------------------------------- grab row --
+
+GrabRow::GrabRow(Axis axis) : Box(axis) {}
+
+void GrabRow::paint_content(Painter& painter, const Theme& theme) const {
+  if (!selected()) return;
+  painter.line(bounds().x, bounds().y, bounds().right(), bounds().y, theme.accent, 2.0);
+}
+
+bool GrabRow::on_mouse_down(const MouseEvent& event) {
+  // Only presses nothing inside wanted. A press on a checkbox in this row is
+  // the checkbox's; reaching here at all means it bubbled past everything.
+  if (event.button == MouseButton::Right) {
+    if (!on_context_menu_) return false;
+    on_context_menu_(event.x, event.y);
+    return true;
+  }
+  if (event.button != MouseButton::Left) return false;
+
+  pressed_ = true;
+  dragging_ = false;
+  press_x_ = event.x;
+  press_y_ = event.y;
+  // Taken so the host captures the pointer, which is what lets a drag carry on
+  // past this row's own edges — and a reorder always leaves them.
+  return true;
+}
+
+bool GrabRow::on_mouse_move(const MouseEvent& event) {
+  if (!pressed_) return false;
+
+  if (!dragging_) {
+    // Vertically as well: a stack is a column, and a reorder moves the pointer
+    // hardly any distance sideways.
+    if (std::max(std::abs(event.x - press_x_), std::abs(event.y - press_y_)) < kDragThreshold) {
+      return true;
+    }
+    dragging_ = true;
+  }
+
+  if (on_drag_) on_drag_(event.x, event.y);
+  return true;
+}
+
+bool GrabRow::on_mouse_up(const MouseEvent& event) {
+  if (event.button != MouseButton::Left || !pressed_) return false;
+  const bool moved = dragging_;
+  pressed_ = false;
+  dragging_ = false;
+  // A press and release in place is a click on the row, which means nothing
+  // here — the controls inside it are what a click is for.
+  if (moved && on_drop_) on_drop_(event.x, event.y);
+  return true;
+}
+
 // --------------------------------------------------------------- title bar --
 
 TitleBar::TitleBar(std::string title) : Box(Axis::Horizontal), title_(std::move(title)) {

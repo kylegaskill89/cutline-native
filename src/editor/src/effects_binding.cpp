@@ -279,6 +279,26 @@ core::Project add_audio_effect(core::Project project, std::string_view clip_id,
 
 // ------------------------------------------------------------- copy/paste --
 
+EffectClipboard copy_one_effect(const core::Project& project, std::string_view clip_id,
+                                std::size_t index) {
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr) return {};
+
+  EffectClipboard clipboard;
+  clipboard.kind = clip->kind;
+
+  if (clip->kind == core::TrackKind::Video) {
+    if (index >= clip->effects.size()) return {};
+    clipboard.video.push_back(clip->effects[index]);
+  } else {
+    if (index >= clip->audio_effects.size()) return {};
+    clipboard.audio.push_back(clip->audio_effects[index]);
+  }
+
+  clipboard.filled = true;
+  return clipboard;
+}
+
 EffectClipboard copy_effects(const core::Project& project, std::string_view clip_id) {
   const core::Clip* clip = core::find_clip(project, clip_id);
   if (clip == nullptr) return {};

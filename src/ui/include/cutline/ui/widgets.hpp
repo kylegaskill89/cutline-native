@@ -144,6 +144,61 @@ class Box : public Widget {
   bool fills_cross_ = false;
 };
 
+/// A row that can be grabbed and right-clicked, with anything inside it.
+///
+/// A `Box` that adds the two gestures a *list entry* needs and nothing else: a
+/// drag, for reordering, and a right-click, for a menu about the row. Its
+/// children keep their own behaviour — a checkbox inside one still toggles —
+/// because a press only reaches here when nothing inside wanted it.
+///
+/// It exists because an effect card's header is several controls that together
+/// mean "this effect", and there was no way to say anything about that row as a
+/// whole. Premiere reorders its effect stack by dragging exactly this.
+class GrabRow : public Box {
+ public:
+  /// How far a press must travel before it is a drag rather than a click.
+  static constexpr double kDragThreshold = 4.0;
+
+  explicit GrabRow(Axis axis = Axis::Horizontal);
+
+  /// Dragged to a point in the window, on every move once it has started.
+  void set_on_drag(std::function<void(double x, double y)> on_drag) {
+    on_drag_ = std::move(on_drag);
+  }
+  /// Released, after a drag that actually moved.
+  void set_on_drop(std::function<void(double x, double y)> on_drop) {
+    on_drop_ = std::move(on_drop);
+  }
+  /// Right-clicked, at the point it happened.
+  void set_on_context_menu(std::function<void(double x, double y)> on_menu) {
+    on_context_menu_ = std::move(on_menu);
+  }
+
+  [[nodiscard]] bool dragging() const noexcept { return dragging_; }
+
+  /// Draws the insertion line when the row is `selected`.
+  ///
+  /// A line across the top rather than a highlight over the whole row: the
+  /// question a reorder asks is *where does it go*, and a lit row answers
+  /// "onto this one", which is not a place.
+  void paint_content(Painter& painter, const Theme& theme) const override;
+
+  bool on_mouse_down(const MouseEvent& event) override;
+  bool on_mouse_move(const MouseEvent& event) override;
+  bool on_mouse_up(const MouseEvent& event) override;
+
+ private:
+  bool pressed_ = false;
+  bool dragging_ = false;
+  double press_x_ = 0.0;
+  double press_y_ = 0.0;
+
+  std::function<void(double, double)> on_drag_;
+  std::function<void(double, double)> on_drop_;
+  std::function<void(double, double)> on_context_menu_;
+};
+
+
 /// The window's own caption, drawn rather than left to the system.
 ///
 /// Windows' title bar is the one part of a window an application does not own,

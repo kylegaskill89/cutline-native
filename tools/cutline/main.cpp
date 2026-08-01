@@ -465,6 +465,15 @@ struct App {
   /// curve somebody was about to paste.
   cutline::editor::KeyframeClipboard keyframe_clipboard;
 
+  /// The effect card a reorder drag would land on, while one is in flight, and
+  /// the header rows themselves.
+  ///
+  /// The rows are held because the highlight has to change *during* a drag, and
+  /// the panel is not rebuilt then — rebuilding it would destroy the row the
+  /// pointer is holding.
+  std::optional<std::size_t> effect_drop_target;
+  std::vector<cutline::ui::GrabRow*> effect_rows;
+
   /// Which lanes are showing their graph, by property name. Here for the same
   /// reason `expanded_params` is: the panel is rebuilt on every edit.
   std::set<std::string> expanded_lanes;
@@ -1177,6 +1186,83 @@ void open_effect_menu(App& app, const std::string& clip_id, const Rect& anchor, 
   app.main.host->open_popup(std::move(list), anchor);
 }
 
+/// Where a dragged effect card would land, by the y it was released at.
+///
+/// The stack is a column of cards in the inspector, so "which effect is under
+/// the pointer" is answered by walking the header rows the panel just built.
+/// They are found by name because the panel is rebuilt from nothing on every
+/// edit and there is no stable widget to hold on to.
+[[nodiscard]] std::optional<std::size_t> effect_row_at(const App& app, double y) {
+  if (app.inspector == nullptr) return std::nullopt;
+
+  std::size_t seen = 0;
+  std::optional<std::size_t> found;
+  for (const auto& child : app.inspector->children()) {
+    const auto* row = dynamic_cast<const cutline::ui::GrabRow*>(child.get());
+    if (row == nullptr) continue;
+    // The nearest header above the pointer, so releasing anywhere over a card —
+    // header or parameters — means that card.
+    if (row->bounds().y <= y) found = seen;
+    ++seen;
+  }
+  return found;
+}
+
+/// Outlines the card a drop would land on. Cleared with no index.
+void show_effect_drop(App& app, double y) {
+  const std::optional<std::size_t> target = effect_row_at(app, y);
+  if (app.effect_drop_target == target) return;
+  app.effect_drop_target = target;
+
+  for (std::size_t i = 0; i < app.effect_rows.size(); ++i) {
+    app.effect_rows[i]->set_selected(target.has_value() && *target == i);
+  }
+  mark_dirty(app);
+}
+
+/// Moves an effect from `index` to wherever the pointer was let go.
+void drop_effect(App& app, std::size_t index, double y) {
+  const std::optional<std::size_t> target = effect_row_at(app, y);
+  app.effect_drop_target.reset();
+  for (cutline::ui::GrabRow* row : app.effect_rows) row->set_selected(false);
+  if (!target.has_value() || *target == index) {
+    mark_dirty(app);
+    return;
+  }
+
+  const auto selection = app.session.selection();
+  if (selection.empty()) return;
+  const std::string clip_id{selection.front()};
+  const bool audio = !cutline::editor::clip_audio_effects(app.session.project(), clip_id).empty();
+
+  // Walked one step at a time, against one project, applied once. The core
+  // moves an effect by a single place — order affects the render, so each step
+  // is a real edit — and a reorder is still one gesture and one undo entry.
+  cutline::core::Project next = app.session.project();
+  const int direction = *target > index ? 1 : -1;
+  for (std::size_t at = index; at != *target; at = static_cast<std::size_t>(
+                                    static_cast<std::ptrdiff_t>(at) + direction)) {
+    next = audio ? cutline::core::move_audio_effect(std::move(next), clip_id, at, direction)
+                 : cutline::core::move_clip_effect(std::move(next), clip_id, at, direction);
+  }
+
+  app.session.apply(std::move(next));
+  invalidate_preview(app);
+  app.inspector_stale = true;
+}
+
+/// The menu a right-click on an effect card offers.
+void open_effect_row_menu(App& app, const std::function<void()>& copy, double x, double y) {
+  if (app.main.host == nullptr) return;
+
+  auto list = std::make_unique<MenuList>(std::vector<std::string>{"Copy Effect"});
+  list->set_on_choose([&app, copy](std::size_t index) {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    if (index == 0) copy();
+  });
+  app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
+}
+
 /// The row an effect card starts with: its name as an on/off checkbox, then
 /// move up, move down and remove.
 ///
@@ -1191,14 +1277,31 @@ void build_effect_header(App& app, const cutline::editor::EffectRow& row, std::s
                          std::function<cutline::core::Project()> on_toggle,
                          std::function<cutline::core::Project(int)> on_move,
                          std::function<cutline::core::Project()> on_remove,
-                         std::function<cutline::core::Project()> on_reset = {}) {
+                         std::function<cutline::core::Project()> on_reset = {},
+                         std::function<void()> on_copy = {}) {
   const auto applied = [&app](cutline::core::Project next) {
     app.session.apply(std::move(next));
     app.inspector_stale = true;
     invalidate_preview(app);
   };
 
-  auto& line = app.inspector->emplace<Box>(Axis::Horizontal);
+  auto& line = app.inspector->emplace<cutline::ui::GrabRow>(Axis::Horizontal);
+
+  // Dragged up or down to reorder, which is how Premiere does it and what the
+  // arrows below are the keyboard-reachable version of.
+  //
+  // The row is told where the pointer is; which effect that lands on is worked
+  // out here, because the row knows nothing of the stack it is in.
+  line.set_on_drag([&app](double, double y) { show_effect_drop(app, y); });
+  app.effect_rows.push_back(&line);
+  line.set_on_drop([&app, index = row.index](double, double y) {
+    drop_effect(app, index, y);
+  });
+  if (on_copy) {
+    line.set_on_context_menu([&app, copy = std::move(on_copy)](double x, double y) {
+      open_effect_row_menu(app, copy, x, y);
+    });
+  }
 
   // The checkbox is the name as well: a disabled effect stays in the stack and
   // stays visible, which is the whole point of disabling rather than removing.
@@ -1320,6 +1423,11 @@ void build_effect_controls(App& app, const std::string& clip_id) {
         },
         [&app, clip_id, index = row.index] {
           return cutline::editor::reset_effect(app.session.project(), clip_id, index);
+        },
+        [&app, clip_id, index = row.index] {
+          app.effect_clipboard =
+              cutline::editor::copy_one_effect(app.session.project(), clip_id, index);
+          app.inspector_stale = true;
         });
 
     if (row.unknown) {
@@ -1464,6 +1572,11 @@ void build_audio_effect_controls(App& app, const std::string& clip_id) {
         },
         [&app, clip_id, index = row.index] {
           return cutline::editor::reset_audio_effect(app.session.project(), clip_id, index);
+        },
+        [&app, clip_id, index = row.index] {
+          app.effect_clipboard =
+              cutline::editor::copy_one_effect(app.session.project(), clip_id, index);
+          app.inspector_stale = true;
         });
 
     if (row.unknown) {
@@ -1984,6 +2097,8 @@ void refresh_inspector(App& app) {
   // hover, focus and capture first, so a slider that was mid-drag when the
   // selection changed is not freed underneath the drag.
   app.keyframes = nullptr;
+  app.effect_rows.clear();
+  app.effect_drop_target.reset();
   app.inspector->clear_children();
 
   const auto selection = app.session.selection();

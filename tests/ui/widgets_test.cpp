@@ -6,6 +6,7 @@
 
 #include "cutline/ui/widgets.hpp"
 
+#include "cutline/ui/controls.hpp"
 #include "cutline/ui/recording_painter.hpp"
 #include "cutline/ui/theme.hpp"
 #include "cutline/ui/widget.hpp"
@@ -530,6 +531,107 @@ TEST(Label, DoesNotClipWhenItFits) {
   RecordingPainter painter;
   label.paint(painter, default_theme());
   EXPECT_EQ(painter.count(DrawCall::Kind::PushClip), 0u);
+}
+
+// ----------------------------------------------------------------- grab row --
+
+struct Grabbed {
+  Grabbed() {
+    host = std::make_unique<WidgetHost>(std::make_unique<Widget>());
+    row = &host->root().emplace<GrabRow>(Axis::Horizontal);
+    box = &row->emplace<Checkbox>("On", false);
+    host->resize(Rect{0.0, 0.0, 400.0, 200.0}, flat_context());
+    row->arrange(Rect{0.0, 0.0, 300.0, 24.0}, flat_context());
+  }
+
+  std::unique_ptr<WidgetHost> host;
+  GrabRow* row = nullptr;
+  Checkbox* box = nullptr;
+};
+
+TEST(GrabRow, APressThatDoesNotMoveIsNotADrag) {
+  Grabbed test;
+  int drops = 0;
+  test.row->set_on_drop([&](double, double) { ++drops; });
+
+  test.host->mouse_down(MouseEvent{.x = 200.0, .y = 12.0, .button = MouseButton::Left});
+  test.host->mouse_up(MouseEvent{.x = 200.0, .y = 12.0, .button = MouseButton::Left});
+  EXPECT_EQ(drops, 0);
+}
+
+TEST(GrabRow, MovingPastTheThresholdBeginsADrag) {
+  Grabbed test;
+  int drags = 0;
+  double last_y = 0.0;
+  test.row->set_on_drag([&](double, double y) {
+    ++drags;
+    last_y = y;
+  });
+
+  test.host->mouse_down(MouseEvent{.x = 200.0, .y = 12.0, .button = MouseButton::Left});
+  test.host->mouse_move(MouseEvent{.x = 200.0, .y = 12.0 + GrabRow::kDragThreshold - 1.0});
+  EXPECT_EQ(drags, 0) << "a wobble began a drag";
+
+  test.host->mouse_move(MouseEvent{.x = 200.0, .y = 90.0});
+  EXPECT_EQ(drags, 1);
+  EXPECT_DOUBLE_EQ(last_y, 90.0);
+  EXPECT_TRUE(test.row->dragging());
+}
+
+TEST(GrabRow, TheDragKeepsArrivingBelowTheRow) {
+  // A reorder always leaves the row it started on, so the capture a handled
+  // press takes is the whole point.
+  Grabbed test;
+  double last_y = 0.0;
+  test.row->set_on_drag([&](double, double y) { last_y = y; });
+
+  test.host->mouse_down(MouseEvent{.x = 200.0, .y = 12.0, .button = MouseButton::Left});
+  ASSERT_EQ(test.host->captured(), test.row);
+  test.host->mouse_move(MouseEvent{.x = 200.0, .y = 500.0});
+  EXPECT_DOUBLE_EQ(last_y, 500.0);
+}
+
+TEST(GrabRow, AControlInsideItKeepsItsOwnBehaviour) {
+  // A press on the checkbox is the checkbox's; the row only sees what nothing
+  // inside it wanted.
+  Grabbed test;
+  int drags = 0;
+  test.row->set_on_drag([&](double, double) { ++drags; });
+
+  const Rect box = test.box->bounds();
+  test.host->mouse_down(MouseEvent{
+      .x = box.x + 2.0, .y = box.y + box.height / 2.0, .button = MouseButton::Left});
+  test.host->mouse_move(MouseEvent{.x = box.x + 2.0, .y = box.y + 90.0});
+  EXPECT_EQ(drags, 0);
+}
+
+TEST(GrabRow, ARightClickAsksForAMenu) {
+  Grabbed test;
+  int menus = 0;
+  test.row->set_on_context_menu([&](double, double) { ++menus; });
+
+  test.host->mouse_down(MouseEvent{.x = 200.0, .y = 12.0, .button = MouseButton::Right});
+  EXPECT_EQ(menus, 1);
+}
+
+TEST(GrabRow, ARightClickWithNoMenuIsNotSwallowed) {
+  Grabbed test;
+  EXPECT_FALSE(test.host->mouse_down(
+      MouseEvent{.x = 200.0, .y = 12.0, .button = MouseButton::Right}));
+}
+
+TEST(GrabRow, DrawsAnInsertionLineWhenItIsTheTarget) {
+  // A line across the top rather than a lit row: the question a reorder asks is
+  // where the card goes, and "onto this one" is not a place.
+  Grabbed test;
+  RecordingPainter quiet;
+  test.row->paint(quiet, default_theme());
+  const std::size_t before = quiet.count(DrawCall::Kind::Line);
+
+  test.row->set_selected(true);
+  RecordingPainter painter;
+  test.row->paint(painter, default_theme());
+  EXPECT_EQ(painter.count(DrawCall::Kind::Line), before + 1);
 }
 
 }  // namespace
