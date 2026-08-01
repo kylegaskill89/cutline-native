@@ -70,16 +70,55 @@ to, and gives nothing to grab.
 | Drag a keyframe in time | yes | no — the one gesture the model supports and nothing offers | machinery |
 | Previous / next keyframe buttons | ◀ ◆ ▶ on every animated row | the diamond toggles one at the playhead; there is no way to *go* to one | control |
 | Select several keyframes | click, shift-click, marquee | no | machinery |
-| Interpolation per keyframe | right-click: Linear, Bezier, Auto Bezier, Continuous, Hold, Ease In, Ease Out | one setting for the whole property, three modes | model + control |
+| Right-click a selection | a context menu on it | **no right-click anywhere in the application** | wiring |
+| Interpolation per keyframe | Linear, Bezier, Auto Bezier, Continuous, Hold, Ease In, Ease Out | three modes, and one setting for the whole property | wiring |
 | Velocity graph | expandable value and speed curves | no | machinery |
 | Copy and paste keyframes | yes | no | wiring |
 
-Two notes on the interpolation row. Ours is deliberately one-per-property —
-that was the reference's shape and it is what most people want — but Premiere's
-is per-keyframe, and *ease in on the way out of one keyframe and linear into the
-next* is not expressible here at all. Changing it is a model change
-(`Keyframe::e` already exists per keyframe; `keyframe_interp_of` collapses it),
-so the storage is mostly there and the resolver would need to stop assuming.
+#### Selecting keyframes, and setting the interpolation between them
+
+Shift-click and marquee-select several keyframes, right-click the selection, and
+set the interpolation for all of them at once. This is how an animation gets
+shaped in practice — ease out of the first, hold through the middle, ease into
+the last — and it is a gesture, not a settings screen.
+
+**This is much cheaper than it first looks, and an earlier draft of this
+document said otherwise.** The claim was that per-keyframe interpolation needs a
+model change because the resolver collapses it. That is wrong. `ease_fraction(f,
+a.e)` reads the mode off the **outgoing** keyframe of the pair being
+interpolated between — so the evaluator is already per-keyframe *and*
+per-segment, and has been since phase 1. Storing "ease out of this one, linear
+into the next" already works and already renders.
+
+Three helpers are what flatten it, and all three are small:
+
+- `keyframe_list_interp` reports `front().e` as though it were the property's;
+- `set_keyframe_list_interp` writes one mode to **every** keyframe in the list;
+- `upsert_keyframe` gives a new keyframe whatever the list's mode is.
+
+What is actually needed is a setter that takes *which* keyframes rather than
+which property, selection state in the view, and a context menu. The model is
+already right.
+
+Note also that the mode living on the outgoing keyframe means it genuinely is
+"the interpolation **between** this keyframe and the next", which is the way
+anybody describes it and the way Premiere presents it. The three modes we have
+are Linear, Hold and Ease; Premiere's seven are a superset, and Bezier with
+draggable handles is the one that needs the velocity graph to be worth having.
+
+#### Nothing in this application has ever seen a right-click
+
+Worth stating on its own, because it blocks the context menu above and is
+invisible until something needs it. `MouseEvent` carries a button and
+`MouseButton::Right` exists, but the Win32 layer only translates
+`WM_LBUTTONDOWN` — there is no `WM_RBUTTONDOWN` case at all, so a right-click
+reaches no widget anywhere in the editor.
+
+The popup machinery it would feed is already there and already used by five
+different controls (`open_popup` takes any widget, `MenuList` is the menu). The
+missing part is three message cases and the routing, plus deciding what a
+right-click means where there is no menu for it — which should be nothing,
+rather than falling through to a left-click.
 
 ### 1.3 The effects library
 
