@@ -674,7 +674,11 @@ TEST(ResetEffect, PutsEveryParameterBackToItsDefault) {
   ASSERT_NE(clip_effects(p, "c1").front().params.front().value, 0.0);
 
   const Project reset = reset_effect(p, "c1", 0);
-  const EffectParamRow& row = clip_effects(reset, "c1").front().params.front();
+  // Held, not bound through: `clip_effects` returns a vector, and a reference
+  // into a temporary one dangles at the semicolon. The symptom is a test that
+  // reads a plausible number out of freed memory — sometimes the right one.
+  const std::vector<EffectRow> rows = clip_effects(reset, "c1");
+  const EffectParamRow& row = rows.front().params.front();
   EXPECT_DOUBLE_EQ(row.value, row.fallback);
 }
 
@@ -688,7 +692,8 @@ TEST(ResetEffect, ClearsTheKeyframesRatherThanWritingOneAtTheDefault) {
   ASSERT_TRUE(clip_effects(p, "c1").front().params.front().animated);
 
   const Project reset = reset_effect(p, "c1", 0);
-  const EffectParamRow& row = clip_effects(reset, "c1").front().params.front();
+  const std::vector<EffectRow> rows = clip_effects(reset, "c1");
+  const EffectParamRow& row = rows.front().params.front();
   EXPECT_FALSE(row.animated);
   EXPECT_DOUBLE_EQ(row.value, row.fallback);
 }
@@ -730,7 +735,8 @@ TEST(ResetAudioEffect, PutsEveryParameterBackToItsDefault) {
                                    moved);
 
   const Project reset = reset_audio_effect(p, "a1", 0);
-  const EffectParamRow& row = clip_audio_effects(reset, "a1").front().params.front();
+  const std::vector<EffectRow> rows = clip_audio_effects(reset, "a1");
+  const EffectParamRow& row = rows.front().params.front();
   EXPECT_DOUBLE_EQ(row.value, row.fallback);
 }
 

@@ -380,15 +380,20 @@ core::Project set_clip_parameter_animated(core::Project project, std::string_vie
   // property already had, and switching it off has to keep the one the
   // keyframes were producing. Either way nothing about the picture changes at
   // this instant, which is the whole point of the control.
+  //
+  // In *shown* units, the ones `set_clip_parameter` takes, because that is what
+  // turning animation off hands back to it. Position's factor is the canvas
+  // rather than a constant, and reading it through the constant one put a layer
+  // three quarters across the frame at a fraction of a pixel from its left edge.
   const double current = gain ? gain_shown(core::gain_at(*clip, local_t))
                               : core::animated_value(*clip, *prop, local_t) *
-                                    display_scale(param);
+                                    shown_scale(project, param);
 
   if (animated) {
     return gain ? core::set_gain_keyframe(std::move(project), clip_id, local_t,
                                           gain_stored(current))
                 : core::set_keyframe(std::move(project), clip_id, *prop, local_t,
-                                     current / display_scale(param));
+                                     current / shown_scale(project, param));
   }
 
   project = gain ? core::clear_gain_keyframes(std::move(project), clip_id)

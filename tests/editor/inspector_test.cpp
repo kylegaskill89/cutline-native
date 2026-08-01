@@ -389,6 +389,19 @@ TEST(Position, AnAnimatedRowReadsItsKeyframeInPixelsToo) {
   EXPECT_DOUBLE_EQ(find(clip_parameters(p, "c1", 0.0), ClipParam::X)->value, 1440.0);
 }
 
+TEST(Position, SurvivesTheStopwatchBeingTurnedOffAgain) {
+  // Switching animation off reads the value out and writes it back as the
+  // static one, and the two halves have to be in the same units. Read in
+  // pixels and written as though it were a fraction, a layer three quarters
+  // across the frame jumped to the very edge of it.
+  Project p = set_clip_parameter_animated(sample_project(), "c1", ClipParam::X, true, 0.0);
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::X, 1440.0, 0.0);
+  p = set_clip_parameter_animated(std::move(p), "c1", ClipParam::X, false, 0.0);
+
+  EXPECT_DOUBLE_EQ(p.tracks.front().clips.front().transform.x, 0.75);
+  EXPECT_DOUBLE_EQ(find(clip_parameters(p, "c1"), ClipParam::X)->value, 1440.0);
+}
+
 TEST(Position, ACanvasOfNothingIsNotADivisionByZero) {
   Project p = sample_project();
   p.canvas_w = 0;
