@@ -238,26 +238,70 @@ reasons. Drag-and-drop needs a drag that crosses panels, which nothing in this
 application does yet. Presets need a new persisted thing with its own file and
 its own format questions. Nested folders are a widget problem only.
 
-### 1.4 Masks
+### 1.4 Masks, 1.5 Catalogue depth, and the thing they share
+
+These two look unrelated — one is a subsystem, the other is content — and they
+are blocked by the same wall. It is worth stating before either is estimated,
+because it makes one of the sizes below badly wrong.
+
+#### The compositor has room for about seven more numbers
+
+Every effect this application has is a field in **one** `Params` struct, applied
+to a layer in a single pass. That struct is delivered as **root constants**, and
+a D3D12 root signature may hold 64 DWORDs in total. Ours holds 49: one for the
+descriptor table and 48 for `ShaderParams`, of which 28 are already effect
+parameters.
+
+**Fifteen DWORDs are left, and a mask needs about eight of them.**
+
+So the claim in an earlier draft of this document — that a new effect is "an
+afternoon", the catalogue and the resolver taking one in two places — is wrong
+in the way that matters. It is true for the next one or two and then it is not
+true at all. Premiere's several dozen effects cannot be reached by adding fields
+to this struct, and the last few that fit would be spent by whichever feature
+happened to ask first.
+
+What unblocks both is the same change: **effects become passes rather than
+fields**. Each effect gets its own shader and its own small constant buffer, the
+compositor runs the stack as a chain of render targets, and the budget stops
+being global. That is how the reference does it and how any of this scales. It
+also happens to be what per-effect masks need, since a mask is then a property
+of a pass rather than of a layer.
+
+It is not a small change — it touches the compositor's whole draw path, costs
+intermediate targets per effect, and needs the blur's existing two-pass special
+case folded into the general mechanism. It is also the single highest-value
+piece of work left in section 1, because everything after it gets cheaper.
+
+#### 1.4 Masks
 
 Premiere puts three mask tools on **every** effect — ellipse, rectangle, pen —
 with path, feather, opacity, expansion, inversion, and per-frame tracking. It is
 how anything gets applied to part of a picture rather than all of it.
 
 We have none of it, and nothing underneath it: no mask in the model, no mask in
-the compositor, no path type. This is the largest item in this section by a wide
-margin and the only one that is genuinely a subsystem. `docs/architecture.md`
-calls arbitrary masks out as something the rewrite makes *cheap* — the shader
-work is real but small — so the cost here is the model, the interaction, and the
-tracking, not the drawing.
+the compositor, no path type.
 
-### 1.5 Catalogue depth
+There is a real decision here, and it is not mine to make:
+
+- **A mask per clip** fits in the budget above and could be built now — shape,
+  feather, expansion, inversion, and handles on the monitor. It is genuinely
+  useful and it is *not* what Premiere does.
+- **A mask per effect** is what Premiere does, and it needs the pass
+  restructuring first.
+
+Tracking is beyond both and belongs with neither: it is per-frame analysis, a
+different kind of work from anything here now.
+
+`docs/architecture.md` calls arbitrary masks out as something the rewrite makes
+*cheap*. That is true of the drawing and false of everything around it.
+
+#### 1.5 Catalogue depth
 
 Eleven video effects against Premiere's several dozen, in five categories
-against eighteen. This is a content gap rather than a structural one: the
-catalogue and the resolver take a new effect in two places and a test walks
-every entry, so each one is an afternoon. Worth listing because "we have
-effects" and "we have the effects somebody reaches for" are different claims.
+against eighteen. Worth listing because "we have effects" and "we have the
+effects somebody reaches for" are different claims — but see the budget above:
+this is a **structural** gap wearing a content gap's clothes.
 
 The ones whose absence would be noticed first, roughly in order: **Lumetri
 Color** (or an equivalent grading control — curves, wheels, HSL secondaries),
