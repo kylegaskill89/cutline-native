@@ -195,6 +195,120 @@ TEST(RemoveKeyframe, RefusesToTakeTheLastOne) {
   EXPECT_EQ(remove_keyframe(project, "c1", x_ref(), 1.0), project);
 }
 
+// -------------------------------------------------------- copy and paste --
+
+[[nodiscard]] std::vector<KeyframeAddress> all_x() {
+  return {KeyframeAddress{.ref = x_ref(), .t = 0.0}, KeyframeAddress{.ref = x_ref(), .t = 2.0},
+          KeyframeAddress{.ref = x_ref(), .t = 4.0}};
+}
+
+TEST(CopyKeyframes, TakesTimesRelativeToTheEarliestOne) {
+  // Absolute times would only ever go back where they came from. The shape of
+  // an animation is the spacing between its points.
+  const KeyframeClipboard clipboard =
+      copy_keyframes(animated(), "c1", std::vector{KeyframeAddress{.ref = x_ref(), .t = 2.0},
+                                                   KeyframeAddress{.ref = x_ref(), .t = 4.0}});
+
+  ASSERT_EQ(clipboard.lanes.size(), 1u);
+  ASSERT_EQ(clipboard.lanes[0].keys.size(), 2u);
+  EXPECT_DOUBLE_EQ(clipboard.lanes[0].keys[0].t, 0.0);
+  EXPECT_DOUBLE_EQ(clipboard.lanes[0].keys[1].t, 2.0);
+}
+
+TEST(CopyKeyframes, GroupsBySomethingThatCanBePastedBack) {
+  core::Project project = animated();
+  core::find_clip(project, "c1")->keyframes[core::anim_prop_index(core::AnimProp::Opacity)] = {
+      Keyframe{.t = 1.0, .v = 0.5}};
+
+  const KeyframeClipboard clipboard =
+      copy_keyframes(project, "c1",
+                     std::vector{KeyframeAddress{.ref = x_ref(), .t = 2.0},
+                                 KeyframeAddress{.ref = ParamRef{.param = ClipParam::Opacity},
+                                                 .t = 1.0}});
+  EXPECT_EQ(clipboard.lanes.size(), 2u);
+}
+
+TEST(CopyKeyframes, CopyingNothingLeavesAnEmptyClipboard) {
+  // So a paste after a failed copy puts nothing anywhere, rather than putting
+  // back whatever was copied before.
+  EXPECT_TRUE(copy_keyframes(animated(), "c1", {}).empty());
+  EXPECT_TRUE(copy_keyframes(animated(), "c1",
+                             std::vector{KeyframeAddress{.ref = x_ref(), .t = 1.5}})
+                  .empty());
+}
+
+TEST(PasteKeyframes, PutsTheEarliestAtTheTimeAsked) {
+  core::Project project = animated();
+  // Two keyframes, 2 seconds apart, back down at half a second.
+  const KeyframeClipboard clipboard =
+      copy_keyframes(project, "c1", std::vector{KeyframeAddress{.ref = x_ref(), .t = 0.0},
+                                                KeyframeAddress{.ref = x_ref(), .t = 2.0}});
+
+  const core::Project pasted = paste_keyframes(project, "c1", clipboard, 0.5);
+  const std::vector<Keyframe>& keys = x_keys(pasted);
+
+  // 0, 0.5, 2, 2.5, 4.
+  ASSERT_EQ(keys.size(), 5u);
+  EXPECT_DOUBLE_EQ(keys[1].t, 0.5);
+  EXPECT_DOUBLE_EQ(keys[3].t, 2.5);
+}
+
+TEST(PasteKeyframes, KeepsEachKeyframesOwnCurve) {
+  // `upsert_keyframe` gives a new keyframe the *list's* mode, so a paste that
+  // did not put the copied one back would quietly flatten every curve it moved.
+  core::Project project = set_keyframe_interp(animated(), "c1", x_ref(), 2.0, Interp::Hold);
+  const KeyframeClipboard clipboard =
+      copy_keyframes(project, "c1", std::vector{KeyframeAddress{.ref = x_ref(), .t = 2.0}});
+
+  const core::Project pasted = paste_keyframes(project, "c1", clipboard, 1.0);
+  const std::vector<Keyframe>& keys = x_keys(pasted);
+  ASSERT_EQ(keys.size(), 4u);
+  EXPECT_EQ(keys[1].e, Interp::Hold) << "the pasted keyframe took the list's mode instead";
+}
+
+TEST(PasteKeyframes, DropsWhatWouldLandOutsideTheClip) {
+  // Clamping would pile a whole curve onto the last frame, which is worse than
+  // losing the part that did not fit.
+  core::Project project = animated();
+  const KeyframeClipboard clipboard =
+      copy_keyframes(project, "c1", std::vector{KeyframeAddress{.ref = x_ref(), .t = 0.0},
+                                                KeyframeAddress{.ref = x_ref(), .t = 4.0}});
+
+  // At 3s the second one would land at 7s, past the clip's 4s end.
+  const core::Project pasted = paste_keyframes(project, "c1", clipboard, 3.0);
+  const std::vector<Keyframe>& keys = x_keys(pasted);
+  ASSERT_EQ(keys.size(), 4u);
+  EXPECT_DOUBLE_EQ(keys.back().t, 4.0);
+}
+
+TEST(PasteKeyframes, OverwritesWhatIsAlreadyAtThatInstant) {
+  core::Project project = animated();
+  const KeyframeClipboard clipboard =
+      copy_keyframes(project, "c1", std::vector{KeyframeAddress{.ref = x_ref(), .t = 0.0}});
+
+  const core::Project pasted = paste_keyframes(project, "c1", clipboard, 2.0);
+  const std::vector<Keyframe>& keys = x_keys(pasted);
+  EXPECT_EQ(keys.size(), 3u) << "it added a second keyframe at the same instant";
+  EXPECT_DOUBLE_EQ(keys[1].v, 0.0) << "the copied value did not go in";
+}
+
+TEST(PasteKeyframes, SkipsAPropertyThatIsNoLongerAnimated) {
+  // Switching animation on is the stopwatch's job, and a paste that silently
+  // did it would change the picture in a way nobody asked for.
+  const KeyframeClipboard clipboard =
+      copy_keyframes(animated(), "c1", std::vector{KeyframeAddress{.ref = x_ref(), .t = 0.0}});
+
+  core::Project bare = animated();
+  core::find_clip(bare, "c1")->keyframes[core::anim_prop_index(core::AnimProp::X)].clear();
+
+  EXPECT_EQ(paste_keyframes(bare, "c1", clipboard, 1.0), bare);
+}
+
+TEST(PasteKeyframes, AnEmptyClipboardChangesNothing) {
+  const core::Project before = animated();
+  EXPECT_EQ(paste_keyframes(before, "c1", KeyframeClipboard{}, 1.0), before);
+}
+
 // ------------------------------------------------------------- neighbours --
 
 TEST(KeyframeNeighbours, FindTheOnesEitherSide) {

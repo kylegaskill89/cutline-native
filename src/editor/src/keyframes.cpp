@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace cutline::editor {
@@ -193,6 +194,82 @@ core::Project remove_keyframe(core::Project project, std::string_view clip_id,
     keys.erase(keys.begin() + static_cast<std::ptrdiff_t>(*index));
     return true;
   });
+}
+
+KeyframeClipboard copy_keyframes(const core::Project& project, std::string_view clip_id,
+                                 std::span<const KeyframeAddress> addresses) {
+  // Const, so the lookup goes through a copy of the clip rather than the
+  // project. `lane_keys` has to be non-const to serve the edits as well, and
+  // this is the one caller that is only reading.
+  const core::Clip* found = core::find_clip(project, clip_id);
+  if (found == nullptr || addresses.empty()) return {};
+  core::Clip clip = *found;
+
+  KeyframeClipboard clipboard;
+  double earliest = std::numeric_limits<double>::max();
+
+  for (const KeyframeAddress& address : addresses) {
+    const std::vector<core::Keyframe>* keys = lane_keys(clip, address.ref);
+    if (keys == nullptr) continue;
+    const auto index = nearest(*keys, address.t);
+    if (!index.has_value()) continue;
+
+    // Grouped by property, so a selection spanning three lanes comes back as
+    // three lanes rather than as one list nobody could put anywhere.
+    const auto lane = std::ranges::find_if(clipboard.lanes, [&address](const auto& entry) {
+      return entry.ref == address.ref;
+    });
+    core::Keyframe copied = (*keys)[*index];
+    earliest = std::min(earliest, copied.t);
+    if (lane == clipboard.lanes.end()) {
+      clipboard.lanes.push_back(KeyframeClipboard::Lane{.ref = address.ref, .keys = {copied}});
+    } else {
+      lane->keys.push_back(copied);
+    }
+  }
+
+  if (clipboard.lanes.empty()) return {};
+
+  // Relative to the earliest, which is what makes pasting at the playhead mean
+  // anything at all.
+  for (KeyframeClipboard::Lane& lane : clipboard.lanes) {
+    for (core::Keyframe& key : lane.keys) key.t -= earliest;
+    std::ranges::sort(lane.keys, {}, &core::Keyframe::t);
+  }
+  return clipboard;
+}
+
+core::Project paste_keyframes(core::Project project, std::string_view clip_id,
+                              const KeyframeClipboard& clipboard, double at) {
+  if (clipboard.empty()) return project;
+
+  core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr) return project;
+  const double limit = core::clip_duration(*clip);
+
+  for (const KeyframeClipboard::Lane& lane : clipboard.lanes) {
+    std::vector<core::Keyframe>* keys = lane_keys(*clip, lane.ref);
+    // Not animated any more, so there is no list to paste into. Switching
+    // animation on here would change the picture in a way nobody asked for.
+    if (keys == nullptr || keys->empty()) continue;
+
+    for (const core::Keyframe& key : lane.keys) {
+      const double when = at + key.t;
+      // Dropped rather than clamped. Clamping would pile a whole curve onto
+      // the clip's last frame, which is worse than losing the part that did
+      // not fit.
+      if (when < 0.0 || when > limit) continue;
+      core::upsert_keyframe(*keys, when, key.v);
+      // `upsert_keyframe` gives a new keyframe the list's mode, so the curve
+      // that was copied has to be put back on top of it.
+      const auto index = nearest(*keys, when);
+      if (index.has_value()) (*keys)[*index].e = key.e;
+    }
+  }
+
+  // Nothing is written when nothing fits, so this is the project exactly as it
+  // arrived — which is what the session needs in order to skip the entry.
+  return project;
 }
 
 std::optional<double> keyframe_before(std::span<const core::Keyframe> keys, double t) noexcept {

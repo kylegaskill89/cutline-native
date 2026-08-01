@@ -113,6 +113,61 @@ struct KeyframeModel {
 [[nodiscard]] core::Project remove_keyframe(core::Project project, std::string_view clip_id,
                                             const ParamRef& ref, double at);
 
+// -------------------------------------------------------- copy and paste --
+
+/// One keyframe, named by where it lives and when.
+struct KeyframeAddress {
+  ParamRef ref;
+  double t = 0.0;
+
+  friend bool operator==(const KeyframeAddress&, const KeyframeAddress&) = default;
+};
+
+/// Keyframes lifted off a clip, ready to go back somewhere else.
+///
+/// Times are **relative to the earliest one copied**, not absolute, which is
+/// what makes pasting at the playhead mean anything: the shape of the animation
+/// is the spacing between its points, and an absolute copy would only ever go
+/// back where it came from.
+struct KeyframeClipboard {
+  struct Lane {
+    ParamRef ref;
+    std::vector<core::Keyframe> keys;
+
+    friend bool operator==(const Lane&, const Lane&) = default;
+  };
+
+  std::vector<Lane> lanes;
+
+  [[nodiscard]] bool empty() const noexcept { return lanes.empty(); }
+
+  friend bool operator==(const KeyframeClipboard&, const KeyframeClipboard&) = default;
+};
+
+/// Takes copies of the keyframes at `addresses`, grouped by property.
+///
+/// Empty when none of them names a keyframe that is there, which is also what
+/// an empty selection produces — so a paste after a failed copy puts nothing
+/// anywhere rather than putting back whatever was copied before.
+[[nodiscard]] KeyframeClipboard copy_keyframes(const core::Project& project,
+                                               std::string_view clip_id,
+                                               std::span<const KeyframeAddress> addresses);
+
+/// Puts them back, with the earliest landing at `at`.
+///
+/// Onto the same properties they came from, which is the only place they mean
+/// anything: a rotation curve pasted onto opacity would be numbers in the wrong
+/// units. A property that is no longer animated is skipped rather than being
+/// switched on — turning animation on is the stopwatch's job, and a paste that
+/// silently did it would be a paste that changed the picture in a way nobody
+/// asked for.
+///
+/// Existing keyframes at the same instants are overwritten, the way placing one
+/// by hand is. Anything that would land past either end of the clip is dropped,
+/// not clamped: clamping would pile a whole curve onto the last frame.
+[[nodiscard]] core::Project paste_keyframes(core::Project project, std::string_view clip_id,
+                                            const KeyframeClipboard& clipboard, double at);
+
 /// The keyframe time before `t`, if there is one. Strictly before, so pressing
 /// the button repeatedly walks the list rather than sticking on one.
 [[nodiscard]] std::optional<double> keyframe_before(std::span<const core::Keyframe> keys,

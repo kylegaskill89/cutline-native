@@ -104,17 +104,55 @@ Rect KeyframeView::ruler() const {
   return Rect{bounds().x, bounds().y, bounds().width, ruler_height_};
 }
 
+bool KeyframeView::is_expanded(std::size_t lane) const {
+  if (lane >= model_.lanes.size()) return false;
+  // A lane with no curve has no graph to open, whatever was remembered about
+  // it — an effect parameter that stopped being sampled, for instance.
+  if (model_.lanes[lane].curve.empty()) return false;
+  return expanded_.contains(model_.lanes[lane].name);
+}
+
+void KeyframeView::set_expanded(std::string_view name, bool expanded) {
+  if (expanded) {
+    expanded_.emplace(name);
+  } else {
+    if (const auto found = expanded_.find(name); found != expanded_.end()) {
+      expanded_.erase(found);
+    }
+  }
+  invalidate_layout();
+}
+
+double KeyframeView::lane_height(std::size_t lane) const {
+  return row_height_ + (is_expanded(lane) ? kGraphHeight : 0.0);
+}
+
 Rect KeyframeView::lane_rect(std::size_t lane) const {
   if (lane >= model_.lanes.size()) return Rect{};
-  return Rect{bounds().x, bounds().y + ruler_height_ + static_cast<double>(lane) * row_height_,
-              bounds().width, row_height_};
+  double top = bounds().y + ruler_height_;
+  for (std::size_t above = 0; above < lane; ++above) top += lane_height(above);
+  return Rect{bounds().x, top, bounds().width, lane_height(lane)};
 }
 
 Rect KeyframeView::track_rect(std::size_t lane) const {
   const Rect row = lane_rect(lane);
   if (row.width <= 0.0) return Rect{};
   const double gutter = std::min(kNameWidth, row.width);
-  return Rect{row.x + gutter, row.y, row.width - gutter, row.height};
+  // One row high whatever the lane's own height: the diamonds stay where they
+  // were and the graph appears underneath them.
+  return Rect{row.x + gutter, row.y, row.width - gutter, row_height_};
+}
+
+Rect KeyframeView::graph_rect(std::size_t lane) const {
+  if (!is_expanded(lane)) return Rect{};
+  const Rect track = track_rect(lane);
+  return Rect{track.x, track.bottom(), track.width, kGraphHeight};
+}
+
+Rect KeyframeView::reveal_rect(std::size_t lane) const {
+  const Rect row = lane_rect(lane);
+  if (row.width <= 0.0 || model_.lanes[lane].curve.empty()) return Rect{};
+  return Rect{row.x, row.y, kRevealWidth, row_height_};
 }
 
 double KeyframeView::axis_x() const {
@@ -184,10 +222,13 @@ Rect KeyframeView::keyframe_rect(std::size_t lane, std::size_t index) const {
 }
 
 std::size_t KeyframeView::lane_at(double y) const {
-  const double top = bounds().y + ruler_height_;
-  if (y < top || row_height_ <= 0.0) return model_.lanes.size();
-  const auto lane = static_cast<std::size_t>((y - top) / row_height_);
-  return lane < model_.lanes.size() ? lane : model_.lanes.size();
+  double top = bounds().y + ruler_height_;
+  if (y < top) return model_.lanes.size();
+  for (std::size_t lane = 0; lane < model_.lanes.size(); ++lane) {
+    top += lane_height(lane);
+    if (y < top) return lane;
+  }
+  return model_.lanes.size();
 }
 
 KeyframeHit KeyframeView::keyframe_at(double x, double y) const {
@@ -222,7 +263,17 @@ LayoutItem KeyframeView::sizing(Axis axis, const LayoutContext& context) const {
 
   // Exactly its rows. A view that asked for more would draw empty lanes, and
   // one that asked for less would hide the last property animated.
-  const double rows = static_cast<double>(model_.lanes.size()) * metrics.list_row_height;
+  //
+  // Measured against the theme's metrics rather than against `row_height_`,
+  // which is only right after a layout has run — and sizing is what decides
+  // whether one does.
+  double rows = 0.0;
+  for (std::size_t lane = 0; lane < model_.lanes.size(); ++lane) {
+    rows += metrics.list_row_height;
+    if (!model_.lanes[lane].curve.empty() && expanded_.contains(model_.lanes[lane].name)) {
+      rows += kGraphHeight;
+    }
+  }
   return LayoutItem::fixed(metrics.panel_header_height + rows);
 }
 
@@ -234,6 +285,60 @@ void KeyframeView::layout(const LayoutContext& context) {
 }
 
 // ---------------------------------------------------------------- painting --
+
+void KeyframeView::paint_graph(Painter& painter, const Theme& theme, std::size_t lane) const {
+  const Rect box = graph_rect(lane);
+  if (box.empty()) return;
+
+  const std::vector<double>& curve = model_.lanes[lane].curve;
+  if (curve.size() < 2 || model_.duration < kShortest) return;
+
+  const SurfaceStyle& panel = theme.style(Part::Panel, State::Normal);
+  const Color faint{panel.text.r, panel.text.g, panel.text.b, 0.35};
+  painter.fill(box, 0.0, Fill::solid(Color{panel.text.r, panel.text.g, panel.text.b, 0.04}));
+
+  // Against the curve's own highest and lowest rather than against the
+  // parameter's range: a rotation that moves by two degrees over a clip is a
+  // flat line on its own -180..180 range and a visible ramp on this one, and
+  // the second is what anybody wants to see. A curve that never moves is drawn
+  // down the middle rather than divided by nothing.
+  const auto [low, high] = std::ranges::minmax(curve);
+  const double span = high - low;
+  const auto y_of = [&](double v) {
+    const double inset = 4.0;
+    const double fraction = span < kShortest ? 0.5 : (v - low) / span;
+    return box.bottom() - inset - fraction * (box.height - inset * 2.0);
+  };
+  const auto t_of = [&](std::size_t i) {
+    return static_cast<double>(i) / static_cast<double>(curve.size() - 1) * model_.duration;
+  };
+
+  painter.push_clip(box, 0.0);
+
+  // The speed underneath, fainter: the slope of the value curve, which is what
+  // makes a hold read as a hold and an ease as a slow-in. Premiere gives it a
+  // graph of its own; there is no room for two here, and one is legible.
+  std::vector<double> speed(curve.size(), 0.0);
+  double fastest = 0.0;
+  for (std::size_t i = 1; i < curve.size(); ++i) {
+    speed[i] = std::abs(curve[i] - curve[i - 1]);
+    fastest = std::max(fastest, speed[i]);
+  }
+  if (fastest > kShortest) {
+    for (std::size_t i = 2; i < curve.size(); ++i) {
+      const double y0 = box.bottom() - speed[i - 1] / fastest * (box.height - 8.0) - 4.0;
+      const double y1 = box.bottom() - speed[i] / fastest * (box.height - 8.0) - 4.0;
+      painter.line(x_of(t_of(i - 1)), y0, x_of(t_of(i)), y1, faint, 1.0);
+    }
+  }
+
+  for (std::size_t i = 1; i < curve.size(); ++i) {
+    painter.line(x_of(t_of(i - 1)), y_of(curve[i - 1]), x_of(t_of(i)), y_of(curve[i]),
+                 theme.accent, 1.5);
+  }
+
+  painter.pop_clip();
+}
 
 void KeyframeView::paint_content(Painter& painter, const Theme& theme) const {
   const SurfaceStyle& panel = theme.style(Part::Panel, State::Normal);
@@ -278,8 +383,27 @@ void KeyframeView::paint_content(Painter& painter, const Theme& theme) const {
       painter.fill(row, 0.0, Fill::solid(Color{panel.text.r, panel.text.g, panel.text.b, 0.05}));
     }
 
-    painter.text(text_run(Rect{row.x + kDiamond, row.y, kNameWidth - kDiamond * 2.0, row.height},
+    // The chevron, for a lane that has a curve to show. Right for closed and
+    // down for open, the same way the inspector's disclosure reads.
+    const Rect reveal = reveal_rect(lane);
+    if (!reveal.empty()) {
+      const double cx = reveal.x + reveal.width * 0.5;
+      const double cy = reveal.y + row_height_ * 0.5;
+      constexpr double reach = 3.0;
+      if (is_expanded(lane)) {
+        painter.line(cx - reach, cy - reach * 0.5, cx, cy + reach * 0.5, panel.text, 1.0);
+        painter.line(cx, cy + reach * 0.5, cx + reach, cy - reach * 0.5, panel.text, 1.0);
+      } else {
+        painter.line(cx - reach * 0.5, cy - reach, cx + reach * 0.5, cy, panel.text, 1.0);
+        painter.line(cx + reach * 0.5, cy, cx - reach * 0.5, cy + reach, panel.text, 1.0);
+      }
+    }
+
+    painter.text(text_run(Rect{row.x + kRevealWidth, row.y,
+                               kNameWidth - kRevealWidth - kDiamond, row_height_},
                           model_.lanes[lane].name, panel, font_size_));
+
+    paint_graph(painter, theme, lane);
 
     // The line the keyframes sit on, so a lane with one point still reads as a
     // span of time rather than as a stray mark.
@@ -362,6 +486,18 @@ bool KeyframeView::on_mouse_down(const MouseEvent& event) {
   }
 
   if (event.button != MouseButton::Left) return false;
+
+  // The chevron, before anything else — it sits in the gutter, where a press
+  // would otherwise begin a rubber band that could never select anything.
+  if (const std::size_t lane = lane_at(event.y); lane < model_.lanes.size()) {
+    const Rect reveal = reveal_rect(lane);
+    if (!reveal.empty() && reveal.contains(event.x, event.y)) {
+      const bool opening = !is_expanded(lane);
+      set_expanded(model_.lanes[lane].name, opening);
+      if (on_expand_) on_expand_(model_.lanes[lane].name, opening);
+      return true;
+    }
+  }
 
   // The ruler scrubs. It is the one part of the view that is about the
   // playhead rather than about keyframes.
@@ -462,6 +598,21 @@ bool KeyframeView::on_mouse_up(const MouseEvent& event) {
 }
 
 bool KeyframeView::on_key_down(const KeyEvent& event) {
+  if (event.modifiers.control) {
+    // Only with something to act on, so Ctrl+C with nothing selected still
+    // means whatever it means elsewhere — copying the selected clip's effects,
+    // for one.
+    if (event.key == Key::C && !selection_.empty()) {
+      if (on_copy_) on_copy_();
+      return true;
+    }
+    if (event.key == Key::V && on_paste_) {
+      on_paste_();
+      return true;
+    }
+    return false;
+  }
+
   if (event.key != Key::Delete || selection_.empty()) return false;
   if (on_delete_) on_delete_();
   return true;

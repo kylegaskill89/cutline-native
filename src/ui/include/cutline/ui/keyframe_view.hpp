@@ -22,7 +22,9 @@
 
 #include <cstddef>
 #include <functional>
+#include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace cutline::ui {
@@ -43,6 +45,16 @@ class KeyframeView : public Widget {
     std::string name;
     /// Clip-local seconds, sorted.
     std::vector<double> times;
+
+    /// The property's value sampled evenly from the start of the clip to its
+    /// end, for the graph. In model units, and never read as a number: the
+    /// graph is drawn against the curve's own highest and lowest, so what the
+    /// units are does not matter and nothing here has to know them.
+    ///
+    /// Supplied rather than worked out, because interpolating keyframes is the
+    /// core's job and a widget that did it would be a widget that had opinions
+    /// about easing.
+    std::vector<double> curve;
 
     friend bool operator==(const Lane&, const Lane&) = default;
   };
@@ -71,6 +83,10 @@ class KeyframeView : public Widget {
   /// A press only becomes a drag once it has travelled this far, so a click
   /// that wobbles selects rather than nudging a keyframe off its time.
   static constexpr double kDragThreshold = 3.0;
+  /// How tall an expanded lane's graph is.
+  static constexpr double kGraphHeight = 52.0;
+  /// The disclosure chevron's square, at the left of the gutter.
+  static constexpr double kRevealWidth = 16.0;
 
   KeyframeView();
 
@@ -150,14 +166,45 @@ class KeyframeView : public Widget {
   /// removing the last keyframe of a property means.
   void set_on_delete(std::function<void()> on_delete) { on_delete_ = std::move(on_delete); }
 
+  /// Ctrl+C with a selection, and Ctrl+V. The clipboard is not the view's:
+  /// keyframes copied here go back onto a *clip*, and the view has never known
+  /// which clip it is showing.
+  void set_on_copy(std::function<void()> on_copy) { on_copy_ = std::move(on_copy); }
+  void set_on_paste(std::function<void()> on_paste) { on_paste_ = std::move(on_paste); }
+
+  /// A graph was opened or closed, by name.
+  ///
+  /// Reported rather than merely remembered here, because the panel this lives
+  /// in is rebuilt from nothing on every edit — and a view that kept its own
+  /// answer would close every graph the moment anything was changed. Which is
+  /// exactly what happened, and is the same lesson the inspector's disclosure
+  /// triangles learned.
+  void set_on_expand(std::function<void(const std::string&, bool)> on_expand) {
+    on_expand_ = std::move(on_expand);
+  }
+
   // ------------------------------------------------------------- geometry --
 
   /// The strip along the top holding the times.
   [[nodiscard]] Rect ruler() const;
-  /// The whole of one lane's row, gutter included.
+  /// The whole of one lane's row, gutter included — taller when expanded.
   [[nodiscard]] Rect lane_rect(std::size_t lane) const;
-  /// The part of it keyframes are drawn in.
+  /// The part of it keyframes are drawn in. One row high whether or not the
+  /// lane is expanded: the diamonds stay put and the graph appears under them.
   [[nodiscard]] Rect track_rect(std::size_t lane) const;
+  /// The graph under an expanded lane. Empty when it is not expanded, or when
+  /// the lane has no curve to draw.
+  [[nodiscard]] Rect graph_rect(std::size_t lane) const;
+  /// The chevron that opens the graph.
+  [[nodiscard]] Rect reveal_rect(std::size_t lane) const;
+
+  /// Whether a lane is showing its graph.
+  ///
+  /// Remembered by the property's *name* rather than by its position, because
+  /// the model is rebuilt on every edit and adding an effect renumbers every
+  /// lane below it.
+  [[nodiscard]] bool is_expanded(std::size_t lane) const;
+  void set_expanded(std::string_view name, bool expanded);
   /// Where a keyframe's diamond sits.
   [[nodiscard]] Rect keyframe_rect(std::size_t lane, std::size_t index) const;
 
@@ -192,6 +239,10 @@ class KeyframeView : public Widget {
  private:
   void select_only(const KeyframeHit& hit);
   void toggle(const KeyframeHit& hit);
+  /// How tall one lane is: a row, plus its graph when it is open.
+  [[nodiscard]] double lane_height(std::size_t lane) const;
+  /// The value and speed curves under an expanded lane.
+  void paint_graph(Painter& painter, const Theme& theme, std::size_t lane) const;
   /// Replaces the selection with everything the rubber band covers.
   void select_within(const Rect& band, bool add);
   /// Asks for a fresh frame without asking for a fresh layout.
@@ -229,12 +280,18 @@ class KeyframeView : public Widget {
   double ruler_height_ = 20.0;
   double font_size_ = 12.0;
 
+  /// By name, so a rebuild does not close every graph. See `is_expanded`.
+  std::set<std::string, std::less<>> expanded_;
+
   std::function<void(std::size_t, std::size_t, double)> on_move_;
   std::function<void(std::size_t, std::size_t, double, double)> on_move_commit_;
   std::function<void()> on_select_;
   std::function<void(double)> on_scrub_;
   std::function<void(double, double)> on_context_menu_;
   std::function<void()> on_delete_;
+  std::function<void()> on_copy_;
+  std::function<void()> on_paste_;
+  std::function<void(const std::string&, bool)> on_expand_;
 };
 
 }  // namespace cutline::ui

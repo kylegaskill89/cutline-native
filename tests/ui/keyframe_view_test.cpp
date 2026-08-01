@@ -507,6 +507,156 @@ TEST(KeyframeView, DeleteAsksForTheSelectionToGo) {
   EXPECT_EQ(deletes, 1);
 }
 
+TEST(KeyframeView, CopyAndPasteAreAskedForRatherThanDone) {
+  // The clipboard is not the view's: keyframes copied here go back onto a
+  // *clip*, and the view has never known which clip it is showing.
+  Laid test;
+  int copies = 0;
+  int pastes = 0;
+  test.view->set_on_copy([&] { ++copies; });
+  test.view->set_on_paste([&] { ++pastes; });
+
+  const auto [x, y] = test.centre(0, 1);
+  test.host->mouse_down(press(x, y));
+  test.host->set_focus(test.view);
+
+  test.host->key_down(KeyEvent{.key = Key::C, .modifiers = {.control = true}});
+  test.host->key_down(KeyEvent{.key = Key::V, .modifiers = {.control = true}});
+  EXPECT_EQ(copies, 1);
+  EXPECT_EQ(pastes, 1);
+}
+
+TEST(KeyframeView, CopyingNothingIsNotSwallowed) {
+  // Ctrl+C with no keyframes selected has to carry on to whatever else it
+  // means — copying the selected clip's effect stack, for one.
+  Laid test;
+  int copies = 0;
+  test.view->set_on_copy([&] { ++copies; });
+  test.host->set_focus(test.view);
+
+  EXPECT_FALSE(test.host->key_down(KeyEvent{.key = Key::C, .modifiers = {.control = true}}));
+  EXPECT_EQ(copies, 0);
+}
+
+// ----------------------------------------------------------------- graph --
+
+/// A lane with a curve on it, so the graph has something to draw.
+[[nodiscard]] KeyframeView::Model with_curve() {
+  KeyframeView::Model model{.duration = 10.0,
+                            .lanes = {KeyframeView::Lane{.name = "Position X",
+                                                         .times = {0.0, 10.0}}}};
+  for (int i = 0; i < 64; ++i) model.lanes[0].curve.push_back(static_cast<double>(i));
+  return model;
+}
+
+TEST(KeyframeView, ALaneWithACurveOffersAWayToOpenIt) {
+  Laid test;
+  EXPECT_TRUE(test.view->reveal_rect(0).empty()) << "offered on a lane with no curve";
+
+  test.view->set_model(with_curve());
+  test.view->arrange(Rect{0.0, 0.0, 496.0, 200.0}, flat_context());
+  EXPECT_FALSE(test.view->reveal_rect(0).empty());
+}
+
+TEST(KeyframeView, OpeningALaneMakesRoomForItsGraph) {
+  Laid test;
+  test.view->set_model(with_curve());
+  test.view->arrange(Rect{0.0, 0.0, 496.0, 200.0}, flat_context());
+
+  const double closed = test.view->lane_rect(0).height;
+  const Rect reveal = test.view->reveal_rect(0);
+  test.host->mouse_down(press(reveal.x + 2.0, reveal.y + reveal.height / 2));
+  test.view->arrange(Rect{0.0, 0.0, 496.0, 200.0}, flat_context());
+
+  EXPECT_TRUE(test.view->is_expanded(0));
+  EXPECT_NEAR(test.view->lane_rect(0).height - closed, KeyframeView::kGraphHeight, 1e-9);
+  EXPECT_FALSE(test.view->graph_rect(0).empty());
+}
+
+TEST(KeyframeView, TheDiamondsStayWhereTheyWereWhenAGraphOpens) {
+  // The graph appears underneath them rather than pushing them down the row,
+  // which would move every keyframe out from under the pointer.
+  Laid test;
+  test.view->set_model(with_curve());
+  test.view->arrange(Rect{0.0, 0.0, 496.0, 200.0}, flat_context());
+  const Rect before = test.view->keyframe_rect(0, 0);
+
+  test.view->set_expanded("Position X", true);
+  test.view->arrange(Rect{0.0, 0.0, 496.0, 200.0}, flat_context());
+  EXPECT_EQ(test.view->keyframe_rect(0, 0), before);
+}
+
+TEST(KeyframeView, AnOpenGraphPushesTheLanesBelowItDown) {
+  KeyframeView view;
+  KeyframeView::Model model = with_curve();
+  model.lanes.push_back(KeyframeView::Lane{.name = "Opacity", .times = {5.0}});
+  view.set_model(std::move(model));
+  view.arrange(Rect{0.0, 0.0, 496.0, 260.0}, flat_context());
+
+  const double before = view.lane_rect(1).y;
+  view.set_expanded("Position X", true);
+  view.arrange(Rect{0.0, 0.0, 496.0, 260.0}, flat_context());
+
+  EXPECT_NEAR(view.lane_rect(1).y - before, KeyframeView::kGraphHeight, 1e-9);
+  EXPECT_EQ(view.lane_at(view.lane_rect(1).y + 2.0), 1u) << "hit-testing did not follow";
+}
+
+TEST(KeyframeView, AnOpenGraphAsksForTheRoomItNeeds) {
+  KeyframeView view;
+  view.set_model(with_curve());
+  const double closed = view.sizing(Axis::Vertical, flat_context()).basis;
+
+  view.set_expanded("Position X", true);
+  EXPECT_NEAR(view.sizing(Axis::Vertical, flat_context()).basis - closed,
+              KeyframeView::kGraphHeight, 1e-9);
+}
+
+TEST(KeyframeView, TheGraphIsRememberedByNameRatherThanByPosition) {
+  // The model is rebuilt on every edit, and adding an effect renumbers every
+  // lane below it.
+  KeyframeView view;
+  KeyframeView::Model model = with_curve();
+  model.lanes.push_back(KeyframeView::Lane{.name = "Opacity", .times = {5.0}});
+  view.set_model(std::move(model));
+  view.set_expanded("Position X", true);
+  ASSERT_TRUE(view.is_expanded(0));
+
+  // The same properties, the other way round.
+  KeyframeView::Model swapped{.duration = 10.0};
+  swapped.lanes.push_back(KeyframeView::Lane{.name = "Opacity", .times = {5.0}});
+  swapped.lanes.push_back(with_curve().lanes[0]);
+  view.set_model(std::move(swapped));
+
+  EXPECT_FALSE(view.is_expanded(0));
+  EXPECT_TRUE(view.is_expanded(1));
+}
+
+TEST(KeyframeView, AGraphIsDrawnInsideItsOwnBox) {
+  KeyframeView view;
+  view.set_model(with_curve());
+  view.set_expanded("Position X", true);
+  view.arrange(Rect{0.0, 0.0, 496.0, 260.0}, flat_context());
+
+  RecordingPainter painter;
+  view.paint(painter, default_theme());
+  EXPECT_TRUE(painter.clips_balanced());
+  EXPECT_GT(painter.count(DrawCall::Kind::Line), 60u) << "the curve was not drawn";
+}
+
+TEST(KeyframeView, ACurveThatNeverMovesIsNotADivisionByZero) {
+  KeyframeView view;
+  KeyframeView::Model model{
+      .duration = 10.0,
+      .lanes = {KeyframeView::Lane{.name = "X", .times = {0.0, 10.0}, .curve = {1.0, 1.0, 1.0}}}};
+  view.set_model(std::move(model));
+  view.set_expanded("X", true);
+  view.arrange(Rect{0.0, 0.0, 496.0, 200.0}, flat_context());
+
+  RecordingPainter painter;
+  view.paint(painter, default_theme());
+  EXPECT_TRUE(painter.clips_balanced());
+}
+
 TEST(KeyframeView, DeleteWithNothingSelectedIsNotSwallowed) {
   // It has to carry on to whatever else Delete means — removing the selected
   // clip, for one.

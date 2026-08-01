@@ -428,6 +428,18 @@ struct App {
   /// is not. Cleared by `refresh_inspector` before anything is built.
   cutline::ui::KeyframeView* keyframes = nullptr;
 
+  /// Keyframes copied out of a lane, waiting to go back somewhere.
+  ///
+  /// Kept apart from the effect clipboard rather than folded into it: they hold
+  /// different things and are filled by different gestures, and one clipboard
+  /// serving both would mean copying an effect stack silently threw away a
+  /// curve somebody was about to paste.
+  cutline::editor::KeyframeClipboard keyframe_clipboard;
+
+  /// Which lanes are showing their graph, by property name. Here for the same
+  /// reason `expanded_params` is: the panel is rebuilt on every edit.
+  std::set<std::string> expanded_lanes;
+
   /// Which parameters are showing their slider, by the key `ParamRow` carries.
   ///
   /// Premiere's arrangement: the number is always there and the slider is
@@ -1377,6 +1389,14 @@ void build_audio_effect_controls(App& app, const std::string& clip_id) {
 /// Below the stacks rather than beside them, because the panel is a narrow
 /// column. Premiere's is a second pane to the right of the parameters; the same
 /// arrangement here would leave both halves too narrow to read.
+/// How finely a lane's graph is sampled.
+///
+/// Enough that an ease reads as a curve rather than as three straight lines,
+/// and few enough that a clip with six animated properties is a few hundred
+/// line segments rather than a few thousand. The panel is about three hundred
+/// pixels wide, so this is roughly one sample per pixel.
+constexpr std::size_t kCurveSamples = 256;
+
 void build_keyframe_lanes(App& app, const std::string& clip_id) {
   const cutline::editor::KeyframeModel model =
       cutline::editor::clip_keyframes(app.session.project(), clip_id);
@@ -1393,13 +1413,37 @@ void build_keyframe_lanes(App& app, const std::string& clip_id) {
     std::vector<double> times;
     times.reserve(lane.keys.size());
     for (const cutline::core::Keyframe& key : lane.keys) times.push_back(key.t);
-    shown.lanes.push_back(
-        cutline::ui::KeyframeView::Lane{.name = lane.name, .times = std::move(times)});
+
+    // The curve, sampled through the model's own evaluator rather than
+    // reimplemented in the view. Whatever easing means is decided in one place,
+    // and the graph is drawn from the same numbers the renderer uses.
+    std::vector<double> curve;
+    curve.reserve(kCurveSamples);
+    for (std::size_t i = 0; i < kCurveSamples; ++i) {
+      const double t = model.duration * static_cast<double>(i) /
+                       static_cast<double>(kCurveSamples - 1);
+      curve.push_back(cutline::core::eval_keyframes(lane.keys, t));
+    }
+
+    shown.lanes.push_back(cutline::ui::KeyframeView::Lane{
+        .name = lane.name, .times = std::move(times), .curve = std::move(curve)});
   }
 
   auto& view = app.inspector->emplace<cutline::ui::KeyframeView>();
   view.set_model(std::move(shown));
   view.set_playhead(local_playhead(app, clip_id));
+
+  // Which graphs were open, put back. The panel is rebuilt from nothing on
+  // every edit, so state left in the widget would mean easing a keyframe closed
+  // the graph you were easing it in — which is exactly what it did.
+  for (const std::string& name : app.expanded_lanes) view.set_expanded(name, true);
+  view.set_on_expand([&app](const std::string& name, bool expanded) {
+    if (expanded) {
+      app.expanded_lanes.insert(name);
+    } else {
+      app.expanded_lanes.erase(name);
+    }
+  });
 
   // The lane order is the view's only handle on which property a row is, so it
   // is captured rather than looked up again: the project can change underneath
@@ -1487,6 +1531,37 @@ void build_keyframe_lanes(App& app, const std::string& clip_id) {
   });
 
   view.set_on_delete([apply_to_selection] { apply_to_selection(kActions.back()); });
+
+  // Where the selection is, in terms the editor understands. The view knows
+  // lane indices and the editor knows properties, and this is the one place
+  // the two meet.
+  const auto selected_addresses = [&app, lanes] {
+    std::vector<cutline::editor::KeyframeAddress> out;
+    if (app.keyframes == nullptr) return out;
+    for (const cutline::ui::KeyframeHit& hit : app.keyframes->selection()) {
+      if (!hit.found || hit.lane >= lanes.size()) continue;
+      if (hit.index >= lanes[hit.lane].keys.size()) continue;
+      out.push_back(cutline::editor::KeyframeAddress{.ref = lanes[hit.lane].ref,
+                                                     .t = lanes[hit.lane].keys[hit.index].t});
+    }
+    return out;
+  };
+
+  view.set_on_copy([&app, clip_id, selected_addresses] {
+    app.keyframe_clipboard =
+        cutline::editor::copy_keyframes(app.session.project(), clip_id, selected_addresses());
+  });
+
+  view.set_on_paste([&app, clip_id] {
+    if (app.keyframe_clipboard.empty()) return;
+    // At the playhead, which is where a paste means something: the clipboard
+    // holds the shape of the animation, and this is where it goes.
+    app.session.apply(cutline::editor::paste_keyframes(
+        app.session.project(), clip_id, app.keyframe_clipboard, local_playhead(app, clip_id)));
+    refresh_timeline(app);
+    invalidate_preview(app);
+    app.inspector_stale = true;
+  });
 
   view.set_on_move_commit(
       [&app, clip_id, lanes](std::size_t lane, std::size_t index, double, double to) {

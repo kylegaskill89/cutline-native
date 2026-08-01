@@ -92,8 +92,29 @@ length across its width, which is what Premiere's does before anybody zooms.
 | Interpolation per keyframe | Linear, Bezier, Auto Bezier, Continuous, Hold, Ease In, Ease Out | **done** for our three modes, across a whole selection at once | — |
 | Zoom and scroll the lanes | yes | **done** — wheel zooms about the pointer, shift-wheel scrolls | — |
 | Delete a selected keyframe | Delete | **done**, and on the menu | — |
-| Velocity graph | expandable value and speed curves | no | machinery |
-| Copy and paste keyframes | yes | no | wiring |
+| Velocity graph | expandable value and speed curves | **done** — both, in one box per lane | — |
+| Bezier handles on the graph | dragged to shape the speed | **not possible** — see below | model |
+| Copy and paste keyframes | yes | **done** — Ctrl+C and Ctrl+V, pasting at the playhead | — |
+
+#### The one part of §1.2 that cannot be built as things stand
+
+The graph draws both curves Premiere's does: the **value** across the lane, and
+the **speed** under it as the slope of the first. They are sampled through
+`core::eval_keyframes` rather than reimplemented, so the picture is drawn from
+the same numbers the renderer uses — an ease reads as an S over an arch, a hold
+as a step over nothing.
+
+What cannot be built is **dragging the handles**. Premiere's velocity graph is
+not only a picture: each keyframe has two bezier control points, and pulling
+them is how a speed is shaped. `core::Keyframe` has a time, a value and one of
+three modes. There is nowhere to put a handle.
+
+Adding them is a real model change rather than a wiring job — `Keyframe` grows
+two offsets, the resolver learns a cubic, the serialiser learns to write them,
+and every project file written before it has to keep loading. It also makes the
+three modes into presets over a continuous space, which is what Premiere's seven
+actually are. Worth doing, and worth doing deliberately rather than as the tail
+of a panel.
 
 Two things that came out of building it are worth keeping.
 
@@ -109,6 +130,13 @@ disclosure triangle. Adding ◀ ▶ to the row left the property's own *name*
 squeezed to nothing, which `--check` caught and a glance would not have.
 Premiere has no chip at all — interpolation there is a right-click on the
 keyframe — so this is where it goes when the context menu lands.
+
+A third, which is the same lesson twice: **panel state does not live in the
+panel**. The inspector is rebuilt from nothing on every edit, so a graph opened
+in a lane closed again the moment anything in it was changed — easing a keyframe
+shut the graph you were easing it in. Which triangles are open now lives on the
+application and is put back after each rebuild, exactly as the parameter rows'
+disclosure state already did.
 
 #### Selecting keyframes, and setting the interpolation between them
 
