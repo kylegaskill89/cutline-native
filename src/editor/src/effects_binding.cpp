@@ -310,6 +310,43 @@ core::Project paste_effects(core::Project project, std::span<const std::string> 
   return project;
 }
 
+core::Project reset_effect(core::Project project, std::string_view clip_id,
+                           std::size_t index) {
+  const core::ClipEffect* effect = effect_at(project, clip_id, index);
+  if (effect == nullptr) return project;
+  const render::EffectSpec* spec = render::find_effect_spec(effect->type);
+  if (spec == nullptr) return project;
+
+  for (const render::EffectParamSpec& param : spec->params) {
+    // The keyframes first. Setting a parameter that is animated writes a
+    // keyframe rather than the stored value, so resetting an animated effect
+    // without clearing them would put a keyframe at the playhead holding the
+    // default and leave the rest of the curve exactly as it was.
+    project = core::clear_effect_keyframes(std::move(project), clip_id, index, param.key);
+    project = core::set_clip_effect_param(std::move(project), clip_id, index,
+                                          std::string(param.key), param.fallback);
+  }
+  for (const render::EffectColorSpec& color : spec->colors) {
+    project = core::set_clip_effect_color(std::move(project), clip_id, index,
+                                          std::string(color.key), std::string(color.fallback));
+  }
+  return project;
+}
+
+core::Project reset_audio_effect(core::Project project, std::string_view clip_id,
+                                 std::size_t index) {
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr || index >= clip->audio_effects.size()) return project;
+  const audio::AudioEffectDef* def = audio::audio_effect_def(clip->audio_effects[index].type);
+  if (def == nullptr) return project;
+
+  for (const audio::AudioEffectParamDef& param : def->params) {
+    project = core::set_audio_effect_param(std::move(project), clip_id, index,
+                                           std::string(param.key), param.fallback);
+  }
+  return project;
+}
+
 // ---------------------------------------------------------------- library --
 
 namespace {

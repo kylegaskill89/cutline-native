@@ -584,6 +584,30 @@ TEST(NumericField, IsAsWideAsItsWidestValueRatherThanItsCurrentOne) {
   EXPECT_DOUBLE_EQ(narrow.basis, wide.sizing(Axis::Horizontal, flat_context()).basis);
 }
 
+TEST(NumericField, ADisabledFieldStillShowsItsValue) {
+  // A governed property — Scale Y under a locked aspect — has to stay readable.
+  // Hiding it would leave nowhere to read the number the picture is at.
+  Numeric test;
+  test.field->set_enabled(false);
+  EXPECT_EQ(test.field->display_text(), "50.0");
+
+  RecordingPainter painter;
+  test.field->paint(painter, default_theme());
+  bool drawn = false;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.run.has_value() && call.run->text == "50.0") drawn = true;
+  }
+  EXPECT_TRUE(drawn);
+}
+
+TEST(NumericField, ADisabledFieldCannotBeScrubbedOrTyped) {
+  Numeric test;
+  test.field->set_enabled(false);
+  test.drag(60.0, 40.0);
+  EXPECT_DOUBLE_EQ(test.field->value(), 50.0);
+  EXPECT_FALSE(test.field->editing());
+}
+
 TEST(NumericField, DrawsItsNumberInTheAccentColour) {
   // The colour is the affordance: nothing else says the number can be dragged.
   Numeric test;
@@ -1344,9 +1368,10 @@ TEST(IconButton, NoTwoIconsAreDrawnAlike) {
     return marks;
   };
 
-  constexpr std::array kIcons{IconButton::Icon::Pointer, IconButton::Icon::Razor,
+  constexpr std::array kIcons{IconButton::Icon::Pointer,   IconButton::Icon::Razor,
                               IconButton::Icon::RateStretch, IconButton::Icon::Slip,
-                              IconButton::Icon::Slide};
+                              IconButton::Icon::Slide,       IconButton::Icon::Reset,
+                              IconButton::Icon::Stopwatch,   IconButton::Icon::Diamond};
   for (std::size_t i = 0; i < kIcons.size(); ++i) {
     for (std::size_t j = i + 1; j < kIcons.size(); ++j) {
       EXPECT_NE(shape(kIcons[i]), shape(kIcons[j]))

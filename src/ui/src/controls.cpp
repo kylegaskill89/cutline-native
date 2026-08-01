@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <format>
 #include <limits>
+#include <numbers>
+#include <utility>
 #include <system_error>
 
 namespace cutline::ui {
@@ -1279,6 +1281,30 @@ void IconButton::paint_content(Painter& painter, const Theme& theme) const {
         painter.line(cx - small * 0.5, cy - small, cx + small * 0.5, cy, style.text, width);
         painter.line(cx + small * 0.5, cy, cx - small * 0.5, cy + small, style.text, width);
       }
+      break;
+    }
+
+    case Icon::Reset: {
+      // A ring with a gap at the top right, and a head on the end nearest it.
+      // Straight segments rather than an arc: the painter has no curve, and at
+      // eight pixels across a hexagon reads as a circle anyway.
+      constexpr int kSides = 8;
+      // Three quarters of the way round, leaving the gap an arrow can sit in.
+      constexpr int kDrawn = 6;
+      const auto point = [cx, cy](int step) {
+        const double angle = 2.0 * std::numbers::pi * static_cast<double>(step) /
+                             static_cast<double>(kSides);
+        return std::pair{cx + reach * std::cos(angle), cy + reach * std::sin(angle)};
+      };
+      for (int i = 0; i < kDrawn; ++i) {
+        const auto [x0, y0] = point(i);
+        const auto [x1, y1] = point(i + 1);
+        painter.line(x0, y0, x1, y1, style.text, width);
+      }
+      // The head, at the open end, pointing the way round the ring goes.
+      const auto [hx, hy] = point(0);
+      painter.line(hx, hy, hx - reach * 0.5, hy - reach * 0.4, style.text, width);
+      painter.line(hx, hy, hx - reach * 0.1, hy + reach * 0.6, style.text, width);
       break;
     }
 

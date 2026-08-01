@@ -666,6 +666,74 @@ TEST(EffectClipboard, PastingWhatIsAlreadyThereChangesNothing) {
   EXPECT_EQ(paste_effects(p, onto, clipboard), p);
 }
 
+// ----------------------------------------------------------------- reset --
+
+TEST(ResetEffect, PutsEveryParameterBackToItsDefault) {
+  Project p = add_effect(one_clip(), "c1", "blur");
+  p = set_effect_parameter(std::move(p), "c1", 0, "amount", 30.0);
+  ASSERT_NE(clip_effects(p, "c1").front().params.front().value, 0.0);
+
+  const Project reset = reset_effect(p, "c1", 0);
+  const EffectParamRow& row = clip_effects(reset, "c1").front().params.front();
+  EXPECT_DOUBLE_EQ(row.value, row.fallback);
+}
+
+TEST(ResetEffect, ClearsTheKeyframesRatherThanWritingOneAtTheDefault) {
+  // Setting an animated parameter writes a keyframe, not the stored value. A
+  // reset that did not clear them first would put one keyframe at the playhead
+  // holding the default and leave the rest of the curve exactly as it was.
+  Project p = add_effect(one_clip(), "c1", "blur");
+  p = set_effect_parameter_animated(std::move(p), "c1", 0, "amount", true, 0.0);
+  p = set_effect_parameter(std::move(p), "c1", 0, "amount", 30.0, 2.0);
+  ASSERT_TRUE(clip_effects(p, "c1").front().params.front().animated);
+
+  const Project reset = reset_effect(p, "c1", 0);
+  const EffectParamRow& row = clip_effects(reset, "c1").front().params.front();
+  EXPECT_FALSE(row.animated);
+  EXPECT_DOUBLE_EQ(row.value, row.fallback);
+}
+
+TEST(ResetEffect, LeavesTheRestOfTheStackAlone) {
+  Project p = add_effect(one_clip(), "c1", "blur");
+  p = add_effect(std::move(p), "c1", "brightness");
+  p = set_effect_parameter(std::move(p), "c1", 1, "amount", 40.0);
+
+  const Project reset = reset_effect(p, "c1", 0);
+  EXPECT_DOUBLE_EQ(clip_effects(reset, "c1")[1].params.front().value, 40.0);
+}
+
+TEST(ResetEffect, DoesNothingForAnEffectThatIsNotThere) {
+  const Project p = add_effect(one_clip(), "c1", "blur");
+  EXPECT_EQ(reset_effect(p, "c1", 9), p);
+  EXPECT_EQ(reset_effect(p, "nope", 0), p);
+}
+
+TEST(ResetAudioEffect, PutsEveryParameterBackToItsDefault) {
+  // Its own audio clip rather than the shared fixture, which is defined further
+  // down with the library tests.
+  Project p = one_clip();
+  Clip a;
+  a.id = "a1";
+  a.media_id = "m2";
+  a.kind = TrackKind::Audio;
+  a.source_out = 5.0;
+  Track t;
+  t.id = "a-track";
+  t.kind = TrackKind::Audio;
+  t.clips = {std::move(a)};
+  p.tracks.push_back(std::move(t));
+
+  p = add_audio_effect(std::move(p), "a1", "lowpass");
+  const double moved = clip_audio_effects(p, "a1").front().params.front().range.maximum;
+  p = core::set_audio_effect_param(std::move(p), "a1", 0,
+                                   clip_audio_effects(p, "a1").front().params.front().key,
+                                   moved);
+
+  const Project reset = reset_audio_effect(p, "a1", 0);
+  const EffectParamRow& row = clip_audio_effects(reset, "a1").front().params.front();
+  EXPECT_DOUBLE_EQ(row.value, row.fallback);
+}
+
 // ---------------------------------------------------------------- library --
 
 /// A video clip and an audio clip, so the library has both kinds to refuse.

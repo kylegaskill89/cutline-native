@@ -182,6 +182,20 @@ struct EffectChoice {
 [[nodiscard]] core::Project add_audio_effect(core::Project project, std::string_view clip_id,
                                              std::string_view type);
 
+/// Puts every parameter of one effect back to its catalogue default.
+///
+/// Colours too, and any keyframes with them: a reset that left an animation
+/// running would put the sliders back and change nothing about the picture.
+/// Returns the project unchanged when the effect is not there or the registry
+/// does not know its type.
+[[nodiscard]] core::Project reset_effect(core::Project project, std::string_view clip_id,
+                                         std::size_t index);
+
+/// The same for an entry in the audio stack, which has no colours and no
+/// keyframes to put back.
+[[nodiscard]] core::Project reset_audio_effect(core::Project project, std::string_view clip_id,
+                                               std::size_t index);
+
 // ---------------------------------------------------------------- library --
 
 /// One entry in the effects library: everything that can be applied to a clip,

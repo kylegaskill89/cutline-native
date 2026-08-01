@@ -554,6 +554,10 @@ class IconButton : public Button {
     /// governs is hidden, and down when it is showing. Drawn smaller than the
     /// arrows, which sit in the same panel and mean something else entirely.
     Disclosure,
+    /// Premiere's reset: an arrow curving back on itself. Drawn as a
+    /// three-quarter ring with a head, because a full circle would read as the
+    /// stopwatch two columns to its left.
+    Reset,
 
     // The tool palette. Each of these says what the tool does to a clip rather
     // than what the tool looks like: a pointer, a cut, a stretch, contents

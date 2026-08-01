@@ -932,6 +932,11 @@ struct ParamRow {
   /// the ◀ and ▶ at the ends of the list.
   bool has_previous = false;
   bool has_next = false;
+  /// Governed by another control, so the number is shown but cannot be set.
+  /// Premiere's Uniform Scale greys Scale Width the same way; ours left both
+  /// live and tied, which reads as two independent controls that mysteriously
+  /// move together.
+  bool governed = false;
   cutline::core::Interp interp = cutline::core::Interp::Linear;
 };
 
@@ -1032,8 +1037,22 @@ void build_param_row(App& app, const ParamRow& row, ParamHandlers handlers) {
   number.set_default_value(row.fallback);
   number.set_on_change(live);
   number.set_on_commit(handlers.commit);
+  // Shown but not settable. The value still has to be *readable* — a locked
+  // aspect means Scale Y is whatever Scale X is, and hiding it would leave
+  // nowhere to read the number the picture is actually at.
+  number.set_enabled(!row.governed);
 
   head.emplace<Spacer>();
+
+  // Premiere's reset, a circular arrow at the end of the row. Double-clicking
+  // the number does the same thing and always has, but nothing on screen said
+  // so — an affordance nobody can see is one nobody uses.
+  if (!row.governed && row.value != row.fallback) {
+    auto& reset = head.emplace<IconButton>(
+        IconButton::Icon::Reset,
+        [commit = handlers.commit, fallback = row.fallback] { commit(fallback); });
+    reset.set_name("reset");
+  }
 
   // Only once animation is on. Before that there is no list to add to, and a
   // marker that silently started one would mean the same as the stopwatch.
@@ -1131,7 +1150,8 @@ void open_effect_menu(App& app, const std::string& clip_id, const Rect& anchor, 
 void build_effect_header(App& app, const cutline::editor::EffectRow& row, std::size_t count,
                          std::function<cutline::core::Project()> on_toggle,
                          std::function<cutline::core::Project(int)> on_move,
-                         std::function<cutline::core::Project()> on_remove) {
+                         std::function<cutline::core::Project()> on_remove,
+                         std::function<cutline::core::Project()> on_reset = {}) {
   const auto applied = [&app](cutline::core::Project next) {
     app.session.apply(std::move(next));
     app.inspector_stale = true;
@@ -1150,6 +1170,14 @@ void build_effect_header(App& app, const cutline::editor::EffectRow& row, std::s
   // Moving is by button rather than by dragging the row. Dragging is what
   // Premiere does and what this should eventually do; a button is what can be
   // reached from the keyboard and what can be tested without a pointer.
+  // Every parameter back to its catalogue default, in one press and one undo
+  // entry. Doing it a row at a time is what the per-row buttons are for; an
+  // effect somebody has pushed too far wants all of them at once.
+  if (on_reset) {
+    auto& reset = line.emplace<IconButton>(IconButton::Icon::Reset);
+    reset.set_on_click([applied, on_reset] { applied(on_reset()); });
+  }
+
   auto& up = line.emplace<IconButton>(IconButton::Icon::ArrowUp);
   up.set_enabled(row.index > 0);
   up.set_on_click([applied, on_move] { applied(on_move(-1)); });
@@ -1249,6 +1277,9 @@ void build_effect_controls(App& app, const std::string& clip_id) {
         },
         [&app, clip_id, index = row.index] {
           return cutline::core::remove_clip_effect(app.session.project(), clip_id, index);
+        },
+        [&app, clip_id, index = row.index] {
+          return cutline::editor::reset_effect(app.session.project(), clip_id, index);
         });
 
     if (row.unknown) {
@@ -1390,6 +1421,9 @@ void build_audio_effect_controls(App& app, const std::string& clip_id) {
         },
         [&app, clip_id, index = row.index] {
           return cutline::core::remove_audio_effect(app.session.project(), clip_id, index);
+        },
+        [&app, clip_id, index = row.index] {
+          return cutline::editor::reset_audio_effect(app.session.project(), clip_id, index);
         });
 
     if (row.unknown) {
@@ -1979,6 +2013,11 @@ void refresh_inspector(App& app) {
                         .keyed_here = spec.keyed_here,
                         .has_previous = cutline::editor::keyframe_before(keys, here).has_value(),
                         .has_next = cutline::editor::keyframe_after(keys, here).has_value(),
+                        // Premiere's Uniform Scale greys Scale Width. Scale Y
+                        // is the follower here: X is the one the lock is set
+                        // from, and Y is what it writes.
+                        .governed = app.aspect_locked &&
+                                    spec.param == cutline::editor::ClipParam::ScaleY,
                         .interp = spec.interp};
 
     // The edit itself, without applying it, so the commit and the live preview
@@ -4109,22 +4148,32 @@ void show_library_drop(App& app, const std::string& id, double x, double y) {
   if (app != nullptr) {
     app->library = &browser;
 
-    const auto apply_to = [app](const std::string& clip_id, const std::string& id) {
-      // Refused rather than silently doing nothing: an audio effect on a
-      // picture, or a transition where nothing abuts the clip, should decline
-      // instead of appearing to work.
-      if (!cutline::editor::library_entry_fits(app->session.project(), clip_id, id)) return;
-      app->session.apply(
-          cutline::editor::apply_library_entry(app->session.project(), clip_id, id));
+    // Every clip named, against one project, applied once.
+    //
+    // Applying per clip would put one entry in the undo stack for each, so
+    // undoing "blur these six" would be six presses. And each one is still
+    // refused on its own terms: an audio effect on a picture, or a transition
+    // where nothing abuts the clip, declines rather than appearing to work — so
+    // a mixed selection takes the effect on the clips it suits and leaves the
+    // rest alone, which is what Premiere does too.
+    const auto apply_to = [app](std::span<const std::string> clip_ids, const std::string& id) {
+      cutline::core::Project next = app->session.project();
+      for (const std::string& clip_id : clip_ids) {
+        next = cutline::editor::apply_library_entry(std::move(next), clip_id, id);
+      }
+      app->session.apply(std::move(next));
       refresh_timeline(*app);
       invalidate_preview(*app);
       app->inspector_stale = true;
     };
 
     browser.set_on_choose([app, apply_to](const std::string& id) {
+      // The whole selection, not the first of it. Selecting six clips and
+      // double-clicking an effect meant five of them were quietly skipped.
       const auto selection = app->session.selection();
       if (selection.empty()) return;
-      apply_to(std::string{selection.front()}, id);
+      const std::vector<std::string> clip_ids(selection.begin(), selection.end());
+      apply_to(clip_ids, id);
     });
 
     // Dragged onto a clip, which is how Premiere applies one and the only way
@@ -4135,7 +4184,19 @@ void show_library_drop(App& app, const std::string& id, double x, double y) {
     browser.set_on_drop([app, apply_to](const std::string& id, double x, double y) {
       const std::optional<std::string> clip_id = library_drop_target(*app, id, x, y);
       show_library_drop(*app, {}, 0.0, 0.0);
-      if (clip_id.has_value()) apply_to(*clip_id, id);
+      if (!clip_id.has_value()) return;
+
+      // Dropped onto one of several selected clips, it takes all of them —
+      // Premiere's rule, and the one that makes dragging onto a selection worth
+      // doing. Onto a clip outside the selection it takes only that clip, which
+      // is what aiming at it meant.
+      const auto selection = app->session.selection();
+      const bool inside = std::ranges::find(selection, *clip_id) != selection.end();
+      if (inside) {
+        apply_to(std::vector<std::string>(selection.begin(), selection.end()), id);
+      } else {
+        apply_to(std::vector{*clip_id}, id);
+      }
     });
   }
   return panel;
