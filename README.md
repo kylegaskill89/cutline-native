@@ -37,6 +37,8 @@ SHA-256 before running it.
   version, which remains the reference for exact numeric behaviour.
 - [`docs/releasing.md`](docs/releasing.md) — how a tag becomes an installer,
   and what the update check refuses.
+- [`docs/premiere-gaps.md`](docs/premiere-gaps.md) — where this still falls
+  short of Premiere, section by section.
 
 ## Status
 
@@ -453,7 +455,7 @@ selection must not take the audio's filters with it.
 settings rather than over the file the user saved. An autosave that wrote the
 real file would turn a crash into a silently overwritten afternoon.
 
-**The interface specification is done too.** §18 is the shape of the thing
+**The interface specification is done bar two items.** §18 is the shape of the thing
 rather than the list of what it can do, and closing it was mostly small
 gestures that had been waiting on nothing: a Snap toggle and a Fit button over
 machinery `TimelineView` already had, Loop over the marked range, an aspect
@@ -478,6 +480,12 @@ tool, marked an out point and started playback.
 **Closing with unsaved changes now asks**, with three answers rather than two.
 "Are you sure" with only Yes and No makes cancelling and discarding the same
 button, and one of those throws away an afternoon.
+
+Two §18 items were recorded as done and were not: **Composite (Blend)** and
+**Reverse**. Both are in the core and tested, and neither has a control
+anywhere. They are the first entries in
+[`docs/premiere-gaps.md`](docs/premiere-gaps.md), which is the comparison with
+Premiere that matters more than either specification now.
 
 1895 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio

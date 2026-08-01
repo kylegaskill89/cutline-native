@@ -7,7 +7,8 @@ a day each.
 Read `README.md` for the story and the numbers, `docs/architecture.md` for the
 native decisions, `docs/spec.md` for the product — it is the authority on exact
 numeric behaviour, carried over from the TypeScript version — and
-`docs/releasing.md` for how a tag becomes an installer somebody can run.
+`docs/releasing.md` for how a tag becomes an installer somebody can run, and
+`docs/premiere-gaps.md` for where this still falls short of Premiere.
 
 ---
 
@@ -249,8 +250,10 @@ terminal.
 ## 6. Status
 
 All eight phases are complete. The parity checklist in `docs/spec.md` §21 is
-done, the UI specification in §18 is done, and there is an installer and a
-release workflow that publishes it. Concretely:
+done, the UI specification in §18 is done **bar two items** — Composite (Blend)
+and Reverse, both of which are in the model and reachable from nowhere, see
+`docs/premiere-gaps.md` §1.0 — and there is an installer and a release workflow
+that publishes it. Concretely:
 
 **Works end to end.** Import, place, move, trim, split, ripple, undo/redo. Eleven
 video effects as shaders, stackable, reorderable, keyframeable. Titles, drawn
@@ -278,7 +281,14 @@ track header switches all work.
 ## 7. What is left
 
 Checked against `docs/spec.md` §21 (the parity checklist) and §18 (the UI spec).
-**Both are done.** What follows is what nobody has asked for yet.
+§21 is done. §18 is done bar two items that were recorded as finished and were
+not: **Composite (Blend)** and **Reverse**. Both are in the core, tested, and
+have no control anywhere — the same "unreachable from the interface" shape this
+section used to be full of, and a reminder that a checklist ticked from memory
+is a checklist ticked wrongly.
+
+Beyond the two specifications, `docs/premiere-gaps.md` is the comparison with
+Premiere itself, which is the target that actually matters now.
 
 ### A. Would be missed by somebody using this every day
 
