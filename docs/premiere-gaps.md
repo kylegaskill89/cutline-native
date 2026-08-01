@@ -335,10 +335,12 @@ confirmed against the source.
 **Not in this document until now.** These are the finds, in rough order of how
 much they cost somebody:
 
-1. **No anchor point.** `core::Transform` is position, scale and rotation, and
-   the compositor rotates and scales about the quad's centre. There is no way to
-   spin a layer about its corner, which is most of what an anchor point is for.
-   Model, shader and control.
+1. ~~**No anchor point.**~~ **Done.** `Transform` carries `anchor_x`/`anchor_y`,
+   a fraction of the layer defaulting to its middle. It turned out to need no
+   shader change at all: position names the anchor, the compositor wants a
+   centre, and the difference is one rotated offset computed in `layer_box`.
+   Shown in pixels of the layer, paired on one row, keyframeable like the rest
+   of the transform. Files written before it read back centred.
 2. **No panner.** Nothing in the model carries pan. Premiere has one on every
    audio clip, and it is not an effect — it is part of what a clip *is*.
 3. **Audio effect parameters cannot be keyframed at all.** `AudioClipEffect`
@@ -348,10 +350,12 @@ much they cost somebody:
 4. **An effect applies to one clip, not the selection.** Both the double-click
    and the drop take `selection.front()`. Premiere applies to every selected
    clip, which is the whole reason to select several.
-5. **Effects cannot be reordered by dragging** — only by the up and down
-   buttons. The buttons were the right first answer: they work from the
-   keyboard and can be tested without a pointer. They are not the last answer.
-6. **Only the whole stack can be copied**, not one effect off it.
+5. ~~**Effects cannot be reordered by dragging.**~~ **Done.** The up and down
+   buttons stay; `ui::GrabRow` adds the drag, with an insertion line across the
+   top of the card it would land above.
+6. ~~**Only the whole stack can be copied.**~~ **Done** — right-click a card's
+   header. It fills the same clipboard, so a paste still *replaces*; copying one
+   effect to *add* to another stack is a different operation and does not exist.
 7. **Effect Controls never says which clip it is showing.** Premiere titles the
    panel with the clip and the sequence. With one clip selected it is obvious;
    with a timeline full of similar takes it is not.
@@ -361,10 +365,6 @@ than four:
 
 | | Where | Size |
 |---|---|---|
-| Paired X/Y on one row | §1.1 | control |
-| A visible reset control per row | §1.1 — double-click works, nothing says so | control |
-| Reset a whole effect at once | §1.1 | wiring |
-| Greying a property another governs (Lock aspect) | §1.1 | wiring |
 | Bezier handles on the velocity graph | §1.2 | **model** |
 | Drag an effect onto the program monitor | §1.3 | control |
 | Nested folders in the library | §1.3 | control |
@@ -372,13 +372,16 @@ than four:
 | Masks | §1.4 | **decision, then machinery** |
 | Catalogue depth | §1.5 | **blocked on the root-constant budget** |
 
-**The shape of what is left.** Of the seventeen items above, eleven are wiring
-or a control and could be done in any order. The other six are not independent:
-masks, catalogue depth and per-effect anything all wait on effects becoming
-passes rather than fields, and bezier handles, anchor point, panner and audio
-keyframes are each a change to the model with a serialiser and a compatibility
-question attached. Those two clusters are the real remaining work in section 1;
-everything else is an afternoon.
+Paired X/Y on one row, a visible reset per row, resetting a whole effect and
+greying a governed property are all done, and are no longer listed.
+
+**The shape of what is left.** Nine of the seventeen remain. Six of those are
+not independent: masks, catalogue depth and per-effect anything all wait on
+effects becoming passes rather than fields, and bezier handles, the panner and
+audio keyframes are each a change to the model with a serialiser and a
+compatibility question attached. The anchor point was the fourth of that second
+cluster and turned out to be the cheap one — the others are not, because none of
+them can be expressed as an offset the existing geometry already carries.
 
 ---
 
