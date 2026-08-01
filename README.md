@@ -440,13 +440,62 @@ selection must not take the audio's filters with it.
 settings rather than over the file the user saved. An autosave that wrote the
 real file would turn a crash into a silently overwritten afternoon.
 
-1858 tests, plus a headless check that lays every panel out in every theme —
+**The interface specification is done too.** §18 is the shape of the thing
+rather than the list of what it can do, and closing it was mostly small
+gestures that had been waiting on nothing: a Snap toggle and a Fit button over
+machinery `TimelineView` already had, Loop over the marked range, an aspect
+lock, Clear beside Copy and Paste, the seven canvas presets and a field for
+anything else, and renaming a track by double-clicking its header.
+
+**J, K and L shuttle**, and the decision there is worth stating: a rate of
+exactly one is ordinary playback with sound, driven by the audio clock, and
+every other rate is a silent shuttle. The sound card plays at its own rate, and
+pitching a mix up to run at 4x — or backwards — is not what those keys are for.
+What they are for is finding a moment by eye.
+
+Two of these found bugs that nothing else would have. The shuttle did not move
+at all, because `Session::set_playhead` snaps to the frame grid and reading it
+back to add a couple of milliseconds rounds to the frame it was already on —
+anything that integrates a value has to hold that value at full precision.
+And renaming a track opened a field with no caret in it, because the host moves
+focus onto whatever was pressed *after* the handler runs, taking it back from
+the field the handler had just focused; typing "B-roll" chose the rate-stretch
+tool, marked an out point and started playback.
+
+**Closing with unsaved changes now asks**, with three answers rather than two.
+"Are you sure" with only Yes and No makes cancelling and discarding the same
+button, and one of those throws away an afternoon.
+
+1895 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a matte, an adjustment layer, a title, and the
 colour picker open, which is the only way the controls a panel is made of get
 checked at all. It fails on a widget that landed nowhere, outside the window, or
 cut in half by the panel holding it. Given a directory, that check writes each theme's frame out
 as a PNG, so a changed fingerprint can be looked at rather than guessed at.
+
+## Releasing
+
+There is an installer, and a workflow that builds one from a tag and publishes
+it with the manifest the editor's update check reads. `docs/releasing.md` is the
+process; the parts worth knowing here are the two refusals.
+
+The **workflow** refuses to release if the tag disagrees with the version in
+`CMakeLists.txt`. A release whose manifest says 0.3.0 while the binary reports
+0.2.0 produces an editor that offers the same update every time it is asked and
+installs it to no effect, for ever — and nothing later in the pipeline would
+notice.
+
+The **editor** refuses a manifest whose installer is not `https`, whose digest
+is missing or malformed, or whose version does not parse. What is on the other
+end of that decision is an executable that will be run, so the download is
+verified against the published SHA-256 *before it touches the disk*: a file that
+failed the check is never worth having, and one left lying beside a real
+installer is an invitation.
+
+Nothing checks on its own. The version at the foot of the project panel is the
+button, and an editor that phoned home the moment it opened would have decided
+on the user's behalf that it may.
 
 ## Building
 

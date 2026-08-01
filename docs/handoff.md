@@ -6,7 +6,8 @@ a day each.
 
 Read `README.md` for the story and the numbers, `docs/architecture.md` for the
 native decisions, `docs/spec.md` for the product — it is the authority on exact
-numeric behaviour, carried over from the TypeScript version.
+numeric behaviour, carried over from the TypeScript version — and
+`docs/releasing.md` for how a tag becomes an installer somebody can run.
 
 ---
 
@@ -29,7 +30,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1858** under the `ui` preset; 1595 of them need no GPU, no window, no FFmpeg |
+| Tests | **1895** under the `ui` preset; 1632 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -50,7 +51,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1595 of the 1858 tests.
+binding between them — 1632 of the 1895 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -98,6 +99,17 @@ one. It takes:
 `preview_window` is a throwaway viewport for driving the render pipeline by hand.
 It is not the editor's UI and will not become it.
 
+### Packaging
+
+```
+cmake --preset ui
+cmake --build --preset ui
+cd build/ui && cpack -G NSIS -C Release   # needs `choco install nsis`
+```
+
+Or push a tag and let the Release workflow do all of it. `docs/releasing.md` is
+the whole process, including why the tag has to match `CMakeLists.txt`.
+
 ---
 
 ## 3. Layers, and the rule that holds them apart
@@ -122,7 +134,7 @@ tools    executables.
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1595 tests run with
+place that knows both, and it is pure too. That is what makes 1632 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -235,9 +247,9 @@ terminal.
 
 ## 6. Status
 
-Phases 1 to 7 are complete and phase 8 — packaging — has not started. The
-parity checklist in `docs/spec.md` §21 is done apart from the optional updater.
-Concretely:
+All eight phases are complete. The parity checklist in `docs/spec.md` §21 is
+done, the UI specification in §18 is done, and there is an installer and a
+release workflow that publishes it. Concretely:
 
 **Works end to end.** Import, place, move, trim, split, ripple, undo/redo. Eleven
 video effects as shaders, stackable, reorderable, keyframeable. Titles, drawn
@@ -250,7 +262,9 @@ remember where they were.
 Scopes, a master fader with a metered bus, transform handles on the picture
 with snapping and guides, a preview that renders at a half or a quarter for
 speed, effect stacks copied from one clip to another, and a recovery copy of
-anything unsaved.
+anything unsaved. Snap and Fit, loop over the marked range, J/K/L shuttle,
+canvas presets, renaming a track, and an update check that verifies what it
+downloads before running it.
 
 **The interface** is one window drawn on the GPU with Skia, sharing the
 compositor's Direct3D device so a decoded frame reaches the screen without a copy
@@ -263,47 +277,29 @@ track header switches all work.
 ## 7. What is left
 
 Checked against `docs/spec.md` §21 (the parity checklist) and §18 (the UI spec).
+**Both are done.** What follows is what nobody has asked for yet.
 
-**§21 is done**, apart from the one item it calls optional: auto-update. Every
-feature the parity checklist names is built, reachable and verified on screen.
-What follows is §18 and the things a release needs that no checklist mentions.
+### A. Would be missed by somebody using this every day
 
-### A. Built and tested in the model or engine, unreachable from the interface
+- **Dragging keyframes in time.** They can be added, removed, retimed by
+  changing the clip's speed, and given a curve — but not slid along the clip.
+  The diamonds are drawn; the gesture is not.
+- **Signing the installer.** Unsigned, so Windows shows SmartScreen the first
+  time. Nothing technical stands in the way; a certificate costs money and is
+  the user's decision to make.
+- **A menu bar.** Every command is on a button or a key, and a few are on
+  neither — there is no way to reach "reset this workspace" without knowing the
+  Reset button does it.
 
-The cheap half. Each is a panel or a gesture away, not new machinery. **Start
-here.**
+### B. Worth doing, and nobody will notice until it is done
 
-| | Exists | Missing |
-|---|---|---|
-| **Renaming a track** | `set_track_label` in core | no way to type one in |
-
-### B. Not built anywhere
-
-- **Loop playback**.
-- **J/K/L shuttle** and **S for snap**. The I/O and marker keys are done.
-- **Aspect lock on scale** as a setting, rather than shift while dragging.
-- **Canvas presets / sequence settings** — the export dialog can resize, but the
-  project's own canvas cannot be changed.
-- **Auto-update**. The spec calls it optional; the person who uses this relies
-  on painless updates, which is the argument for it.
-- **A prompt on closing with unsaved changes.** There is none: the window just
-  goes. Autosave keeps a recovery copy in that case, which is a net rather than
-  an answer.
-- **Dragging keyframes in time**, and **keeping hardware-decoded frames on the
-  GPU** instead of uploading them from system memory (the decoder can already
-  produce D3D12 textures; nothing samples them yet).
-
-### C. Not a feature, and the thing actually between here and a release
-
-**Phase 8: packaging.** There is no installer, no signed binary, no release
-workflow and no auto-update. Everything above is polish on an editor that
-works; this is the difference between an editor that works and one somebody
-else can run.
-
-### Suggested order
-
-1. **Packaging**, because nothing else makes the rest of it usable by anyone.
-2. Then A and B by appetite. Most of what is left there is wiring.
+- **Keeping hardware-decoded frames on the GPU** instead of uploading them from
+  system memory. The decoder can already produce D3D12 textures; nothing
+  samples them yet. This is the last large win left in the preview.
+- **Streaming audio decode.** `AudioMixer` decodes whole ranges eagerly, which
+  is roughly 230 MB per ten minutes of stereo. A long timeline of long sources
+  is the case that will eventually need it.
+- **Nothing in the test suite ever resizes a real window** — see below.
 
 And one thing worth doing whatever comes next: **nothing in the test suite ever
 resizes a real window.** The pixel tests draw on a fixed CPU raster surface and
@@ -405,6 +401,23 @@ Eleven are already done and are worth reading as the pattern for the rest:
 
 Each of these cost real time. They are documented in the code as well, but they
 are the sort of thing that bites twice.
+
+**A press that moves the focus has it taken straight back.** `mouse_down` walks
+up from the widget that was pressed and focuses the first thing that can take
+the keyboard, which is right for an ordinary click and wrong when the handler
+has just said where the keyboard should go. Renaming a track opened a field with
+no caret in it, and typing "B-roll" chose the rate-stretch tool, marked an out
+point and started playback. The host now leaves the focus alone when the
+handler changed it. Anything that opens a popup and focuses something inside it
+depends on that.
+
+**Anything that integrates a value has to hold it at full precision.**
+`Session::set_playhead` snaps to the frame grid, so the J/K/L shuttle — which
+added a couple of milliseconds per turn of the loop — read the playhead back,
+added its step, and rounded to the frame it was already on. It did not move at
+all, and at 4x it occasionally cleared a boundary and lurched, which looked like
+the rate being ignored rather than like rounding. The shuttle keeps its own
+position and quantises only on the way out.
 
 **A reference bound to a *member* of a temporary is not lifetime-extended.**
 `const auto& x = timeline_model(p).tracks[0].something;` reads freed memory. This
