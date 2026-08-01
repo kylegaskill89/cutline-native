@@ -1,0 +1,221 @@
+#include "cutline/editor/keyframes.hpp"
+
+#include "cutline/core/query.hpp"
+#include "cutline/render/effect_catalog.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <utility>
+
+namespace cutline::editor {
+namespace {
+
+/// How close a press has to be, in seconds, to count as being on a keyframe.
+/// The view converts a distance in pixels into one of these before asking.
+constexpr double kReach = core::kKeyframeRemoveEps;
+
+/// Two keyframes closer than this are the same instant, and a move that would
+/// produce them is refused. The looser of the model's two tolerances, so a drag
+/// cannot squeeze two points closer together than an edit could tell apart.
+constexpr double kApart = core::kKeyframeRemoveEps;
+
+/// The transform properties a lane can exist for, in the order the inspector
+/// lists them. Not `kAnimProps`, which is in storage order.
+constexpr std::array<ClipParam, 6> kMotionParams{
+    ClipParam::Opacity, ClipParam::X,        ClipParam::Y,
+    ClipParam::ScaleX,  ClipParam::ScaleY,   ClipParam::Rotation,
+};
+
+[[nodiscard]] std::optional<core::AnimProp> anim_prop_of(ClipParam param) noexcept {
+  switch (param) {
+    case ClipParam::Opacity: return core::AnimProp::Opacity;
+    case ClipParam::X: return core::AnimProp::X;
+    case ClipParam::Y: return core::AnimProp::Y;
+    case ClipParam::ScaleX: return core::AnimProp::ScaleX;
+    case ClipParam::ScaleY: return core::AnimProp::ScaleY;
+    case ClipParam::Rotation: return core::AnimProp::Rotation;
+    default: return std::nullopt;
+  }
+}
+
+/// The list a reference names, or null when it names nothing that exists.
+///
+/// One function rather than one per caller, and non-const so the edits can use
+/// it too — every one of them is "find the list, change it, put the clip back",
+/// and finding it is the only part that differs between a transform property
+/// and an effect's.
+[[nodiscard]] std::vector<core::Keyframe>* lane_keys(core::Clip& clip, const ParamRef& ref) {
+  if (ref.motion()) {
+    if (ref.param == ClipParam::Gain) return &clip.gain_keyframes;
+    const auto prop = anim_prop_of(ref.param);
+    if (!prop.has_value()) return nullptr;
+    return &clip.keyframes[core::anim_prop_index(*prop)];
+  }
+
+  if (ref.effect >= clip.effects.size()) return nullptr;
+  const auto found = clip.effects[ref.effect].keyframes.find(ref.key);
+  if (found == clip.effects[ref.effect].keyframes.end()) return nullptr;
+  return &found->second;
+}
+
+/// The index of the keyframe nearest `t`, if one is within `kReach`.
+[[nodiscard]] std::optional<std::size_t> nearest(std::span<const core::Keyframe> keys,
+                                                 double t) noexcept {
+  std::optional<std::size_t> best;
+  double closest = kReach;
+  for (std::size_t i = 0; i < keys.size(); ++i) {
+    const double distance = std::abs(keys[i].t - t);
+    if (distance <= closest) {
+      closest = distance;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/// Applies `edit` to the list `ref` names on `clip_id`, and reports whether
+/// anything came of it. Every edit below is this shape.
+template <typename Fn>
+[[nodiscard]] core::Project edited(core::Project project, std::string_view clip_id,
+                                   const ParamRef& ref, Fn&& edit) {
+  core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr) return project;
+
+  std::vector<core::Keyframe>* keys = lane_keys(*clip, ref);
+  if (keys == nullptr || keys->empty()) return project;
+
+  // Against a copy, so a refused edit leaves the project as it was rather than
+  // half-applied. Every operation here can decline.
+  std::vector<core::Keyframe> next = *keys;
+  if (!edit(next)) return project;
+
+  *keys = std::move(next);
+  return project;
+}
+
+}  // namespace
+
+KeyframeModel clip_keyframes(const core::Project& project, std::string_view clip_id) {
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr) return {};
+
+  KeyframeModel model;
+  model.duration = core::clip_duration(*clip);
+
+  const auto add = [&model](ParamRef ref, std::string name,
+                            const std::vector<core::Keyframe>& keys) {
+    if (keys.empty()) return;
+    model.lanes.push_back(
+        KeyframeLane{.ref = std::move(ref), .name = std::move(name), .keys = keys});
+  };
+
+  for (const ClipParam param : kMotionParams) {
+    const auto prop = anim_prop_of(param);
+    if (!prop.has_value()) continue;
+    add(ParamRef{.param = param}, std::string(param_name(param)),
+        clip->keyframes[core::anim_prop_index(*prop)]);
+  }
+  add(ParamRef{.param = ClipParam::Gain}, std::string(param_name(ClipParam::Gain)),
+      clip->gain_keyframes);
+
+  for (std::size_t i = 0; i < clip->effects.size(); ++i) {
+    const core::ClipEffect& effect = clip->effects[i];
+    const render::EffectSpec* spec = render::find_effect_spec(effect.type);
+    const std::string effect_name = spec != nullptr ? std::string(spec->name) : effect.type;
+
+    // Walked through the spec rather than through the map, so lanes come out in
+    // the order the inspector shows the parameters rather than alphabetically.
+    // An effect the registry no longer has contributes nothing, which is the
+    // same answer its parameter rows give.
+    if (spec == nullptr) continue;
+    for (const render::EffectParamSpec& param : spec->params) {
+      const auto found = effect.keyframes.find(std::string(param.key));
+      if (found == effect.keyframes.end()) continue;
+      // Qualified, because "Amount" says nothing when three effects have one.
+      add(ParamRef{.effect = i, .key = std::string(param.key)},
+          effect_name + " — " + std::string(param.name), found->second);
+    }
+  }
+
+  return model;
+}
+
+core::Project move_keyframe(core::Project project, std::string_view clip_id,
+                            const ParamRef& ref, double from, double to) {
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr) return project;
+  // Clamped here, where the clip is in hand: a keyframe dragged past either end
+  // is one that can never be reached again.
+  const double limit = core::clip_duration(*clip);
+  const double target = std::clamp(to, 0.0, limit);
+
+  return edited(std::move(project), clip_id, ref,
+                [from, target](std::vector<core::Keyframe>& keys) {
+                  const auto index = nearest(keys, from);
+                  if (!index.has_value()) return false;
+                  if (keys[*index].t == target) return false;
+
+                  // Onto another one is refused rather than merged. Two
+                  // keyframes at the same instant have no meaningful order, and
+                  // which survived would be whichever the sort happened to
+                  // keep.
+                  for (std::size_t i = 0; i < keys.size(); ++i) {
+                    if (i != *index && std::abs(keys[i].t - target) < kApart) return false;
+                  }
+
+                  keys[*index].t = target;
+                  std::ranges::sort(keys, {}, &core::Keyframe::t);
+                  return true;
+                });
+}
+
+core::Project set_keyframe_interp(core::Project project, std::string_view clip_id,
+                                  const ParamRef& ref, double at, core::Interp mode) {
+  return edited(std::move(project), clip_id, ref,
+                [at, mode](std::vector<core::Keyframe>& keys) {
+                  const auto index = nearest(keys, at);
+                  if (!index.has_value() || keys[*index].e == mode) return false;
+                  keys[*index].e = mode;
+                  return true;
+                });
+}
+
+core::Project remove_keyframe(core::Project project, std::string_view clip_id,
+                              const ParamRef& ref, double at) {
+  return edited(std::move(project), clip_id, ref, [at](std::vector<core::Keyframe>& keys) {
+    // The last one is refused. A property with animation on and no keyframes
+    // evaluates to zero, which is not what removing a point should mean;
+    // turning animation off is the stopwatch's job.
+    if (keys.size() <= 1) return false;
+    const auto index = nearest(keys, at);
+    if (!index.has_value()) return false;
+    keys.erase(keys.begin() + static_cast<std::ptrdiff_t>(*index));
+    return true;
+  });
+}
+
+std::optional<double> keyframe_before(std::span<const core::Keyframe> keys, double t) noexcept {
+  std::optional<double> best;
+  for (const core::Keyframe& key : keys) {
+    // Strictly before, and by more than the match tolerance, so pressing the
+    // button repeatedly walks the list instead of sticking on the one it just
+    // landed on.
+    if (key.t < t - core::kKeyframeMatchEps && (!best.has_value() || key.t > *best)) {
+      best = key.t;
+    }
+  }
+  return best;
+}
+
+std::optional<double> keyframe_after(std::span<const core::Keyframe> keys, double t) noexcept {
+  std::optional<double> best;
+  for (const core::Keyframe& key : keys) {
+    if (key.t > t + core::kKeyframeMatchEps && (!best.has_value() || key.t < *best)) {
+      best = key.t;
+    }
+  }
+  return best;
+}
+
+}  // namespace cutline::editor

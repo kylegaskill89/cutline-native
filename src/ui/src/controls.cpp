@@ -1231,6 +1231,14 @@ void IconButton::paint_content(Painter& painter, const Theme& theme) const {
       painter.line(cx - reach, cy - reach * 0.5, cx, cy + reach * 0.5, style.text, width);
       painter.line(cx, cy + reach * 0.5, cx + reach, cy - reach * 0.5, style.text, width);
       break;
+    case Icon::ArrowLeft:
+      painter.line(cx + reach * 0.5, cy - reach, cx - reach * 0.5, cy, style.text, width);
+      painter.line(cx - reach * 0.5, cy, cx + reach * 0.5, cy + reach, style.text, width);
+      break;
+    case Icon::ArrowRight:
+      painter.line(cx - reach * 0.5, cy - reach, cx + reach * 0.5, cy, style.text, width);
+      painter.line(cx + reach * 0.5, cy, cx - reach * 0.5, cy + reach, style.text, width);
+      break;
     case Icon::Cross:
       painter.line(cx - reach, cy - reach, cx + reach, cy + reach, style.text, width);
       painter.line(cx - reach, cy + reach, cx + reach, cy - reach, style.text, width);

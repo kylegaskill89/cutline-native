@@ -537,6 +537,10 @@ class IconButton : public Button {
   enum class Icon {
     ArrowUp,
     ArrowDown,
+    /// Premiere's ◀ ▶ either side of a keyframe marker: go to the previous or
+    /// the next one on this property.
+    ArrowLeft,
+    ArrowRight,
     Cross,
     Plus,
     /// Premiere's animation toggle: a clock face with one hand.

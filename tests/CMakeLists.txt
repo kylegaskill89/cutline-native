@@ -24,6 +24,7 @@ add_executable(cutline_core_tests
   editor/generators_test.cpp
   editor/import_test.cpp
   editor/inspector_test.cpp
+  editor/keyframes_test.cpp
   editor/monitor_binding_test.cpp
   editor/session_test.cpp
   editor/timeline_binding_test.cpp
@@ -43,6 +44,7 @@ add_executable(cutline_core_tests
   ui/controls_test.cpp
   ui/dock_test.cpp
   ui/dock_view_test.cpp
+  ui/keyframe_view_test.cpp
   ui/layout_test.cpp
   ui/meter_view_test.cpp
   ui/monitor_test.cpp

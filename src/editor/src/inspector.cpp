@@ -140,6 +140,24 @@ std::string_view to_string(ClipParam param) noexcept {
   return "unknown";
 }
 
+std::string_view param_name(ClipParam param) noexcept {
+  switch (param) {
+    case ClipParam::Opacity: return "Opacity";
+    case ClipParam::X: return "Position X";
+    case ClipParam::Y: return "Position Y";
+    case ClipParam::ScaleX: return "Scale X";
+    case ClipParam::ScaleY: return "Scale Y";
+    case ClipParam::Rotation: return "Rotation";
+    case ClipParam::Speed: return "Speed";
+    // Volume rather than Gain: it is what the control is called everywhere
+    // else, and the row shows decibels.
+    case ClipParam::Gain: return "Volume";
+    case ClipParam::FadeIn: return "Fade In";
+    case ClipParam::FadeOut: return "Fade Out";
+  }
+  return "Unknown";
+}
+
 std::vector<ParamSpec> clip_parameters(const core::Project& project, std::string_view clip_id,
                                        double local_t) {
   const core::Clip* clip = core::find_clip(project, clip_id);
@@ -150,7 +168,7 @@ std::vector<ParamSpec> clip_parameters(const core::Project& project, std::string
 
   if (clip->kind == core::TrackKind::Video) {
     out.push_back(ParamSpec{.param = ClipParam::Opacity,
-                            .name = "Opacity",
+                            .name = std::string(param_name(ClipParam::Opacity)),
                             .range = {.minimum = 0.0, .maximum = 100.0},
                             .value = clip->opacity * kPercent,
                             .fallback = 100.0,
@@ -160,40 +178,40 @@ std::vector<ParamSpec> clip_parameters(const core::Project& project, std::string
     // middle. Shown as a percentage of the canvas rather than in pixels, which
     // is what keeps it independent of the export resolution.
     out.push_back(ParamSpec{.param = ClipParam::X,
-                            .name = "Position X",
+                            .name = std::string(param_name(ClipParam::X)),
                             .range = {.minimum = -50.0, .maximum = 150.0},
                             .value = clip->transform.x * kPercent,
                             .fallback = 50.0,
                             .suffix = "%"});
     out.push_back(ParamSpec{.param = ClipParam::Y,
-                            .name = "Position Y",
+                            .name = std::string(param_name(ClipParam::Y)),
                             .range = {.minimum = -50.0, .maximum = 150.0},
                             .value = clip->transform.y * kPercent,
                             .fallback = 50.0,
                             .suffix = "%"});
 
     out.push_back(ParamSpec{.param = ClipParam::ScaleX,
-                            .name = "Scale X",
+                            .name = std::string(param_name(ClipParam::ScaleX)),
                             .range = {.minimum = 0.0, .maximum = 400.0},
                             .value = clip->transform.scale_x * kPercent,
                             .fallback = 100.0,
                             .suffix = "%"});
     out.push_back(ParamSpec{.param = ClipParam::ScaleY,
-                            .name = "Scale Y",
+                            .name = std::string(param_name(ClipParam::ScaleY)),
                             .range = {.minimum = 0.0, .maximum = 400.0},
                             .value = clip->transform.scale_y * kPercent,
                             .fallback = 100.0,
                             .suffix = "%"});
 
     out.push_back(ParamSpec{.param = ClipParam::Rotation,
-                            .name = "Rotation",
+                            .name = std::string(param_name(ClipParam::Rotation)),
                             .range = {.minimum = -180.0, .maximum = 180.0},
                             .value = clip->transform.rotation,
                             .fallback = 0.0,
                             .suffix = "\xc2\xb0"});  // degree sign, UTF-8
   } else {
     out.push_back(ParamSpec{.param = ClipParam::Gain,
-                            .name = "Volume",
+                            .name = std::string(param_name(ClipParam::Gain)),
                             .range = {.minimum = ui::kGainFloorDb, .maximum = gain_ceiling_db()},
                             .value = gain_shown(clip->gain),
                             // Unity, which is where a volume control resets to.
@@ -202,7 +220,7 @@ std::vector<ParamSpec> clip_parameters(const core::Project& project, std::string
   }
 
   out.push_back(ParamSpec{.param = ClipParam::Speed,
-                          .name = "Speed",
+                          .name = std::string(param_name(ClipParam::Speed)),
                           .range = {.minimum = kSliderMinSpeed, .maximum = kSliderMaxSpeed},
                           .value = core::clip_speed(*clip),
                           .fallback = 1.0,
@@ -211,13 +229,13 @@ std::vector<ParamSpec> clip_parameters(const core::Project& project, std::string
   // Fades are bounded by the clip they are on: a two second fade on a one
   // second clip is not a shorter fade, it is a mistake.
   out.push_back(ParamSpec{.param = ClipParam::FadeIn,
-                          .name = "Fade In",
+                          .name = std::string(param_name(ClipParam::FadeIn)),
                           .range = {.minimum = 0.0, .maximum = length},
                           .value = clip->fade_in,
                           .fallback = 0.0,
                           .suffix = "s"});
   out.push_back(ParamSpec{.param = ClipParam::FadeOut,
-                          .name = "Fade Out",
+                          .name = std::string(param_name(ClipParam::FadeOut)),
                           .range = {.minimum = 0.0, .maximum = length},
                           .value = clip->fade_out,
                           .fallback = 0.0,

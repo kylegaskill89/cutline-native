@@ -35,7 +35,15 @@ enum class ClipParam {
   FadeOut,
 };
 
+/// The stable identifier: lower case, underscored, for keys and for tests.
 [[nodiscard]] std::string_view to_string(ClipParam param) noexcept;
+
+/// What it is called on screen — "Position X" rather than `x`.
+///
+/// Its own function because two things now write it: a parameter row and a
+/// keyframe lane. Two lists of the same ten strings would eventually disagree,
+/// and the one nobody edited would be the one on screen.
+[[nodiscard]] std::string_view param_name(ClipParam param) noexcept;
 
 /// One row of the inspector.
 struct ParamSpec {

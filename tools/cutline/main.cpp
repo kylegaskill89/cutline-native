@@ -32,6 +32,7 @@
 #include "cutline/editor/generators.hpp"
 #include "cutline/editor/import.hpp"
 #include "cutline/editor/inspector.hpp"
+#include "cutline/editor/keyframes.hpp"
 #include "cutline/editor/monitor_binding.hpp"
 #include "cutline/editor/session.hpp"
 #include "cutline/editor/timeline_binding.hpp"
@@ -44,6 +45,7 @@
 #include "cutline/ui/controls.hpp"
 #include "cutline/ui/dock.hpp"
 #include "cutline/ui/dock_view.hpp"
+#include "cutline/ui/keyframe_view.hpp"
 #include "cutline/ui/meter_view.hpp"
 #include "cutline/ui/monitor.hpp"
 #include "cutline/ui/scopes_view.hpp"
@@ -784,6 +786,42 @@ void inspector_heading(App& app, std::string text) {
                     cutline::core::clip_duration(*clip));
 }
 
+/// The keyframes on one property, or nothing when it is not animated.
+///
+/// Through `clip_keyframes` rather than reaching into the model, so a lane in
+/// the view and a row in the inspector cannot disagree about what is animated.
+[[nodiscard]] std::vector<cutline::core::Keyframe> lane_keys(
+    const App& app, const std::string& clip_id, const cutline::editor::ParamRef& ref) {
+  const cutline::editor::KeyframeModel model =
+      cutline::editor::clip_keyframes(app.session.project(), clip_id);
+  for (const cutline::editor::KeyframeLane& lane : model.lanes) {
+    if (lane.ref == ref) return lane.keys;
+  }
+  return {};
+}
+
+/// Moves the playhead to the keyframe either side of it on one property.
+///
+/// In timeline time, because that is what the playhead is in. The lane's own
+/// times are clip-local, so the clip's start has to go back on.
+void step_to_keyframe(App& app, const std::string& clip_id,
+                      const cutline::editor::ParamRef& ref, int direction) {
+  const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), clip_id);
+  if (clip == nullptr) return;
+
+  const std::vector<cutline::core::Keyframe> keys = lane_keys(app, clip_id, ref);
+  const double here = local_playhead(app, clip_id);
+  const std::optional<double> target = direction < 0
+                                           ? cutline::editor::keyframe_before(keys, here)
+                                           : cutline::editor::keyframe_after(keys, here);
+  if (!target.has_value()) return;
+
+  app.session.set_playhead(clip->start + *target);
+  refresh_timeline(app);
+  invalidate_preview(app);
+  app.inspector_stale = true;
+}
+
 /// Rebuilds the inspector when moving the playhead changes what it shows.
 ///
 /// Which is only when the selected clip animates something: an animated row
@@ -823,6 +861,10 @@ struct ParamRow {
   bool animatable = false;
   bool animated = false;
   bool keyed_here = false;
+  /// Whether there is a keyframe to go back or forward to, which is what greys
+  /// the ◀ and ▶ at the ends of the list.
+  bool has_previous = false;
+  bool has_next = false;
   cutline::core::Interp interp = cutline::core::Interp::Linear;
 };
 
@@ -871,6 +913,12 @@ struct ParamHandlers {
   std::function<void(bool)> animate;
   std::function<void()> keyframe;
   std::function<void(cutline::core::Interp)> interp;
+
+  /// Moves the playhead to this property's previous (-1) or next (+1)
+  /// keyframe. Premiere's ◀ ▶ either side of the marker, and the only way to
+  /// *reach* a keyframe from a parameter row — the marker says one is here and
+  /// offers no way to get to one that is not.
+  std::function<void(int)> step;
 };
 
 void build_param_row(App& app, const ParamRow& row, ParamHandlers handlers) {
@@ -927,19 +975,44 @@ void build_param_row(App& app, const ParamRow& row, ParamHandlers handlers) {
     // dropdown of three. Three is short enough to walk round, and a dropdown
     // beside a stopwatch and a diamond on a narrow row is a lot of chrome for
     // a setting with three values.
-    head.emplace<Button>(std::string(cutline::editor::interp_name(row.interp)),
-                         [interp = std::move(handlers.interp), mode = row.interp] {
-                           if (interp) interp(cutline::editor::next_interp(mode));
-                         });
+    // Premiere's ◀ ◆ ▶. The marker alone says a keyframe is here; these are
+    // what get to one that is not, and without them a keyframe placed off the
+    // playhead can only be found by scrubbing until the diamond lights up.
+    auto& previous = head.emplace<IconButton>(IconButton::Icon::ArrowLeft);
+    previous.set_enabled(row.has_previous);
+    if (handlers.step) previous.set_on_click([step = handlers.step] { step(-1); });
 
     auto& mark =
         head.emplace<IconButton>(IconButton::Icon::Diamond, std::move(handlers.keyframe));
     mark.set_selected(row.keyed_here);
+
+    auto& next = head.emplace<IconButton>(IconButton::Icon::ArrowRight);
+    next.set_enabled(row.has_next);
+    if (handlers.step) next.set_on_click([step = std::move(handlers.step)] { step(1); });
   }
 
   if (!expanded) return;
 
-  auto& slider = app.inspector->emplace<Slider>(row.range, row.value);
+  auto& more = app.inspector->emplace<Box>(Axis::Horizontal);
+
+  // The interpolation chip, behind the triangle rather than on the head row.
+  //
+  // It was on the row until ◀ ▶ joined it there, and the two together left the
+  // property's own *name* squeezed to nothing — which `--check` caught and a
+  // glance would not have. The row is what a parameter is read by and has to
+  // stay legible; the chip is a setting nobody touches twice.
+  //
+  // Premiere has no chip at all: interpolation there is a right-click on the
+  // keyframe, per keyframe. That is where this is going, and the chip goes when
+  // it arrives. Until then it is the only way to set a curve at all.
+  if (row.animated) {
+    more.emplace<Button>(std::string(cutline::editor::interp_name(row.interp)),
+                         [interp = std::move(handlers.interp), mode = row.interp] {
+                           if (interp) interp(cutline::editor::next_interp(mode));
+                         });
+  }
+
+  auto& slider = more.emplace<Slider>(row.range, row.value);
   slider.set_default_value(row.fallback);
   // The picture follows the drag; the document is written once, at the end of
   // it. Sweeping a slider and watching nothing happen until the button comes up
@@ -1128,16 +1201,25 @@ void build_effect_controls(App& app, const std::string& clip_id) {
         continue;
       }
 
-      const ParamRow control{.name = param.name,
-                             .suffix = param.suffix,
-                             .key = "fx." + std::to_string(row.index) + "." + param.key,
-                             .range = param.range,
-                             .value = param.value,
-                             .fallback = param.fallback,
-                             .animatable = true,
-                             .animated = param.animated,
-                             .keyed_here = param.keyed_here,
-                             .interp = param.interp};
+      const cutline::editor::ParamRef ref{.effect = row.index, .key = param.key};
+      const std::vector<cutline::core::Keyframe> keys =
+          param.animated ? lane_keys(app, clip_id, ref)
+                         : std::vector<cutline::core::Keyframe>{};
+      const double here = local_playhead(app, clip_id);
+
+      const ParamRow control{
+          .name = param.name,
+          .suffix = param.suffix,
+          .key = "fx." + std::to_string(row.index) + "." + param.key,
+          .range = param.range,
+          .value = param.value,
+          .fallback = param.fallback,
+          .animatable = true,
+          .animated = param.animated,
+          .keyed_here = param.keyed_here,
+          .has_previous = cutline::editor::keyframe_before(keys, here).has_value(),
+          .has_next = cutline::editor::keyframe_after(keys, here).has_value(),
+          .interp = param.interp};
 
       build_param_row(
           app, control,
@@ -1177,7 +1259,10 @@ void build_effect_controls(App& app, const std::string& clip_id) {
                      app.session.project(), clip_id, index, key, mode));
                  invalidate_preview(app);
                  app.inspector_stale = true;
-               }});
+               },
+           .step = [&app, clip_id, ref](int direction) {
+             step_to_keyframe(app, clip_id, ref, direction);
+           }});
     }
 
     for (const cutline::editor::EffectColorRow& color : row.colors) {
@@ -1271,6 +1356,85 @@ void build_audio_effect_controls(App& app, const std::string& clip_id) {
           }});
     }
   }
+}
+
+/// Every animated property on the clip, laid out in time.
+///
+/// The other half of Premiere's Effect Controls panel. A parameter row says a
+/// keyframe is at the playhead; this says where all of them are, which is what
+/// shaping an animation needs — and it is the only place a keyframe can be
+/// grabbed and moved, an operation the model has always supported and nothing
+/// has ever offered.
+///
+/// Below the stacks rather than beside them, because the panel is a narrow
+/// column. Premiere's is a second pane to the right of the parameters; the same
+/// arrangement here would leave both halves too narrow to read.
+void build_keyframe_lanes(App& app, const std::string& clip_id) {
+  const cutline::editor::KeyframeModel model =
+      cutline::editor::clip_keyframes(app.session.project(), clip_id);
+  // Nothing animated, nothing to show. An empty lane view in a column this
+  // narrow is a heading and a strip of dead space.
+  if (model.empty()) return;
+
+  inspector_heading(app, "Keyframes");
+
+  cutline::ui::KeyframeView::Model shown;
+  shown.duration = model.duration;
+  shown.lanes.reserve(model.lanes.size());
+  for (const cutline::editor::KeyframeLane& lane : model.lanes) {
+    std::vector<double> times;
+    times.reserve(lane.keys.size());
+    for (const cutline::core::Keyframe& key : lane.keys) times.push_back(key.t);
+    shown.lanes.push_back(
+        cutline::ui::KeyframeView::Lane{.name = lane.name, .times = std::move(times)});
+  }
+
+  auto& view = app.inspector->emplace<cutline::ui::KeyframeView>();
+  view.set_model(std::move(shown));
+  view.set_playhead(local_playhead(app, clip_id));
+
+  // The lane order is the view's only handle on which property a row is, so it
+  // is captured rather than looked up again: the project can change underneath
+  // a drag, and a lane index resolved against a newer model is a different
+  // property.
+  const std::vector<cutline::editor::KeyframeLane> lanes = model.lanes;
+
+  view.set_on_scrub([&app, clip_id](double t) {
+    const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), clip_id);
+    if (clip == nullptr) return;
+    app.session.set_playhead(clip->start + t);
+    refresh_timeline(app);
+    invalidate_preview(app);
+    app.inspector_stale = true;
+  });
+
+  view.set_on_move([&app, clip_id, lanes, control = &view](std::size_t lane, std::size_t index,
+                                                           double to) {
+    if (lane >= lanes.size()) return;
+    // The same bargain as a scrubbed number: rendered against a copy so the
+    // picture follows the drag, and written to the document once, on release.
+    app.live_gesture = true;
+    app.live_project = cutline::editor::move_keyframe(
+        app.session.project(), clip_id, lanes[lane].ref, lanes[lane].keys[index].t, to);
+    // And the diamond follows the pointer. Without this the view goes on
+    // drawing the keyframe where it was until the button comes up.
+    control->nudge(lane, index, to);
+    invalidate_preview(app);
+    refresh_handles(app);
+  });
+
+  view.set_on_move_commit(
+      [&app, clip_id, lanes](std::size_t lane, std::size_t index, double, double to) {
+        if (lane >= lanes.size()) return;
+        // From the captured list rather than from the view: the view's model
+        // has been nudged during the drag and no longer says where the keyframe
+        // started, which is what the edit has to find it by.
+        app.session.apply(cutline::editor::move_keyframe(
+            app.session.project(), clip_id, lanes[lane].ref, lanes[lane].keys[index].t, to));
+        refresh_timeline(app);
+        invalidate_preview(app);
+        app.inspector_stale = true;
+      });
 }
 
 /// The four the model renders, in the order the dropdown offers them.
@@ -1609,6 +1773,11 @@ void refresh_inspector(App& app) {
   for (const cutline::editor::ParamSpec& spec :
        cutline::editor::clip_parameters(app.session.project(), clip_id,
                                         local_playhead(app, clip_id))) {
+    const cutline::editor::ParamRef ref{.param = spec.param};
+    const std::vector<cutline::core::Keyframe> keys =
+        spec.animated ? lane_keys(app, clip_id, ref) : std::vector<cutline::core::Keyframe>{};
+    const double here = local_playhead(app, clip_id);
+
     const ParamRow line{.name = spec.name,
                         // The transform's units are already in its names —
                         // "Position X" in percent of the canvas — and repeating
@@ -1620,6 +1789,8 @@ void refresh_inspector(App& app) {
                         .animatable = spec.animatable,
                         .animated = spec.animated,
                         .keyed_here = spec.keyed_here,
+                        .has_previous = cutline::editor::keyframe_before(keys, here).has_value(),
+                        .has_next = cutline::editor::keyframe_after(keys, here).has_value(),
                         .interp = spec.interp};
 
     // The edit itself, without applying it, so the commit and the live preview
@@ -1679,7 +1850,10 @@ void refresh_inspector(App& app) {
                    app.session.project(), clip_id, param, mode));
                invalidate_preview(app);
                app.inspector_stale = true;
-             }});
+             },
+         .step = [&app, clip_id, ref](int direction) {
+           step_to_keyframe(app, clip_id, ref, direction);
+         }});
   }
 
   // Below Motion and above the effects: a transition belongs to the cut rather
@@ -1696,6 +1870,10 @@ void refresh_inspector(App& app) {
   } else {
     build_audio_effect_controls(app, clip_id);
   }
+
+  // Last, because it is about everything above it: the transform's animation
+  // and the effect stack's, on one axis.
+  build_keyframe_lanes(app, clip_id);
 
   app.inspector->emplace<Spacer>();
 

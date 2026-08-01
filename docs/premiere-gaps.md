@@ -77,20 +77,38 @@ single gap in this section. A time ruler, the clip drawn as a bar, a playhead,
 a zoom and scroll bar, and **one lane per animated property** with its
 keyframes on it.
 
-Ours has none of it. Keyframe times are drawn as diamonds on the clip in the
-*timeline* panel, which says a keyframe exists but not which property it belongs
-to, and gives nothing to grab.
+`ui::KeyframeView` is now the lane view, under the effect stacks rather than
+beside them — the panel is a narrow column, and Premiere's side-by-side
+arrangement would leave both halves too narrow to read. It fits the clip's whole
+length across its width, which is what Premiere's does before anybody zooms.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| Keyframe lane per property | yes | no | machinery |
-| Drag a keyframe in time | yes | no — the one gesture the model supports and nothing offers | machinery |
-| Previous / next keyframe buttons | ◀ ◆ ▶ on every animated row | the diamond toggles one at the playhead; there is no way to *go* to one | control |
-| Select several keyframes | click, shift-click, marquee | no | machinery |
+| Keyframe lane per property | yes | **done** | — |
+| Drag a keyframe in time | yes | **done** — the picture follows, one undo entry for the drag | — |
+| Previous / next keyframe buttons | ◀ ◆ ▶ on every animated row | **done**, greyed at the ends of the list | — |
+| Select several keyframes | click, shift-click, marquee | click and shift-click; no marquee | control |
 | Right-click a selection | a context menu on it | **no right-click anywhere in the application** | wiring |
-| Interpolation per keyframe | Linear, Bezier, Auto Bezier, Continuous, Hold, Ease In, Ease Out | three modes, and one setting for the whole property | wiring |
+| Interpolation per keyframe | Linear, Bezier, Auto Bezier, Continuous, Hold, Ease In, Ease Out | `set_keyframe_interp` does it; nothing calls it yet | wiring |
+| Zoom and scroll the lanes | yes | the clip's whole length, always | control |
+| Delete a selected keyframe | Delete | `remove_keyframe` does it; no key is bound | wiring |
 | Velocity graph | expandable value and speed curves | no | machinery |
 | Copy and paste keyframes | yes | no | wiring |
+
+Two things that came out of building it are worth keeping.
+
+The lane view is the first thing in the application whose *contents* sit on its
+own edge. A keyframe at exactly zero — which switching the stopwatch on at the
+head of a clip produces — was drawn half outside the widget, where a press does
+not reach it at all, because a point outside a widget's bounds routes somewhere
+else entirely. The axis is inset by the grab reach at each end. This is the
+third time that trap has been hit, after the monitor's transform handles.
+
+And the interpolation chip has moved off the parameter row and behind the
+disclosure triangle. Adding ◀ ▶ to the row left the property's own *name*
+squeezed to nothing, which `--check` caught and a glance would not have.
+Premiere has no chip at all — interpolation there is a right-click on the
+keyframe — so this is where it goes when the context menu lands.
 
 #### Selecting keyframes, and setting the interpolation between them
 
@@ -113,9 +131,9 @@ Three helpers are what flatten it, and all three are small:
 - `set_keyframe_list_interp` writes one mode to **every** keyframe in the list;
 - `upsert_keyframe` gives a new keyframe whatever the list's mode is.
 
-What is actually needed is a setter that takes *which* keyframes rather than
-which property, selection state in the view, and a context menu. The model is
-already right.
+`editor::set_keyframe_interp` is the setter that takes *which keyframe* rather
+than which property, and the view keeps a selection. What is left is the context
+menu — and the right-click that would open it.
 
 Note also that the mode living on the outgoing keyframe means it genuinely is
 "the interpolation **between** this keyframe and the next", which is the way
