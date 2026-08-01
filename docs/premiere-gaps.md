@@ -55,7 +55,7 @@ still opens the field rather than nudging the value somewhere nobody asked for.
 | Per-row reset button | a visible circular arrow | double-click the number, with no affordance saying so | control |
 | Per-section reset | one per `fx` group | none | wiring |
 | Greying a property another one governs | Uniform Scale greys Scale Width | Lock aspect ties them but leaves both live | wiring |
-| Live update while scrubbing | the picture follows the drag | the number follows; the frame redraws on release | wiring |
+| Live update while scrubbing | the picture follows the drag | **done** — one undo entry for the whole gesture | — |
 
 Two things fell out of building it and are worth keeping written down.
 

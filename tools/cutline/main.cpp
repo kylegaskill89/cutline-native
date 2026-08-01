@@ -516,6 +516,22 @@ struct App {
   /// and thrown away; the release makes it again against the session, once.
   std::optional<cutline::core::Project> live_project;
 
+  /// Whether a control is mid-gesture and `live_project` is what it is saying.
+  ///
+  /// The same argument as `dragging_handle` one field up, for the controls
+  /// rather than the monitor: scrubbing a number should move the *picture*,
+  /// which is the only way to judge what a value is doing, but it must leave
+  /// one undo entry rather than one per pixel. So each change renders against a
+  /// copy and only the release is applied.
+  ///
+  /// Cleared in `settle` when nothing holds the pointer, rather than by the
+  /// control that set it. A scrub that ends back where it began reports no
+  /// change at all — deliberately, so an undo stack does not collect entries
+  /// for gestures that did nothing — and a flag cleared only by a commit would
+  /// then stay set for ever, freezing the preview on a project the document no
+  /// longer has.
+  bool live_gesture = false;
+
   /// The project the preview should render: the gesture's if there is one.
   [[nodiscard]] const cutline::core::Project& showing() const noexcept {
     return live_project.has_value() ? *live_project : session.project();
@@ -831,21 +847,54 @@ struct ParamRow {
   return std::abs(range.maximum - range.minimum) >= 100.0 ? 1 : 2;
 }
 
-/// The animation handlers default to nothing, for a row that is not animatable.
-/// A parameter with nowhere to keep a keyframe — an audio effect's — builds no
-/// stopwatch, no marker and no chip, so none of them is ever called.
-void build_param_row(App& app, const ParamRow& row, std::function<void(double)> on_commit,
-                     std::function<void(bool)> on_animate = {},
-                     std::function<void()> on_keyframe = {},
-                     std::function<void(cutline::core::Interp)> on_interp = {}) {
+/// What a parameter row can do, in one bundle.
+///
+/// A struct rather than a list of arguments because only `commit` is always
+/// there: a row with nowhere to keep a keyframe — an audio effect's — has no
+/// stopwatch, no marker and no chip, and one that changes only the sound has
+/// nothing to preview. Naming them at each call site is also what keeps five
+/// lambdas in a row readable.
+struct ParamHandlers {
+  /// Writes the value to the document. The end of a gesture.
+  std::function<void(double)> commit;
+
+  /// The project this value *would* make, without applying it.
+  ///
+  /// Called on every change during a drag, and what the preview renders until
+  /// the pointer comes up. Returning the project rather than applying it is the
+  /// whole point: one gesture has to be one entry in the undo stack, so
+  /// scrubbing Scale from 100 to 180 must be one thing to undo and not eighty.
+  ///
+  /// Absent for anything that changes no pixels, which is every audio effect.
+  std::function<cutline::core::Project(double)> preview;
+
+  std::function<void(bool)> animate;
+  std::function<void()> keyframe;
+  std::function<void(cutline::core::Interp)> interp;
+};
+
+void build_param_row(App& app, const ParamRow& row, ParamHandlers handlers) {
   auto& head = app.inspector->emplace<Box>(Axis::Horizontal);
 
   if (row.animatable) {
     auto& watch = head.emplace<IconButton>(
         IconButton::Icon::Stopwatch,
-        [animate = std::move(on_animate), animated = row.animated] { animate(!animated); });
+        [animate = std::move(handlers.animate), animated = row.animated] { animate(!animated); });
     watch.set_selected(row.animated);
   }
+
+  // Shown while the pointer is down and thrown away when it comes up. See
+  // `ParamHandlers::preview`.
+  const auto live = [&app, preview = handlers.preview](double value) {
+    if (!preview) return;
+    app.live_gesture = true;
+    app.live_project = preview(value);
+    invalidate_preview(app);
+    // The overlay is part of the picture, so it follows too.
+    refresh_handles(app);
+    // Deliberately not marking the inspector stale: rebuilding it would destroy
+    // the control the pointer is still holding.
+  };
 
   // Premiere's disclosure triangle, and the slider behind it. The number is
   // what a parameter is read and set by; the slider is for the rarer case of
@@ -866,7 +915,8 @@ void build_param_row(App& app, const ParamRow& row, std::function<void(double)> 
   number.set_decimals(decimals_for(row.range));
   number.set_suffix(row.suffix);
   number.set_default_value(row.fallback);
-  number.set_on_commit(on_commit);
+  number.set_on_change(live);
+  number.set_on_commit(handlers.commit);
 
   head.emplace<Spacer>();
 
@@ -878,11 +928,12 @@ void build_param_row(App& app, const ParamRow& row, std::function<void(double)> 
     // beside a stopwatch and a diamond on a narrow row is a lot of chrome for
     // a setting with three values.
     head.emplace<Button>(std::string(cutline::editor::interp_name(row.interp)),
-                         [interp = std::move(on_interp), mode = row.interp] {
+                         [interp = std::move(handlers.interp), mode = row.interp] {
                            if (interp) interp(cutline::editor::next_interp(mode));
                          });
 
-    auto& mark = head.emplace<IconButton>(IconButton::Icon::Diamond, std::move(on_keyframe));
+    auto& mark =
+        head.emplace<IconButton>(IconButton::Icon::Diamond, std::move(handlers.keyframe));
     mark.set_selected(row.keyed_here);
   }
 
@@ -890,9 +941,11 @@ void build_param_row(App& app, const ParamRow& row, std::function<void(double)> 
 
   auto& slider = app.inspector->emplace<Slider>(row.range, row.value);
   slider.set_default_value(row.fallback);
-  // On commit rather than on change: the control follows the pointer as it
-  // goes, and the project is written once, at the end of the gesture.
-  slider.set_on_commit(std::move(on_commit));
+  // The picture follows the drag; the document is written once, at the end of
+  // it. Sweeping a slider and watching nothing happen until the button comes up
+  // is the case this control exists for.
+  slider.set_on_change(live);
+  slider.set_on_commit(std::move(handlers.commit));
 }
 
 /// Offers the catalogue, and adds what is chosen.
@@ -1088,33 +1141,43 @@ void build_effect_controls(App& app, const std::string& clip_id) {
 
       build_param_row(
           app, control,
-          [&app, clip_id, index = row.index, key = param.key](double value) {
-            app.session.apply(cutline::editor::set_effect_parameter(
-                app.session.project(), clip_id, index, key, value,
-                local_playhead(app, clip_id)));
-            invalidate_preview(app);
-            app.inspector_stale = true;
-          },
-          [&app, clip_id, index = row.index, key = param.key](bool animated) {
-            app.session.apply(cutline::editor::set_effect_parameter_animated(
-                app.session.project(), clip_id, index, key, animated,
-                local_playhead(app, clip_id)));
-            invalidate_preview(app);
-            app.inspector_stale = true;
-          },
-          [&app, clip_id, index = row.index, key = param.key] {
-            app.session.apply(cutline::editor::toggle_effect_keyframe(
-                app.session.project(), clip_id, index, key, local_playhead(app, clip_id)));
-            refresh_timeline(app);
-            invalidate_preview(app);
-            app.inspector_stale = true;
-          },
-          [&app, clip_id, index = row.index, key = param.key](cutline::core::Interp mode) {
-            app.session.apply(cutline::editor::set_effect_parameter_interp(
-                app.session.project(), clip_id, index, key, mode));
-            invalidate_preview(app);
-            app.inspector_stale = true;
-          });
+          {.commit =
+               [&app, clip_id, index = row.index, key = param.key](double value) {
+                 app.session.apply(cutline::editor::set_effect_parameter(
+                     app.session.project(), clip_id, index, key, value,
+                     local_playhead(app, clip_id)));
+                 invalidate_preview(app);
+                 app.inspector_stale = true;
+               },
+           .preview =
+               [&app, clip_id, index = row.index, key = param.key](double value) {
+                 return cutline::editor::set_effect_parameter(
+                     app.session.project(), clip_id, index, key, value,
+                     local_playhead(app, clip_id));
+               },
+           .animate =
+               [&app, clip_id, index = row.index, key = param.key](bool animated) {
+                 app.session.apply(cutline::editor::set_effect_parameter_animated(
+                     app.session.project(), clip_id, index, key, animated,
+                     local_playhead(app, clip_id)));
+                 invalidate_preview(app);
+                 app.inspector_stale = true;
+               },
+           .keyframe =
+               [&app, clip_id, index = row.index, key = param.key] {
+                 app.session.apply(cutline::editor::toggle_effect_keyframe(
+                     app.session.project(), clip_id, index, key, local_playhead(app, clip_id)));
+                 refresh_timeline(app);
+                 invalidate_preview(app);
+                 app.inspector_stale = true;
+               },
+           .interp =
+               [&app, clip_id, index = row.index, key = param.key](cutline::core::Interp mode) {
+                 app.session.apply(cutline::editor::set_effect_parameter_interp(
+                     app.session.project(), clip_id, index, key, mode));
+                 invalidate_preview(app);
+                 app.inspector_stale = true;
+               }});
     }
 
     for (const cutline::editor::EffectColorRow& color : row.colors) {
@@ -1194,15 +1257,18 @@ void build_audio_effect_controls(App& app, const std::string& clip_id) {
                              // a button that could not do what it said.
                              .animatable = false};
 
-      build_param_row(app, control,
-                      [&app, clip_id, index = row.index, key = param.key](double value) {
-                        app.session.apply(cutline::core::set_audio_effect_param(
-                            app.session.project(), clip_id, index, key, value));
-                        // No `invalidate_preview`: this changes the sound and
-                        // not one pixel. The player notices the project has
-                        // moved on by itself, on the next frame.
-                        app.inspector_stale = true;
-                      });
+      // And no `preview` either, for the same reason there is no stopwatch:
+      // there is nothing here for a preview to show.
+      build_param_row(
+          app, control,
+          {.commit = [&app, clip_id, index = row.index, key = param.key](double value) {
+            app.session.apply(cutline::core::set_audio_effect_param(
+                app.session.project(), clip_id, index, key, value));
+            // No `invalidate_preview`: this changes the sound and not one
+            // pixel. The player notices the project has moved on by itself, on
+            // the next frame.
+            app.inspector_stale = true;
+          }});
     }
   }
 }
@@ -1556,51 +1622,64 @@ void refresh_inspector(App& app) {
                         .keyed_here = spec.keyed_here,
                         .interp = spec.interp};
 
+    // The edit itself, without applying it, so the commit and the live preview
+    // cannot drift apart about what a value means.
+    //
+    // With the lock on, the other axis follows. Applied here rather than in the
+    // binding because the lock is a property of the controls, and an edit made
+    // from a script or a monitor drag should not have a checkbox somewhere else
+    // deciding what it meant.
+    const auto edited = [&app, clip_id, param = spec.param](double value) {
+      cutline::core::Project next = cutline::editor::set_clip_parameter(
+          app.session.project(), clip_id, param, value, local_playhead(app, clip_id));
+      if (app.aspect_locked) {
+        const auto tied = other_scale_axis(param);
+        if (tied.has_value()) {
+          next = cutline::editor::set_clip_parameter(std::move(next), clip_id, *tied, value,
+                                                     local_playhead(app, clip_id));
+        }
+      }
+      return next;
+    };
+
     build_param_row(
         app, line,
-        [&app, clip_id, param = spec.param](double value) {
-          app.session.apply(cutline::editor::set_clip_parameter(
-              app.session.project(), clip_id, param, value, local_playhead(app, clip_id)));
-          // With the lock on, the other axis follows. Applied here rather than
-          // in the binding because the lock is a property of the controls, and
-          // an edit made from a script or a monitor drag should not have a
-          // checkbox somewhere else deciding what it meant.
-          if (app.aspect_locked) {
-            const auto tied = other_scale_axis(param);
-            if (tied.has_value()) {
-              app.session.apply(cutline::editor::set_clip_parameter(
-                  app.session.project(), clip_id, *tied, value,
-                  local_playhead(app, clip_id)));
-            }
-          }
-          refresh_timeline(app);
-          invalidate_preview(app);
-          // Marked, not rebuilt: this lambda belongs to the slider that a
-          // rebuild would destroy. It has to be rebuilt though — the model may
-          // have clamped the value, and a speed change alters the clip's
-          // length, which moves the bounds of both fade controls.
-          app.inspector_stale = true;
-        },
-        [&app, clip_id, param = spec.param](bool animated) {
-          app.session.apply(cutline::editor::set_clip_parameter_animated(
-              app.session.project(), clip_id, param, animated, local_playhead(app, clip_id)));
-          refresh_timeline(app);
-          invalidate_preview(app);
-          app.inspector_stale = true;
-        },
-        [&app, clip_id, param = spec.param] {
-          app.session.apply(cutline::editor::toggle_clip_parameter_keyframe(
-              app.session.project(), clip_id, param, local_playhead(app, clip_id)));
-          refresh_timeline(app);
-          invalidate_preview(app);
-          app.inspector_stale = true;
-        },
-        [&app, clip_id, param = spec.param](cutline::core::Interp mode) {
-          app.session.apply(cutline::editor::set_clip_parameter_interp(app.session.project(),
-                                                                       clip_id, param, mode));
-          invalidate_preview(app);
-          app.inspector_stale = true;
-        });
+        {.commit =
+             [&app, edited](double value) {
+               app.session.apply(edited(value));
+               refresh_timeline(app);
+               invalidate_preview(app);
+               // Marked, not rebuilt: this lambda belongs to the control that a
+               // rebuild would destroy. It has to be rebuilt though — the model
+               // may have clamped the value, and a speed change alters the
+               // clip's length, which moves both fade controls' bounds.
+               app.inspector_stale = true;
+             },
+         .preview = edited,
+         .animate =
+             [&app, clip_id, param = spec.param](bool animated) {
+               app.session.apply(cutline::editor::set_clip_parameter_animated(
+                   app.session.project(), clip_id, param, animated,
+                   local_playhead(app, clip_id)));
+               refresh_timeline(app);
+               invalidate_preview(app);
+               app.inspector_stale = true;
+             },
+         .keyframe =
+             [&app, clip_id, param = spec.param] {
+               app.session.apply(cutline::editor::toggle_clip_parameter_keyframe(
+                   app.session.project(), clip_id, param, local_playhead(app, clip_id)));
+               refresh_timeline(app);
+               invalidate_preview(app);
+               app.inspector_stale = true;
+             },
+         .interp =
+             [&app, clip_id, param = spec.param](cutline::core::Interp mode) {
+               app.session.apply(cutline::editor::set_clip_parameter_interp(
+                   app.session.project(), clip_id, param, mode));
+               invalidate_preview(app);
+               app.inspector_stale = true;
+             }});
   }
 
   // Below Motion and above the effects: a transition belongs to the cut rather
@@ -1698,15 +1777,21 @@ void refresh_timeline(App& app) {
 /// the box the pointer is describing and the model is a frame behind it, so
 /// writing the model's answer back mid-gesture would fight the drag — which
 /// looked, on screen, like the layer sticking every few pixels.
+///
+/// Reads `showing()` rather than the document, so that scrubbing Position in
+/// the inspector moves the box in the monitor. The two are the same picture
+/// described twice, and a box that stayed put while the number went by would be
+/// the more convincing of the two — it is drawn over the frame itself.
 void refresh_handles(App& app) {
   if (app.monitor == nullptr) return;
   if (app.dragging_handle) return;
 
+  const cutline::core::Project& document = app.showing();
   const auto selection = app.session.selection();
   app.monitor->set_transform(
-      selection.empty() ? std::nullopt
-                        : cutline::editor::monitor_box(app.session.project(), selection.front(),
-                                                       app.session.playhead()));
+      selection.empty()
+          ? std::nullopt
+          : cutline::editor::monitor_box(document, selection.front(), app.session.playhead()));
 }
 
 /// What the sort button says, and what pressing it moves to next.
@@ -2177,7 +2262,7 @@ void invalidate_preview(App& app) {
   // document no longer has, and looks merely out of date. Anything asking for
   // a fresh picture while no handle is being dragged is asking for the
   // document's.
-  if (!app.dragging_handle) app.live_project.reset();
+  if (!app.dragging_handle && !app.live_gesture) app.live_project.reset();
 
   app.preview_stale = true;
   // The scopes measure the picture, so anything that changes the picture
@@ -4590,6 +4675,16 @@ void resize_surface(Shell& shell, int width, int height) {
 /// rebuilds part of the interface, so none of them can happen where they are
 /// asked for — the thing asking is usually inside what the rebuild replaces.
 void settle(App& app) {
+  // A gesture lasts exactly as long as the pointer is held, and the host is the
+  // only thing that knows that. See `App::live_gesture` for why the control
+  // cannot be trusted to say when it is finished.
+  if (app.live_gesture && app.main.host != nullptr && app.main.host->captured() == nullptr) {
+    app.live_gesture = false;
+    app.live_project.reset();
+    app.preview_stale = true;
+    refresh_handles(app);
+  }
+
   // The arrangement first, because rebuilding it is what creates a panel that
   // has never been shown before — and that panel then wants filling in this
   // same frame rather than staying blank until something else changes.
