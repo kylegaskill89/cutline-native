@@ -329,13 +329,18 @@ LayoutItem NumericField::sizing(Axis axis, const LayoutContext& context) const {
     return context.text.measure(std::format("{:.{}f}", value, decimals_) + suffix_,
                                 metrics.font_size, false);
   };
+  // `padding_y`, not `padding_x`. A number is not a button: the wider padding
+  // is there so a label has room to breathe inside a bevel, and spending it
+  // twice on every field is what pushed a parameter row over its own width —
+  // the label and the number ended up drawn on top of each other, which neither
+  // `--check`'s empty-widget test nor its clipping test can see.
   const double widest = std::max(width_of(range_.minimum), width_of(range_.maximum));
-  return LayoutItem::fixed(widest + metrics.padding_x * 2.0);
+  return LayoutItem::fixed(widest + metrics.padding_y * 2.0);
 }
 
 void NumericField::layout(const LayoutContext& context) {
   font_size_ = context.metrics().font_size;
-  padding_ = context.metrics().padding_x;
+  padding_ = context.metrics().padding_y;
   // The field sits over the number exactly, so committing does not make the
   // row appear to move.
   if (field_ != nullptr) field_->arrange(bounds(), context);

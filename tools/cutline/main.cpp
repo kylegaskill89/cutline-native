@@ -932,6 +932,22 @@ struct ParamRow {
   /// the ◀ and ▶ at the ends of the list.
   bool has_previous = false;
   bool has_next = false;
+  /// A second number on the same row.
+  ///
+  /// Premiere's Position is *one* property with two components, on one row,
+  /// behind one stopwatch. Ours are two `AnimProp`s with two keyframe lists, so
+  /// the row's animation chrome fans out to both — which is what makes the two
+  /// stay in step and the pairing honest rather than cosmetic.
+  struct Partner {
+    std::string suffix;
+    ValueRange range;
+    double value = 0.0;
+    double fallback = 0.0;
+    std::function<void(double)> commit;
+    std::function<cutline::core::Project(double)> preview;
+  };
+  std::optional<Partner> partner;
+
   /// Governed by another control, so the number is shown but cannot be set.
   /// Premiere's Uniform Scale greys Scale Width the same way; ours left both
   /// live and tied, which reads as two independent controls that mysteriously
@@ -1042,16 +1058,39 @@ void build_param_row(App& app, const ParamRow& row, ParamHandlers handlers) {
   // nowhere to read the number the picture is actually at.
   number.set_enabled(!row.governed);
 
+  if (row.partner.has_value()) {
+    const ParamRow::Partner& other = *row.partner;
+    auto& second = head.emplace<cutline::ui::NumericField>(other.range, other.value);
+    second.set_decimals(decimals_for(other.range));
+    second.set_suffix(other.suffix);
+    second.set_default_value(other.fallback);
+    second.set_on_change([&app, preview = other.preview](double value) {
+      if (!preview) return;
+      app.live_gesture = true;
+      app.live_project = preview(value);
+      invalidate_preview(app);
+      refresh_handles(app);
+    });
+    second.set_on_commit(other.commit);
+  }
+
   head.emplace<Spacer>();
 
   // Premiere's reset, a circular arrow at the end of the row. Double-clicking
   // the number does the same thing and always has, but nothing on screen said
   // so — an affordance nobody can see is one nobody uses.
-  if (!row.governed && row.value != row.fallback) {
-    auto& reset = head.emplace<IconButton>(
-        IconButton::Icon::Reset,
-        [commit = handlers.commit, fallback = row.fallback] { commit(fallback); });
+  const bool moved = row.value != row.fallback ||
+                     (row.partner.has_value() && row.partner->value != row.partner->fallback);
+  if (!row.governed && moved) {
+    auto& reset = head.emplace<IconButton>(IconButton::Icon::Reset);
     reset.set_name("reset");
+    reset.set_on_click([commit = handlers.commit, fallback = row.fallback,
+                        partner = row.partner] {
+      // Both halves of a paired row. Resetting Position to its default and
+      // leaving the other axis where it was is not what the button says.
+      if (partner.has_value() && partner->commit) partner->commit(partner->fallback);
+      commit(fallback);
+    });
   }
 
   // Only once animation is on. Before that there is no list to add to, and a
@@ -1977,6 +2016,18 @@ void refresh_inspector(App& app) {
     app.inspector->emplace<Label>("Its effects apply to everything below it.").set_small(true);
   }
 
+  // Which clip this is. Premiere titles the panel with the clip and the
+  // sequence, and with a timeline full of similar takes it is the only thing
+  // saying whether the numbers below belong to the one you meant.
+  {
+    const auto media = std::ranges::find(app.session.project().media,
+                                         clip == nullptr ? std::string{} : clip->media_id,
+                                         &cutline::core::Media::id);
+    auto& name = app.inspector->emplace<Label>(
+        media == app.session.project().media.end() ? clip_id : media->name);
+    name.set_bold(true);
+  }
+
   // Premiere's own heading for the built-in transform, and the honest one for
   // an audio clip, which has no geometry to move.
   inspector_heading(app, visual ? "Motion" : "Audio");
@@ -1992,18 +2043,63 @@ void refresh_inspector(App& app) {
     });
   }
 
-  for (const cutline::editor::ParamSpec& spec :
-       cutline::editor::clip_parameters(app.session.project(), clip_id,
-                                        local_playhead(app, clip_id))) {
+  const std::vector<cutline::editor::ParamSpec> specs =
+      cutline::editor::clip_parameters(app.session.project(), clip_id,
+                                       local_playhead(app, clip_id));
+
+  for (const cutline::editor::ParamSpec& spec : specs) {
+    // Position Y has no row of its own: it rides on Position X's, the way
+    // Premiere's Position is one property with two components. Scale is
+    // deliberately *not* paired — Premiere keeps Scale and Scale Width apart
+    // too, because Uniform Scale is what joins them.
+    if (spec.param == cutline::editor::ClipParam::Y) continue;
+
     const cutline::editor::ParamRef ref{.param = spec.param};
     const std::vector<cutline::core::Keyframe> keys =
         spec.animated ? lane_keys(app, clip_id, ref) : std::vector<cutline::core::Keyframe>{};
     const double here = local_playhead(app, clip_id);
 
-    const ParamRow line{.name = spec.name,
-                        // The transform's units are already in its names —
-                        // "Position X" in percent of the canvas — and repeating
-                        // them would read as noise.
+    // The paired half, when there is one.
+    bool paired = false;
+    std::optional<ParamRow::Partner> partner;
+    if (spec.param == cutline::editor::ClipParam::X) {
+      const auto found = std::ranges::find(specs, cutline::editor::ClipParam::Y,
+                                           &cutline::editor::ParamSpec::param);
+      if (found != specs.end()) {
+        paired = true;
+        partner = ParamRow::Partner{
+            .suffix = found->suffix,
+            .range = found->range,
+            .value = found->value,
+            .fallback = found->fallback,
+            .commit =
+                [&app, clip_id](double value) {
+                  app.session.apply(cutline::editor::set_clip_parameter(
+                      app.session.project(), clip_id, cutline::editor::ClipParam::Y, value,
+                      local_playhead(app, clip_id)));
+                  refresh_timeline(app);
+                  invalidate_preview(app);
+                  app.inspector_stale = true;
+                },
+            .preview =
+                [&app, clip_id](double value) {
+                  return cutline::editor::set_clip_parameter(
+                      app.session.project(), clip_id, cutline::editor::ClipParam::Y, value,
+                      local_playhead(app, clip_id));
+                }};
+      }
+    }
+
+    const ParamRow line{// "Position" rather than "Position X", now that both
+                        // numbers are on the row.
+                        .name = partner.has_value() ? "Position" : spec.name,
+                        // The unit, on every one of these. It was left off
+                        // originally on the grounds that the names carried it,
+                        // which was never true — "Scale X" does not say percent
+                        // and "Position X" does not say percent of the canvas.
+                        // Pairing Position made it visible: one half showed a
+                        // unit and the other did not.
+                        .suffix = spec.suffix,
                         .key = "motion." + spec.name,
                         .range = spec.range,
                         .value = spec.value,
@@ -2016,6 +2112,7 @@ void refresh_inspector(App& app) {
                         // Premiere's Uniform Scale greys Scale Width. Scale Y
                         // is the follower here: X is the one the lock is set
                         // from, and Y is what it writes.
+                        .partner = std::move(partner),
                         .governed = app.aspect_locked &&
                                     spec.param == cutline::editor::ClipParam::ScaleY,
                         .interp = spec.interp};
@@ -2054,27 +2151,46 @@ void refresh_inspector(App& app) {
                app.inspector_stale = true;
              },
          .preview = edited,
+         // Both axes, on a paired row. One stopwatch that animated only X
+         // would leave Position half-animated, which the lane view would then
+         // honestly show as one lane where the row promised two.
          .animate =
-             [&app, clip_id, param = spec.param](bool animated) {
-               app.session.apply(cutline::editor::set_clip_parameter_animated(
-                   app.session.project(), clip_id, param, animated,
-                   local_playhead(app, clip_id)));
+             [&app, clip_id, param = spec.param, paired](bool animated) {
+               const double here = local_playhead(app, clip_id);
+               cutline::core::Project next = cutline::editor::set_clip_parameter_animated(
+                   app.session.project(), clip_id, param, animated, here);
+               if (paired) {
+                 next = cutline::editor::set_clip_parameter_animated(
+                     std::move(next), clip_id, cutline::editor::ClipParam::Y, animated, here);
+               }
+               app.session.apply(std::move(next));
                refresh_timeline(app);
                invalidate_preview(app);
                app.inspector_stale = true;
              },
          .keyframe =
-             [&app, clip_id, param = spec.param] {
-               app.session.apply(cutline::editor::toggle_clip_parameter_keyframe(
-                   app.session.project(), clip_id, param, local_playhead(app, clip_id)));
+             [&app, clip_id, param = spec.param, paired] {
+               const double here = local_playhead(app, clip_id);
+               cutline::core::Project next = cutline::editor::toggle_clip_parameter_keyframe(
+                   app.session.project(), clip_id, param, here);
+               if (paired) {
+                 next = cutline::editor::toggle_clip_parameter_keyframe(
+                     std::move(next), clip_id, cutline::editor::ClipParam::Y, here);
+               }
+               app.session.apply(std::move(next));
                refresh_timeline(app);
                invalidate_preview(app);
                app.inspector_stale = true;
              },
          .interp =
-             [&app, clip_id, param = spec.param](cutline::core::Interp mode) {
-               app.session.apply(cutline::editor::set_clip_parameter_interp(
-                   app.session.project(), clip_id, param, mode));
+             [&app, clip_id, param = spec.param, paired](cutline::core::Interp mode) {
+               cutline::core::Project next = cutline::editor::set_clip_parameter_interp(
+                   app.session.project(), clip_id, param, mode);
+               if (paired) {
+                 next = cutline::editor::set_clip_parameter_interp(
+                     std::move(next), clip_id, cutline::editor::ClipParam::Y, mode);
+               }
+               app.session.apply(std::move(next));
                invalidate_preview(app);
                app.inspector_stale = true;
              },
