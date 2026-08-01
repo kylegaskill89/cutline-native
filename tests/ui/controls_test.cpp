@@ -360,6 +360,263 @@ TEST(Slider, ANarrowSliderIsStillHarmless) {
   EXPECT_GE(test.slider->value(), 0.0);
 }
 
+// --------------------------------------------------------- numeric field --
+
+/// A numeric field in a host, laid out wide enough to be dragged across.
+struct Numeric {
+  explicit Numeric(ValueRange range = ValueRange{.minimum = 0.0, .maximum = 100.0},
+                   double value = 50.0) {
+    host = std::make_unique<WidgetHost>(std::make_unique<Widget>());
+    field = &host->root().emplace<NumericField>(range, value);
+    field->set_on_change([this](double v) {
+      ++changes;
+      last = v;
+    });
+    field->set_on_commit([this](double v) {
+      ++commits;
+      committed = v;
+    });
+    host->resize(Rect{0.0, 0.0, 400.0, 100.0}, flat_context());
+    field->arrange(Rect{0.0, 0.0, 120.0, 24.0}, flat_context());
+  }
+
+  /// Presses at `x`, drags to `x + by`, and lets go.
+  void drag(double from, double by, Modifiers modifiers = {}) {
+    host->mouse_down(MouseEvent{
+        .x = from, .y = 12.0, .button = MouseButton::Left, .modifiers = modifiers,
+        .click_count = 1});
+    host->mouse_move(MouseEvent{.x = from + by, .y = 12.0, .modifiers = modifiers});
+    host->mouse_up(MouseEvent{
+        .x = from + by, .y = 12.0, .button = MouseButton::Left, .modifiers = modifiers});
+  }
+
+  void type(std::string_view text) {
+    for (const char c : text) host->text(static_cast<char32_t>(c));
+  }
+
+  std::unique_ptr<WidgetHost> host;
+  NumericField* field = nullptr;
+  int changes = 0;
+  int commits = 0;
+  double last = -1.0;
+  double committed = -1.0;
+};
+
+TEST(NumericField, ShowsTheValueAsANumber) {
+  // The whole reason this control exists. A slider can only say "about two
+  // thirds along", which is not something anybody can write down.
+  const NumericField field(ValueRange{.minimum = 0.0, .maximum = 100.0}, 66.66);
+  EXPECT_EQ(field.display_text(), "66.7");
+}
+
+TEST(NumericField, ShowsItsUnitWithoutASpaceBeforeIt) {
+  NumericField field(ValueRange{.minimum = 0.0, .maximum = 360.0}, 90.0);
+  field.set_suffix("°");
+  field.set_decimals(0);
+  EXPECT_EQ(field.display_text(), "90°");
+}
+
+TEST(NumericField, DraggingScrubsTheValue) {
+  Numeric test;
+  test.drag(60.0, 40.0);
+  // The default rate crosses the range in `kScrubTravel` pixels.
+  EXPECT_DOUBLE_EQ(test.field->value(), 50.0 + 40.0 * (100.0 / NumericField::kScrubTravel));
+  EXPECT_EQ(test.commits, 1) << "one gesture is one entry in the undo stack";
+}
+
+TEST(NumericField, ScrubbingIsMeasuredFromThePressRatherThanTheLastMove) {
+  // A drag that goes out and comes back has to come back to where it started.
+  // Accumulating each move's delta drifts, and a stepped range drifts fastest.
+  Numeric test;
+  test.host->mouse_down(press(60.0, 12.0));
+  test.host->mouse_move(MouseEvent{.x = 160.0, .y = 12.0});
+  test.host->mouse_move(MouseEvent{.x = 60.0, .y = 12.0});
+  test.host->mouse_up(press(60.0, 12.0));
+
+  EXPECT_DOUBLE_EQ(test.field->value(), 50.0);
+  EXPECT_EQ(test.commits, 0) << "it ended where it began, so nothing changed";
+}
+
+TEST(NumericField, ShiftScrubsCoarselyAndControlFinely) {
+  Numeric coarse;
+  coarse.drag(60.0, 10.0, Modifiers{.shift = true});
+
+  Numeric fine;
+  fine.drag(60.0, 10.0, Modifiers{.control = true});
+
+  EXPECT_GT(coarse.field->value(), 50.0 + 10.0 * (100.0 / NumericField::kScrubTravel));
+  EXPECT_LT(fine.field->value(), 50.0 + 10.0 * (100.0 / NumericField::kScrubTravel));
+  EXPECT_GT(fine.field->value(), 50.0);
+}
+
+TEST(NumericField, AFineScrubAccumulatesAcrossAStepThatWouldRoundItAway) {
+  // Each pixel of a fine drag is worth a fraction of the step. Quantising the
+  // scrub as it went would round every one of them back to nothing, and the
+  // value would never move at all.
+  Numeric test(ValueRange{.minimum = 0.0, .maximum = 100.0, .step = 1.0}, 50.0);
+  test.drag(60.0, 60.0, Modifiers{.control = true});
+  EXPECT_DOUBLE_EQ(test.field->value(), 53.0);
+}
+
+TEST(NumericField, AClickThatDoesNotMoveOpensTheFieldInsteadOfNudging) {
+  Numeric test;
+  test.host->mouse_down(press(60.0, 12.0));
+  test.host->mouse_up(press(60.0, 12.0));
+
+  EXPECT_TRUE(test.field->editing());
+  EXPECT_EQ(test.changes, 0) << "clicking a number must not change it";
+}
+
+TEST(NumericField, ASmallWobbleIsStillAClick) {
+  Numeric test;
+  test.host->mouse_down(press(60.0, 12.0));
+  test.host->mouse_move(MouseEvent{.x = 60.0 + NumericField::kScrubThreshold - 1.0, .y = 12.0});
+  test.host->mouse_up(press(60.0, 12.0));
+
+  EXPECT_TRUE(test.field->editing());
+  EXPECT_DOUBLE_EQ(test.field->value(), 50.0);
+}
+
+TEST(NumericField, AScrubIsNotAlsoAClick) {
+  Numeric test;
+  test.drag(60.0, 40.0);
+  EXPECT_FALSE(test.field->editing());
+}
+
+TEST(NumericField, TypingANumberSetsIt) {
+  Numeric test;
+  test.field->begin_edit();
+  ASSERT_TRUE(test.field->editing());
+
+  test.type("12.5");
+  test.host->key_down(KeyEvent{.key = Key::Enter});
+
+  EXPECT_DOUBLE_EQ(test.field->value(), 12.5);
+  EXPECT_EQ(test.commits, 1);
+  EXPECT_FALSE(test.field->editing()) << "Enter is the end of the edit";
+}
+
+TEST(NumericField, TheFieldOpensWithTheNumberAloneAndSelected) {
+  // Having to type round a degree sign would make the fast path slower than
+  // the slow one.
+  Numeric test(ValueRange{.minimum = 0.0, .maximum = 360.0}, 90.0);
+  test.field->set_suffix("°");
+  test.field->begin_edit();
+
+  test.type("45");
+  test.host->key_down(KeyEvent{.key = Key::Enter});
+  EXPECT_DOUBLE_EQ(test.field->value(), 45.0) << "the selection was replaced, not appended to";
+}
+
+TEST(NumericField, TypingTheUnitBackInIsAccepted) {
+  Numeric test;
+  test.field->set_suffix("%");
+  test.field->begin_edit();
+  test.type("20%");
+  test.host->key_down(KeyEvent{.key = Key::Enter});
+  EXPECT_DOUBLE_EQ(test.field->value(), 20.0);
+}
+
+TEST(NumericField, NonsenseLeavesTheValueAlone) {
+  Numeric test;
+  test.field->begin_edit();
+  test.type("about half");
+  test.host->key_down(KeyEvent{.key = Key::Enter});
+
+  EXPECT_DOUBLE_EQ(test.field->value(), 50.0);
+  EXPECT_EQ(test.commits, 0);
+}
+
+TEST(NumericField, ATypedValueIsClampedToTheRange) {
+  Numeric test;
+  test.field->begin_edit();
+  test.type("900");
+  test.host->key_down(KeyEvent{.key = Key::Enter});
+  EXPECT_DOUBLE_EQ(test.field->value(), 100.0);
+}
+
+TEST(NumericField, EscapeClosesTheFieldAndKeepsTheValue) {
+  Numeric test;
+  test.field->begin_edit();
+  test.type("7");
+  test.host->key_down(KeyEvent{.key = Key::Escape});
+
+  EXPECT_FALSE(test.field->editing()) << "a field with no way out of it is worse than none";
+  EXPECT_DOUBLE_EQ(test.field->value(), 50.0);
+  EXPECT_EQ(test.commits, 0);
+}
+
+TEST(NumericField, TheKeyboardComesBackToTheNumberWhenTheEditEnds) {
+  Numeric test;
+  test.field->begin_edit();
+  test.host->key_down(KeyEvent{.key = Key::Enter});
+  EXPECT_EQ(test.host->focused(), test.field);
+}
+
+TEST(NumericField, DoubleClickingReturnsToTheDefault) {
+  Numeric test;
+  test.field->set_default_value(25.0);
+  test.host->mouse_down(press(60.0, 12.0, 2));
+
+  EXPECT_DOUBLE_EQ(test.field->value(), 25.0);
+  EXPECT_EQ(test.commits, 1);
+  EXPECT_FALSE(test.field->editing());
+}
+
+TEST(NumericField, ArrowKeysNudgeIt) {
+  Numeric test(ValueRange{.minimum = 0.0, .maximum = 100.0, .step = 5.0}, 50.0);
+  test.host->set_focus(test.field);
+
+  test.host->key_down(KeyEvent{.key = Key::Up});
+  EXPECT_DOUBLE_EQ(test.field->value(), 55.0);
+  test.host->key_down(KeyEvent{.key = Key::Down});
+  test.host->key_down(KeyEvent{.key = Key::Down});
+  EXPECT_DOUBLE_EQ(test.field->value(), 45.0);
+  EXPECT_EQ(test.commits, 3) << "each press is a gesture of its own";
+}
+
+TEST(NumericField, IsAsWideAsItsWidestValueRatherThanItsCurrentOne) {
+  // Otherwise the row shuffles sideways as the number is scrubbed past 9.9.
+  const NumericField field(ValueRange{.minimum = 0.0, .maximum = 1000.0}, 1.0);
+  const LayoutItem narrow = field.sizing(Axis::Horizontal, flat_context());
+
+  NumericField wide(ValueRange{.minimum = 0.0, .maximum = 1000.0}, 999.0);
+  EXPECT_DOUBLE_EQ(narrow.basis, wide.sizing(Axis::Horizontal, flat_context()).basis);
+}
+
+TEST(NumericField, DrawsItsNumberInTheAccentColour) {
+  // The colour is the affordance: nothing else says the number can be dragged.
+  Numeric test;
+  RecordingPainter painter;
+  test.field->paint(painter, default_theme());
+
+  bool found = false;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.run.has_value() && call.run->text == "50.0") {
+      found = call.run->color == default_theme().accent;
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
+TEST(NumericField, DrawsTheFieldInsteadOfTheNumberWhileEditing) {
+  Numeric test;
+  test.field->begin_edit();
+  test.field->arrange(Rect{0.0, 0.0, 120.0, 24.0}, flat_context());
+
+  // The field opens showing the same number, so the number appearing is
+  // expected. Twice is the bug: the hot text drawn underneath the field that
+  // replaced it, one pixel off, in a different colour.
+  RecordingPainter painter;
+  test.field->paint(painter, default_theme());
+
+  int drawn = 0;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.run.has_value() && call.run->text == "50.0") ++drawn;
+  }
+  EXPECT_EQ(drawn, 1);
+}
+
 // --------------------------------------------------------------- checkbox --
 
 struct Ticked {

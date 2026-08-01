@@ -170,6 +170,12 @@ class TextField : public Widget {
   void set_on_commit(std::function<void(const std::string&)> on_commit) {
     on_commit_ = std::move(on_commit);
   }
+  /// The edit is over, however it ended: Enter, Escape, or the keyboard
+  /// leaving. For whoever put the field there, which usually has to take it
+  /// away again — a field opened over something else and never closed is worse
+  /// than no field at all. Runs after any commit, so a handler that reads the
+  /// value sees the committed one.
+  void set_on_finish(std::function<void()> on_finish) { on_finish_ = std::move(on_finish); }
 
   [[nodiscard]] std::size_t caret() const noexcept { return caret_; }
   /// Moves the caret and drops any selection. Clamped, and snapped to a code
@@ -241,6 +247,134 @@ class TextField : public Widget {
 
   std::function<void(const std::string&)> on_change_;
   std::function<void(const std::string&)> on_commit_;
+  std::function<void()> on_finish_;
+};
+
+/// A number that can be read, dragged and typed — Premiere's "hot text".
+///
+/// The control an inspector is actually made of, and the one thing `Slider` was
+/// never able to be. A slider says *about* two thirds along; this says 66.7,
+/// which is a number somebody can write down, match on another clip, and
+/// reproduce tomorrow. Premiere shows the number always and hides the slider
+/// behind a disclosure triangle, and it is the right way round: the exact value
+/// is wanted far more often than the coarse gesture.
+///
+/// Three gestures, in Premiere's arrangement:
+///
+/// - **drag** the number left and right to scrub it;
+/// - **click** it to type an exact one;
+/// - **double-click** to go back to the parameter's default.
+///
+/// A press only becomes a scrub once it has moved past `kScrubThreshold`, so a
+/// click that wobbles by a pixel still opens the field rather than nudging the
+/// value and leaving it somewhere nobody asked for.
+///
+/// Typing is a `TextField` child rather than a caret and a selection written
+/// again here. It is built once and hidden, not created and destroyed: the
+/// thing that ends an edit is very often the field's own key handler, and
+/// freeing it there would return into freed memory.
+class NumericField : public Widget {
+ public:
+  /// How far the pointer must move before a press counts as a scrub rather
+  /// than a click.
+  static constexpr double kScrubThreshold = 3.0;
+  /// Multipliers for a scrub with shift or control held. The same pair the
+  /// slider's arrow keys use, so the two controls do not disagree about what
+  /// shift means.
+  static constexpr double kCoarseScrub = 10.0;
+  static constexpr double kFineScrub = 0.1;
+  /// The range crosses this many pixels of drag at the default rate. Chosen so
+  /// a full sweep is a comfortable gesture rather than a flick or a journey.
+  static constexpr double kScrubTravel = 200.0;
+
+  explicit NumericField(ValueRange range = {}, double value = 0.0);
+
+  [[nodiscard]] double value() const noexcept { return value_; }
+  /// Clamped and quantised, without calling the change handler.
+  void set_value(double value);
+
+  [[nodiscard]] const ValueRange& range() const noexcept { return range_; }
+  void set_range(const ValueRange& range);
+
+  /// Digits after the point. Premiere shows one for most things, and a
+  /// trailing `.0` is what makes a column of numbers line up.
+  void set_decimals(int decimals) noexcept;
+  [[nodiscard]] int decimals() const noexcept { return decimals_; }
+
+  /// Drawn after the number: `%`, `px`, `°`. Also accepted, and ignored, when
+  /// a value is typed back in, so copying a number out and pasting it in works.
+  void set_suffix(std::string suffix);
+  [[nodiscard]] const std::string& suffix() const noexcept { return suffix_; }
+
+  /// What a double-click returns to.
+  void set_default_value(std::optional<double> value) { default_ = value; }
+
+  /// What one pixel of drag is worth. Zero derives it from the range, which is
+  /// what nearly every parameter wants; set it for one whose useful span is
+  /// much smaller than its legal one.
+  void set_scrub_step(double step) noexcept;
+  [[nodiscard]] double scrub_step() const noexcept;
+
+  /// Every change, including each pixel of a scrub.
+  void set_on_change(std::function<void(double)> on_change) {
+    on_change_ = std::move(on_change);
+  }
+  /// Once, when a gesture finishes. Where the project gets written.
+  void set_on_commit(std::function<void(double)> on_commit) {
+    on_commit_ = std::move(on_commit);
+  }
+
+  /// The number as shown, suffix and all.
+  [[nodiscard]] std::string display_text() const;
+
+  [[nodiscard]] bool editing() const noexcept;
+  /// Opens the field over the number, with everything selected.
+  void begin_edit();
+
+  [[nodiscard]] Part part() const noexcept override { return Part::Input; }
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  void layout(const LayoutContext& context) override;
+  void paint_content(Painter& painter, const Theme& theme) const override;
+
+  bool on_mouse_down(const MouseEvent& event) override;
+  bool on_mouse_move(const MouseEvent& event) override;
+  bool on_mouse_up(const MouseEvent& event) override;
+  bool on_key_down(const KeyEvent& event) override;
+
+ private:
+  /// The number alone, which is what the field is opened with.
+  [[nodiscard]] std::string number_text() const;
+  /// Reads a typed string, ignoring surrounding space and any suffix. Nothing
+  /// when it is not a number, which leaves the value alone.
+  [[nodiscard]] std::optional<double> parse(std::string_view text) const;
+
+  void commit(double value);
+  void finish();
+  void end_edit();
+
+  ValueRange range_;
+  double value_ = 0.0;
+  std::optional<double> default_;
+  int decimals_ = 1;
+  std::string suffix_;
+  double scrub_step_ = 0.0;
+
+  /// Built in the constructor and hidden. See the note above.
+  TextField* field_ = nullptr;
+
+  bool pressed_here_ = false;
+  bool scrubbing_ = false;
+  double press_x_ = 0.0;
+  /// The scrub's own value, kept unquantised so a fine drag across a stepped
+  /// parameter accumulates instead of rounding to nothing on every pixel.
+  double scrub_value_ = 0.0;
+  double gesture_start_ = 0.0;
+
+  double font_size_ = 13.0;
+  double padding_ = 6.0;
+
+  std::function<void(double)> on_change_;
+  std::function<void(double)> on_commit_;
 };
 
 /// A box that is either ticked or not, with a label beside it.
@@ -412,6 +546,10 @@ class IconButton : public Button {
     /// pixels across are much harder to tell apart than a lit button and an
     /// unlit one.
     Diamond,
+    /// Premiere's disclosure triangle: a chevron pointing right when what it
+    /// governs is hidden, and down when it is showing. Drawn smaller than the
+    /// arrows, which sit in the same panel and mean something else entirely.
+    Disclosure,
 
     // The tool palette. Each of these says what the tool does to a clip rather
     // than what the tool looks like: a pointer, a cut, a stretch, contents

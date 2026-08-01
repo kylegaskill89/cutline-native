@@ -103,6 +103,7 @@
 #include <thread>
 #include <optional>
 #include <print>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -416,6 +417,15 @@ struct App {
   /// in the model would mean serialising it, undoing it, and answering what a
   /// locked clip with unequal scales means.
   bool aspect_locked = false;
+
+  /// Which parameters are showing their slider, by the key `ParamRow` carries.
+  ///
+  /// Premiere's arrangement: the number is always there and the slider is
+  /// behind a disclosure triangle, because the exact value is wanted far more
+  /// often than the coarse gesture. Kept here rather than on the row because
+  /// the inspector is rebuilt from scratch on every edit — state left in a
+  /// widget would close every triangle each time a value changed.
+  std::set<std::string> expanded_params;
 
   /// Shuttle speed, as a multiple of real time. Zero is not shuttling.
   ///
@@ -787,6 +797,10 @@ void follow_playhead(App& app) {
 struct ParamRow {
   std::string name;
   std::string suffix;
+  /// What the disclosure triangle's state is remembered against. Has to be
+  /// unique within the panel and stable across a rebuild — the effect's index
+  /// and the parameter's key, since two effects can both have an "Amount".
+  std::string key;
   ValueRange range;
   double value = 0.0;
   double fallback = 0.0;
@@ -795,6 +809,27 @@ struct ParamRow {
   bool keyed_here = false;
   cutline::core::Interp interp = cutline::core::Interp::Linear;
 };
+
+/// How many digits after the point a range deserves.
+///
+/// A stepped range needs exactly its step's precision and nothing more: a
+/// control that moves in whole numbers showing a decimal place is a decimal
+/// place nobody can put anything in.
+///
+/// A continuous one always needs at least one, whatever its span. This is the
+/// part that is easy to get wrong — none of the transform parameters declares
+/// a step, so a rule derived from the nudge gives Opacity no decimals at all,
+/// and a scrub that lands on 100.4 then reads as 100. A number that rounds
+/// what it is showing is worse than a slider, which at least never claimed to
+/// be exact. Two places below a span of 100, where the units are seconds or a
+/// speed multiplier and a tenth is a coarse thing to be stuck with.
+[[nodiscard]] int decimals_for(const ValueRange& range) {
+  if (range.step > 0.0) {
+    if (range.step >= 1.0) return 0;
+    return range.step >= 0.1 ? 1 : 2;
+  }
+  return std::abs(range.maximum - range.minimum) >= 100.0 ? 1 : 2;
+}
 
 /// The animation handlers default to nothing, for a row that is not animatable.
 /// A parameter with nowhere to keep a keyframe — an audio effect's — builds no
@@ -812,11 +847,27 @@ void build_param_row(App& app, const ParamRow& row, std::function<void(double)> 
     watch.set_selected(row.animated);
   }
 
-  // The unit goes in the label, because the slider has no readout to put it in
-  // and "Amount" alone does not say whether 40 is pixels or percent.
-  auto& label =
-      head.emplace<Label>(row.suffix.empty() ? row.name : row.name + " (" + row.suffix + ")");
+  // Premiere's disclosure triangle, and the slider behind it. The number is
+  // what a parameter is read and set by; the slider is for the rarer case of
+  // wanting to sweep it and watch.
+  const bool expanded = app.expanded_params.contains(row.key);
+  auto& reveal = head.emplace<IconButton>(IconButton::Icon::Disclosure, [&app, key = row.key] {
+    if (!app.expanded_params.erase(key)) app.expanded_params.insert(key);
+    app.inspector_stale = true;
+  });
+  reveal.set_selected(expanded);
+
+  auto& label = head.emplace<Label>(row.name);
   label.set_small(true);
+
+  // The value, immediately after the name and before everything else, which is
+  // where Premiere puts it and where it is read from.
+  auto& number = head.emplace<cutline::ui::NumericField>(row.range, row.value);
+  number.set_decimals(decimals_for(row.range));
+  number.set_suffix(row.suffix);
+  number.set_default_value(row.fallback);
+  number.set_on_commit(on_commit);
+
   head.emplace<Spacer>();
 
   // Only once animation is on. Before that there is no list to add to, and a
@@ -834,6 +885,8 @@ void build_param_row(App& app, const ParamRow& row, std::function<void(double)> 
     auto& mark = head.emplace<IconButton>(IconButton::Icon::Diamond, std::move(on_keyframe));
     mark.set_selected(row.keyed_here);
   }
+
+  if (!expanded) return;
 
   auto& slider = app.inspector->emplace<Slider>(row.range, row.value);
   slider.set_default_value(row.fallback);
@@ -1024,6 +1077,7 @@ void build_effect_controls(App& app, const std::string& clip_id) {
 
       const ParamRow control{.name = param.name,
                              .suffix = param.suffix,
+                             .key = "fx." + std::to_string(row.index) + "." + param.key,
                              .range = param.range,
                              .value = param.value,
                              .fallback = param.fallback,
@@ -1131,6 +1185,7 @@ void build_audio_effect_controls(App& app, const std::string& clip_id) {
     for (const cutline::editor::EffectParamRow& param : row.params) {
       const ParamRow control{.name = param.name,
                              .suffix = param.suffix,
+                             .key = "afx." + std::to_string(row.index) + "." + param.key,
                              .range = param.range,
                              .value = param.value,
                              .fallback = param.fallback,
@@ -1492,6 +1547,7 @@ void refresh_inspector(App& app) {
                         // The transform's units are already in its names —
                         // "Position X" in percent of the canvas — and repeating
                         // them would read as noise.
+                        .key = "motion." + spec.name,
                         .range = spec.range,
                         .value = spec.value,
                         .fallback = spec.fallback,

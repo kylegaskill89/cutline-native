@@ -26,32 +26,49 @@ They are in the model, tested, and reachable from nowhere.
 | **Composite (Blend)** | `core::set_clip_blend`, eight modes in the compositor | no control anywhere in the interface | wiring |
 | **Reverse** | `core::set_clip_speed(…, reverse)`, honoured by the renderer and the mixer | the Speed row has no reverse toggle beside it | wiring |
 
-### 1.1 How a parameter is shown and set
+### 1.1 How a parameter is shown and set — **done**
 
 Premiere shows a **number**, in blue, that can be dragged to scrub the value or
 clicked to type an exact one. A disclosure triangle beside it reveals a slider
-underneath for the properties that have a bounded range. Ours is the other way
+underneath for the properties that have a bounded range. Ours was the other way
 round and short of one half: a slider and *no number at all*.
 
-That last part is the important one. `Slider::paint_content` draws a groove, a
-fill and a thumb, and nothing else — so there is currently **no way to see what
-a value is, and no way to type one**. "Scale is about two thirds along" is not a
-number anybody can write down, match on another clip, or reproduce tomorrow.
+That last part was the important one. `Slider::paint_content` draws a groove, a
+fill and a thumb, and nothing else — so there was **no way to see what a value
+was, and no way to type one**. "Scale is about two thirds along" is not a number
+anybody can write down, match on another clip, or reproduce tomorrow.
+
+`ui::NumericField` is now that control, in Premiere's arrangement: the number
+sits after the property's name in the theme's accent colour, underlined under
+the pointer; dragging it scrubs, clicking it opens a field over it, and a
+disclosure triangle beside the name reveals the slider underneath. A press only
+becomes a scrub once it has travelled three pixels, so a click that wobbles
+still opens the field rather than nudging the value somewhere nobody asked for.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| Numeric readout | always visible | **absent** | control |
-| Drag the number to scrub | yes, with fine/coarse modifiers | no | control |
-| Click the number to type | yes | no | control |
-| Slider | behind a disclosure triangle | always, and it is the only control | — |
+| Numeric readout | always visible | **done** | — |
+| Drag the number to scrub | yes, with fine/coarse modifiers | **done** — shift is ×10, control ×0.1 | — |
+| Click the number to type | yes | **done**, and the unit may be typed back in | — |
+| Slider | behind a disclosure triangle | **done** | — |
 | Paired X/Y on one row | Position and Anchor Point are one row of two numbers | two separate rows | control |
-| Per-row reset button | a visible circular arrow | double-click the slider, with no affordance saying so | control |
+| Per-row reset button | a visible circular arrow | double-click the number, with no affordance saying so | control |
 | Per-section reset | one per `fx` group | none | wiring |
 | Greying a property another one governs | Uniform Scale greys Scale Width | Lock aspect ties them but leaves both live | wiring |
+| Live update while scrubbing | the picture follows the drag | the number follows; the frame redraws on release | wiring |
 
-The right shape is one control — call it a **numeric field** — that is a
-scrubbable number, a text field on click, and an optional slider on expansion.
-It replaces `Slider` in the inspector and everything above it stays as it is.
+Two things fell out of building it and are worth keeping written down.
+
+The first is that **a number that rounds what it is showing is worse than a
+slider**, which at least never claimed to be exact. None of the transform
+parameters declares a step, so the first rule for how many decimals to show —
+enough to make one nudge visible — gave Opacity none at all, and a scrub landing
+on 100.4 read as 100. A continuous range now always gets at least one place.
+
+The second is that `TextField` had no way to say an edit was over. Enter and the
+keyboard leaving both committed, but Escape reverted the text and stayed open,
+and so did a commit of an unchanged value — a field opened over something else
+and never closed. It now has `set_on_finish`, called however the edit ends.
 
 ### 1.2 The keyframe timeline
 

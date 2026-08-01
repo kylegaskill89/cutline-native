@@ -1,9 +1,12 @@
 #include "cutline/ui/controls.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <format>
 #include <limits>
+#include <system_error>
 
 namespace cutline::ui {
 namespace {
@@ -185,6 +188,265 @@ bool Slider::on_key_down(const KeyEvent& event) {
     case Key::End:
       commit(range_.maximum);
       break;
+    default:
+      return false;
+  }
+
+  finish();
+  return true;
+}
+
+// ---------------------------------------------------------- numeric field --
+
+NumericField::NumericField(ValueRange range, double value) : range_(range) {
+  set_focusable(true);
+  value_ = range_.quantise(value);
+
+  // Built now and hidden, rather than made when an edit starts. What ends an
+  // edit is usually the field's own key handler, and destroying it there would
+  // return into freed memory.
+  field_ = &emplace<TextField>();
+  field_->set_visible(false);
+  field_->set_on_commit([this](const std::string& text) {
+    if (const std::optional<double> parsed = parse(text)) {
+      gesture_start_ = value_;
+      commit(*parsed);
+      finish();
+    }
+  });
+  field_->set_on_finish([this] { end_edit(); });
+}
+
+void NumericField::set_value(double value) { value_ = range_.quantise(value); }
+
+void NumericField::set_range(const ValueRange& range) {
+  range_ = range;
+  value_ = range_.quantise(value_);
+  invalidate_layout();
+}
+
+void NumericField::set_decimals(int decimals) noexcept {
+  decimals_ = std::clamp(decimals, 0, 6);
+  invalidate_layout();
+}
+
+void NumericField::set_suffix(std::string suffix) {
+  suffix_ = std::move(suffix);
+  invalidate_layout();
+}
+
+void NumericField::set_scrub_step(double step) noexcept {
+  scrub_step_ = std::max(0.0, step);
+}
+
+double NumericField::scrub_step() const noexcept {
+  if (scrub_step_ > 0.0) return scrub_step_;
+  const double span = std::abs(range_.maximum - range_.minimum);
+  if (span < kDegenerate) return 0.0;
+  return span / kScrubTravel;
+}
+
+std::string NumericField::number_text() const {
+  return std::format("{:.{}f}", value_, decimals_);
+}
+
+std::string NumericField::display_text() const {
+  // Unspaced, the way a unit is written: 50% and 90°, not 50 % and 90 °.
+  return number_text() + suffix_;
+}
+
+std::optional<double> NumericField::parse(std::string_view text) const {
+  const auto space = [](char c) { return c == ' ' || c == '\t'; };
+  while (!text.empty() && space(text.front())) text.remove_prefix(1);
+  while (!text.empty() && space(text.back())) text.remove_suffix(1);
+  if (text.empty()) return std::nullopt;
+
+  double parsed = 0.0;
+  const char* const begin = text.data();
+  const char* const end = begin + text.size();
+  const std::from_chars_result result = std::from_chars(begin, end, parsed);
+  if (result.ec != std::errc{}) return std::nullopt;
+
+  // Whatever follows the number has to be the unit, and nothing else. "50%"
+  // and "50 %" are the same value; "50 pixels or so" is a typing mistake, and
+  // taking 50 from it would be guessing.
+  std::string_view rest(result.ptr, static_cast<std::size_t>(end - result.ptr));
+  while (!rest.empty() && space(rest.front())) rest.remove_prefix(1);
+  if (!rest.empty() && rest != suffix_) return std::nullopt;
+
+  return parsed;
+}
+
+void NumericField::commit(double value) {
+  const double next = range_.quantise(value);
+  if (next == value_) return;
+  value_ = next;
+  invalidate_layout();
+  if (on_change_) on_change_(value_);
+}
+
+void NumericField::finish() {
+  if (value_ == gesture_start_) return;
+  if (on_commit_) on_commit_(value_);
+}
+
+bool NumericField::editing() const noexcept {
+  return field_ != nullptr && field_->visible();
+}
+
+void NumericField::begin_edit() {
+  if (field_ == nullptr || editing()) return;
+  // The number alone: the suffix is decoration, and having to type round it
+  // would make the fast path slower than the slow one.
+  field_->set_text(number_text());
+  field_->set_visible(true);
+  field_->select_all();
+  if (WidgetHost* const owner = host(); owner != nullptr) owner->set_focus(field_);
+  invalidate_layout();
+}
+
+void NumericField::end_edit() {
+  if (!editing()) return;
+  // Hidden first, so the focus move below cannot come back round through the
+  // field's own focus-lost handler and start this again.
+  field_->set_visible(false);
+  if (WidgetHost* const owner = host(); owner != nullptr && owner->focused() == field_) {
+    owner->set_focus(this);
+  }
+  invalidate_layout();
+}
+
+LayoutItem NumericField::sizing(Axis axis, const LayoutContext& context) const {
+  const Metrics& metrics = context.metrics();
+  if (axis == Axis::Vertical) return LayoutItem::fixed(metrics.control_height);
+
+  // Sized for the widest number the range can produce rather than for the one
+  // showing, so a row does not shuffle sideways as its value is scrubbed past
+  // 9.9 and back.
+  const auto width_of = [&](double value) {
+    return context.text.measure(std::format("{:.{}f}", value, decimals_) + suffix_,
+                                metrics.font_size, false);
+  };
+  const double widest = std::max(width_of(range_.minimum), width_of(range_.maximum));
+  return LayoutItem::fixed(widest + metrics.padding_x * 2.0);
+}
+
+void NumericField::layout(const LayoutContext& context) {
+  font_size_ = context.metrics().font_size;
+  padding_ = context.metrics().padding_x;
+  // The field sits over the number exactly, so committing does not make the
+  // row appear to move.
+  if (field_ != nullptr) field_->arrange(bounds(), context);
+}
+
+void NumericField::paint_content(Painter& painter, const Theme& theme) const {
+  if (editing()) return;  // the field is drawing itself over this
+
+  const SurfaceStyle& style = theme.style(part(), state());
+  const Rect area = bounds();
+  const Rect where{area.x + padding_, area.y, area.width - padding_ * 2.0, area.height};
+
+  // Premiere's blue. The accent rather than the label colour, because that
+  // colour is the whole affordance: a number drawn like a label says nothing
+  // can be done to it, and there is no other hint that this one can be dragged.
+  TextRun run = text_run(where, display_text(), style, font_size_, TextAlign::Left);
+  if (enabled()) run.color = theme.accent;
+  painter.text(run);
+
+  // Underlined under the pointer, which is the second half of the same
+  // affordance and the part that says *this* number rather than the row.
+  if (hovered() && enabled() && !scrubbing_) {
+    const double width = painter.measure(display_text(), font_size_, false);
+    const double y = std::round(area.y + (area.height + font_size_) / 2.0) + 1.0;
+    painter.line(where.x, y, where.x + width, y, run.color, 1.0);
+  }
+}
+
+bool NumericField::on_mouse_down(const MouseEvent& event) {
+  if (event.button != MouseButton::Left) return false;
+  gesture_start_ = value_;
+
+  if (event.click_count >= 2 && default_.has_value()) {
+    commit(*default_);
+    finish();
+    return true;
+  }
+
+  // Nothing happens yet. Whether this is a scrub or a click is decided by
+  // whether the pointer moves, and deciding it now would mean every click on
+  // the number also nudged it.
+  pressed_here_ = true;
+  scrubbing_ = false;
+  press_x_ = event.x;
+  scrub_value_ = value_;
+  return true;
+}
+
+bool NumericField::on_mouse_move(const MouseEvent& event) {
+  if (!pressed_here_) return false;
+
+  const double moved = event.x - press_x_;
+  if (!scrubbing_) {
+    if (std::abs(moved) < kScrubThreshold) return true;
+    scrubbing_ = true;
+  }
+
+  double rate = scrub_step();
+  if (event.modifiers.shift) rate *= kCoarseScrub;
+  if (event.modifiers.control) rate *= kFineScrub;
+
+  // Against the press, not against the last move. Accumulating deltas drifts,
+  // and a drag that returns to where it started has to return to the value it
+  // started at.
+  scrub_value_ = range_.clamp(gesture_start_ + moved * rate);
+  commit(scrub_value_);
+  return true;
+}
+
+bool NumericField::on_mouse_up(const MouseEvent& event) {
+  if (event.button != MouseButton::Left || !pressed_here_) return false;
+  pressed_here_ = false;
+
+  if (scrubbing_) {
+    scrubbing_ = false;
+    finish();
+    return true;
+  }
+
+  // It never moved, so it was a click, and a click on a number means type one.
+  begin_edit();
+  return true;
+}
+
+bool NumericField::on_key_down(const KeyEvent& event) {
+  if (event.modifiers.alt) return false;
+  if (event.modifiers.control) {
+    if (event.key != Key::A) return false;
+    begin_edit();
+    return true;
+  }
+
+  const double amount = range_.nudge() * (event.modifiers.shift ? kCoarseNudge : 1.0);
+  gesture_start_ = value_;
+
+  switch (event.key) {
+    case Key::Left:
+    case Key::Down:
+      commit(value_ - amount);
+      break;
+    case Key::Right:
+    case Key::Up:
+      commit(value_ + amount);
+      break;
+    case Key::Home:
+      commit(range_.minimum);
+      break;
+    case Key::End:
+      commit(range_.maximum);
+      break;
+    case Key::Enter:
+      begin_edit();
+      return true;
     default:
       return false;
   }
@@ -778,6 +1040,7 @@ void TextField::on_focus_changed(bool focused) {
   // writing on every keystroke would fill an undo history with single letters.
   dragging_ = false;
   commit();
+  if (on_finish_) on_finish_();
 }
 
 bool TextField::on_mouse_down(const MouseEvent& event) {
@@ -867,6 +1130,7 @@ bool TextField::on_key_down(const KeyEvent& event) {
         replace_selection("\n");
       } else {
         commit();
+        if (on_finish_) on_finish_();
       }
       return true;
 
@@ -880,6 +1144,10 @@ bool TextField::on_key_down(const KeyEvent& event) {
         invalidate_layout();
         if (on_change_) on_change_(text_);
       }
+      // Ending the edit even when nothing changed. A field that swallowed
+      // Escape and stayed open would be the one thing on screen with no way
+      // out of it.
+      if (on_finish_) on_finish_();
       return true;
 
     default:
@@ -989,6 +1257,22 @@ void IconButton::paint_content(Painter& painter, const Theme& theme) const {
       painter.line(cx, cy + reach, cx - reach, cy, style.text, width);
       painter.line(cx - reach, cy, cx, cy - reach, style.text, width);
       break;
+
+    case Icon::Disclosure: {
+      // The state is the direction, the way the tool buttons' state is which
+      // one is current: right for closed, down for open. Two thirds the reach
+      // of the arrows, so a row of effect controls does not read as three
+      // arrows meaning three different things.
+      const double small = reach * 0.66;
+      if (selected()) {
+        painter.line(cx - small, cy - small * 0.5, cx, cy + small * 0.5, style.text, width);
+        painter.line(cx, cy + small * 0.5, cx + small, cy - small * 0.5, style.text, width);
+      } else {
+        painter.line(cx - small * 0.5, cy - small, cx + small * 0.5, cy, style.text, width);
+        painter.line(cx + small * 0.5, cy, cx - small * 0.5, cy + small, style.text, width);
+      }
+      break;
+    }
 
     case Icon::Pointer: {
       // A cursor: tip at the top, two flanks, and a tail.
