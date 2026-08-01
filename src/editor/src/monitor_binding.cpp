@@ -76,15 +76,22 @@ core::Project apply_monitor_box(core::Project project, std::string_view clip_id,
 
   const double local_t = t - clip->start;
 
-  // Percentages, because that is what the inspector's rows are in and what
-  // `set_clip_parameter` divides back out. Going through it rather than around
-  // it is the point: a drag on the monitor and a drag on a slider have to be
-  // the same edit, keyframes and all.
+  // In the units the inspector's rows are in, because `set_clip_parameter` is
+  // what divides them back out. Going through it rather than around it is the
+  // point: a drag on the monitor and a drag on a number have to be the same
+  // edit, keyframes and all.
+  //
+  // Position is in **pixels of the canvas** and scale is in percent, which is
+  // exactly the split the rows show. The box's own coordinates are canvas
+  // fractions either way.
   constexpr double kPercent = 100.0;
-  project = set_clip_parameter(std::move(project), clip_id, ClipParam::X, box.x * kPercent,
-                               local_t);
-  project = set_clip_parameter(std::move(project), clip_id, ClipParam::Y, box.y * kPercent,
-                               local_t);
+  const auto canvas = [&project](int extent) {
+    return extent > 0 ? static_cast<double>(extent) : 1.0;
+  };
+  project = set_clip_parameter(std::move(project), clip_id, ClipParam::X,
+                               box.x * canvas(project.canvas_w), local_t);
+  project = set_clip_parameter(std::move(project), clip_id, ClipParam::Y,
+                               box.y * canvas(project.canvas_h), local_t);
   project = set_clip_parameter(std::move(project), clip_id, ClipParam::ScaleX,
                                box.width / natural.width * kPercent, local_t);
   project = set_clip_parameter(std::move(project), clip_id, ClipParam::ScaleY,

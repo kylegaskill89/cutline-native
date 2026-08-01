@@ -231,11 +231,12 @@ using cutline::ui::built_in_themes;
 constexpr std::array<std::pair<std::string_view, std::string_view>, 7> kPanels{{
     {"project", "Project"},
     {"effects", "Effect Controls"},
-    // Premiere's Effects panel, under its own name: this one holds the things
-    // you can apply, and "Effect Controls" holds what one you applied is doing.
-    // Two panels with almost the same name is Premiere's own confusion, and
-    // "Effects Library" is the clearer of the two words.
-    {"library", "Effects Library"},
+    // Premiere's own two names, which are confusingly similar on purpose: this
+    // one holds the things you can apply and "Effect Controls" holds what the
+    // one you applied is doing. "Effects Library" was clearer and half a tab
+    // too wide — three titles and three close buttons did not fit the panel,
+    // and the buttons ended up drawn over the last letter of each label.
+    {"library", "Effects"},
     {"monitor", "Program Monitor"},
     {"timeline", "Timeline"},
     {"audio", "Audio Master"},

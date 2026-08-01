@@ -327,14 +327,77 @@ TEST(Inspector, AnAnimatedRowReadsItsValueAtTheGivenTime) {
 
 TEST(Inspector, SettingAnAnimatedParameterWritesAKeyframeRatherThanTheStoredValue) {
   Project p = set_clip_parameter_animated(sample_project(), "c1", ClipParam::X, true, 0.0);
-  p = set_clip_parameter(std::move(p), "c1", ClipParam::X, 75.0, 3.0);
+  // Three quarters across a 1920-wide canvas, in the pixels the row is in.
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::X, 1440.0, 3.0);
 
   const Clip& clip = p.tracks.front().clips.front();
   const auto& frames = clip.keyframes[core::anim_prop_index(core::AnimProp::X)];
   ASSERT_EQ(frames.size(), 2u);
   EXPECT_DOUBLE_EQ(frames[1].t, 3.0);
-  // Stored as a fraction of the canvas, shown as a percentage of it.
+  // Stored as a fraction of the canvas, shown in pixels of it.
   EXPECT_DOUBLE_EQ(frames[1].v, 0.75);
+}
+
+// ------------------------------------------------------------- position --
+//
+// The one display unit whose factor is the project rather than a constant.
+// Premiere shows Position in pixels, which is what anybody reads and types; the
+// model keeps a fraction, which is what makes a layout independent of the
+// export resolution.
+
+TEST(Position, IsShownInPixelsOfTheCanvas) {
+  const Project p = sample_project();
+  const std::vector<ParamSpec> specs = clip_parameters(p, "c1");
+
+  // A centred clip on a 1920x1080 sequence.
+  EXPECT_DOUBLE_EQ(find(specs, ClipParam::X)->value, 960.0);
+  EXPECT_DOUBLE_EQ(find(specs, ClipParam::Y)->value, 540.0);
+  EXPECT_TRUE(find(specs, ClipParam::X)->suffix.empty()) << "pixels carry no unit here";
+}
+
+TEST(Position, TheDefaultIsTheMiddleOfTheCanvas) {
+  const std::vector<ParamSpec> specs = clip_parameters(sample_project(), "c1");
+  EXPECT_DOUBLE_EQ(find(specs, ClipParam::X)->fallback, 960.0);
+  EXPECT_DOUBLE_EQ(find(specs, ClipParam::Y)->fallback, 540.0);
+}
+
+TEST(Position, ReachesHalfACanvasEitherSideOfTheFrame) {
+  // So a layer can be parked well off screen and brought back.
+  const std::vector<ParamSpec> specs = clip_parameters(sample_project(), "c1");
+  EXPECT_DOUBLE_EQ(find(specs, ClipParam::X)->range.minimum, -960.0);
+  EXPECT_DOUBLE_EQ(find(specs, ClipParam::X)->range.maximum, 2880.0);
+}
+
+TEST(Position, FollowsTheSequenceSizeWithoutMovingTheClip) {
+  // Changing the canvas changes what the rows read out and nothing about where
+  // the picture is: the model stores a fraction.
+  Project p = sample_project();
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::X, 480.0);
+  const double stored = p.tracks.front().clips.front().transform.x;
+
+  p.canvas_w = 3840;
+  EXPECT_DOUBLE_EQ(p.tracks.front().clips.front().transform.x, stored);
+  EXPECT_DOUBLE_EQ(find(clip_parameters(p, "c1"), ClipParam::X)->value, 960.0);
+}
+
+TEST(Position, AnAnimatedRowReadsItsKeyframeInPixelsToo) {
+  // Read through the constant scale instead, an animated Position showed a
+  // number a hundred times too small.
+  Project p = set_clip_parameter_animated(sample_project(), "c1", ClipParam::X, true, 0.0);
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::X, 1440.0, 0.0);
+
+  EXPECT_DOUBLE_EQ(find(clip_parameters(p, "c1", 0.0), ClipParam::X)->value, 1440.0);
+}
+
+TEST(Position, ACanvasOfNothingIsNotADivisionByZero) {
+  Project p = sample_project();
+  p.canvas_w = 0;
+  p.canvas_h = 0;
+  const std::vector<ParamSpec> specs = clip_parameters(p, "c1");
+  EXPECT_DOUBLE_EQ(find(specs, ClipParam::X)->value, 0.5) << "the stored fraction, shown raw";
+
+  const Project written = set_clip_parameter(p, "c1", ClipParam::X, 0.25);
+  EXPECT_DOUBLE_EQ(written.tracks.front().clips.front().transform.x, 0.25);
 }
 
 TEST(Inspector, TurningTheStopwatchOffKeepsTheValueAtThatTime) {

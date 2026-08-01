@@ -51,19 +51,40 @@ constexpr double kSliderMaxSpeed = 4.0;
 
 /// The factor between what is stored and what is shown.
 ///
-/// Gain is deliberately absent: it is the one parameter whose display is not a
-/// scale of what is stored. See `gain_shown` below.
+/// Two parameters are deliberately absent. Gain's display is not a scale of
+/// what is stored at all — see `gain_shown` below. Position's factor is the
+/// *canvas*, not a constant, so it needs the project; see `position_scale`.
 [[nodiscard]] double display_scale(ClipParam param) noexcept {
   switch (param) {
     case ClipParam::Opacity:
-    case ClipParam::X:
-    case ClipParam::Y:
     case ClipParam::ScaleX:
     case ClipParam::ScaleY:
       return kPercent;
     default:
       return 1.0;
   }
+}
+
+/// Pixels per stored unit for Position, which is the canvas's own size.
+///
+/// Premiere shows Position in pixels — 960.0, 540.0 on a 1920x1080 sequence —
+/// and that is what anybody reads and types. The model stores a fraction of the
+/// canvas, which is what keeps a layout independent of the export resolution,
+/// so this is the one conversion that has to ask the project rather than a
+/// constant.
+///
+/// A canvas of zero would make every position read as zero and every typed
+/// value divide by nothing, so it falls back to one — the stored fraction shown
+/// raw, which is at least a number that moves.
+[[nodiscard]] double position_scale(const core::Project& project, ClipParam param) noexcept {
+  const int extent = param == ClipParam::X ? project.canvas_w : project.canvas_h;
+  return extent > 0 ? static_cast<double>(extent) : 1.0;
+}
+
+/// The whole factor for a parameter, canvas included.
+[[nodiscard]] double shown_scale(const core::Project& project, ClipParam param) noexcept {
+  if (param == ClipParam::X || param == ClipParam::Y) return position_scale(project, param);
+  return display_scale(param);
 }
 
 /// Volume, shown in decibels rather than as a percentage of unity.
@@ -96,7 +117,12 @@ constexpr double kSliderMaxSpeed = 4.0;
 }
 
 /// Fills in what a row's animation state is, and what it is worth at `local_t`.
-void fill_animation(ParamSpec& row, const core::Clip& clip, double local_t) {
+///
+/// Takes the project, not only the clip, because Position's display factor is
+/// the canvas — an animated Position read through the constant scale would show
+/// a number a hundred times too small.
+void fill_animation(const core::Project& project, ParamSpec& row, const core::Clip& clip,
+                    double local_t) {
   if (row.param == ClipParam::Gain) {
     row.animatable = true;
     row.animated = core::is_gain_animated(clip);
@@ -117,7 +143,7 @@ void fill_animation(ParamSpec& row, const core::Clip& clip, double local_t) {
     // What the keyframes are producing, not what is stored: an animated
     // property ignores its stored value, and showing it would put a number on
     // screen that nothing is using.
-    row.value = core::animated_value(clip, *prop, local_t) * display_scale(row.param);
+    row.value = core::animated_value(clip, *prop, local_t) * shown_scale(project, row.param);
     row.keyed_here = keyed_at(clip.keyframes[core::anim_prop_index(*prop)], local_t);
     row.interp = core::keyframe_interp_of(clip, *prop);
   }
@@ -199,21 +225,34 @@ std::vector<ParamSpec> clip_parameters(const core::Project& project, std::string
                             .fallback = 100.0,
                             .suffix = "%"});
 
-    // Position is the clip's centre as a fraction of the canvas, so half is the
-    // middle. Shown as a percentage of the canvas rather than in pixels, which
-    // is what keeps it independent of the export resolution.
+    // Position is the clip's centre, **in pixels of the canvas**, which is what
+    // Premiere shows and what anybody reads and types: 960.0, 540.0 on a
+    // 1920x1080 sequence.
+    //
+    // The model still stores a fraction, which is what keeps a layout
+    // independent of the export resolution — this is a display unit like every
+    // other one here, and the only one whose factor is the project rather than
+    // a constant. Changing the sequence size therefore moves nothing; it only
+    // changes the numbers these rows read out.
+    //
+    // No suffix. Pixels are the canvas's own unit, the row is named Position,
+    // and Premiere writes no unit there either.
+    //
+    // Half a canvas either side of the frame, so a layer can be parked well off
+    // screen and brought back — the same span the percentages had.
+    const double canvas_w = position_scale(project, ClipParam::X);
+    const double canvas_h = position_scale(project, ClipParam::Y);
+
     out.push_back(ParamSpec{.param = ClipParam::X,
                             .name = std::string(param_name(ClipParam::X)),
-                            .range = {.minimum = -50.0, .maximum = 150.0},
-                            .value = clip->transform.x * kPercent,
-                            .fallback = 50.0,
-                            .suffix = "%"});
+                            .range = {.minimum = -canvas_w * 0.5, .maximum = canvas_w * 1.5},
+                            .value = clip->transform.x * canvas_w,
+                            .fallback = canvas_w * 0.5});
     out.push_back(ParamSpec{.param = ClipParam::Y,
                             .name = std::string(param_name(ClipParam::Y)),
-                            .range = {.minimum = -50.0, .maximum = 150.0},
-                            .value = clip->transform.y * kPercent,
-                            .fallback = 50.0,
-                            .suffix = "%"});
+                            .range = {.minimum = -canvas_h * 0.5, .maximum = canvas_h * 1.5},
+                            .value = clip->transform.y * canvas_h,
+                            .fallback = canvas_h * 0.5});
 
     out.push_back(ParamSpec{.param = ClipParam::ScaleX,
                             .name = std::string(param_name(ClipParam::ScaleX)),
@@ -266,7 +305,7 @@ std::vector<ParamSpec> clip_parameters(const core::Project& project, std::string
                           .fallback = 0.0,
                           .suffix = "s"});
 
-  for (ParamSpec& row : out) fill_animation(row, *clip, local_t);
+  for (ParamSpec& row : out) fill_animation(project, row, *clip, local_t);
   return out;
 }
 
@@ -283,7 +322,7 @@ core::Project set_clip_parameter(core::Project project, std::string_view clip_id
   if (const std::optional<core::AnimProp> prop = anim_prop_of(param);
       prop.has_value() && core::is_animated(*clip, *prop)) {
     return core::set_keyframe(std::move(project), clip_id, *prop, local_t,
-                              value / display_scale(param));
+                              value / shown_scale(project, param));
   }
 
   // Read, change one field, set the whole value back — which is the contract
@@ -296,10 +335,10 @@ core::Project set_clip_parameter(core::Project project, std::string_view clip_id
       return core::set_clip_opacity(std::move(project), clip_id, value / kPercent);
 
     case ClipParam::X:
-      transform.x = value / kPercent;
+      transform.x = value / position_scale(project, ClipParam::X);
       return core::set_clip_transform(std::move(project), clip_id, transform);
     case ClipParam::Y:
-      transform.y = value / kPercent;
+      transform.y = value / position_scale(project, ClipParam::Y);
       return core::set_clip_transform(std::move(project), clip_id, transform);
     case ClipParam::ScaleX:
       transform.scale_x = value / kPercent;
