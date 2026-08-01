@@ -11,6 +11,7 @@
 #include "cutline/ui/timeline.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <optional>
 #include <span>
@@ -156,6 +157,30 @@ std::string_view param_name(ClipParam param) noexcept {
     case ClipParam::FadeOut: return "Fade Out";
   }
   return "Unknown";
+}
+
+std::span<const core::BlendMode> blend_modes() noexcept {
+  // Premiere's order: Normal, then the modes that lighten, then the ones that
+  // darken, then the odd one out.
+  static constexpr std::array kModes{
+      core::BlendMode::Normal,  core::BlendMode::Add,     core::BlendMode::Screen,
+      core::BlendMode::Lighten, core::BlendMode::Multiply, core::BlendMode::Darken,
+      core::BlendMode::Overlay, core::BlendMode::Difference};
+  return kModes;
+}
+
+std::string_view blend_name(core::BlendMode mode) noexcept {
+  switch (mode) {
+    case core::BlendMode::Normal: return "Normal";
+    case core::BlendMode::Add: return "Add";
+    case core::BlendMode::Screen: return "Screen";
+    case core::BlendMode::Multiply: return "Multiply";
+    case core::BlendMode::Overlay: return "Overlay";
+    case core::BlendMode::Darken: return "Darken";
+    case core::BlendMode::Lighten: return "Lighten";
+    case core::BlendMode::Difference: return "Difference";
+  }
+  return "Normal";
 }
 
 std::vector<ParamSpec> clip_parameters(const core::Project& project, std::string_view clip_id,

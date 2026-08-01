@@ -15,6 +15,7 @@
 #include "cutline/core/model.hpp"
 #include "cutline/ui/controls.hpp"
 
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -80,6 +81,15 @@ struct ParamSpec {
 
 /// The three curves, as a person reads them. Premiere's chip is the same three.
 [[nodiscard]] std::string_view interp_name(core::Interp mode) noexcept;
+
+/// The blend modes, in the order a control should offer them, and what each is
+/// called on screen.
+///
+/// Premiere's own order and Premiere's own words: Normal first, then the modes
+/// that lighten, then the ones that darken, then the odd one out. Alphabetical
+/// would put Add above Normal, which is nobody's idea of a default.
+[[nodiscard]] std::span<const core::BlendMode> blend_modes() noexcept;
+[[nodiscard]] std::string_view blend_name(core::BlendMode mode) noexcept;
 
 /// The next one round, for a chip that cycles rather than a dropdown of three.
 [[nodiscard]] core::Interp next_interp(core::Interp mode) noexcept;

@@ -1995,6 +1995,48 @@ void refresh_inspector(App& app) {
          .step = [&app, clip_id, ref](int direction) {
            step_to_keyframe(app, clip_id, ref, direction);
          }});
+
+    // Reverse belongs beside Speed and nowhere else: they are one operation in
+    // the model — `set_clip_speed` takes both — and a clip played backwards at
+    // half rate is one retime rather than two.
+    if (spec.param == cutline::editor::ClipParam::Speed && clip != nullptr) {
+      auto& backwards = app.inspector->emplace<Checkbox>("Reverse", clip->reverse);
+      backwards.set_on_change([&app, clip_id](bool on) {
+        const cutline::core::Clip* now =
+            cutline::core::find_clip(app.session.project(), clip_id);
+        if (now == nullptr) return;
+        app.session.apply(
+            cutline::core::set_clip_speed(app.session.project(), clip_id, now->speed, on));
+        refresh_timeline(app);
+        invalidate_preview(app);
+        app.inspector_stale = true;
+      });
+    }
+  }
+
+  // Premiere's Composite, under the transform it composites. Only for a clip
+  // with a picture: a blend mode on a waveform means nothing, and the
+  // compositor never asks about one.
+  if (visual) {
+    const std::span<const cutline::core::BlendMode> modes = cutline::editor::blend_modes();
+    std::vector<std::string> names;
+    names.reserve(modes.size());
+    std::size_t current = 0;
+    for (std::size_t i = 0; i < modes.size(); ++i) {
+      names.emplace_back(cutline::editor::blend_name(modes[i]));
+      if (clip != nullptr && clip->blend == modes[i]) current = i;
+    }
+
+    auto& line = app.inspector->emplace<Box>(Axis::Horizontal);
+    line.emplace<Label>("Blend").set_small(true);
+    auto& choice = line.emplace<Dropdown>(std::move(names), current);
+    choice.set_on_change([&app, clip_id, modes](std::size_t index) {
+      if (index >= modes.size()) return;
+      app.session.apply(
+          cutline::core::set_clip_blend(app.session.project(), clip_id, modes[index]));
+      invalidate_preview(app);
+      app.inspector_stale = true;
+    });
   }
 
   // Below Motion and above the effects: a transition belongs to the cut rather

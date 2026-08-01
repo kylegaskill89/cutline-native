@@ -16,15 +16,19 @@ Nothing here is scheduled. It is a map, not a plan.
 
 ## 1. Effects
 
-### 1.0 Two things the spec asked for that were missed
+### 1.0 Two things the spec asked for that were missed — **done**
 
-Found while writing this section, and both are §18 items I recorded as done.
-They are in the model, tested, and reachable from nowhere.
+Found while writing this section, and both were §18 items recorded as done: in
+the model, tested, and reachable from nowhere.
 
-| | Exists | Missing | Size |
+| | Exists | Was missing | |
 |---|---|---|---|
-| **Composite (Blend)** | `core::set_clip_blend`, eight modes in the compositor | no control anywhere in the interface | wiring |
-| **Reverse** | `core::set_clip_speed(…, reverse)`, honoured by the renderer and the mixer | the Speed row has no reverse toggle beside it | wiring |
+| **Composite (Blend)** | `core::set_clip_blend`, eight modes in the compositor | no control anywhere in the interface | **done** — a dropdown under the transform, in Premiere's order |
+| **Reverse** | `core::set_clip_speed(…, reverse)`, honoured by the renderer and the mixer | the Speed row had no reverse toggle beside it | **done** — a checkbox beside Speed |
+
+Reverse sits beside Speed and nowhere else, because they are one operation in
+the model: `set_clip_speed` takes both, and a clip played backwards at half rate
+is one retime rather than two.
 
 ### 1.1 How a parameter is shown and set — **done**
 
