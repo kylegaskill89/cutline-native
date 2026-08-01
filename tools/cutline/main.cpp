@@ -3967,6 +3967,59 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   return panel;
 }
 
+/// The clip under a point, if dropping `id` there would do anything.
+///
+/// Works in the *main window's* coordinates. A drag that began in the library
+/// keeps the pointer captured, so the moves arrive at the browser however far
+/// away the cursor is — and the timeline it has to hit is a different panel
+/// entirely. Nothing below this knows about both, which is why the answer is
+/// worked out here.
+///
+/// Nothing when the pointer is not over a clip, or over one the entry could not
+/// be applied to: a video effect over a waveform is a drop that has to decline
+/// rather than land somewhere approximate.
+[[nodiscard]] std::optional<std::string> library_drop_target(const App& app,
+                                                             const std::string& id, double x,
+                                                             double y) {
+  if (app.timeline == nullptr || id.empty()) return std::nullopt;
+
+  const std::optional<cutline::ui::BlockRef> block = app.timeline->block_at(x, y);
+  if (!block.has_value()) return std::nullopt;
+
+  const cutline::ui::TimelineModel& model = app.timeline->model();
+  if (block->track >= model.tracks.size()) return std::nullopt;
+  const auto& blocks = model.tracks[block->track].blocks;
+  if (block->block >= blocks.size()) return std::nullopt;
+
+  const std::string& clip_id = blocks[block->block].id;
+  if (!cutline::editor::library_entry_fits(app.session.project(), clip_id, id)) {
+    return std::nullopt;
+  }
+  return clip_id;
+}
+
+/// Outlines the clip a drop would land on, or clears the outline.
+///
+/// An empty `id` means the drag is over, which is how a drop that lands on
+/// nothing still tidies up after itself.
+void show_library_drop(App& app, const std::string& id, double x, double y) {
+  if (app.timeline == nullptr) return;
+  if (id.empty()) {
+    app.timeline->set_drop_target(std::nullopt);
+    return;
+  }
+
+  // Through `library_drop_target` rather than through `block_at` directly, so
+  // the outline appears on exactly the clips a drop would be accepted by. An
+  // outline on a clip that then refused the drop would be a lie.
+  const std::optional<std::string> clip_id = library_drop_target(app, id, x, y);
+  if (!clip_id.has_value()) {
+    app.timeline->set_drop_target(std::nullopt);
+    return;
+  }
+  app.timeline->set_drop_target(app.timeline->block_at(x, y));
+}
+
 /// The effects library: everything that can be applied, searchable.
 ///
 /// Premiere has a panel for this, and it is the right shape. A menu was the
@@ -4001,19 +4054,34 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
 
   if (app != nullptr) {
     app->library = &browser;
-    browser.set_on_choose([app](const std::string& id) {
-      const auto selection = app->session.selection();
-      if (selection.empty()) return;
-      const std::string clip_id{selection.front()};
+
+    const auto apply_to = [app](const std::string& clip_id, const std::string& id) {
       // Refused rather than silently doing nothing: an audio effect on a
-      // picture, or a transition where nothing abuts the clip, is a
-      // double-click that should say so instead of appearing to work.
+      // picture, or a transition where nothing abuts the clip, should decline
+      // instead of appearing to work.
       if (!cutline::editor::library_entry_fits(app->session.project(), clip_id, id)) return;
       app->session.apply(
           cutline::editor::apply_library_entry(app->session.project(), clip_id, id));
       refresh_timeline(*app);
       invalidate_preview(*app);
       app->inspector_stale = true;
+    };
+
+    browser.set_on_choose([app, apply_to](const std::string& id) {
+      const auto selection = app->session.selection();
+      if (selection.empty()) return;
+      apply_to(std::string{selection.front()}, id);
+    });
+
+    // Dragged onto a clip, which is how Premiere applies one and the only way
+    // that does not need the right thing selected first.
+    browser.set_on_drag([app](const std::string& id, double x, double y) {
+      show_library_drop(*app, id, x, y);
+    });
+    browser.set_on_drop([app, apply_to](const std::string& id, double x, double y) {
+      const std::optional<std::string> clip_id = library_drop_target(*app, id, x, y);
+      show_library_drop(*app, {}, 0.0, 0.0);
+      if (clip_id.has_value()) apply_to(*clip_id, id);
     });
   }
   return panel;

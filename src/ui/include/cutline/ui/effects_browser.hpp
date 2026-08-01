@@ -94,6 +94,33 @@ class EffectsBrowser : public Widget {
     on_select_ = std::move(on_select);
   }
 
+  // ------------------------------------------------------------- dragging --
+
+  /// How far a press must travel before it becomes a drag rather than a click.
+  static constexpr double kDragThreshold = 4.0;
+
+  /// An entry is being dragged, and the pointer is at this point in the
+  /// window. Called on every move, so whoever is listening can say whether a
+  /// drop there would land on anything.
+  ///
+  /// The browser cannot answer that itself and should not try. The pointer is
+  /// over a *different panel* — the timeline, most likely — and the only thing
+  /// that knows about both is the composition root above them. A handled press
+  /// captures the pointer, so these keep arriving however far outside the
+  /// browser the cursor goes; that capture is the whole reason a drag can cross
+  /// a panel boundary at all.
+  void set_on_drag(std::function<void(const std::string& id, double x, double y)> on_drag) {
+    on_drag_ = std::move(on_drag);
+  }
+  /// The button came up somewhere, ending a drag that had actually moved.
+  void set_on_drop(std::function<void(const std::string& id, double x, double y)> on_drop) {
+    on_drop_ = std::move(on_drop);
+  }
+
+  /// The entry being dragged, or empty. What the timeline's highlight and the
+  /// cursor are drawn from.
+  [[nodiscard]] const std::string& dragging() const noexcept { return dragging_; }
+
   // -------------------------------------------------------------- geometry --
 
   [[nodiscard]] double row_height() const noexcept { return row_height_; }
@@ -115,6 +142,8 @@ class EffectsBrowser : public Widget {
   void paint_content(Painter& painter, const Theme& theme) const override;
 
   bool on_mouse_down(const MouseEvent& event) override;
+  bool on_mouse_move(const MouseEvent& event) override;
+  bool on_mouse_up(const MouseEvent& event) override;
   bool on_wheel(const WheelEvent& event) override;
   bool on_key_down(const KeyEvent& event) override;
 
@@ -128,12 +157,22 @@ class EffectsBrowser : public Widget {
   std::string filter_;
   std::string selected_;
 
-  /// Folders that are *closed*, rather than the ones that are open.
+  /// Folders that have been *opened*, rather than the ones that are shut.
   ///
-  /// A catalogue is worth more open than shut — the whole point of a library is
-  /// seeing what is in it — and remembering the exception means a folder added
-  /// later arrives open rather than hidden.
-  std::set<std::string, std::less<>> closed_;
+  /// Everything starts collapsed. The whole catalogue laid out at once is forty
+  /// names in a narrow column, which is a list rather than a library — the
+  /// folders are what make it navigable, and they only do that job while they
+  /// are shut. Remembering the exception this way round also means a category
+  /// added later arrives collapsed like the rest rather than spilling open.
+  std::set<std::string, std::less<>> open_;
+
+  /// The entry a press landed on, and whether it has travelled far enough to
+  /// count as a drag. Held separately from the selection: a press picks
+  /// immediately, and only movement turns it into something being carried.
+  std::string pressed_;
+  std::string dragging_;
+  double press_x_ = 0.0;
+  double press_y_ = 0.0;
 
   double scroll_ = 0.0;
   double row_height_ = 22.0;
@@ -141,6 +180,8 @@ class EffectsBrowser : public Widget {
 
   std::function<void(const std::string&)> on_choose_;
   std::function<void(const std::string&)> on_select_;
+  std::function<void(const std::string&, double, double)> on_drag_;
+  std::function<void(const std::string&, double, double)> on_drop_;
 };
 
 }  // namespace cutline::ui

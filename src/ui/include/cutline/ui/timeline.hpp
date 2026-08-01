@@ -727,6 +727,18 @@ class TimelineView : public Widget {
   /// and stays ignorant of what was being dragged.
   [[nodiscard]] std::optional<DropPoint> drop_at(double x, double y) const;
 
+  /// The block a drop from somewhere else would land on, outlined so it is
+  /// obvious *which* clip is about to receive it.
+  ///
+  /// Set by whoever is running the drag rather than worked out here: the
+  /// timeline does not know that a drag is happening, only that something has
+  /// asked it to point at a clip. Cleared with `std::nullopt` when the pointer
+  /// is over nothing, which is also how a drag that ends elsewhere tidies up.
+  void set_drop_target(std::optional<BlockRef> target);
+  [[nodiscard]] const std::optional<BlockRef>& drop_target() const noexcept {
+    return drop_target_;
+  }
+
   /// How tall the tracks are altogether, and how far they are scrolled.
   [[nodiscard]] const Viewport& vertical() const noexcept { return vertical_; }
 
@@ -833,6 +845,8 @@ class TimelineView : public Widget {
 
   DragMode mode_ = DragMode::None;
   std::optional<BlockRef> drag_;
+  /// The block a drop from another panel would land on. See `set_drop_target`.
+  std::optional<BlockRef> drop_target_;
   /// The clip as it was when the drag began. Every position is computed from
   /// this rather than from the last one, so rounding cannot accumulate over a
   /// long drag and leave the clip a frame off where the pointer is.

@@ -38,11 +38,18 @@ const RecordingPainter& measurer() {
                       .folder = "Video Transitions"}};
 }
 
+/// A browser in a host. Every folder is opened unless a test says otherwise,
+/// because most of these are about rows rather than about folders — and the
+/// library itself starts collapsed, so a fixture that did not say which it
+/// wanted would be testing the default by accident.
 struct Listed {
-  Listed() {
+  explicit Listed(bool open_all = true) {
     host = std::make_unique<WidgetHost>(std::make_unique<Widget>());
     browser = &host->root().emplace<EffectsBrowser>();
     browser->set_items(catalogue());
+    if (open_all) {
+      for (const EffectEntry& entry : catalogue()) browser->set_open(entry.folder, true);
+    }
     host->resize(Rect{0.0, 0.0, 300.0, 600.0}, flat_context());
     browser->arrange(Rect{0.0, 0.0, 260.0, 500.0}, flat_context());
   }
@@ -79,6 +86,12 @@ TEST(EffectsBrowser, GroupsEntriesUnderTheirFolders) {
   EXPECT_EQ(test.browser->rows().size(), 9u);
 }
 
+TEST(EffectsBrowser, CollapsedItIsJustTheHeadings) {
+  const Listed test(false);
+  EXPECT_EQ(test.folders(), 4u);
+  EXPECT_EQ(test.browser->rows().size(), 4u);
+}
+
 TEST(EffectsBrowser, KeepsTheCataloguesOrderRatherThanTheAlphabets) {
   // Where a folder sits is the registry's decision. Sorted, Audio would come
   // first and the video effects nobody sorted would look shuffled.
@@ -88,6 +101,8 @@ TEST(EffectsBrowser, KeepsTheCataloguesOrderRatherThanTheAlphabets) {
 
 TEST(EffectsBrowser, ClosingAFolderHidesItsContentsAndNotItself) {
   Listed test;
+  ASSERT_LT(test.row_of("video:brightness"), test.browser->rows().size());
+
   test.browser->set_open("Video · Colour", false);
 
   EXPECT_FALSE(test.browser->is_open("Video · Colour"));
@@ -97,25 +112,26 @@ TEST(EffectsBrowser, ClosingAFolderHidesItsContentsAndNotItself) {
       << "another folder's contents went with it";
 }
 
-TEST(EffectsBrowser, EverythingStartsOpen) {
-  // A library is worth more open than shut — the whole point is seeing what is
-  // in it — and remembering the exception means a folder added later arrives
-  // open rather than hidden.
-  const Listed test;
-  EXPECT_TRUE(test.browser->is_open("Audio"));
-  EXPECT_TRUE(test.browser->is_open("A folder nobody has heard of"));
+TEST(EffectsBrowser, EverythingStartsCollapsed) {
+  // The whole catalogue laid out at once is forty names in a narrow column,
+  // which is a list rather than a library. Remembering which folders were
+  // *opened* also means a category added later arrives collapsed like the rest
+  // rather than spilling open.
+  const Listed test(false);
+  EXPECT_FALSE(test.browser->is_open("Audio"));
+  EXPECT_FALSE(test.browser->is_open("A folder nobody has heard of"));
 }
 
 TEST(EffectsBrowser, ClickingAHeadingAnywhereOpensAndClosesIt) {
   // A folder's name is a much larger target than a six-pixel chevron, and both
   // mean the same thing.
-  Listed test;
+  Listed test(false);
   const Rect heading = test.browser->row_rect(0);
   test.host->mouse_down(press(heading.y + heading.height / 2));
-  EXPECT_FALSE(test.browser->is_open("Video · Colour"));
+  EXPECT_TRUE(test.browser->is_open("Video · Colour"));
 
   test.host->mouse_down(press(heading.y + heading.height / 2));
-  EXPECT_TRUE(test.browser->is_open("Video · Colour"));
+  EXPECT_FALSE(test.browser->is_open("Video · Colour"));
 }
 
 // ---------------------------------------------------------------- search --
@@ -149,16 +165,15 @@ TEST(EffectsBrowser, AFolderWithNothingLeftInItIsNotDrawnAtAll) {
 }
 
 TEST(EffectsBrowser, ASearchOpensEveryFolderWhateverWasClosed) {
-  // A search that hid its own results behind a closed folder would appear to
-  // find nothing at all.
-  Listed test;
-  test.browser->set_open("Video · Colour", false);
+  // Everything starts collapsed, so without this a search would appear to find
+  // nothing at all — which is the whole reason searching has to override it.
+  Listed test(false);
   ASSERT_EQ(test.row_of("video:hue"), test.browser->rows().size());
 
   test.browser->set_filter("hue");
   EXPECT_LT(test.row_of("video:hue"), test.browser->rows().size());
 
-  // And what was closed is still closed once the search is cleared.
+  // And what was closed is closed again once the search is cleared.
   test.browser->set_filter("");
   EXPECT_FALSE(test.browser->is_open("Video · Colour"));
 }
@@ -211,6 +226,14 @@ TEST(EffectsBrowser, ASingleClickPicksAndADoubleClickApplies) {
   EXPECT_EQ(chosen, "video:hue");
 }
 
+TEST(EffectsBrowser, AFolderOpenedByHandStaysOpenAcrossASearch) {
+  Listed test(false);
+  test.browser->set_open("Audio", true);
+  test.browser->set_filter("hue");
+  test.browser->set_filter("");
+  EXPECT_TRUE(test.browser->is_open("Audio"));
+}
+
 TEST(EffectsBrowser, ClickingAFolderDoesNotSelectAnything) {
   Listed test;
   const Rect heading = test.browser->row_rect(0);
@@ -251,6 +274,91 @@ TEST(EffectsBrowser, EnterApplliesWhatIsSelected) {
 
   test.host->key_down(KeyEvent{.key = Key::Enter});
   EXPECT_EQ(chosen, "audio:lowpass");
+}
+
+// --------------------------------------------------------------- dragging --
+
+TEST(EffectsBrowser, APressThatDoesNotMoveIsAClickRatherThanADrag) {
+  Listed test;
+  int drags = 0;
+  int drops = 0;
+  test.browser->set_on_drag([&](const std::string&, double, double) { ++drags; });
+  test.browser->set_on_drop([&](const std::string&, double, double) { ++drops; });
+
+  const Rect where = test.browser->row_rect(test.row_of("video:hue"));
+  const double y = where.y + where.height / 2;
+  test.host->mouse_down(press(y));
+  test.host->mouse_move(MouseEvent{.x = 40.0, .y = y});
+  test.host->mouse_up(press(y));
+
+  EXPECT_EQ(drags, 0);
+  EXPECT_EQ(drops, 0);
+  EXPECT_EQ(test.browser->selected(), "video:hue") << "the click did not even pick";
+}
+
+TEST(EffectsBrowser, MovingPastTheThresholdStartsCarryingTheEntry) {
+  Listed test;
+  std::string carried;
+  test.browser->set_on_drag([&](const std::string& id, double, double) { carried = id; });
+
+  const Rect where = test.browser->row_rect(test.row_of("video:blur"));
+  const double y = where.y + where.height / 2;
+  test.host->mouse_down(press(y));
+  test.host->mouse_move(MouseEvent{.x = 40.0, .y = y + EffectsBrowser::kDragThreshold - 1.0});
+  EXPECT_TRUE(carried.empty()) << "a wobble started a drag";
+
+  test.host->mouse_move(MouseEvent{.x = 40.0, .y = y + 40.0});
+  EXPECT_EQ(carried, "video:blur");
+  EXPECT_EQ(test.browser->dragging(), "video:blur");
+}
+
+TEST(EffectsBrowser, TheDragKeepsArrivingOutsideTheBrowser) {
+  // The whole reason a drag can cross into another panel: a handled press
+  // captures the pointer, so the moves keep coming however far away it goes.
+  Listed test;
+  double last_x = 0.0;
+  test.browser->set_on_drag([&](const std::string&, double x, double) { last_x = x; });
+
+  const Rect where = test.browser->row_rect(test.row_of("video:blur"));
+  const double y = where.y + where.height / 2;
+  test.host->mouse_down(press(y));
+  ASSERT_EQ(test.host->captured(), test.browser);
+
+  test.host->mouse_move(MouseEvent{.x = 900.0, .y = y + 200.0});
+  EXPECT_DOUBLE_EQ(last_x, 900.0);
+}
+
+TEST(EffectsBrowser, TheDropReportsWhereTheButtonCameUp) {
+  Listed test;
+  std::string dropped;
+  double where_x = 0.0;
+  test.browser->set_on_drop([&](const std::string& id, double x, double) {
+    dropped = id;
+    where_x = x;
+  });
+
+  const Rect row = test.browser->row_rect(test.row_of("audio:lowpass"));
+  const double y = row.y + row.height / 2;
+  test.host->mouse_down(press(y));
+  test.host->mouse_move(MouseEvent{.x = 600.0, .y = y + 100.0});
+  test.host->mouse_up(MouseEvent{.x = 600.0, .y = y + 100.0, .button = MouseButton::Left});
+
+  EXPECT_EQ(dropped, "audio:lowpass");
+  EXPECT_DOUBLE_EQ(where_x, 600.0);
+  EXPECT_TRUE(test.browser->dragging().empty()) << "still carrying it after the release";
+}
+
+TEST(EffectsBrowser, AFolderCannotBeDragged) {
+  // There is nothing to apply, and a heading that could be picked up would be a
+  // gesture with no possible ending.
+  Listed test;
+  int drags = 0;
+  test.browser->set_on_drag([&](const std::string&, double, double) { ++drags; });
+
+  const Rect heading = test.browser->row_rect(0);
+  test.host->mouse_down(press(heading.y + heading.height / 2));
+  test.host->mouse_move(MouseEvent{.x = 40.0, .y = heading.y + 80.0});
+  EXPECT_EQ(drags, 0);
 }
 
 // -------------------------------------------------------------- scrolling --

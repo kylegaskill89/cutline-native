@@ -213,7 +213,7 @@ folders and never learns the difference between them.
 | Folder tree | Presets, Lumetri Presets, Audio Effects, Audio Transitions, Video Effects (18 categories), Video Transitions | **done** — one level, qualified: `Video · Colour`, `Audio`, `Video Transitions` | — |
 | Double-click to apply to the selection | yes | **done**, and Enter does the same from the keyboard | — |
 | Transitions in the same panel | Video and Audio Transitions are folders in it | **done** — and refused where nothing abuts the clip | — |
-| Drag an effect onto a clip | onto the timeline or the program monitor | no | machinery |
+| Drag an effect onto a clip | onto the timeline or the program monitor | **done** for the timeline; not the monitor | control |
 | Nested folders | Video Effects › Blur & Sharpen › Gaussian Blur | one level, with the parent folded into the name | control |
 | User bins | new bin / delete, to gather favourites | no | machinery |
 | Named presets | save a configured stack, apply it by name | copy and paste only, one clipboard, not saved | machinery |
@@ -228,15 +228,28 @@ overlapping transition at a join where neither clip has handles to lend. A
 cross-dissolve there resolves to nothing at all, and dip-to-black is the one
 that always works because it is sequential rather than overlapping.
 
-**A search never hides its own results.** Every folder is drawn open while a
-filter is running, whatever was collapsed before, and a folder left with nothing
-in it is not drawn at all. Both were easy to get wrong in the direction that
-makes a search appear to find nothing.
+**A search never hides its own results.** Every folder starts *collapsed* —
+forty names in a narrow column is a list rather than a library — so a filter has
+to override that, or searching would appear to find nothing at all. A folder
+left empty by the filter is not drawn either. Both were easy to get wrong in the
+direction that makes a search look like a failure.
 
-The remaining items are the expensive ones, and they are expensive for different
-reasons. Drag-and-drop needs a drag that crosses panels, which nothing in this
-application does yet. Presets need a new persisted thing with its own file and
-its own format questions. Nested folders are a widget problem only.
+Dragging an entry onto a clip works, and the clip it would land on is outlined
+while the pointer is over it. The outline is drawn only where the drop would
+actually be *accepted*, so it never promises something the release then refuses.
+
+This is the first drag in the application that crosses a panel boundary, and it
+needed nothing new to do it: a handled press captures the pointer, so the moves
+keep arriving at the browser however far away the cursor goes. The browser
+reports where the pointer is and stays ignorant of the timeline; the timeline
+answers `block_at` and stays ignorant of the drag; the composition root is the
+only thing that knows about both.
+
+The remaining items are the expensive ones. Presets need a new persisted thing
+with its own file and its own format questions. User bins need the same
+persistence plus a way to reorder. Nested folders are a widget problem only.
+Dropping onto the *program monitor* is the same mechanism as the timeline drop
+with a different hit test, and waits on there being a reason to prefer it.
 
 ### 1.4 Masks, 1.5 Catalogue depth, and the thing they share
 

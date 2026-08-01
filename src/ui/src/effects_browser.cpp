@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <utility>
 
 namespace cutline::ui {
@@ -52,14 +53,14 @@ bool EffectsBrowser::is_open(std::string_view folder) const {
   // Everything is open while a search is running, whatever was collapsed
   // before: a search that hid its own results would appear to find nothing.
   if (!filter_.empty()) return true;
-  return !closed_.contains(folder);
+  return open_.contains(folder);
 }
 
 void EffectsBrowser::set_open(std::string_view folder, bool open) {
   if (open) {
-    if (const auto found = closed_.find(folder); found != closed_.end()) closed_.erase(found);
+    open_.emplace(folder);
   } else {
-    closed_.emplace(folder);
+    if (const auto found = open_.find(folder); found != open_.end()) open_.erase(found);
   }
   rebuild();
 }
@@ -194,6 +195,8 @@ bool EffectsBrowser::on_mouse_down(const MouseEvent& event) {
 
   const Row& row = rows_[index];
   if (row.is_folder) {
+    pressed_.clear();
+    dragging_.clear();
     // Anywhere on the heading, not only on the chevron. A folder's name is a
     // much larger target than a six-pixel mark, and both mean the same thing.
     set_open(row.folder, !is_open(row.folder));
@@ -202,9 +205,47 @@ bool EffectsBrowser::on_mouse_down(const MouseEvent& event) {
 
   select(row.id);
   if (on_select_) on_select_(selected_);
+
+  // Noted, not started. Whether this press is a click or a drag is decided by
+  // whether the pointer moves, and deciding it now would mean every click on an
+  // effect also picked it up.
+  pressed_ = row.id;
+  dragging_.clear();
+  press_x_ = event.x;
+  press_y_ = event.y;
+
   // Premiere applies on a double-click. A single one only picks, so the
   // catalogue can be read without changing anything.
   if (event.click_count >= 2 && on_choose_) on_choose_(row.id);
+  return true;
+}
+
+bool EffectsBrowser::on_mouse_move(const MouseEvent& event) {
+  if (pressed_.empty()) return false;
+
+  if (dragging_.empty()) {
+    // Both axes: dragging an effect down onto a track below moves the pointer
+    // hardly any distance sideways.
+    const double travelled =
+        std::max(std::abs(event.x - press_x_), std::abs(event.y - press_y_));
+    if (travelled < kDragThreshold) return true;
+    dragging_ = pressed_;
+  }
+
+  if (on_drag_) on_drag_(dragging_, event.x, event.y);
+  return true;
+}
+
+bool EffectsBrowser::on_mouse_up(const MouseEvent& event) {
+  if (event.button != MouseButton::Left || pressed_.empty()) return false;
+
+  const std::string carried = std::move(dragging_);
+  dragging_.clear();
+  pressed_.clear();
+
+  // Only a drag that actually moved is a drop. A press and release in place is
+  // a click, and it has already done what a click does.
+  if (!carried.empty() && on_drop_) on_drop_(carried, event.x, event.y);
   return true;
 }
 

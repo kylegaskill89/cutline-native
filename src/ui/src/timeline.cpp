@@ -565,6 +565,12 @@ Rect TimelineView::marked_bar() const {
   return Rect{x, ruler.bottom() - height, width, height};
 }
 
+void TimelineView::set_drop_target(std::optional<BlockRef> target) {
+  if (drop_target_ == target) return;
+  drop_target_ = target;
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
 std::optional<BlockRef> TimelineView::block_at(double x, double y) const {
   if (!tracks_area().contains(x, y)) return std::nullopt;
 
@@ -765,6 +771,14 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
       const State state = clip.selected ? State::Selected : State::Normal;
       const SurfaceStyle& style = theme.style(Part::Clip, state);
       paint_surface(painter, box.inset(1.0), style);
+
+      // The clip a drop is about to land on. Outlined rather than filled: the
+      // point is to say *which* one receives it, and repainting the block would
+      // hide the picture somebody is aiming at.
+      if (drop_target_.has_value() && drop_target_->track == track &&
+          drop_target_->block == i) {
+        painter.stroke(box.inset(1.0), style.corner_radius, theme.accent, 2.0);
+      }
 
       // The filmstrip first, under everything, for the same reason the waveform
       // is: it is the clip's picture and the label reads over the top of it.
