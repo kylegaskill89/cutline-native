@@ -40,4 +40,22 @@ struct LoadedProject {
 /// body, or a schema version this build does not understand.
 [[nodiscard]] std::expected<LoadedProject, std::string> from_json(std::string_view text);
 
+/// A clip's two effect stacks on their own.
+struct EffectStacks {
+  std::vector<ClipEffect> video;
+  std::vector<AudioClipEffect> audio;
+
+  friend bool operator==(const EffectStacks&, const EffectStacks&) = default;
+};
+
+/// Effects encoded exactly as they are inside a project.
+///
+/// Exposed so that anything saving effects *outside* a project — a preset, a
+/// clipboard that outlives a session — writes the same shape a project does.
+/// Two encoders for one structure is two things to keep in step, and the one
+/// nobody edited is the one that would silently stop reading old files.
+[[nodiscard]] std::string effects_to_json(const EffectStacks& stacks, int indent = 2);
+
+[[nodiscard]] std::expected<EffectStacks, std::string> effects_from_json(std::string_view text);
+
 }  // namespace cutline::core

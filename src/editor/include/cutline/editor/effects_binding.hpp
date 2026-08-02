@@ -291,8 +291,22 @@ struct LibraryEntry {
 };
 
 /// The whole library, in the order a panel should show it: video effects by
-/// category, then audio effects, then transitions.
-[[nodiscard]] std::vector<LibraryEntry> effect_library();
+/// category, then audio effects, then transitions, then whatever has been saved
+/// as a preset.
+///
+/// Presets are passed in rather than read from disk here, because this layer
+/// has no business deciding when a settings file is loaded — and because a test
+/// wants to hand it a set without writing one.
+[[nodiscard]] std::vector<LibraryEntry> effect_library(
+    std::span<const std::string> preset_names = {});
+
+/// The prefix a preset's id carries, so a caller can tell one from an effect
+/// without taking the id apart. `apply_library_entry` refuses these: applying a
+/// preset needs the saved set, which this layer does not hold.
+inline constexpr std::string_view kPresetPrefix = "preset:";
+
+/// The name inside a preset id, or empty when it is not one.
+[[nodiscard]] std::string_view preset_name_of(std::string_view id) noexcept;
 
 /// Applies whatever `id` names to a clip.
 ///

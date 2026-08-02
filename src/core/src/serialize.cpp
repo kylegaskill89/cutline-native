@@ -570,4 +570,35 @@ std::expected<LoadedProject, std::string> from_json(std::string_view text) {
   return loaded;
 }
 
+std::string effects_to_json(const EffectStacks& stacks, int indent) {
+  json out = json::object();
+
+  json video = json::array();
+  for (const ClipEffect& e : stacks.video) video.push_back(write(e));
+  out["effects"] = std::move(video);
+
+  json audio = json::array();
+  for (const AudioClipEffect& e : stacks.audio) audio.push_back(write(e));
+  out["audio_effects"] = std::move(audio);
+
+  return out.dump(indent);
+}
+
+std::expected<EffectStacks, std::string> effects_from_json(std::string_view text) {
+  const json parsed = json::parse(text, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_object()) {
+    return std::unexpected("not a JSON object");
+  }
+
+  EffectStacks out;
+  if (const auto video = parsed.find("effects"); video != parsed.end() && video->is_array()) {
+    for (const json& e : *video) out.video.push_back(read_clip_effect(e));
+  }
+  if (const auto audio = parsed.find("audio_effects");
+      audio != parsed.end() && audio->is_array()) {
+    for (const json& e : *audio) out.audio.push_back(read_audio_effect(e));
+  }
+  return out;
+}
+
 }  // namespace cutline::core

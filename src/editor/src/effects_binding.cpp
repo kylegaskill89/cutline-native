@@ -545,7 +545,12 @@ constexpr std::string_view kTransitionPrefix = "transition:";
 
 }  // namespace
 
-std::vector<LibraryEntry> effect_library() {
+std::string_view preset_name_of(std::string_view id) noexcept {
+  if (!id.starts_with(kPresetPrefix)) return {};
+  return id.substr(kPresetPrefix.size());
+}
+
+std::vector<LibraryEntry> effect_library(std::span<const std::string> preset_names) {
   std::vector<LibraryEntry> out;
 
   // Paths, not names. Twenty video effects in five categories under one flat
@@ -570,6 +575,14 @@ std::vector<LibraryEntry> effect_library() {
                                      std::string(transition_id(kind)),
                                .name = std::string(transition_name(kind)),
                                .folder = "Video Transitions"});
+  }
+
+  // Last, and in their own folder, which is where Premiere keeps them. A
+  // preset is reached for the same way an effect is, so it belongs in the same
+  // panel rather than behind a menu somewhere else.
+  for (const std::string& name : preset_names) {
+    out.push_back(LibraryEntry{
+        .id = std::string(kPresetPrefix) + name, .name = name, .folder = "Presets"});
   }
   return out;
 }

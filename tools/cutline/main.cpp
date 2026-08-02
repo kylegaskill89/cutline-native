@@ -33,6 +33,7 @@
 #include "cutline/editor/import.hpp"
 #include "cutline/editor/inspector.hpp"
 #include "cutline/editor/keyframes.hpp"
+#include "cutline/editor/presets.hpp"
 #include "cutline/editor/monitor_binding.hpp"
 #include "cutline/editor/session.hpp"
 #include "cutline/editor/timeline_binding.hpp"
@@ -496,6 +497,16 @@ struct App {
   /// monitor was handed them. The widget draws shapes and has never heard of an
   /// effect stack, so the mapping back lives here.
   std::vector<std::size_t> mask_effects;
+
+  /// Named effect stacks, read once at startup and written whenever one is
+  /// saved or removed. Application data rather than project data: a look you
+  /// have built up belongs to you, not to whichever project happened to be open
+  /// when you made it.
+  cutline::editor::Presets presets;
+
+  /// What is typed in the preset name field, kept here because the panel it
+  /// lives in is rebuilt from nothing on every edit.
+  std::string preset_name;
 
   /// Which parameters are showing their slider, by the key `ParamRow` carries.
   ///
@@ -1393,6 +1404,55 @@ void build_effect_header(App& app, const cutline::editor::EffectRow& row, std::s
                            [applied, on_remove] { applied(on_remove()); });
 }
 
+/// What the effects library should list, presets included.
+[[nodiscard]] std::vector<cutline::ui::EffectEntry> library_entries(const App& app) {
+  std::vector<std::string> preset_names;
+  for (const cutline::editor::EffectPreset& preset : app.presets.named) {
+    preset_names.push_back(preset.name);
+  }
+
+  std::vector<cutline::ui::EffectEntry> entries;
+  for (const cutline::editor::LibraryEntry& entry :
+       cutline::editor::effect_library(preset_names)) {
+    entries.push_back(cutline::ui::EffectEntry{
+        .id = entry.id, .name = entry.name, .folder = entry.folder});
+  }
+  return entries;
+}
+
+/// Puts the library's list back, which is how a saved preset appears in it.
+///
+/// Setting the items keeps whichever folders are open — they are remembered by
+/// name — so this does not close the tree somebody was working in.
+void refresh_library(App& app) {
+  if (app.library == nullptr) return;
+  app.library->set_items(library_entries(app));
+}
+
+/// Names what is on a clip and keeps it.
+///
+/// Written to disk immediately rather than on exit: a preset is worth having
+/// because it survives, and one lost to a crash an hour later is worse than one
+/// that was never offered.
+void save_preset(App& app, const std::string& clip_id, std::string name) {
+  if (name.empty()) return;
+
+  if (!cutline::editor::save_preset(app.presets, app.session.project(), clip_id,
+                                    std::move(name))) {
+    complain(app.main.window, "There is nothing on this clip to save.");
+    return;
+  }
+
+  if (const auto ok = cutline::editor::write_presets(cutline::editor::default_presets_path(),
+                                                     app.presets);
+      !ok) {
+    complain(app.main.window, "Could not save the preset.\n\n" + ok.error());
+  }
+
+  refresh_library(app);
+  app.inspector_stale = true;
+}
+
 /// The effect stack: a header per effect, its parameters beneath it.
 ///
 /// Copy and paste a whole stack, above whichever stack the clip has.
@@ -1444,6 +1504,29 @@ void build_effect_clipboard_row(App& app, const std::string& clip_id) {
   const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), clip_id);
   clear.set_enabled(clip != nullptr &&
                     !(clip->effects.empty() && clip->audio_effects.empty()));
+
+  // Saving one, on a row of its own. A name typed in place rather than asked
+  // for in a dialog: naming a thing is part of making it, and a modal in the
+  // middle of that is a modal in the way.
+  auto& saving = app.inspector->emplace<Box>(Axis::Horizontal);
+  auto& name = saving.emplace<TextField>(app.preset_name);
+  name.set_placeholder("Preset name");
+  name.set_on_change([&app](const std::string& text) { app.preset_name = text; });
+
+  auto& save = saving.emplace<Button>("Save");
+  // Greyed only for a clip with nothing on it. Deliberately *not* greyed for an
+  // empty name: enabling it would need the panel rebuilt on every keystroke,
+  // and the rebuild would destroy the field being typed into.
+  save.set_enabled(clip != nullptr &&
+                   !(clip->effects.empty() && clip->audio_effects.empty()));
+  save.set_on_click([&app, clip_id, field = &name] {
+    // Read from the control rather than from the copy on `App`, which is only
+    // there so the text survives a rebuild.
+    const std::string wanted = field->text();
+    if (wanted.empty()) return;
+    app.preset_name.clear();
+    save_preset(app, clip_id, wanted);
+  });
 }
 
 /// Where one effect applies.
@@ -4631,6 +4714,25 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
 /// Nothing when the pointer is not over a clip, or over one the entry could not
 /// be applied to: a video effect over a waveform is a drop that has to decline
 /// rather than land somewhere approximate.
+/// Whether an entry could be applied to a clip, presets included.
+///
+/// `library_entry_fits` answers for the catalogue and has never seen a preset,
+/// so this asks the saved set for those — and a preset carrying nothing the
+/// clip could take is refused, exactly as an audio effect over a picture is.
+[[nodiscard]] bool drop_fits(const App& app, const std::string& clip_id,
+                             const std::string& id) {
+  const std::string_view name = cutline::editor::preset_name_of(id);
+  if (name.empty()) {
+    return cutline::editor::library_entry_fits(app.session.project(), clip_id, id);
+  }
+
+  const cutline::editor::EffectPreset* saved =
+      cutline::editor::find_preset(app.presets, name);
+  if (saved == nullptr) return false;
+  return cutline::editor::apply_preset(app.session.project(), clip_id, *saved) !=
+         app.session.project();
+}
+
 /// What a drop on the program monitor would land on: whatever the monitor is
 /// showing at the playhead.
 ///
@@ -4666,7 +4768,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   }
 
   if (!found.has_value()) return std::nullopt;
-  if (!cutline::editor::library_entry_fits(project, *found, id)) return std::nullopt;
+  if (!drop_fits(app, *found, id)) return std::nullopt;
   return found;
 }
 
@@ -4691,9 +4793,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   if (block->block >= blocks.size()) return std::nullopt;
 
   const std::string& clip_id = blocks[block->block].id;
-  if (!cutline::editor::library_entry_fits(app.session.project(), clip_id, id)) {
-    return std::nullopt;
-  }
+  if (!drop_fits(app, clip_id, id)) return std::nullopt;
   return clip_id;
 }
 
@@ -4746,7 +4846,9 @@ void show_library_drop(App& app, const std::string& id, double x, double y) {
   search.set_placeholder("Search effects");
 
   auto& browser = panel->emplace<cutline::ui::EffectsBrowser>();
-  browser.set_items([] {
+  browser.set_items([app] {
+    if (app != nullptr) return library_entries(*app);
+
     std::vector<cutline::ui::EffectEntry> entries;
     for (const cutline::editor::LibraryEntry& entry : cutline::editor::effect_library()) {
       entries.push_back(cutline::ui::EffectEntry{
@@ -4774,9 +4876,18 @@ void show_library_drop(App& app, const std::string& id, double x, double y) {
     // a mixed selection takes the effect on the clips it suits and leaves the
     // rest alone, which is what Premiere does too.
     const auto apply_to = [app](std::span<const std::string> clip_ids, const std::string& id) {
+      // A preset is applied from the saved set rather than by the binding: the
+      // binding knows what an effect *type* means and has never seen a preset,
+      // which is what keeps a settings file out of a pure layer.
+      const std::string_view preset = cutline::editor::preset_name_of(id);
+      const cutline::editor::EffectPreset* saved =
+          preset.empty() ? nullptr : cutline::editor::find_preset(app->presets, preset);
+
       cutline::core::Project next = app->session.project();
       for (const std::string& clip_id : clip_ids) {
-        next = cutline::editor::apply_library_entry(std::move(next), clip_id, id);
+        next = saved != nullptr
+                   ? cutline::editor::apply_preset(std::move(next), clip_id, *saved)
+                   : cutline::editor::apply_library_entry(std::move(next), clip_id, id);
       }
       app->session.apply(std::move(next));
       refresh_timeline(*app);
@@ -7036,6 +7147,13 @@ int main(int argc, char** argv) {
   }
   // Reconciled against the panels this build has, whatever the file said.
   cutline::editor::settle(app.workspaces, known_panels());
+
+  // And the saved presets, before the library is built, so they are in the tree
+  // from the first frame rather than appearing after it.
+  if (auto read = cutline::editor::read_presets(cutline::editor::default_presets_path());
+      read.has_value()) {
+    app.presets = std::move(*read);
+  }
 
   app.main.host = std::make_unique<WidgetHost>(build_interface(&app));
 

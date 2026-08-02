@@ -22,6 +22,7 @@ add_library(cutline_editor
   src/titles.cpp
   src/transitions.cpp
   src/updates.cpp
+  src/presets.cpp
   src/workspace.cpp)
 add_library(cutline::editor ALIAS cutline_editor)
 
