@@ -4783,13 +4783,17 @@ void show_library_drop(App& app, const std::string& id, double x, double y) {
 /// a narrow column as a whole region, and a row of strips needs a width it
 /// cannot count on — the master fader learned that the hard way and is stacked
 /// for the same reason.
-void build_track_strip(App& app, Box& column, const cutline::core::Track& track) {
+void build_track_strip(App& app, Box& column, const cutline::core::Track& track,
+                       std::size_t index) {
   const std::string track_id = track.id;
 
   // No mute or solo here. They are on the track head in the timeline, which is
   // where Premiere keeps them too and where they are while you are editing —
   // a second pair somewhere else is two controls for one flag.
-  column.emplace<Label>(track.label.empty() ? track_id : track.label).set_bold(true);
+  // The same name the timeline shows. The raw id is an internal string and
+  // reading "a1" in one panel and "A1" in another is two names for one track.
+  column.emplace<Label>(cutline::editor::default_track_label(app.session.project(), index))
+      .set_bold(true);
 
   auto& fader = column.emplace<Box>(Axis::Horizontal);
   fader.emplace<Label>("Volume").set_small(true);
@@ -4854,9 +4858,10 @@ void build_track_strip(App& app, Box& column, const cutline::core::Track& track)
   // mixer and puts the master at the right-hand end of it; stacked, the master
   // going first is what the same arrangement reads as.
   if (app != nullptr) {
-    for (const cutline::core::Track& track : app->session.project().tracks) {
-      if (track.kind != cutline::core::TrackKind::Audio) continue;
-      build_track_strip(*app, column, track);
+    const std::vector<cutline::core::Track>& tracks = app->session.project().tracks;
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+      if (tracks[i].kind != cutline::core::TrackKind::Audio) continue;
+      build_track_strip(*app, column, tracks[i], i);
     }
   }
 
