@@ -530,6 +530,9 @@ std::string_view interp_name(core::Interp mode) noexcept {
     case core::Interp::Linear: return "Linear";
     case core::Interp::Hold: return "Hold";
     case core::Interp::Ease: return "Ease";
+    // Named for what it is rather than for a shape, because it has no fixed
+    // one — it is whatever the handles on the graph have been pulled into.
+    case core::Interp::Bezier: return "Bezier";
   }
   return "Linear";
 }
@@ -538,6 +541,11 @@ core::Interp next_interp(core::Interp mode) noexcept {
   switch (mode) {
     case core::Interp::Linear: return core::Interp::Hold;
     case core::Interp::Hold: return core::Interp::Ease;
+    // Bezier is not in the cycle. It is a shape somebody drew, and a chip that
+    // stepped into it would have to invent handles; a chip that stepped *out*
+    // of it silently throws that shape away, which the chip does do — that is
+    // what it is for, and it is one undo away.
+    case core::Interp::Bezier:
     case core::Interp::Ease: return core::Interp::Linear;
   }
   return core::Interp::Linear;

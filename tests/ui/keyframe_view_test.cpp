@@ -657,6 +657,204 @@ TEST(KeyframeView, ACurveThatNeverMovesIsNotADivisionByZero) {
   EXPECT_TRUE(painter.clips_balanced());
 }
 
+// ----------------------------------------------------------- bezier handles --
+//
+// Drawn on the graph of an expanded lane, for the keyframes that are selected,
+// and dragged in both directions at once. The view knows what a handle looks
+// like and nothing about what one means.
+
+/// Two keyframes with values and handles on them, which is what a handle needs
+/// to be placed against.
+[[nodiscard]] KeyframeView::Model with_handles() {
+  KeyframeView::Model model = with_curve();
+  model.lanes[0].values = {0.0, 63.0};
+  model.lanes[0].handles = {KeyframeHandles{}, KeyframeHandles{}};
+  return model;
+}
+
+/// Fills a view in with the handled model and lays it out, expanded.
+void shape(KeyframeView& view) {
+  view.set_model(with_handles());
+  view.set_expanded("Position X", true);
+  view.arrange(Rect{0.0, 0.0, 496.0, 260.0}, flat_context());
+}
+
+TEST(KeyframeHandles, AreOnlyShownForSelectedKeyframes) {
+  KeyframeView view;
+  shape(view);
+  EXPECT_TRUE(view.handle_rect(0, 0, KeyframeHandle::Out).empty());
+
+  view.set_selection({KeyframeHit{.lane = 0, .index = 0, .found = true}});
+  EXPECT_FALSE(view.handle_rect(0, 0, KeyframeHandle::Out).empty());
+}
+
+TEST(KeyframeHandles, ThereIsNoHandleForASegmentThatIsNotThere) {
+  KeyframeView view;
+  shape(view);
+  view.set_selection({KeyframeHit{.lane = 0, .index = 0, .found = true},
+                      KeyframeHit{.lane = 0, .index = 1, .found = true}});
+
+  EXPECT_TRUE(view.handle_rect(0, 0, KeyframeHandle::In).empty()) << "nothing before the first";
+  EXPECT_TRUE(view.handle_rect(0, 1, KeyframeHandle::Out).empty()) << "nothing after the last";
+  EXPECT_FALSE(view.handle_rect(0, 0, KeyframeHandle::Out).empty());
+  EXPECT_FALSE(view.handle_rect(0, 1, KeyframeHandle::In).empty());
+}
+
+TEST(KeyframeHandles, ALaneWithNoValuesDrawsNone) {
+  // Without the keyframes own values there is nothing to place a handle
+  // against, and guessing would put a control where it does not belong.
+  KeyframeView view;
+  view.set_model(with_curve());
+  view.set_expanded("Position X", true);
+  view.arrange(Rect{0.0, 0.0, 496.0, 260.0}, flat_context());
+  view.set_selection({KeyframeHit{.lane = 0, .index = 0, .found = true}});
+
+  EXPECT_TRUE(view.handle_rect(0, 0, KeyframeHandle::Out).empty());
+}
+
+TEST(KeyframeHandles, AClosedLaneHasNone) {
+  KeyframeView view;
+  view.set_model(with_handles());
+  view.arrange(Rect{0.0, 0.0, 496.0, 260.0}, flat_context());
+  view.set_selection({KeyframeHit{.lane = 0, .index = 0, .found = true}});
+
+  EXPECT_TRUE(view.handle_rect(0, 0, KeyframeHandle::Out).empty());
+}
+
+TEST(KeyframeHandles, TheDefaultSitsAThirdOfTheWayAlongTheSegment) {
+  KeyframeView view;
+  shape(view);
+  view.set_selection({KeyframeHit{.lane = 0, .index = 0, .found = true}});
+
+  const Rect box = view.handle_rect(0, 0, KeyframeHandle::Out);
+  const double centre = box.x + box.width / 2.0;
+  EXPECT_NEAR(centre, view.x_of(10.0 / 3.0), 0.5);
+}
+
+TEST(KeyframeHandles, APressOnOneTakesItRatherThanTheKeyframe) {
+  KeyframeView view;
+  shape(view);
+  view.set_selection({KeyframeHit{.lane = 0, .index = 0, .found = true}});
+
+  const Rect box = view.handle_rect(0, 0, KeyframeHandle::Out);
+  std::size_t lane = 99;
+  std::size_t index = 99;
+  const KeyframeHandle side =
+      view.handle_at(box.x + box.width / 2.0, box.y + box.height / 2.0, lane, index);
+
+  EXPECT_EQ(side, KeyframeHandle::Out);
+  EXPECT_EQ(lane, 0u);
+  EXPECT_EQ(index, 0u);
+}
+
+/// A view in a host, expanded, with the first keyframe picked out — the state
+/// every drag below starts from.
+struct Shaped {
+  Shaped() {
+    auto owned = std::make_unique<Widget>();
+    Widget* root = owned.get();
+    host = std::make_unique<WidgetHost>(std::move(owned));
+    view = &root->emplace<KeyframeView>();
+    view->set_model(with_handles());
+    view->set_expanded("Position X", true);
+    host->resize(Rect{0.0, 0.0, 600.0, 400.0}, flat_context());
+    view->arrange(Rect{0.0, 0.0, 496.0, 260.0}, flat_context());
+    view->set_selection({KeyframeHit{.lane = 0, .index = 0, .found = true}});
+  }
+
+  std::unique_ptr<WidgetHost> host;
+  KeyframeView* view = nullptr;
+};
+
+TEST(KeyframeHandles, DraggingOneReportsWhereItWentInSegmentUnits) {
+  Shaped test;
+  double reported_x = -1.0;
+  int commits = 0;
+  test.view->set_on_handle_commit(
+      [&](std::size_t, std::size_t, KeyframeHandle, double x, double) {
+        reported_x = x;
+        ++commits;
+      });
+
+  const Rect box = test.view->handle_rect(0, 0, KeyframeHandle::Out);
+  const double from_x = box.x + box.width / 2.0;
+  const double from_y = box.y + box.height / 2.0;
+  // Two thirds along the ten-second segment.
+  const double to_x = test.view->x_of(20.0 / 3.0);
+
+  test.host->mouse_down(press(from_x, from_y));
+  test.host->mouse_move(MouseEvent{.x = to_x, .y = from_y});
+  test.host->mouse_up(press(to_x, from_y));
+
+  EXPECT_EQ(commits, 1);
+  EXPECT_NEAR(reported_x, 2.0 / 3.0, 0.02);
+}
+
+TEST(KeyframeHandles, ADragIsOneCommitAndManyPreviews) {
+  Shaped test;
+  int previews = 0;
+  int commits = 0;
+  test.view->set_on_handle(
+      [&](std::size_t, std::size_t, KeyframeHandle, double, double) { ++previews; });
+  test.view->set_on_handle_commit(
+      [&](std::size_t, std::size_t, KeyframeHandle, double, double) { ++commits; });
+
+  const Rect box = test.view->handle_rect(0, 0, KeyframeHandle::Out);
+  const double x = box.x + box.width / 2.0;
+  const double y = box.y + box.height / 2.0;
+  test.host->mouse_down(press(x, y));
+  for (int i = 1; i <= 5; ++i) test.host->mouse_move(MouseEvent{.x = x + i * 6.0, .y = y - i * 2.0});
+  test.host->mouse_up(press(x + 30.0, y - 10.0));
+
+  EXPECT_GT(previews, 1) << "the curve has to follow the drag";
+  EXPECT_EQ(commits, 1) << "and the document is written once";
+}
+
+TEST(KeyframeHandles, IsClampedInTimeButNotInValue) {
+  Shaped test;
+  double got_x = -1.0;
+  double got_y = 0.0;
+  test.view->set_on_handle_commit(
+      [&](std::size_t, std::size_t, KeyframeHandle, double x, double y) {
+        got_x = x;
+        got_y = y;
+      });
+
+  const Rect box = test.view->handle_rect(0, 0, KeyframeHandle::Out);
+  const double x = box.x + box.width / 2.0;
+  const double y = box.y + box.height / 2.0;
+  // Dragged back before its own keyframe and far above the graph.
+  const double away_x = test.view->x_of(0.0) - 60.0;
+  const double away_y = test.view->graph_rect(0).y - 200.0;
+  test.host->mouse_down(press(x, y));
+  test.host->mouse_move(MouseEvent{.x = away_x, .y = away_y});
+  test.host->mouse_up(press(away_x, away_y));
+
+  EXPECT_DOUBLE_EQ(got_x, 0.0) << "a curve cannot be at two values in one instant";
+  EXPECT_GT(got_y, 1.0) << "but overshoot is a shape somebody wants";
+}
+
+TEST(KeyframeHandles, AFlatCurveIsNotADivisionByZero) {
+  KeyframeView view;
+  KeyframeView::Model model{
+      .duration = 10.0,
+      .lanes = {KeyframeView::Lane{.name = "X",
+                                   .times = {0.0, 10.0},
+                                   .curve = {1.0, 1.0, 1.0},
+                                   .values = {1.0, 1.0},
+                                   .handles = {KeyframeHandles{}, KeyframeHandles{}}}}};
+  view.set_model(std::move(model));
+  view.set_expanded("X", true);
+  view.arrange(Rect{0.0, 0.0, 496.0, 200.0}, flat_context());
+  view.set_selection({KeyframeHit{.lane = 0, .index = 0, .found = true}});
+
+  EXPECT_FALSE(view.graph_value_at(0, view.graph_rect(0).y + 10.0).has_value());
+
+  RecordingPainter painter;
+  view.paint(painter, default_theme());
+  EXPECT_TRUE(painter.clips_balanced());
+}
+
 TEST(KeyframeView, DeleteWithNothingSelectedIsNotSwallowed) {
   // It has to carry on to whatever else Delete means — removing the selected
   // clip, for one.

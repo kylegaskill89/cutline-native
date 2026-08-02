@@ -109,6 +109,36 @@ struct KeyframeModel {
                                                 std::string_view clip_id, const ParamRef& ref,
                                                 double at, core::Interp mode);
 
+/// Which of a keyframe's two handles a drag has hold of.
+enum class HandleSide {
+  /// Toward the next keyframe.
+  Out,
+  /// Back toward the previous one.
+  In,
+};
+
+/// Moves one handle on the keyframe nearest `at`, and switches that segment to
+/// Bezier if it was not already.
+///
+/// `x` and `y` are in normalised segment space, measured from the keyframe's own
+/// end — see `core::Keyframe`. `x` is clamped to 0..1 because a handle dragged
+/// backwards past its own keyframe describes a curve that is at two values at
+/// the same instant; `y` deliberately is not, because a handle pulled past the
+/// far keyframe is how an animation is made to overshoot and come back.
+///
+/// Switching the *segment*, not the keyframe: interpolation is stored on the
+/// keyframe a segment leaves, so dragging the outgoing handle changes this
+/// keyframe's mode and dragging the incoming one changes the previous
+/// keyframe's. A drag that reached for the mode of whichever keyframe it was
+/// nearest would bend a segment nobody was pointing at.
+///
+/// Returns the project unchanged when nothing is near `at`, or when the handle
+/// would shape a segment that is not there — the outgoing handle of the last
+/// keyframe, or the incoming handle of the first.
+[[nodiscard]] core::Project set_keyframe_handle(core::Project project,
+                                                std::string_view clip_id, const ParamRef& ref,
+                                                double at, HandleSide side, double x, double y);
+
 /// Removes the keyframe nearest `at`.
 ///
 /// Unchanged when it is the last one: a property with animation on and no

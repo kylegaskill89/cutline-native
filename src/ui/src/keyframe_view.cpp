@@ -231,6 +231,107 @@ std::size_t KeyframeView::lane_at(double y) const {
   return model_.lanes.size();
 }
 
+namespace {
+
+/// The value span a lane's graph is drawn against, and the inset inside it.
+///
+/// Against the curve's own highest and lowest rather than the parameter's
+/// range, for the reason `paint_graph` gives. Kept here so the painting and the
+/// hit testing cannot drift apart about where a value sits.
+constexpr double kGraphInset = 4.0;
+
+}  // namespace
+
+double KeyframeView::graph_y_of(std::size_t lane, double value) const {
+  const Rect box = graph_rect(lane);
+  if (box.empty() || lane >= model_.lanes.size()) return 0.0;
+  const std::vector<double>& curve = model_.lanes[lane].curve;
+  if (curve.size() < 2) return box.y + box.height / 2.0;
+
+  const auto [low, high] = std::ranges::minmax(curve);
+  const double span = high - low;
+  const double fraction = span < kShortest ? 0.5 : (value - low) / span;
+  return box.bottom() - kGraphInset - fraction * (box.height - kGraphInset * 2.0);
+}
+
+std::optional<double> KeyframeView::graph_value_at(std::size_t lane, double y) const {
+  const Rect box = graph_rect(lane);
+  if (box.empty() || lane >= model_.lanes.size()) return std::nullopt;
+  const std::vector<double>& curve = model_.lanes[lane].curve;
+  if (curve.size() < 2) return std::nullopt;
+
+  const auto [low, high] = std::ranges::minmax(curve);
+  const double span = high - low;
+  // A curve that never moves is drawn down the middle, and there is no scale to
+  // invert. Saying so is better than dividing by nothing and reporting a value
+  // that would send a handle to infinity.
+  if (span < kShortest) return std::nullopt;
+
+  const double usable = box.height - kGraphInset * 2.0;
+  if (usable <= 0.0) return std::nullopt;
+  return low + (box.bottom() - kGraphInset - y) / usable * span;
+}
+
+Rect KeyframeView::handle_rect(std::size_t lane, std::size_t index,
+                               KeyframeHandle side) const {
+  if (side == KeyframeHandle::None || lane >= model_.lanes.size()) return Rect{};
+  if (!is_selected(lane, index)) return Rect{};
+
+  const Rect box = graph_rect(lane);
+  if (box.empty()) return Rect{};
+
+  const Lane& row = model_.lanes[lane];
+  // Values and handles are optional on a lane. Without them there is nothing to
+  // place a handle against, and guessing would put a control somewhere it does
+  // not belong.
+  if (row.values.size() != row.times.size() || row.handles.size() != row.times.size()) {
+    return Rect{};
+  }
+  if (index >= row.times.size()) return Rect{};
+
+  // The keyframe at the far end of the segment this handle shapes. Without one
+  // there is no segment, and a handle for it would shape nothing.
+  const bool outgoing = side == KeyframeHandle::Out;
+  if (outgoing && index + 1 >= row.times.size()) return Rect{};
+  if (!outgoing && index == 0) return Rect{};
+  const std::size_t far = outgoing ? index + 1 : index - 1;
+
+  const KeyframeHandles& handles = row.handles[index];
+  const double fx = outgoing ? handles.out_x : handles.in_x;
+  const double fy = outgoing ? handles.out_y : handles.in_y;
+
+  // Measured from this keyframe toward the far one, which is what makes the two
+  // sides symmetric: pulling either outward is a larger number.
+  const double t = row.times[index] + (row.times[far] - row.times[index]) * fx;
+  const double v = row.values[index] + (row.values[far] - row.values[index]) * fy;
+
+  const double x = x_of(t);
+  const double y = graph_y_of(lane, v);
+  return Rect{x - kHandleSize, y - kHandleSize, kHandleSize * 2.0, kHandleSize * 2.0};
+}
+
+KeyframeHandle KeyframeView::handle_at(double x, double y, std::size_t& lane,
+                                       std::size_t& index) const {
+  for (std::size_t l = 0; l < model_.lanes.size(); ++l) {
+    if (graph_rect(l).empty()) continue;
+    for (const KeyframeHit& picked : selection_) {
+      if (picked.lane != l) continue;
+      for (const KeyframeHandle side : {KeyframeHandle::Out, KeyframeHandle::In}) {
+        const Rect box = handle_rect(l, picked.index, side);
+        if (box.empty()) continue;
+        const double cx = box.x + box.width / 2.0;
+        const double cy = box.y + box.height / 2.0;
+        if (std::hypot(cx - x, cy - y) <= kHandleReach) {
+          lane = l;
+          index = picked.index;
+          return side;
+        }
+      }
+    }
+  }
+  return KeyframeHandle::None;
+}
+
 KeyframeHit KeyframeView::keyframe_at(double x, double y) const {
   const std::size_t lane = lane_at(y);
   if (lane >= model_.lanes.size()) return {};
@@ -335,6 +436,35 @@ void KeyframeView::paint_graph(Painter& painter, const Theme& theme, std::size_t
   for (std::size_t i = 1; i < curve.size(); ++i) {
     painter.line(x_of(t_of(i - 1)), y_of(curve[i - 1]), x_of(t_of(i)), y_of(curve[i]),
                  theme.accent, 1.5);
+  }
+
+  // The handles of whichever keyframes are selected, on top of the curve.
+  //
+  // Only the selection. Every handle of every keyframe at once is a thicket
+  // nobody can aim at, and it is the selection that any operation acts on
+  // anyway. Premiere shows them the same way.
+  const Lane& row = model_.lanes[lane];
+  if (row.values.size() == row.times.size() && row.handles.size() == row.times.size()) {
+    for (const KeyframeHit& picked : selection_) {
+      if (picked.lane != lane || picked.index >= row.times.size()) continue;
+
+      const double anchor_x = x_of(row.times[picked.index]);
+      const double anchor_y = y_of(row.values[picked.index]);
+      for (const KeyframeHandle side : {KeyframeHandle::Out, KeyframeHandle::In}) {
+        const Rect box = handle_rect(lane, picked.index, side);
+        if (box.empty()) continue;
+
+        // Solid on a segment that is listening to it, hollow on one that is
+        // not: a keyframe still set to Linear shows where its handles *would*
+        // be, and pulling one is what switches the segment over. A filled
+        // control that did nothing would be a lie.
+        const bool live = row.handles[picked.index].bezier;
+        const double cx = box.x + box.width / 2.0;
+        const double cy = box.y + box.height / 2.0;
+        painter.line(anchor_x, anchor_y, cx, cy, live ? theme.accent : faint, 1.0);
+        painter.fill(box, 0.0, Fill::solid(live ? theme.accent : faint));
+      }
+    }
   }
 
   painter.pop_clip();
@@ -487,6 +617,31 @@ bool KeyframeView::on_mouse_down(const MouseEvent& event) {
 
   if (event.button != MouseButton::Left) return false;
 
+  // A handle, before the chevron and before the keyframes. It is drawn on top
+  // of the graph and sits inside a lane's row, so anything tested first would
+  // take the press out from under it.
+  {
+    std::size_t lane = 0;
+    std::size_t index = 0;
+    if (const KeyframeHandle side = handle_at(event.x, event.y, lane, index);
+        side != KeyframeHandle::None) {
+      handle_side_ = side;
+      handle_lane_ = lane;
+      handle_index_ = index;
+      const KeyframeHandles& handles = model_.lanes[lane].handles[index];
+      handle_x_ = side == KeyframeHandle::Out ? handles.out_x : handles.in_x;
+      handle_y_ = side == KeyframeHandle::Out ? handles.out_y : handles.in_y;
+
+      dragging_ = {};
+      banding_ = false;
+      pressed_ = true;
+      moved_ = false;
+      press_x_ = event.x;
+      press_y_ = event.y;
+      return true;
+    }
+  }
+
   // The chevron, before anything else — it sits in the gutter, where a press
   // would otherwise begin a rubber band that could never select anything.
   if (const std::size_t lane = lane_at(event.y); lane < model_.lanes.size()) {
@@ -545,17 +700,62 @@ bool KeyframeView::on_mouse_down(const MouseEvent& event) {
   return true;
 }
 
+std::pair<double, double> KeyframeView::handle_from(double x, double y) const {
+  double fx = handle_x_;
+  double fy = handle_y_;
+  if (handle_lane_ >= model_.lanes.size()) return {fx, fy};
+
+  const Lane& row = model_.lanes[handle_lane_];
+  if (row.values.size() != row.times.size() || handle_index_ >= row.times.size()) {
+    return {fx, fy};
+  }
+
+  const bool outgoing = handle_side_ == KeyframeHandle::Out;
+  if (outgoing && handle_index_ + 1 >= row.times.size()) return {fx, fy};
+  if (!outgoing && handle_index_ == 0) return {fx, fy};
+  const std::size_t far = outgoing ? handle_index_ + 1 : handle_index_ - 1;
+
+  // Both axes are a fraction of the segment, measured from this keyframe's own
+  // end, so the arithmetic is the same in each direction and the sign falls out
+  // of which keyframe is further along.
+  if (const double span = row.times[far] - row.times[handle_index_]; std::abs(span) > kShortest) {
+    fx = (time_at(x) - row.times[handle_index_]) / span;
+  }
+  if (const std::optional<double> value = graph_value_at(handle_lane_, y); value.has_value()) {
+    if (const double rise = row.values[far] - row.values[handle_index_];
+        std::abs(rise) > kShortest) {
+      fy = (*value - row.values[handle_index_]) / rise;
+    }
+  }
+
+  // Clamped in time only. A handle dragged back past its own keyframe describes
+  // a curve at two values in the same instant; one pulled past the far keyframe
+  // in *value* is an overshoot, which is a shape somebody wants.
+  return {std::clamp(fx, 0.0, 1.0), fy};
+}
+
 bool KeyframeView::on_mouse_move(const MouseEvent& event) {
   if (!pressed_) return false;
 
   if (!moved_) {
     // Vertically too, for the band: a sweep straight down a column of lanes is
     // a perfectly ordinary gesture and moves the pointer no distance sideways.
-    const double travelled = banding_ ? std::max(std::abs(event.x - press_x_),
-                                                 std::abs(event.y - press_y_))
-                                      : std::abs(event.x - press_x_);
+    // Vertically too for a handle, which is dragged in both directions — a
+    // handle pulled straight up moves no distance sideways at all.
+    const bool two_dimensional = banding_ || handle_side_ != KeyframeHandle::None;
+    const double travelled = two_dimensional ? std::max(std::abs(event.x - press_x_),
+                                                        std::abs(event.y - press_y_))
+                                             : std::abs(event.x - press_x_);
     if (travelled < kDragThreshold) return true;
     moved_ = true;
+  }
+
+  if (handle_side_ != KeyframeHandle::None) {
+    const auto [x, y] = handle_from(event.x, event.y);
+    handle_x_ = x;
+    handle_y_ = y;
+    if (on_handle_) on_handle_(handle_lane_, handle_index_, handle_side_, x, y);
+    return true;
   }
 
   if (banding_) {
@@ -574,6 +774,17 @@ bool KeyframeView::on_mouse_move(const MouseEvent& event) {
 bool KeyframeView::on_mouse_up(const MouseEvent& event) {
   if (event.button != MouseButton::Left || !pressed_) return false;
   pressed_ = false;
+
+  if (handle_side_ != KeyframeHandle::None) {
+    const KeyframeHandle side = std::exchange(handle_side_, KeyframeHandle::None);
+    if (moved_) {
+      moved_ = false;
+      if (on_handle_commit_) {
+        on_handle_commit_(handle_lane_, handle_index_, side, handle_x_, handle_y_);
+      }
+    }
+    return true;
+  }
 
   if (banding_) {
     banding_ = false;

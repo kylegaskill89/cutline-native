@@ -47,6 +47,7 @@ NLOHMANN_JSON_SERIALIZE_ENUM(Interp, {
                                          {Interp::Linear, "linear"},
                                          {Interp::Hold, "hold"},
                                          {Interp::Ease, "ease"},
+                                         {Interp::Bezier, "bezier"},
                                      })
 
 namespace {
@@ -74,6 +75,12 @@ void put_if_set(json& j, const char* key, const std::optional<T>& value) {
 json write(const Keyframe& k) {
   json j{{"t", k.t}, {"v", k.v}};
   if (k.e != Interp::Linear) j["e"] = k.e;  // linear is the overwhelming default
+  // Handles only when they mean something. Every keyframe carries them and
+  // almost none has moved them, so writing them always would double the size of
+  // an animated project's file to say "untouched" over and over.
+  if (k.e == Interp::Bezier) {
+    j["h"] = json::array({k.out_x, k.out_y, k.in_x, k.in_y});
+  }
   return j;
 }
 
@@ -268,11 +275,22 @@ std::vector<Keyframe> read_keyframes(const json& j) {
   std::vector<Keyframe> out;
   if (!j.is_array()) return out;
   for (const json& k : j) {
-    out.push_back(Keyframe{
+    Keyframe frame{
         .t = read_or(k, "t", 0.0),
         .v = read_or(k, "v", 0.0),
         .e = read_or(k, "e", Interp::Linear),
-    });
+    };
+    // Absent in every file written before there were handles, and absent in
+    // most written since — the defaults are the cubic that is a straight line,
+    // which is what a keyframe without them meant.
+    if (const auto handles = k.find("h");
+        handles != k.end() && handles->is_array() && handles->size() == 4) {
+      frame.out_x = (*handles)[0].get<double>();
+      frame.out_y = (*handles)[1].get<double>();
+      frame.in_x = (*handles)[2].get<double>();
+      frame.in_y = (*handles)[3].get<double>();
+    }
+    out.push_back(frame);
   }
   return out;
 }

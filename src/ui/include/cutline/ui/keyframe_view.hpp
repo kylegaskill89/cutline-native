@@ -22,12 +22,40 @@
 
 #include <cstddef>
 #include <functional>
+#include <optional>
+#include <utility>
 #include <set>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace cutline::ui {
+
+/// Which of a keyframe's two handles a point is on.
+enum class KeyframeHandle {
+  None,
+  /// Toward the next keyframe.
+  Out,
+  /// Back toward the previous one.
+  In,
+};
+
+/// One keyframe's bezier handles, in normalised segment space: x a fraction of
+/// the segment's duration, y a fraction of its value change, both measured from
+/// this keyframe's own end. The view never interprets them beyond drawing —
+/// what a handle *means* is the model's business.
+struct KeyframeHandles {
+  double out_x = 1.0 / 3.0;
+  double out_y = 1.0 / 3.0;
+  double in_x = 1.0 / 3.0;
+  double in_y = 1.0 / 3.0;
+  /// The segment *leaving* this keyframe is shaped by handles rather than by a
+  /// fixed curve. Drawn differently, because a handle on a segment that is not
+  /// listening to it would be a control that does nothing.
+  bool bezier = false;
+
+  friend bool operator==(const KeyframeHandles&, const KeyframeHandles&) = default;
+};
 
 /// Where in the view a point lands.
 struct KeyframeHit {
@@ -55,6 +83,16 @@ class KeyframeView : public Widget {
     /// core's job and a widget that did it would be a widget that had opinions
     /// about easing.
     std::vector<double> curve;
+
+    /// Each keyframe's own value, one per entry in `times`, in the same units
+    /// as `curve`. Empty when the caller has nothing to say, and then no
+    /// handles are drawn — which is the honest answer, since a handle has to be
+    /// placed against the two values it sits between.
+    std::vector<double> values;
+
+    /// Each keyframe's handles, one per entry in `times`. Empty for the same
+    /// reason and with the same result.
+    std::vector<KeyframeHandles> handles;
 
     friend bool operator==(const Lane&, const Lane&) = default;
   };
@@ -172,6 +210,23 @@ class KeyframeView : public Widget {
   void set_on_copy(std::function<void()> on_copy) { on_copy_ = std::move(on_copy); }
   void set_on_paste(std::function<void()> on_paste) { on_paste_ = std::move(on_paste); }
 
+  /// A handle was dragged. `x` and `y` are in normalised segment space, ready
+  /// for the model. Called on every move for a preview; the commit is the one
+  /// that should be written down, and carries where the handle started so an
+  /// undo can put it back.
+  void set_on_handle(
+      std::function<void(std::size_t lane, std::size_t index, KeyframeHandle side, double x,
+                         double y)>
+          on_handle) {
+    on_handle_ = std::move(on_handle);
+  }
+  void set_on_handle_commit(
+      std::function<void(std::size_t lane, std::size_t index, KeyframeHandle side, double x,
+                         double y)>
+          on_commit) {
+    on_handle_commit_ = std::move(on_commit);
+  }
+
   /// A graph was opened or closed, by name.
   ///
   /// Reported rather than merely remembered here, because the panel this lives
@@ -216,6 +271,33 @@ class KeyframeView : public Widget {
   [[nodiscard]] double x_of(double t) const;
   [[nodiscard]] double time_at(double x) const;
 
+  /// Half the side of a handle's square, and how far from its centre a press
+  /// still counts as being on it.
+  static constexpr double kHandleSize = 3.0;
+  static constexpr double kHandleReach = 6.0;
+
+  /// Where a handle sits, in widget pixels. Empty when the lane is not
+  /// expanded, when there is no segment on that side, or when the caller
+  /// supplied no values to place it against.
+  ///
+  /// Only for keyframes that are **selected**. Every handle of every keyframe
+  /// on every lane at once is a thicket nobody can aim at, and Premiere shows
+  /// them for the selection too.
+  [[nodiscard]] Rect handle_rect(std::size_t lane, std::size_t index,
+                                 KeyframeHandle side) const;
+
+  /// The handle at a point, if a press there would grab one. `lane` and `index`
+  /// name which keyframe it belongs to.
+  [[nodiscard]] KeyframeHandle handle_at(double x, double y, std::size_t& lane,
+                                         std::size_t& index) const;
+
+  /// Where a value sits inside a lane's graph, and back again. The graph is
+  /// scaled to the curve's own highest and lowest, so this needs the lane.
+  /// `value_at` returns nothing when the curve is flat, where there is no
+  /// scale to invert.
+  [[nodiscard]] double graph_y_of(std::size_t lane, double value) const;
+  [[nodiscard]] std::optional<double> graph_value_at(std::size_t lane, double y) const;
+
   /// The keyframe at a point, if a press there would grab one.
   [[nodiscard]] KeyframeHit keyframe_at(double x, double y) const;
   /// Which lane a y falls in. Past the end when none.
@@ -245,6 +327,11 @@ class KeyframeView : public Widget {
   void paint_graph(Painter& painter, const Theme& theme, std::size_t lane) const;
   /// Replaces the selection with everything the rubber band covers.
   void select_within(const Rect& band, bool add);
+  /// Turns a pointer position into the handle it describes, in normalised
+  /// segment space. Falls back to whatever the handle already was on either
+  /// axis it cannot answer for — a flat curve has no vertical scale to invert,
+  /// and a segment of no duration has no horizontal one.
+  [[nodiscard]] std::pair<double, double> handle_from(double x, double y) const;
   /// Asks for a fresh frame without asking for a fresh layout.
   void repaint();
 
@@ -276,6 +363,14 @@ class KeyframeView : public Widget {
   /// drag that goes nowhere reports nothing.
   double drag_from_ = 0.0;
 
+  /// The handle drag in progress. Kept apart from `dragging_` for the same
+  /// reason the band is: a press takes hold of exactly one thing.
+  KeyframeHandle handle_side_ = KeyframeHandle::None;
+  std::size_t handle_lane_ = 0;
+  std::size_t handle_index_ = 0;
+  double handle_x_ = 0.0;
+  double handle_y_ = 0.0;
+
   double row_height_ = 22.0;
   double ruler_height_ = 20.0;
   double font_size_ = 12.0;
@@ -292,6 +387,9 @@ class KeyframeView : public Widget {
   std::function<void()> on_copy_;
   std::function<void()> on_paste_;
   std::function<void(const std::string&, bool)> on_expand_;
+  std::function<void(std::size_t, std::size_t, KeyframeHandle, double, double)> on_handle_;
+  std::function<void(std::size_t, std::size_t, KeyframeHandle, double, double)>
+      on_handle_commit_;
 };
 
 }  // namespace cutline::ui

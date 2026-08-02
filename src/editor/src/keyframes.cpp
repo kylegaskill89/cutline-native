@@ -215,6 +215,45 @@ core::Project set_keyframe_interp(core::Project project, std::string_view clip_i
                 });
 }
 
+core::Project set_keyframe_handle(core::Project project, std::string_view clip_id,
+                                  const ParamRef& ref, double at, HandleSide side, double x,
+                                  double y) {
+  return edited(std::move(project), clip_id, ref,
+                [at, side, x, y](std::vector<core::Keyframe>& keys) {
+                  const auto index = nearest(keys, at);
+                  if (!index.has_value()) return false;
+
+                  // The segment a handle shapes, and therefore the keyframe
+                  // whose mode has to change. An outgoing handle shapes the
+                  // segment leaving this keyframe; an incoming one shapes the
+                  // segment that arrives, which belongs to the keyframe before.
+                  const std::size_t shaped =
+                      side == HandleSide::Out ? *index : (*index == 0 ? *index : *index - 1);
+                  if (side == HandleSide::Out && *index + 1 >= keys.size()) return false;
+                  if (side == HandleSide::In && *index == 0) return false;
+
+                  const double clamped_x = std::clamp(x, 0.0, 1.0);
+                  core::Keyframe& frame = keys[*index];
+                  if (side == HandleSide::Out) {
+                    if (frame.out_x == clamped_x && frame.out_y == y &&
+                        keys[shaped].e == core::Interp::Bezier) {
+                      return false;
+                    }
+                    frame.out_x = clamped_x;
+                    frame.out_y = y;
+                  } else {
+                    if (frame.in_x == clamped_x && frame.in_y == y &&
+                        keys[shaped].e == core::Interp::Bezier) {
+                      return false;
+                    }
+                    frame.in_x = clamped_x;
+                    frame.in_y = y;
+                  }
+                  keys[shaped].e = core::Interp::Bezier;
+                  return true;
+                });
+}
+
 core::Project remove_keyframe(core::Project project, std::string_view clip_id,
                               const ParamRef& ref, double at) {
   return edited(std::move(project), clip_id, ref, [at](std::vector<core::Keyframe>& keys) {

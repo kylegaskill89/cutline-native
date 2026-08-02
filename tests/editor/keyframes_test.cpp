@@ -195,6 +195,74 @@ TEST(RemoveKeyframe, RefusesToTakeTheLastOne) {
   EXPECT_EQ(remove_keyframe(project, "c1", x_ref(), 1.0), project);
 }
 
+// ------------------------------------------------------------- handles --
+//
+// Dragging a handle both shapes the curve and switches the segment to Bezier.
+// Which keyframe's mode changes is the part worth stating: interpolation lives
+// on the keyframe a segment *leaves*, so the incoming handle of a keyframe
+// changes the mode of the one before it.
+
+TEST(SetKeyframeHandle, ShapesTheSegmentAndSwitchesItToBezier) {
+  core::Project p = animated();
+  p = set_keyframe_handle(std::move(p), "c1", x_ref(), 0.0, HandleSide::Out, 0.5, 0.0);
+
+  const std::vector<core::Keyframe>& keys = x_keys(p);
+  EXPECT_EQ(keys[0].e, core::Interp::Bezier);
+  EXPECT_DOUBLE_EQ(keys[0].out_x, 0.5);
+  EXPECT_DOUBLE_EQ(keys[0].out_y, 0.0);
+}
+
+TEST(SetKeyframeHandle, AnIncomingHandleSwitchesTheKeyframeBeforeIt) {
+  // The segment it shapes is the one that *arrives*, and that segment's mode is
+  // stored on the keyframe it left. Switching this keyframe instead would bend
+  // the next segment along, which is not the one being pointed at.
+  core::Project p = animated();
+  p = set_keyframe_handle(std::move(p), "c1", x_ref(), 4.0, HandleSide::In, 0.25, 1.0);
+
+  const std::vector<core::Keyframe>& keys = x_keys(p);
+  EXPECT_EQ(keys[1].e, core::Interp::Bezier) << "the segment arriving at the last";
+  EXPECT_EQ(keys[2].e, core::Interp::Linear) << "and not the one leaving it";
+  EXPECT_DOUBLE_EQ(keys[2].in_x, 0.25) << "the handle stays on the keyframe it belongs to";
+}
+
+TEST(SetKeyframeHandle, BendsWhatTheEvaluatorProduces) {
+  core::Project p = animated();
+  const double before = core::animated_value(*core::find_clip(p, "c1"), core::AnimProp::X, 1.0);
+
+  // Flat out of the start: it leaves slowly, so it is behind where it was.
+  p = set_keyframe_handle(std::move(p), "c1", x_ref(), 0.0, HandleSide::Out, 1.0 / 3.0, 0.0);
+  const double after = core::animated_value(*core::find_clip(p, "c1"), core::AnimProp::X, 1.0);
+
+  EXPECT_LT(after, before);
+}
+
+TEST(SetKeyframeHandle, ClampsTheTimeButNotTheValue) {
+  core::Project p = animated();
+  p = set_keyframe_handle(std::move(p), "c1", x_ref(), 0.0, HandleSide::Out, -3.0, 2.5);
+
+  const std::vector<core::Keyframe>& keys = x_keys(p);
+  EXPECT_DOUBLE_EQ(keys[0].out_x, 0.0) << "a curve cannot be at two values in one instant";
+  EXPECT_DOUBLE_EQ(keys[0].out_y, 2.5) << "overshoot is a shape somebody wants";
+}
+
+TEST(SetKeyframeHandle, RefusesAHandleWithNoSegmentToShape) {
+  const core::Project p = animated();
+  // The outgoing handle of the last keyframe, and the incoming one of the first.
+  EXPECT_EQ(set_keyframe_handle(p, "c1", x_ref(), 4.0, HandleSide::Out, 0.5, 0.5), p);
+  EXPECT_EQ(set_keyframe_handle(p, "c1", x_ref(), 0.0, HandleSide::In, 0.5, 0.5), p);
+}
+
+TEST(SetKeyframeHandle, RefusesWhenNothingIsNearTheTimeAsked) {
+  const core::Project p = animated();
+  EXPECT_EQ(set_keyframe_handle(p, "c1", x_ref(), 1.0, HandleSide::Out, 0.5, 0.5), p);
+}
+
+TEST(SetKeyframeHandle, SettingTheSameHandleAgainChangesNothing) {
+  core::Project p = animated();
+  p = set_keyframe_handle(std::move(p), "c1", x_ref(), 0.0, HandleSide::Out, 0.5, 0.25);
+  EXPECT_EQ(set_keyframe_handle(p, "c1", x_ref(), 0.0, HandleSide::Out, 0.5, 0.25), p);
+}
+
 // -------------------------------------------------------- copy and paste --
 
 [[nodiscard]] std::vector<KeyframeAddress> all_x() {

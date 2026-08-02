@@ -1737,8 +1737,28 @@ void build_keyframe_lanes(App& app, const std::string& clip_id) {
       curve.push_back(cutline::core::eval_keyframes(lane.keys, t));
     }
 
-    shown.lanes.push_back(cutline::ui::KeyframeView::Lane{
-        .name = lane.name, .times = std::move(times), .curve = std::move(curve)});
+    // The keyframes' own values and handles, so the graph can draw the bezier
+    // controls and a drag can be converted back into the model's units. The
+    // view knows what a handle looks like and nothing about what it means.
+    std::vector<double> values;
+    std::vector<cutline::ui::KeyframeHandles> handles;
+    values.reserve(lane.keys.size());
+    handles.reserve(lane.keys.size());
+    for (const cutline::core::Keyframe& key : lane.keys) {
+      values.push_back(key.v);
+      handles.push_back(cutline::ui::KeyframeHandles{
+          .out_x = key.out_x,
+          .out_y = key.out_y,
+          .in_x = key.in_x,
+          .in_y = key.in_y,
+          .bezier = key.e == cutline::core::Interp::Bezier});
+    }
+
+    shown.lanes.push_back(cutline::ui::KeyframeView::Lane{.name = lane.name,
+                                                          .times = std::move(times),
+                                                          .curve = std::move(curve),
+                                                          .values = std::move(values),
+                                                          .handles = std::move(handles)});
   }
 
   auto& view = app.inspector->emplace<cutline::ui::KeyframeView>();
@@ -1887,6 +1907,38 @@ void build_keyframe_lanes(App& app, const std::string& clip_id) {
         invalidate_preview(app);
         app.inspector_stale = true;
       });
+
+  // A handle dragged on the graph. The same bargain as everything else that is
+  // dragged here: rendered against a copy while the button is down, written to
+  // the document once on release, so the whole gesture is one undo entry.
+  const auto handle_side = [](cutline::ui::KeyframeHandle side) {
+    return side == cutline::ui::KeyframeHandle::Out ? cutline::editor::HandleSide::Out
+                                                    : cutline::editor::HandleSide::In;
+  };
+
+  view.set_on_handle([&app, clip_id, lanes, handle_side](std::size_t lane, std::size_t index,
+                                                         cutline::ui::KeyframeHandle side,
+                                                         double x, double y) {
+    if (lane >= lanes.size() || index >= lanes[lane].keys.size()) return;
+    app.live_gesture = true;
+    app.live_project = cutline::editor::set_keyframe_handle(
+        app.session.project(), clip_id, lanes[lane].ref, lanes[lane].keys[index].t,
+        handle_side(side), x, y);
+    invalidate_preview(app);
+    refresh_handles(app);
+  });
+
+  view.set_on_handle_commit([&app, clip_id, lanes, handle_side](
+                                std::size_t lane, std::size_t index,
+                                cutline::ui::KeyframeHandle side, double x, double y) {
+    if (lane >= lanes.size() || index >= lanes[lane].keys.size()) return;
+    app.session.apply(cutline::editor::set_keyframe_handle(
+        app.session.project(), clip_id, lanes[lane].ref, lanes[lane].keys[index].t,
+        handle_side(side), x, y));
+    refresh_timeline(app);
+    invalidate_preview(app);
+    app.inspector_stale = true;
+  });
 }
 
 /// The four the model renders, in the order the dropdown offers them.
