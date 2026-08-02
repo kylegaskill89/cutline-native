@@ -53,18 +53,6 @@ class TabStrip : public Widget {
     on_activate_ = std::move(on_activate);
   }
   void set_on_close(std::function<void(std::size_t)> on_close) { on_close_ = std::move(on_close); }
-  /// Called on every move once a press has become a drag. Positions are in the
-  /// same coordinates as widget bounds, because a tab is nearly always dropped
-  /// somewhere that is not this strip.
-  ///
-  /// There is deliberately no matching `on_drop`. A drop rebuilds the whole
-  /// dock tree, which destroys this strip — so the release is left to bubble
-  /// up to the `DockView`, which survives it. See `on_mouse_up`.
-  void set_on_drag(std::function<void(std::size_t, double, double)> on_drag) {
-    on_drag_ = std::move(on_drag);
-  }
-
-  [[nodiscard]] std::optional<std::size_t> dragging() const noexcept { return drag_; }
 
   /// Tabs are as wide as their titles, up to a share of the strip. Past that
   /// they are all squeezed equally — the alternative is the last tab of a full
@@ -82,12 +70,17 @@ class TabStrip : public Widget {
   [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
   void paint_content(Painter& painter, const Theme& theme) const override;
 
+  /// Shows the tab that was pressed, closes one whose cross was pressed, and
+  /// then *declines* a press on a tab so the gesture belongs to the `DockView`
+  /// above.
+  ///
+  /// Declining is the whole point. A press that captures the pointer here would
+  /// be lost the moment the layout rebuilt — which showing the pressed tab does
+  /// immediately — because the rebuild destroys this strip and the host drops
+  /// the capture with it. Dragging a tab that was not already showing then did
+  /// nothing at all, which is most tabs in a group of several.
   bool on_mouse_down(const MouseEvent& event) override;
   bool on_mouse_move(const MouseEvent& event) override;
-  /// Ends the drag and then *declines* the event, so it carries on up to the
-  /// `DockView`. The drop rearranges the layout, which destroys this strip;
-  /// finishing the gesture here would mean returning into a freed object.
-  bool on_mouse_up(const MouseEvent& event) override;
   void on_mouse_leave() override;
 
  private:
@@ -97,17 +90,11 @@ class TabStrip : public Widget {
   std::vector<double> widths_;
   Metrics metrics_;
 
-  std::optional<std::size_t> pressed_;
-  std::optional<std::size_t> drag_;
-  double press_x_ = 0.0;
-  double press_y_ = 0.0;
-
   std::size_t hovered_tab_ = 0;
   bool has_hovered_tab_ = false;
 
   std::function<void(std::size_t)> on_activate_;
   std::function<void(std::size_t)> on_close_;
-  std::function<void(std::size_t, double, double)> on_drag_;
 };
 
 /// One tab group: the strip, and whichever panel is showing under it.
@@ -189,8 +176,22 @@ class DockView : public Widget {
   /// The panel being dragged and where the pointer is, so the drop zone can be
   /// drawn. Set by the view itself while a tab is dragged; exposed so a drag
   /// arriving from another window can be shown the same way.
+  ///
+  /// This is the *highlight*, not the gesture — see `carrying`. A window told
+  /// there is nothing to show clears its zone and nothing else, which is what
+  /// lets one drag be drawn in whichever window the pointer is over without any
+  /// of them forgetting whose drag it is.
   void set_drag(std::optional<PanelId> panel, double x, double y);
   [[nodiscard]] const std::optional<PanelId>& dragging() const noexcept { return drag_; }
+
+  /// The panel this view is dragging, if the gesture started here.
+  ///
+  /// Separate from `dragging` because they answer different questions and the
+  /// answers differ exactly when it matters: a tab dragged clean out of every
+  /// window has no drop zone to draw anywhere, and if that cleared the gesture
+  /// too the release would do nothing — which is why a panel could not be torn
+  /// out into a window of its own.
+  [[nodiscard]] const std::optional<PanelId>& carrying() const noexcept { return carrying_; }
 
   /// Called when a tab is released over the view. The caller changes the
   /// layout and hands the new tree back through `set_node`.
@@ -221,6 +222,13 @@ class DockView : public Widget {
   void layout(const LayoutContext& context) override;
   void paint_overlay(Painter& painter, const Theme& theme) const override;
 
+  /// Takes the press on a tab, and the pointer with it.
+  ///
+  /// Here rather than in the strip that was pressed because this outlives the
+  /// rebuild that showing a tab causes, and a drop rebuilds the tree as well.
+  /// The strip decides *which* tab; the gesture belongs here.
+  bool on_mouse_down(const MouseEvent& event) override;
+  bool on_mouse_move(const MouseEvent& event) override;
   bool on_mouse_up(const MouseEvent& event) override;
 
  private:
@@ -232,6 +240,8 @@ class DockView : public Widget {
   void wire(DockGroup& group);
 
   [[nodiscard]] std::string title_of(const PanelId& panel) const;
+  /// The panel whose tab is under a point, or nothing.
+  [[nodiscard]] std::optional<PanelId> tab_at(double x, double y) const;
   /// The rectangle a drop would fill, for the highlight.
   [[nodiscard]] Rect drop_rect(const DropTarget& target) const;
 
@@ -248,9 +258,17 @@ class DockView : public Widget {
   /// a rebuild. Owns what it holds.
   std::map<PanelId, std::unique_ptr<Widget>, std::less<>> spare_;
 
+  /// What a drop would be shown as, which may be somebody else's drag.
   std::optional<PanelId> drag_;
   double drag_x_ = 0.0;
   double drag_y_ = 0.0;
+
+  /// The press, before it has travelled far enough to be a drag, and the drag
+  /// once it has. Both survive a rebuild of the tree because this widget does.
+  std::optional<PanelId> pressed_;
+  double press_x_ = 0.0;
+  double press_y_ = 0.0;
+  std::optional<PanelId> carrying_;
 
   Metrics metrics_;
 

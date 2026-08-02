@@ -60,8 +60,6 @@ void TabStrip::set_tabs(std::vector<Tab> tabs, std::size_t active) {
   tabs_ = std::move(tabs);
   active_ = tabs_.empty() ? 0 : std::min(active, tabs_.size() - 1);
   widths_.assign(tabs_.size(), 0.0);
-  pressed_.reset();
-  drag_.reset();
   has_hovered_tab_ = false;
   invalidate_layout();
 }
@@ -174,41 +172,27 @@ bool TabStrip::on_mouse_down(const MouseEvent& event) {
     return true;
   }
 
-  if (*index != active_ && on_activate_) on_activate_(*index);
+  if (*index != active_ && on_activate_) {
+    on_activate_(*index);
+    // Asked for explicitly. Showing a different tab is somebody else's rebuild,
+    // and this press is declined below — so nothing else here marks the window
+    // as needing drawing, and the tab that was pressed would not appear to have
+    // been pressed until something unrelated caused a frame.
+    if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+  }
 
-  pressed_ = index;
-  press_x_ = event.x;
-  press_y_ = event.y;
-  return true;
+  // Declined, so the press carries on up to the `DockView`, which takes the
+  // pointer and owns the rest of the gesture. Handling it here would capture on
+  // a widget that showing the tab is about to destroy, and the drag would end
+  // before it began.
+  return false;
 }
 
 bool TabStrip::on_mouse_move(const MouseEvent& event) {
-  if (!pressed_.has_value()) {
-    const auto over = tab_at(event.x, event.y);
-    has_hovered_tab_ = over.has_value();
-    if (over.has_value()) hovered_tab_ = *over;
-    return false;
-  }
-
-  if (!drag_.has_value()) {
-    if (std::hypot(event.x - press_x_, event.y - press_y_) < kTabDragThreshold) return true;
-    drag_ = pressed_;
-  }
-  if (on_drag_) on_drag_(*drag_, event.x, event.y);
-  return true;
-}
-
-bool TabStrip::on_mouse_up(const MouseEvent& event) {
-  if (event.button != MouseButton::Left) return false;
-
-  const bool dragged = drag_.has_value();
-  pressed_.reset();
-  drag_.reset();
-
-  // Declined on purpose when it was a drag. The drop rearranges the layout,
-  // which destroys this strip, so it has to be finished by something that
-  // outlives it — the `DockView` this bubbles up to.
-  return !dragged;
+  const auto over = tab_at(event.x, event.y);
+  has_hovered_tab_ = over.has_value();
+  if (over.has_value()) hovered_tab_ = *over;
+  return false;
 }
 
 void TabStrip::on_mouse_leave() { has_hovered_tab_ = false; }
@@ -325,14 +309,6 @@ void DockView::wire(DockGroup& group) {
   which->strip_->set_on_close([this, which](std::size_t index) {
     if (index < which->panels_.size() && on_close_) on_close_(which->panels_[index]);
   });
-  which->strip_->set_on_drag([this, which](std::size_t index, double x, double y) {
-    if (index >= which->panels_.size()) return;
-    set_drag(which->panels_[index], x, y);
-    // Reported outwards as well, so a drag can be shown in another window.
-    // Fired from here rather than inside `set_drag` so that a window being
-    // *told* about someone else's drag does not report it straight back.
-    if (on_drag_) on_drag_(which->panels_[index], x, y);
-  });
 }
 
 std::vector<DockGroup*> DockView::groups() const { return groups_; }
@@ -373,10 +349,21 @@ void DockView::layout(const LayoutContext& context) {
 std::optional<DropTarget> DockView::drop_target(double x, double y) const {
   if (!bounds().contains(x, y)) return std::nullopt;
 
-  // Tabs first, before even the rim. A strip means "join these", and the
-  // topmost group's tabs sit within a rim's width of the window edge — letting
-  // the rim win there would make the top panel the one group in the window
-  // that nothing can be tabbed into.
+  // The rim: a drop here means down the whole side of the window, not beside
+  // whichever pane happens to be nearest the edge. Capped against the view's
+  // own size so a narrow one is not entirely rim.
+  const double rim = std::min(kDockRimWidth, std::min(bounds().width, bounds().height) * 0.2);
+  if (x - bounds().x < rim) return DropTarget{.side = DockSide::Left, .at_edge = true};
+  if (bounds().right() - x < rim) return DropTarget{.side = DockSide::Right, .at_edge = true};
+  if (bounds().bottom() - y < rim) return DropTarget{.side = DockSide::Bottom, .at_edge = true};
+
+  // Tabs before the *top* rim only. A strip means "join these", and the topmost
+  // group's tabs run the whole length of that rim — letting it win there would
+  // make the top panel the one group in the window nothing could be tabbed
+  // into. The other three rims overlap a strip for an inch at most, so they
+  // win: aiming at the very edge of the window means the edge, and losing that
+  // to whichever strip happened to be at that height is why dragging a panel to
+  // the side sometimes appeared to do nothing at all.
   for (const DockGroup* group : groups_) {
     if (!group->strip().bounds().contains(x, y)) continue;
     if (const PanelId onto = group->active_panel(); !onto.empty()) {
@@ -384,14 +371,7 @@ std::optional<DropTarget> DockView::drop_target(double x, double y) const {
     }
   }
 
-  // The rim: a drop here means down the whole side of the window, not beside
-  // whichever pane happens to be nearest the edge. Capped against the view's
-  // own size so a narrow one is not entirely rim.
-  const double rim = std::min(kDockRimWidth, std::min(bounds().width, bounds().height) * 0.2);
-  if (x - bounds().x < rim) return DropTarget{.side = DockSide::Left, .at_edge = true};
-  if (bounds().right() - x < rim) return DropTarget{.side = DockSide::Right, .at_edge = true};
   if (y - bounds().y < rim) return DropTarget{.side = DockSide::Top, .at_edge = true};
-  if (bounds().bottom() - y < rim) return DropTarget{.side = DockSide::Bottom, .at_edge = true};
 
   for (const DockGroup* group : groups_) {
     if (!group->bounds().contains(x, y)) continue;
@@ -407,6 +387,57 @@ void DockView::set_drag(std::optional<PanelId> panel, double x, double y) {
   drag_ = std::move(panel);
   drag_x_ = x;
   drag_y_ = y;
+  // The zone is drawn in the overlay, so moving it is a repaint and nothing
+  // else. Asked for here rather than left to the caller, since a view being
+  // told about a drag in another window has nothing else to prompt it.
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
+std::optional<PanelId> DockView::tab_at(double x, double y) const {
+  for (const DockGroup* group : groups_) {
+    const std::optional<std::size_t> index = group->strip().tab_at(x, y);
+    if (!index.has_value() || *index >= group->panels_.size()) continue;
+    // Not the cross: that closes the tab, and the strip has already done it.
+    if (const Rect closer = group->strip().close_rect(*index);
+        !closer.empty() && closer.contains(x, y)) {
+      return std::nullopt;
+    }
+    return group->panels_[*index];
+  }
+  return std::nullopt;
+}
+
+bool DockView::on_mouse_down(const MouseEvent& event) {
+  if (event.button != MouseButton::Left) return false;
+
+  std::optional<PanelId> panel = tab_at(event.x, event.y);
+  if (!panel.has_value()) return false;
+
+  // Noted, not started: whether this is a click or a drag is decided by whether
+  // the pointer moves. Handling it is what takes the pointer, and taking the
+  // pointer *here* is the point — the strip it came from may not survive the
+  // next frame.
+  pressed_ = std::move(panel);
+  press_x_ = event.x;
+  press_y_ = event.y;
+  carrying_.reset();
+  return true;
+}
+
+bool DockView::on_mouse_move(const MouseEvent& event) {
+  if (!pressed_.has_value()) return false;
+
+  if (!carrying_.has_value()) {
+    if (std::hypot(event.x - press_x_, event.y - press_y_) < kTabDragThreshold) return true;
+    carrying_ = pressed_;
+  }
+
+  set_drag(carrying_, event.x, event.y);
+  // Reported outwards as well, so the drag can be shown in another window.
+  // Fired from here rather than from inside `set_drag`, so that a view being
+  // *told* about someone else's drag does not report it straight back.
+  if (on_drag_) on_drag_(*carrying_, event.x, event.y);
+  return true;
 }
 
 Rect DockView::drop_rect(const DropTarget& target) const {
@@ -436,10 +467,18 @@ void DockView::paint_overlay(Painter& painter, const Theme& theme) const {
 }
 
 bool DockView::on_mouse_up(const MouseEvent& event) {
-  if (event.button != MouseButton::Left || !drag_.has_value()) return false;
+  if (event.button != MouseButton::Left) return false;
 
-  const PanelId panel = *drag_;
-  drag_.reset();
+  const std::optional<PanelId> carried = std::move(carrying_);
+  pressed_.reset();
+  carrying_.reset();
+  set_drag(std::nullopt, 0.0, 0.0);
+
+  // A press that never travelled is a click, and showing the tab is all a click
+  // does — the strip did that when it was pressed.
+  if (!carried.has_value()) return false;
+
+  const PanelId panel = *carried;
 
   // Resolved here rather than in the strip that started it, because acting on
   // this destroys that strip. See `TabStrip::on_mouse_up`.

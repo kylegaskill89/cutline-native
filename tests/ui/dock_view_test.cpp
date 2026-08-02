@@ -308,6 +308,45 @@ TEST(DockView, TheRimWinsOverThePanelUnderIt) {
   EXPECT_TRUE(target->at_edge);
 }
 
+TEST(DockView, TheSideRimWinsOverAStripAtTheSameHeight) {
+  // A strip runs the whole width of its group, so the left rim crosses one for
+  // an inch. Letting the strip win there meant that aiming a panel at the very
+  // edge of the window joined a tab group instead — the drop did something, but
+  // not the thing being aimed at, which reads as docking having failed.
+  const Fixture fixture;
+  DockGroup* group = fixture.view->group_showing("project");
+  ASSERT_NE(group, nullptr);
+  const Rect strip = group->strip().bounds();
+
+  const auto target = fixture.view->drop_target(2.0, strip.y + strip.height / 2.0);
+  ASSERT_TRUE(target.has_value());
+  EXPECT_TRUE(target->at_edge);
+  EXPECT_EQ(target->side, DockSide::Left);
+
+  // And the strip still wins everywhere else along itself, which is most of it.
+  const auto joined = fixture.view->drop_target(strip.x + strip.width / 2.0,
+                                                strip.y + strip.height / 2.0);
+  ASSERT_TRUE(joined.has_value());
+  EXPECT_EQ(joined->side, DockSide::Centre);
+}
+
+TEST(DockView, TheTopRimStillYieldsToTheStripUnderIt) {
+  // The topmost group's tabs run the whole length of the top rim, so this is the
+  // one place the rim has to give way: otherwise the top panel would be the one
+  // group in the window that nothing could ever be tabbed into.
+  const Fixture fixture;
+  DockGroup* group = fixture.view->group_showing("monitor");
+  ASSERT_NE(group, nullptr);
+  const Rect strip = group->strip().bounds();
+  ASSERT_LT(strip.y, kDockRimWidth) << "this strip is not under the top rim";
+
+  const auto target =
+      fixture.view->drop_target(strip.x + strip.width / 2.0, strip.y + 2.0);
+  ASSERT_TRUE(target.has_value());
+  EXPECT_EQ(target->side, DockSide::Centre);
+  EXPECT_FALSE(target->at_edge);
+}
+
 TEST(DockView, OutsideTheViewIsNotADropAtAll) {
   // Which is how a panel is torn out into a window of its own.
   const Fixture fixture;
@@ -382,6 +421,62 @@ TEST(DockView, ATabDroppedOutsideWantsToBeAWindow) {
   EXPECT_EQ(std::get<0>(*fixture.torn_out), "project");
   EXPECT_DOUBLE_EQ(std::get<1>(*fixture.torn_out), 1400.0);
   EXPECT_FALSE(fixture.docked.has_value());
+}
+
+TEST(DockView, ATabThatIsNotShowingCanStillBeDragged) {
+  // Pressing it asks for it to be shown, and showing it rebuilds the tree —
+  // which destroys the strip the press landed on. With the gesture living in
+  // the strip, the host dropped the capture along with it and the drag was over
+  // before it started: most of the tabs in a group of several could not be
+  // moved at all.
+  Fixture fixture;
+  DockGroup* group = fixture.view->group_showing("project");
+  ASSERT_NE(group, nullptr);
+  const Rect tab = group->strip().tab_rect(1);
+  ASSERT_FALSE(tab.empty());
+
+  fixture.host->mouse_down(press(tab.x + 5.0, tab.y + tab.height / 2.0));
+  ASSERT_TRUE(fixture.activated.has_value()) << "pressing it did not ask for it to be shown";
+  EXPECT_EQ(*fixture.activated, "effects");
+
+  // The rebuild that showing it causes, in the middle of the gesture.
+  fixture.view->set_node(sample_node());
+  fixture.relayout();
+
+  DockGroup* onto = fixture.view->group_showing("monitor");
+  ASSERT_NE(onto, nullptr);
+  const Rect area = onto->content_area();
+  fixture.host->mouse_move(press(area.x + area.width / 2.0, area.y + area.height / 2.0));
+  ASSERT_TRUE(fixture.view->carrying().has_value()) << "the rebuild swallowed the drag";
+
+  fixture.host->mouse_up(press(area.x + area.width / 2.0, area.y + area.height / 2.0));
+  ASSERT_TRUE(fixture.docked.has_value());
+  EXPECT_EQ(fixture.docked->first, "effects");
+  EXPECT_EQ(fixture.docked->second.onto, "monitor");
+}
+
+TEST(DockView, ADragWithNowhereToLandStillEndsInATearOut) {
+  // While a tab is dragged the application tells every window where the drop
+  // zone should be, and a window the pointer is not over is told there is none.
+  // The window the drag *started* in gets that message too the moment the
+  // pointer leaves it — and when the highlight and the gesture were one field,
+  // being told "nothing to show" also meant forgetting what was being carried.
+  // Releasing then did nothing, so a panel could not be torn out into a window.
+  Fixture fixture;
+  DockGroup* group = fixture.view->group_showing("project");
+  ASSERT_NE(group, nullptr);
+  const Rect tab = group->strip().tab_rect(0);
+
+  fixture.host->mouse_down(press(tab.x + 5.0, tab.y + tab.height / 2.0));
+  fixture.host->mouse_move(press(1400.0, 400.0));
+
+  fixture.view->set_drag(std::nullopt, 0.0, 0.0);
+  EXPECT_FALSE(fixture.view->dragging().has_value()) << "the zone should be gone";
+  ASSERT_TRUE(fixture.view->carrying().has_value()) << "but not the drag itself";
+
+  fixture.host->mouse_up(press(1400.0, 400.0));
+  ASSERT_TRUE(fixture.torn_out.has_value());
+  EXPECT_EQ(std::get<0>(*fixture.torn_out), "project");
 }
 
 TEST(DockView, AClickOnATabIsNotADrag) {
