@@ -352,25 +352,29 @@ from anything here now.
 
 #### 1.5 Catalogue depth
 
-Twenty video effects, up from eleven, in five categories. The structural gap
+Twenty-three video effects, up from eleven, in five categories. The structural gap
 underneath this is gone: an entry is now one branch in one shader and one line
 in the registry, and costs nothing permanent.
 
 Added since: **Exposure**, **Gamma**, **Levels**, **Colour Balance**, **Tint**,
-**Directional Blur**, **Sharpen**, **Posterize**, **Threshold**. Three of those
-reach one kind of pass, which is the clearest sign the ceiling has gone — an
-entry is a name and some numbers rather than a slot in a struct.
+**Directional Blur**, **Sharpen**, **Posterize**, **Threshold**, **Radial
+Blur**, **Lens Distortion** and **Noise**. Three of those reach one kind of
+pass, which is the clearest sign the ceiling has gone — an entry is a name and
+some numbers rather than a slot in a struct.
+
+Noise is the one worth naming: grain has to *move*, and the moment is the one
+thing a pass cannot work out for itself. It comes from the time the planner is
+already given, which is why that function takes one beyond resolving keyframes.
 
 Still absent, roughly in the order their absence would be noticed: **Lumetri
 Color** (or an equivalent grading control — curves, wheels, HSL secondaries),
-**Radial Blur**, **Noise**, **Lens Distortion**, **Drop Shadow**, **Track Matte
-Key**, **Ultra Key** (ours is a simple chroma key), **Warp Stabilizer**, and
-**Transform** (the effect, which unlike Motion sits in the stack and can be
-reordered).
+**Drop Shadow**, **Track Matte Key**, **Ultra Key** (ours is a simple chroma
+key), **Warp Stabilizer**, and **Transform** (the effect, which unlike Motion
+sits in the stack and can be reordered).
 
 Of those, Drop Shadow and Track Matte Key want something the pass chain does not
-have yet — a second texture to read besides the layer itself. Noise wants a time
-the pass does not carry. The rest are branches.
+have yet — a second texture to read besides the layer itself. The rest are
+branches.
 
 ### 1.6 Audit: what section 1 is still missing
 

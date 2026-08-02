@@ -1097,6 +1097,95 @@ TEST_F(CompositorTest, BlurSoftensTheLayersOwnEdge) {
   EXPECT_EQ(pixel_at(soft, kWidth / 4, kHeight / 2).a, 255) << "well inside is untouched";
 }
 
+TEST_F(CompositorTest, ARadialZoomDragsThePictureTowardsItsCentre) {
+  // A pass sees the layer alone, so the structure it has to work with has to be
+  // inside the layer: a crop down the middle gives it a hard vertical edge.
+  //
+  // With the centre off to the left, a zoom walks each pixel's taps towards it —
+  // so a pixel on the empty right-hand side picks up what lies between it and
+  // the centre, and the edge is dragged inwards.
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  const std::vector<EffectPass> plain{cropped(0.0f, 0.0f, 0.5f, 0.0f)};
+  layer.passes = plain;
+  const Image sharp = render({&layer, 1});
+  ASSERT_EQ(pixel_at(sharp, kWidth / 2 + 4, kHeight / 2).a, 0) << "the crop took the right half";
+
+  const std::vector<EffectPass> zoomed{cropped(0.0f, 0.0f, 0.5f, 0.0f),
+                                       EffectPass{PassKind::RadialBlur, {0.6f, 0.2f, 0.5f, 0.0f}}};
+  layer.passes = zoomed;
+  const Image streaked = render({&layer, 1});
+
+  EXPECT_GT(pixel_at(streaked, kWidth / 2 + 4, kHeight / 2).a, 0)
+      << "nothing was dragged towards the centre";
+  // And it fades away from the edge rather than filling the empty half.
+  EXPECT_LT(pixel_at(streaked, kWidth - 2, kHeight / 2).a,
+            pixel_at(streaked, kWidth / 2 + 4, kHeight / 2).a);
+}
+
+TEST_F(CompositorTest, ALensDistortionMovesTheEdgeAndLeavesTheMiddle) {
+  // The middle of a lens is the part that does not move. What barrels is
+  // everything else, and the further out the more.
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  const std::vector<EffectPass> effects{EffectPass{PassKind::Distort, {0.6f, 1.0f}}};
+  layer.passes = effects;
+  const Image bent = render({&layer, 1});
+
+  EXPECT_EQ(pixel_at(bent, kWidth / 2, kHeight / 2).a, 255) << "the middle stayed";
+  // Barrelled outward, the corners of the source leave the frame and the
+  // corners of the frame have nothing to show.
+  EXPECT_EQ(pixel_at(bent, 1, 1).a, 0) << "the corner should have been pushed out of frame";
+}
+
+TEST_F(CompositorTest, NoiseVariesAcrossThePictureAndWithTime) {
+  // Grain is grain: it differs pixel to pixel, and it moves. A single value
+  // applied everywhere would be a brightness change wearing the wrong name.
+  Layer layer;
+  layer.color = Color::from_srgb(0.5f, 0.5f, 0.5f);
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  const std::vector<EffectPass> first{EffectPass{PassKind::Noise, {0.8f, 0.0f, 1.0f}}};
+  layer.passes = first;
+  const Image one = render({&layer, 1});
+
+  bool varies = false;
+  for (int x = 1; x < kWidth && !varies; ++x) {
+    if (pixel_at(one, x, kHeight / 2).r != pixel_at(one, 0, kHeight / 2).r) varies = true;
+  }
+  EXPECT_TRUE(varies) << "every pixel took the same grain";
+
+  const std::vector<EffectPass> later{EffectPass{PassKind::Noise, {0.8f, 3.5f, 1.0f}}};
+  layer.passes = later;
+  const Image two = render({&layer, 1});
+
+  bool moved = false;
+  for (int x = 0; x < kWidth && !moved; ++x) {
+    if (pixel_at(one, x, kHeight / 2).r != pixel_at(two, x, kHeight / 2).r) moved = true;
+  }
+  EXPECT_TRUE(moved) << "the grain sat still, which is dirt on the lens rather than grain";
+}
+
+TEST_F(CompositorTest, NoiseLeavesTransparentPixelsAlone) {
+  // Grain on a transparent corner is a rectangle of dirt around a layer that
+  // has been cropped or masked.
+  Layer layer;
+  layer.color = Color::from_srgb(0.5f, 0.5f, 0.5f);
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  const std::vector<EffectPass> effects{cropped(0.5f, 0.0f, 0.0f, 0.0f),
+                                        EffectPass{PassKind::Noise, {0.9f, 1.0f, 1.0f}}};
+  layer.passes = effects;
+  const Image grained = render({&layer, 1});
+
+  EXPECT_EQ(pixel_at(grained, kWidth / 4, kHeight / 2).a, 0) << "grain filled in the crop";
+  EXPECT_GT(pixel_at(grained, kWidth * 3 / 4, kHeight / 2).a, 0);
+}
+
 TEST_F(CompositorTest, ABlurSpreadsPastTheLayersEdge) {
   // Premiere's does, and for a while ours could not: a pass sees the layer
   // alone, filling the scratch edge to edge, so there were no pixels outside it

@@ -127,6 +127,30 @@ constexpr std::array kDirectionalBlur{
     Param{.key = "angle", .name = "Angle", .minimum = -180.0, .maximum = 180.0,
           .fallback = 0.0, .suffix = "°"}};
 
+constexpr std::array kRadialBlur{
+    // Nothing at first, like every other effect here: adding one to a stack has
+    // to leave the picture alone until somebody asks it not to.
+    Param{.key = "amount", .name = "Amount", .minimum = 0.0, .maximum = 100.0, .fallback = 0.0,
+          .suffix = "%"},
+    Param{.key = "x", .name = "Centre X", .minimum = -50.0, .maximum = 150.0, .fallback = 50.0,
+          .suffix = "%"},
+    Param{.key = "y", .name = "Centre Y", .minimum = -50.0, .maximum = 150.0, .fallback = 50.0,
+          .suffix = "%"},
+    Param{.key = "spin", .name = "Spin", .minimum = 0.0, .maximum = 1.0, .fallback = 0.0,
+          .suffix = "", .toggle = true}};
+
+constexpr std::array kDistort{
+    Param{.key = "amount", .name = "Distortion", .minimum = -100.0, .maximum = 100.0,
+          .fallback = 0.0, .suffix = "%"},
+    Param{.key = "scale", .name = "Scale", .minimum = 25.0, .maximum = 200.0,
+          .fallback = 100.0, .suffix = "%"}};
+
+constexpr std::array kNoise{
+    Param{.key = "amount", .name = "Amount", .minimum = 0.0, .maximum = 100.0, .fallback = 0.0,
+          .suffix = "%"},
+    Param{.key = "monochrome", .name = "Monochrome", .minimum = 0.0, .maximum = 1.0,
+          .fallback = 1.0, .suffix = "", .toggle = true}};
+
 constexpr std::array kPosterize{
     Param{.key = "levels", .name = "Levels", .minimum = 2.0, .maximum = 32.0, .fallback = 6.0,
           .suffix = ""}};
@@ -163,14 +187,20 @@ constexpr std::array kCatalog{
                .category = EffectCategory::BlurAndSharpen, .params = kDirectionalBlur},
     EffectSpec{.type = "sharpen", .name = "Sharpen",
                .category = EffectCategory::BlurAndSharpen, .params = kSharpen},
+    EffectSpec{.type = "radialblur", .name = "Radial Blur",
+               .category = EffectCategory::BlurAndSharpen, .params = kRadialBlur},
     EffectSpec{.type = "chromakey", .name = "Chroma Key", .category = EffectCategory::Keying,
                .params = kChromaKey, .colors = kChromaKeyColors},
     EffectSpec{.type = "crop", .name = "Crop", .category = EffectCategory::Transform,
                .params = kCrop},
     EffectSpec{.type = "flip", .name = "Flip", .category = EffectCategory::Transform,
                .params = kFlip},
+    EffectSpec{.type = "distort", .name = "Lens Distortion",
+               .category = EffectCategory::Transform, .params = kDistort},
     EffectSpec{.type = "vignette", .name = "Vignette", .category = EffectCategory::Stylize,
                .params = kVignette},
+    EffectSpec{.type = "noise", .name = "Noise", .category = EffectCategory::Stylize,
+               .params = kNoise},
     EffectSpec{.type = "posterize", .name = "Posterize", .category = EffectCategory::Stylize,
                .params = kPosterize},
     EffectSpec{.type = "threshold", .name = "Threshold", .category = EffectCategory::Stylize,

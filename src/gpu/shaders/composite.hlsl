@@ -77,6 +77,9 @@
 #define PASS_POSTERIZE 11
 #define PASS_THRESHOLD 12
 #define PASS_DIRBLUR   13
+#define PASS_RADIAL    14
+#define PASS_DISTORT   15
+#define PASS_NOISE     16
 
 // Laid out so no member straddles a 16-byte boundary, because these arrive as
 // root constants and HLSL packs a cbuffer in float4 rows.
@@ -514,6 +517,110 @@ float4 blurPass(float2 uv) {
     return float4(total.a > 0.0 ? total.rgb / total.a : float3(0.0, 0.0, 0.0), total.a);
 }
 
+/// A blur along the rays out of a point: outward for a zoom, round it for a
+/// spin.
+///
+/// Taps walk from the pixel towards the centre (or round it) rather than in a
+/// fixed direction, so the streak is longer the further out it is — which is
+/// what makes it read as speed rather than as a smear.
+float4 radialBlurPass(float2 uv) {
+    const float amount = params.passA.x;
+    const float2 centre = params.passA.yz;
+    const bool spin = params.passA.w >= 0.5;
+    if (amount <= 0.0) return texture0.Sample(linearSampler, uv);
+
+    // In the layer's own coordinates, so the centre means what the panel says
+    // whatever margin the scratch was given.
+    const float2 here = layerUv(uv);
+    const float2 offset = here - centre;
+
+    float4 total = float4(0.0, 0.0, 0.0, 0.0);
+    float weightSum = 0.0;
+
+    [unroll]
+    for (int i = 0; i <= BLUR_TAPS; ++i) {
+        const float step = float(i) / float(BLUR_TAPS) * amount;
+
+        float2 sampled;
+        if (spin) {
+            // Round the centre: the same radius, a little further along.
+            const float angle = step;
+            sampled = centre + float2(offset.x * cos(angle) - offset.y * sin(angle),
+                                      offset.x * sin(angle) + offset.y * cos(angle));
+        } else {
+            sampled = centre + offset * (1.0 - step);
+        }
+
+        // Back into the scratch, and dropped when it falls off the layer, so
+        // the streak fades out at the edge instead of dragging a clamped pixel.
+        const float span = 1.0 - 2.0 * params.margin;
+        const float2 scratch = sampled * span + params.margin;
+        if (sampled.x < 0.0 || sampled.x > 1.0 || sampled.y < 0.0 || sampled.y > 1.0) continue;
+
+        const float4 texel = texture0.Sample(linearSampler, scratch);
+        total += float4(texel.rgb * texel.a, texel.a);
+        weightSum += 1.0;
+    }
+
+    if (weightSum <= 0.0) return float4(0.0, 0.0, 0.0, 0.0);
+    total /= weightSum;
+    return float4(total.a > 0.0 ? total.rgb / total.a : float3(0.0, 0.0, 0.0), total.a);
+}
+
+/// A lens. Positive barrels the picture outward, negative pinches it inward,
+/// and the scale is what puts the corners back inside the frame afterwards.
+float4 distortPass(float2 uv) {
+    const float amount = params.passA.x;
+    const float scale = params.passA.y;
+
+    // Centred and squared: the displacement grows with the square of the
+    // distance from the middle, which is what a real lens does and what makes
+    // the middle of the picture stay still.
+    float2 here = (layerUv(uv) - 0.5) * 2.0;
+    const float r2 = dot(here, here);
+    here *= (1.0 + amount * r2) / max(scale, 0.01);
+
+    const float2 layer = here * 0.5 + 0.5;
+    if (layer.x < 0.0 || layer.x > 1.0 || layer.y < 0.0 || layer.y > 1.0) {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+
+    const float span = 1.0 - 2.0 * params.margin;
+    return texture0.Sample(linearSampler, layer * span + params.margin);
+}
+
+/// A value in 0..1 that looks random and is not: the same inputs give the same
+/// number every time, which is what makes a frame reproducible.
+float hashNoise(float2 at, float seed) {
+    const float3 sown = float3(at, seed);
+    return frac(sin(dot(sown, float3(12.9898, 78.233, 37.719))) * 43758.5453);
+}
+
+/// Film grain, added in coded values because that is where grain lives — it is
+/// a property of the stock rather than of the light.
+float4 noisePass(float2 uv, float4 source) {
+    const float amount = params.passA.x;
+    const float seed = params.passA.y;
+    const bool monochrome = params.passA.z >= 0.5;
+    if (amount <= 0.0) return source;
+
+    // Quantised to the scratch's own pixels, so the grain is grain rather than
+    // a smooth wobble, and it does not crawl when the layer is scaled.
+    const float2 at = floor(uv * float2(2048.0, 2048.0));
+
+    float3 grain;
+    if (monochrome) {
+        grain = (hashNoise(at, seed) - 0.5).xxx;
+    } else {
+        grain = float3(hashNoise(at, seed) - 0.5, hashNoise(at, seed + 11.0) - 0.5,
+                       hashNoise(at, seed + 23.0) - 0.5);
+    }
+
+    // Nothing where there is nothing: grain on a transparent corner would be a
+    // rectangle of dirt around a layer that has been cropped or masked.
+    return float4(saturate(source.rgb + grain * amount), source.a);
+}
+
 // -------------------------------------------------------------------- mask --
 
 /// How much of this pixel the pass applies to: 1 fully, 0 not at all.
@@ -642,6 +749,12 @@ float4 PSEffect(VSOutput input) : SV_Target {
         // and which it is has already been decided by the step the compositor
         // handed down.
         after = blurPass(input.uv);
+    } else if (params.passKind == PASS_RADIAL) {
+        after = radialBlurPass(input.uv);
+    } else if (params.passKind == PASS_DISTORT) {
+        after = distortPass(input.uv);
+    } else if (params.passKind == PASS_NOISE) {
+        after = noisePass(input.uv, before);
     } else if (params.passKind == PASS_SHARPEN) {
         after = float4(sharpenPass(input.uv), texture0.Sample(linearSampler, input.uv).a);
     } else if (params.passKind == PASS_FLIP) {

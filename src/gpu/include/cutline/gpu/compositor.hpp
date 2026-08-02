@@ -86,6 +86,9 @@ enum class PassKind {
   Posterize,
   Threshold,
   DirectionalBlur,
+  RadialBlur,
+  Distort,
+  Noise,
 };
 
 /// How many floats a pass carries. Eight, shared by every kind, because only

@@ -75,6 +75,12 @@ enum class EffectPassKind {
   Threshold,
   /// A Gaussian along one angle rather than across both axes.
   DirectionalBlur,
+  /// A blur along the rays out of a point: zoom, or spin about it.
+  RadialBlur,
+  /// A lens: barrel outward, or pinch inward.
+  Distort,
+  /// Film grain, which needs the moment as well as the amount.
+  Noise,
 };
 
 /// How many floats a pass carries.
@@ -183,6 +189,19 @@ struct EffectPass {
 /// An unsharp mask: the difference between the pixel and its neighbours, added
 /// back. `radius` is in pixels of the layer.
 [[nodiscard]] EffectPass sharpen_pass(float amount, float radius) noexcept;
+
+/// A blur along the rays out of a point: zoom when it moves outward, spin when
+/// it goes round. `amount` is a fraction of the distance from the centre rather
+/// than a pixel count, so it looks the same at any size.
+[[nodiscard]] EffectPass radial_blur_pass(float amount, float centre_x, float centre_y,
+                                          bool spin) noexcept;
+
+/// A lens: positive barrels outward, negative pinches inward.
+[[nodiscard]] EffectPass distort_pass(float amount, float scale) noexcept;
+
+/// Film grain. `seed` is what makes it move — the same value twice is the same
+/// grain twice, which is what one frame wants and a running sequence does not.
+[[nodiscard]] EffectPass noise_pass(float amount, float seed, bool monochrome) noexcept;
 
 /// Quantised to `levels` steps per channel. Two is the fewest that is still a
 /// picture.

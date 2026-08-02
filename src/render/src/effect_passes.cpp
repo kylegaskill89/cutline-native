@@ -149,6 +149,31 @@ EffectPass sharpen_pass(float amount, float radius) noexcept {
   return pass;
 }
 
+EffectPass radial_blur_pass(float amount, float centre_x, float centre_y,
+                            bool spin) noexcept {
+  EffectPass pass{.kind = EffectPassKind::RadialBlur};
+  pass.values[0] = std::max(0.0f, amount);
+  pass.values[1] = centre_x;
+  pass.values[2] = centre_y;
+  pass.values[3] = spin ? 1.0f : 0.0f;
+  return pass;
+}
+
+EffectPass distort_pass(float amount, float scale) noexcept {
+  EffectPass pass{.kind = EffectPassKind::Distort};
+  pass.values[0] = amount;
+  pass.values[1] = std::max(0.01f, scale);
+  return pass;
+}
+
+EffectPass noise_pass(float amount, float seed, bool monochrome) noexcept {
+  EffectPass pass{.kind = EffectPassKind::Noise};
+  pass.values[0] = std::clamp(amount, 0.0f, 1.0f);
+  pass.values[1] = seed;
+  pass.values[2] = monochrome ? 1.0f : 0.0f;
+  return pass;
+}
+
 EffectPass posterize_pass(float levels) noexcept {
   EffectPass pass{.kind = EffectPassKind::Posterize};
   pass.values[0] = std::max(2.0f, levels);
@@ -319,6 +344,30 @@ std::vector<EffectPass> plan_effect_passes(const core::Clip& clip, double local_
         };
         passes.push_back(tint_pass(colour("shadow", EffectColor{0.0f, 0.0f, 0.0f}),
                                    colour("highlight", EffectColor{1.0f, 1.0f, 1.0f}), amount));
+      }
+
+    } else if (effect.type == "radialblur") {
+      const auto amount = static_cast<float>(param(effect, "amount", 0.0) / 100.0);
+      if (amount > 0.0f) {
+        passes.push_back(radial_blur_pass(
+            amount, static_cast<float>(param(effect, "x", 50.0) / 100.0),
+            static_cast<float>(param(effect, "y", 50.0) / 100.0),
+            param(effect, "spin", 0.0) >= 0.5));
+      }
+
+    } else if (effect.type == "distort") {
+      const auto amount = static_cast<float>(param(effect, "amount", 0.0) / 100.0);
+      const auto scale = static_cast<float>(param(effect, "scale", 100.0) / 100.0);
+      if (amount != 0.0f || scale != 1.0f) passes.push_back(distort_pass(amount, scale));
+
+    } else if (effect.type == "noise") {
+      const auto amount = static_cast<float>(param(effect, "amount", 0.0) / 100.0);
+      if (amount > 0.0f) {
+        // The moment is what makes grain move rather than sit there like dirt on
+        // the lens. It is the one thing a pass cannot work out for itself, and
+        // the only reason this function takes a time at all beyond resolving.
+        passes.push_back(noise_pass(amount, static_cast<float>(local_t),
+                                    param(effect, "monochrome", 1.0) >= 0.5));
       }
 
     } else if (effect.type == "sharpen") {
