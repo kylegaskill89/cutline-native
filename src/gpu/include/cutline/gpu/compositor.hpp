@@ -79,6 +79,13 @@ enum class PassKind {
   ChromaKey,
   Flip,
   Blur,
+  Levels,
+  Balance,
+  Tint,
+  Sharpen,
+  Posterize,
+  Threshold,
+  DirectionalBlur,
 };
 
 /// How many floats a pass carries. Eight, shared by every kind, because only

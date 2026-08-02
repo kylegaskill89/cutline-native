@@ -764,6 +764,9 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
       // One draw per pass, and two for a blur - a separable Gaussian is two
       // passes at right angles, which is what makes a large radius affordable.
       for (const EffectPass& effect : layer.passes) {
+        // A Gaussian is two draws at right angles; everything else is one,
+        // including a directional blur, which is one of those axes aimed
+        // somewhere the compositor works out below.
         const int draws = effect.kind == PassKind::Blur ? 2 : 1;
         for (int draw = 0; draw < draws; ++draw) {
           const int source = held;
@@ -785,7 +788,13 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
           pass.mask_opacity = effect.mask.opacity;
           pass.mask_inverted = effect.mask.inverted;
 
-          if (effect.kind == PassKind::Blur) {
+          // How wide a tap is depends on the target's size, which is the one
+          // thing the plan cannot know — so every pass that samples its
+          // neighbours has its step filled in here.
+          const float texel_x = 1.0f / static_cast<float>(d.width);
+          const float texel_y = 1.0f / static_cast<float>(d.height);
+
+          if (effect.kind == PassKind::Blur || effect.kind == PassKind::DirectionalBlur) {
             // Taps are spread over three sigma, where a Gaussian has
             // effectively fallen to nothing, and the stride widens to cover
             // that with a bounded number of them.
@@ -793,8 +802,19 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
             const float radius = std::max(1.0f, 3.0f * sigma);
             const float stride = std::max(1.0f, radius / static_cast<float>(kBlurTaps));
             pass.pass_a[1] = stride;
-            pass.pass_a[2] = draw == 0 ? stride / static_cast<float>(d.width) : 0.0f;
-            pass.pass_a[3] = draw == 0 ? 0.0f : stride / static_cast<float>(d.height);
+
+            if (effect.kind == PassKind::Blur) {
+              pass.pass_a[2] = draw == 0 ? stride * texel_x : 0.0f;
+              pass.pass_a[3] = draw == 0 ? 0.0f : stride * texel_y;
+            } else {
+              const float angle = effect.values[4];
+              pass.pass_a[2] = std::cos(angle) * stride * texel_x;
+              pass.pass_a[3] = std::sin(angle) * stride * texel_y;
+            }
+          } else if (effect.kind == PassKind::Sharpen) {
+            const float radius = std::max(0.0f, effect.values[1]);
+            pass.pass_a[2] = radius * texel_x;
+            pass.pass_a[3] = radius * texel_y;
           }
 
           const D3D12_RESOURCE_BARRIER swap[] = {

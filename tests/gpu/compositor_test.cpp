@@ -699,6 +699,183 @@ TEST_F(CompositorTest, EffectsApplyOnTopOfAGradient) {
   EXPECT_LT(pixel_at(image, kWidth - 1, kHeight / 2).r, 20);
 }
 
+// ------------------------------------------------------------ the newer few --
+//
+// Nine effects that arrived after the pass restructuring. Each is one branch in
+// one shader and one entry in the catalogue, which is the whole argument for
+// having done it — so what is worth testing about each is only that its branch
+// does the thing its name says.
+
+[[nodiscard]] Layer tone(std::span<const EffectPass> passes, float grey = 0.5f) {
+  Layer layer;
+  layer.color = Color::from_srgb(grey, grey, grey);
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.passes = passes;
+  return layer;
+}
+
+TEST_F(CompositorTest, ExposureDoublesTheLightRatherThanTheNumber) {
+  // A stop is a doubling of light, not of the number the light was written down
+  // as. Coded 0.5 is 0.214 in linear; twice that is 0.428, which encodes back
+  // to coded 0.686 — about 175, not the 255 that doubling the coded value
+  // would clip to.
+  const std::vector<EffectPass> effects{
+      EffectPass{PassKind::Levels, {0.0f, 1.0f, 1.0f, 2.0f}}};
+  const Layer layer = tone(effects);
+
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_NEAR(centre.r, 175, 2);
+}
+
+TEST_F(CompositorTest, GammaBendsTheMidpointWithoutMovingTheEnds) {
+  const std::vector<EffectPass> effects{
+      EffectPass{PassKind::Levels, {0.0f, 1.0f, 2.0f, 1.0f}}};
+
+  const Layer mid = tone(effects);
+  EXPECT_GT(pixel_at(render({&mid, 1}), kWidth / 2, kHeight / 2).r, 160) << "lifted";
+
+  const Layer white = tone(effects, 1.0f);
+  EXPECT_GE(pixel_at(render({&white, 1}), kWidth / 2, kHeight / 2).r, 253) << "and still white";
+}
+
+TEST_F(CompositorTest, LevelsStretchWhatIsBetweenThePoints) {
+  // Black at 25%, white at 75%: a coded 0.5 sits halfway between and stays put,
+  // while a coded 0.25 falls to nothing.
+  const std::vector<EffectPass> effects{
+      EffectPass{PassKind::Levels, {0.25f, 0.75f, 1.0f, 1.0f}}};
+
+  const Layer mid = tone(effects);
+  EXPECT_NEAR(pixel_at(render({&mid, 1}), kWidth / 2, kHeight / 2).r, 128, 3);
+
+  const Layer dark = tone(effects, 0.25f);
+  EXPECT_LE(pixel_at(render({&dark, 1}), kWidth / 2, kHeight / 2).r, 3);
+}
+
+TEST_F(CompositorTest, ColourBalanceGainsOneChannel) {
+  const std::vector<EffectPass> effects{EffectPass{PassKind::Balance, {1.5f, 1.0f, 1.0f}}};
+  const Layer layer = tone(effects);
+
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_GT(centre.r, centre.g);
+  EXPECT_EQ(centre.g, centre.b) << "the other two are untouched";
+}
+
+TEST_F(CompositorTest, TintMapsDarkAndLightToTwoColours) {
+  // Black to blue, white to yellow, fully applied.
+  const std::vector<EffectPass> effects{
+      EffectPass{PassKind::Tint, {0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f}}};
+
+  const Layer dark = tone(effects, 0.05f);
+  const Rgba shadow = pixel_at(render({&dark, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_GT(shadow.b, shadow.r);
+
+  const Layer light = tone(effects, 0.95f);
+  const Rgba highlight = pixel_at(render({&light, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_GT(highlight.r, highlight.b);
+}
+
+/// A four-pixel row: two dark, two light, with a hard step in the middle of the
+/// layer rather than at the edge of it. What a sharpen has to find.
+struct SteppedPatch {
+  static constexpr int kSize = 4;
+  std::array<std::uint8_t, kSize * 4> pixels{
+      60, 60, 60, 255, 60, 60, 60, 255, 200, 200, 200, 255, 200, 200, 200, 255,
+  };
+
+  [[nodiscard]] FrameView view() const {
+    FrameView frame;
+    frame.width = kSize;
+    frame.height = 1;
+    frame.layout = PixelLayout::Rgba8;
+    frame.full_range = true;
+    frame.planes[0] = PlaneView{.data = pixels.data(), .stride = kSize * 4};
+    return frame;
+  }
+};
+
+TEST_F(CompositorTest, SharpenLeavesAFlatFieldAlone) {
+  // Nothing to find, so nothing to do. A sharpen that lifted a flat field would
+  // be a brightness with extra steps.
+  const std::vector<EffectPass> effects{EffectPass{PassKind::Sharpen, {1.0f, 2.0f}}};
+  const Layer layer = tone(effects);
+  EXPECT_NEAR(pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2).r, 128, 2);
+}
+
+TEST_F(CompositorTest, SharpenPushesTheTwoSidesOfAnEdgeApart) {
+  // The step has to be *inside* the layer. A pass sees the layer alone, so an
+  // edge that only exists because two layers meet is not an edge it can find —
+  // the same thing the blur's own edge test says.
+  const SteppedPatch patch;
+  const FrameView frame = patch.view();
+
+  Layer layer;
+  layer.frame = &frame;
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  const std::array<Layer, 1> plain{layer};
+  const Image before = render(plain);
+
+  // A radius wide enough to span the ramp. The patch is four pixels stretched
+  // across sixty-four, so its step arrives as a gradient about a quarter of the
+  // canvas wide — and an unsharp mask finds nothing in the middle of a straight
+  // ramp, only at the shoulders where it bends.
+  const std::vector<EffectPass> effects{EffectPass{PassKind::Sharpen, {1.5f, kWidth / 8.0f}}};
+  layer.passes = effects;
+  const std::array<Layer, 1> sharpened{layer};
+  const Image after = render(sharpened);
+
+  // At the shoulders of the ramp: the dark side goes darker and the light side
+  // goes lighter, which is what an unsharp mask does to an edge.
+  // The four source pixels land at 8, 24, 40 and 56 across the canvas, so the
+  // ramp runs from 24 to 40 and the shoulders are its two ends.
+  const int dark_before = pixel_at(before, kWidth * 3 / 8, kHeight / 2).r;
+  const int dark_after = pixel_at(after, kWidth * 3 / 8, kHeight / 2).r;
+  const int light_before = pixel_at(before, kWidth * 5 / 8, kHeight / 2).r;
+  const int light_after = pixel_at(after, kWidth * 5 / 8, kHeight / 2).r;
+
+  EXPECT_LT(dark_after, dark_before) << dark_after << " vs " << dark_before;
+  EXPECT_GT(light_after, light_before) << light_after << " vs " << light_before;
+}
+
+TEST_F(CompositorTest, PosterizeCollapsesToItsLevels) {
+  // Two levels is black and white and nothing between, so a mid grey has to
+  // land on one of them rather than staying where it was.
+  const std::vector<EffectPass> effects{EffectPass{PassKind::Posterize, {2.0f}}};
+  const Layer layer = tone(effects, 0.6f);
+
+  const int value = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2).r;
+  EXPECT_TRUE(value <= 3 || value >= 252) << "landed at " << value;
+}
+
+TEST_F(CompositorTest, ThresholdSplitsAtTheLevelItIsGiven) {
+  const std::vector<EffectPass> effects{EffectPass{PassKind::Threshold, {0.5f}}};
+
+  const Layer dark = tone(effects, 0.4f);
+  EXPECT_LE(pixel_at(render({&dark, 1}), kWidth / 2, kHeight / 2).r, 3);
+
+  const Layer light = tone(effects, 0.6f);
+  EXPECT_GE(pixel_at(render({&light, 1}), kWidth / 2, kHeight / 2).r, 252);
+}
+
+TEST_F(CompositorTest, ADirectionalBlurSmearsAlongItsAngleOnly) {
+  // A quarter-covering white square, blurred horizontally: its vertical edges
+  // soften and its horizontal ones do not.
+  EffectPass sideways{PassKind::DirectionalBlur, {6.0f}};
+  sideways.values[4] = 0.0f;  // along x
+  const std::vector<EffectPass> effects{sideways};
+
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth * 0.5f, kHeight * 0.5f, 0.0f};
+  layer.passes = effects;
+
+  const Image image = render({&layer, 1});
+  // Just inside the left edge, where a horizontal blur reaches; and just inside
+  // the top edge, where it does not.
+  EXPECT_LT(pixel_at(image, kWidth / 4 + 2, kHeight / 2).a, 250) << "the side softened";
+  EXPECT_GE(pixel_at(image, kWidth / 2, kHeight / 4 + 2).a, 250) << "the top did not";
+}
+
 // -------------------------------------------------------------------- mask --
 //
 // A mask belongs to one pass, and the shader applies it the same way whatever

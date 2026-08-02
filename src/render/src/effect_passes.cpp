@@ -102,6 +102,65 @@ EffectPass blur_pass(float sigma) noexcept {
   return pass;
 }
 
+EffectPass directional_blur_pass(float sigma, float radians) noexcept {
+  EffectPass pass{.kind = EffectPassKind::DirectionalBlur};
+  pass.values[0] = std::max(0.0f, sigma);
+  // The angle is carried as an angle and resolved to a direction by the
+  // compositor, which is the only thing that knows how big a pixel is.
+  pass.values[4] = radians;
+  return pass;
+}
+
+EffectPass levels_pass(float black, float white, float gamma, float exposure) noexcept {
+  EffectPass pass{.kind = EffectPassKind::Levels};
+  pass.values[0] = black;
+  // A white point at or below the black one has no range between them to map,
+  // and every pixel would come out at one end or the other.
+  pass.values[1] = std::max(white, black + 1e-4f);
+  pass.values[2] = std::max(gamma, 1e-3f);
+  pass.values[3] = std::max(exposure, 0.0f);
+  return pass;
+}
+
+EffectPass balance_pass(float red, float green, float blue) noexcept {
+  EffectPass pass{.kind = EffectPassKind::Balance};
+  pass.values[0] = std::max(0.0f, red);
+  pass.values[1] = std::max(0.0f, green);
+  pass.values[2] = std::max(0.0f, blue);
+  return pass;
+}
+
+EffectPass tint_pass(EffectColor shadow, EffectColor highlight, float amount) noexcept {
+  EffectPass pass{.kind = EffectPassKind::Tint};
+  pass.values[0] = shadow.r;
+  pass.values[1] = shadow.g;
+  pass.values[2] = shadow.b;
+  pass.values[3] = std::clamp(amount, 0.0f, 1.0f);
+  pass.values[4] = highlight.r;
+  pass.values[5] = highlight.g;
+  pass.values[6] = highlight.b;
+  return pass;
+}
+
+EffectPass sharpen_pass(float amount, float radius) noexcept {
+  EffectPass pass{.kind = EffectPassKind::Sharpen};
+  pass.values[0] = std::max(0.0f, amount);
+  pass.values[1] = std::max(0.0f, radius);
+  return pass;
+}
+
+EffectPass posterize_pass(float levels) noexcept {
+  EffectPass pass{.kind = EffectPassKind::Posterize};
+  pass.values[0] = std::max(2.0f, levels);
+  return pass;
+}
+
+EffectPass threshold_pass(float level) noexcept {
+  EffectPass pass{.kind = EffectPassKind::Threshold};
+  pass.values[0] = std::clamp(level, 0.0f, 1.0f);
+  return pass;
+}
+
 PassMask pass_mask(const core::Mask& mask) noexcept {
   if (!mask.active()) return PassMask{};
 
@@ -141,6 +200,16 @@ float pass_blend(const EffectPass& pass) noexcept { return pass.values[4]; }
 bool pass_flips_x(const EffectPass& pass) noexcept { return pass.values[0] < 0.0f; }
 bool pass_flips_y(const EffectPass& pass) noexcept { return pass.values[1] < 0.0f; }
 float pass_sigma(const EffectPass& pass) noexcept { return pass.values[0]; }
+float pass_angle(const EffectPass& pass) noexcept { return pass.values[4]; }
+float pass_amount(const EffectPass& pass) noexcept { return pass.values[0]; }
+
+std::array<float, 4> pass_levels(const EffectPass& pass) noexcept {
+  return {pass.values[0], pass.values[1], pass.values[2], pass.values[3]};
+}
+
+std::array<float, 3> pass_balance(const EffectPass& pass) noexcept {
+  return {pass.values[0], pass.values[1], pass.values[2]};
+}
 
 // ------------------------------------------------------------------- plan --
 
@@ -210,6 +279,66 @@ std::vector<EffectPass> plan_effect_passes(const core::Clip& clip, double local_
           crop_pass(edge("left"), edge("top"), edge("right"), edge("bottom"));
       if (pass_crop(pass) != std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}) {
         passes.push_back(pass);
+      }
+
+    } else if (effect.type == "exposure") {
+      // Stops, so +1 is twice the light. Multiplying in linear is what makes it
+      // behave like an exposure rather than like a brightness.
+      const double stops = param(effect, "stops", 0.0);
+      if (stops != 0.0) {
+        passes.push_back(levels_pass(0.0f, 1.0f, 1.0f, static_cast<float>(std::pow(2.0, stops))));
+      }
+
+    } else if (effect.type == "gamma") {
+      const auto gamma = static_cast<float>(param(effect, "amount", 100.0) / 100.0);
+      if (gamma != 1.0f) passes.push_back(levels_pass(0.0f, 1.0f, gamma, 1.0f));
+
+    } else if (effect.type == "levels") {
+      const auto black = static_cast<float>(param(effect, "black", 0.0) / 100.0);
+      const auto white = static_cast<float>(param(effect, "white", 100.0) / 100.0);
+      const auto gamma = static_cast<float>(param(effect, "gamma", 100.0) / 100.0);
+      if (black != 0.0f || white != 1.0f || gamma != 1.0f) {
+        passes.push_back(levels_pass(black, white, gamma, 1.0f));
+      }
+
+    } else if (effect.type == "balance") {
+      const auto red = static_cast<float>(param(effect, "red", 100.0) / 100.0);
+      const auto green = static_cast<float>(param(effect, "green", 100.0) / 100.0);
+      const auto blue = static_cast<float>(param(effect, "blue", 100.0) / 100.0);
+      if (red != 1.0f || green != 1.0f || blue != 1.0f) {
+        passes.push_back(balance_pass(red, green, blue));
+      }
+
+    } else if (effect.type == "tint") {
+      const auto amount = static_cast<float>(param(effect, "amount", 100.0) / 100.0);
+      if (amount > 0.0f) {
+        const auto colour = [&effect](const char* key, EffectColor fallback) {
+          const auto found = effect.colors.find(key);
+          return found == effect.colors.end() ? fallback
+                                              : parse_hex_color(found->second, fallback);
+        };
+        passes.push_back(tint_pass(colour("shadow", EffectColor{0.0f, 0.0f, 0.0f}),
+                                   colour("highlight", EffectColor{1.0f, 1.0f, 1.0f}), amount));
+      }
+
+    } else if (effect.type == "sharpen") {
+      const auto amount = static_cast<float>(param(effect, "amount", 0.0) / 100.0);
+      if (amount > 0.0f) {
+        passes.push_back(sharpen_pass(amount, static_cast<float>(param(effect, "radius", 1.0))));
+      }
+
+    } else if (effect.type == "posterize") {
+      const auto levels = static_cast<float>(param(effect, "levels", 6.0));
+      if (levels < 255.0f) passes.push_back(posterize_pass(levels));
+
+    } else if (effect.type == "threshold") {
+      passes.push_back(threshold_pass(static_cast<float>(param(effect, "level", 50.0) / 100.0)));
+
+    } else if (effect.type == "directionalblur") {
+      const auto sigma = static_cast<float>(std::max(0.0, param(effect, "amount", 0.0)));
+      if (sigma > 0.0f) {
+        passes.push_back(directional_blur_pass(
+            sigma, static_cast<float>(param(effect, "angle", 0.0) * std::numbers::pi / 180.0)));
       }
 
     } else if (effect.type == "chromakey") {

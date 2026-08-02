@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -284,6 +285,100 @@ TEST(EffectPasses, AMaskWithNoShapeIsNoMask) {
   const std::vector<EffectPass> passes = plan_effect_passes(clip_with({masked}), 0.0);
   ASSERT_EQ(passes.size(), 1u);
   EXPECT_FALSE(passes[0].mask.active());
+}
+
+
+// ----------------------------------------------------------- the newer few --
+//
+// Nine effects that arrived after the restructuring, and three of them are the
+// same *kind* of pass reached through different catalogue entries — which is
+// the point: an entry costs a branch here, not a field in the root constants.
+
+TEST(EffectPasses, ExposureGammaAndLevelsAreAllOneKindOfPass) {
+  const auto kind_of = [](const char* type, std::map<std::string, double> params) {
+    const std::vector<EffectPass> passes =
+        plan_effect_passes(clip_with({effect(type, std::move(params))}), 0.0);
+    return passes.empty() ? EffectPassKind::Color : passes.front().kind;
+  };
+
+  EXPECT_EQ(kind_of("exposure", {{"stops", 1.0}}), EffectPassKind::Levels);
+  EXPECT_EQ(kind_of("gamma", {{"amount", 200.0}}), EffectPassKind::Levels);
+  EXPECT_EQ(kind_of("levels", {{"black", 10.0}}), EffectPassKind::Levels);
+}
+
+TEST(EffectPasses, ExposureIsInStops) {
+  const std::vector<EffectPass> passes =
+      plan_effect_passes(clip_with({effect("exposure", {{"stops", 1.0}})}), 0.0);
+  ASSERT_EQ(passes.size(), 1u);
+  EXPECT_NEAR(pass_levels(passes[0])[3], 2.0f, 1e-6) << "one stop is twice the light";
+}
+
+TEST(EffectPasses, ALevelsWhitePointCannotFallBelowItsBlackOne) {
+  // There would be no range between them to map, and every pixel would come out
+  // at one end or the other.
+  const std::vector<EffectPass> passes = plan_effect_passes(
+      clip_with({effect("levels", {{"black", 80.0}, {"white", 20.0}})}), 0.0);
+  ASSERT_EQ(passes.size(), 1u);
+  EXPECT_GT(pass_levels(passes[0])[1], pass_levels(passes[0])[0]);
+}
+
+TEST(EffectPasses, ColourBalanceIsAGainPerChannel) {
+  const std::vector<EffectPass> passes = plan_effect_passes(
+      clip_with({effect("balance", {{"red", 150.0}, {"green", 100.0}, {"blue", 50.0}})}), 0.0);
+  ASSERT_EQ(passes.size(), 1u);
+  const std::array<float, 3> gains = pass_balance(passes[0]);
+  EXPECT_NEAR(gains[0], 1.5f, 1e-6);
+  EXPECT_NEAR(gains[1], 1.0f, 1e-6);
+  EXPECT_NEAR(gains[2], 0.5f, 1e-6);
+}
+
+TEST(EffectPasses, TintCarriesBothColours) {
+  ClipEffect tinted = effect("tint", {{"amount", 100.0}});
+  tinted.colors["shadow"] = "#0000ff";
+  tinted.colors["highlight"] = "#ffff00";
+
+  const std::vector<EffectPass> passes = plan_effect_passes(clip_with({tinted}), 0.0);
+  ASSERT_EQ(passes.size(), 1u);
+  EXPECT_EQ(passes[0].kind, EffectPassKind::Tint);
+  EXPECT_NEAR(passes[0].values[2], 1.0f, 1e-6) << "a blue shadow";
+  EXPECT_NEAR(passes[0].values[4], 1.0f, 1e-6) << "and a yellow highlight";
+}
+
+TEST(EffectPasses, ADirectionalBlurCarriesItsAngleInRadians) {
+  const std::vector<EffectPass> passes = plan_effect_passes(
+      clip_with({effect("directionalblur", {{"amount", 5.0}, {"angle", 90.0}})}), 0.0);
+  ASSERT_EQ(passes.size(), 1u);
+  EXPECT_EQ(passes[0].kind, EffectPassKind::DirectionalBlur);
+  EXPECT_NEAR(pass_sigma(passes[0]), 5.0f, 1e-6);
+  EXPECT_NEAR(pass_angle(passes[0]), 1.5707963f, 1e-5);
+}
+
+TEST(EffectPasses, PosterizeNeedsAtLeastTwoLevels) {
+  const std::vector<EffectPass> passes =
+      plan_effect_passes(clip_with({effect("posterize", {{"levels", 1.0}})}), 0.0);
+  ASSERT_EQ(passes.size(), 1u);
+  EXPECT_NEAR(pass_amount(passes[0]), 2.0f, 1e-6) << "one level is not a picture";
+}
+
+TEST(EffectPasses, ThresholdIsAFraction) {
+  const std::vector<EffectPass> passes =
+      plan_effect_passes(clip_with({effect("threshold", {{"level", 25.0}})}), 0.0);
+  ASSERT_EQ(passes.size(), 1u);
+  EXPECT_NEAR(pass_amount(passes[0]), 0.25f, 1e-6);
+}
+
+TEST(EffectPasses, ANeutralGradeIsNoPass) {
+  // The same rule the older effects follow: something added and not touched
+  // should not cost a round trip through a scratch target.
+  EXPECT_TRUE(plan_effect_passes(
+                  clip_with({effect("exposure", {{"stops", 0.0}}),
+                             effect("gamma", {{"amount", 100.0}}),
+                             effect("balance", {{"red", 100.0}, {"green", 100.0},
+                                                {"blue", 100.0}}),
+                             effect("sharpen", {{"amount", 0.0}}),
+                             effect("directionalblur", {{"amount", 0.0}})}),
+                  0.0)
+                  .empty());
 }
 
 }  // namespace

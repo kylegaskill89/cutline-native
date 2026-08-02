@@ -70,6 +70,13 @@
 #define PASS_CHROMAKEY 4
 #define PASS_FLIP      5
 #define PASS_BLUR      6
+#define PASS_LEVELS    7
+#define PASS_BALANCE   8
+#define PASS_TINT      9
+#define PASS_SHARPEN   10
+#define PASS_POSTERIZE 11
+#define PASS_THRESHOLD 12
+#define PASS_DIRBLUR   13
 
 // Laid out so no member straddles a 16-byte boundary, because these arrive as
 // root constants and HLSL packs a cbuffer in float4 rows.
@@ -533,13 +540,82 @@ float maskCoverage(float2 uv) {
     return inside * params.maskOpacity;
 }
 
+// ------------------------------------------------------------- the newer few --
+//
+// Every one of these is a branch here and an entry in the catalogue, and not
+// one of them needed a field of its own in the root constants. That is what
+// passes bought.
+
+/// Black point, white point, gamma and exposure.
+///
+/// The points and the gamma work on coded values, where a black point is a
+/// coded level and a gamma is the curve everybody means by one. Exposure does
+/// not: a stop is a doubling of *light*, so it multiplies in linear and comes
+/// back, which is the difference between an exposure and a brightness.
+float3 levelsPass(float3 coded) {
+    const float black    = params.passA.x;
+    const float white    = params.passA.y;
+    const float gamma    = params.passA.z;
+    const float exposure = params.passA.w;
+
+    float3 c = saturate((coded - black) / max(white - black, 1e-4));
+    c = pow(max(c, 0.0), 1.0 / max(gamma, 1e-3));
+
+    if (exposure != 1.0) {
+        c = encodeSrgb(linearizeSrgb(c) * exposure);
+    }
+    return saturate(c);
+}
+
+/// A gain per channel, in linear light, because a colour cast is a cast on the
+/// light rather than on the numbers it was written down as.
+float3 balancePass(float3 coded) {
+    const float3 gain = params.passA.rgb;
+    return saturate(encodeSrgb(linearizeSrgb(coded) * gain));
+}
+
+/// Shadows and highlights mapped to two colours, by luma.
+float3 tintPass(float3 coded) {
+    const float3 shadow = params.passA.rgb;
+    const float amount = params.passA.w;
+    const float3 highlight = params.passB.rgb;
+
+    const float luma = rgbToYuv601(coded).x;
+    return saturate(lerp(coded, lerp(shadow, highlight, saturate(luma)), amount));
+}
+
+/// An unsharp mask: the picture minus a blurred copy of it, added back.
+///
+/// Four taps rather than a full Gaussian. Sharpening is a local operation by
+/// definition — the radius is a pixel or two — so a wide kernel would cost
+/// noticeably more to produce the same edge.
+float3 sharpenPass(float2 uv) {
+    const float amount = params.passA.x;
+    const float2 step = params.passA.zw;
+
+    const float3 centre = texture0.Sample(linearSampler, uv).rgb;
+    float3 around = texture0.Sample(linearSampler, uv + float2(step.x, 0.0)).rgb;
+    around += texture0.Sample(linearSampler, uv - float2(step.x, 0.0)).rgb;
+    around += texture0.Sample(linearSampler, uv + float2(0.0, step.y)).rgb;
+    around += texture0.Sample(linearSampler, uv - float2(0.0, step.y)).rgb;
+    around *= 0.25;
+
+    return saturate(centre + (centre - around) * amount);
+}
+
 /// One effect over the scratch. Coded in, coded out.
 float4 PSEffect(VSOutput input) : SV_Target {
     const float4 before = texture0.Sample(linearSampler, input.uv);
 
     float4 after;
-    if (params.passKind == PASS_BLUR) {
+    if (params.passKind == PASS_BLUR || params.passKind == PASS_DIRBLUR) {
+        // The same maths either way. A Gaussian is two of these at right
+        // angles and a directional blur is one of them aimed somewhere else,
+        // and which it is has already been decided by the step the compositor
+        // handed down.
         after = blurPass(input.uv);
+    } else if (params.passKind == PASS_SHARPEN) {
+        after = float4(sharpenPass(input.uv), texture0.Sample(linearSampler, input.uv).a);
     } else if (params.passKind == PASS_FLIP) {
         // A mirror in texture space, which is why it survives the rotation the
         // composite applies afterwards rather than fighting it.
@@ -561,6 +637,21 @@ float4 PSEffect(VSOutput input) : SV_Target {
             if (!insideCrop(input.uv)) after.a = 0.0;
         } else if (params.passKind == PASS_CHROMAKEY) {
             after.a *= chromaKeyAlpha(after.rgb);
+        } else if (params.passKind == PASS_LEVELS) {
+            after.rgb = levelsPass(after.rgb);
+        } else if (params.passKind == PASS_BALANCE) {
+            after.rgb = balancePass(after.rgb);
+        } else if (params.passKind == PASS_TINT) {
+            after.rgb = tintPass(after.rgb);
+        } else if (params.passKind == PASS_POSTERIZE) {
+            // Rounded to the nearest step rather than floored, so the darkest
+            // and lightest bands are the same width as the ones between them
+            // instead of half of one.
+            const float levels = max(params.passA.x, 2.0);
+            after.rgb = saturate(round(after.rgb * (levels - 1.0)) / (levels - 1.0));
+        } else if (params.passKind == PASS_THRESHOLD) {
+            const float luma = rgbToYuv601(after.rgb).x;
+            after.rgb = luma >= params.passA.x ? float3(1.0, 1.0, 1.0) : float3(0.0, 0.0, 0.0);
         }
     }
 

@@ -74,6 +74,67 @@ constexpr std::array kChromaKey{
 constexpr std::array kChromaKeyColors{
     EffectColorSpec{.key = "color", .name = "Key Colour", .fallback = "#00d000"}};
 
+// ---------------------------------------------------------------- grading --
+//
+// Everything from here down arrived after effects became passes, and between
+// them they are the argument for having done it: each is one branch in one
+// shader and one entry here. None needed a permanent field in the root
+// constants, which is what the old flat struct charged for every effect.
+
+constexpr std::array kExposure{
+    Param{.key = "stops", .name = "Stops", .minimum = -4.0, .maximum = 4.0, .fallback = 0.5,
+          .suffix = ""}};
+
+constexpr std::array kGamma{
+    Param{.key = "amount", .name = "Amount", .minimum = 10.0, .maximum = 400.0,
+          .fallback = 120.0, .suffix = "%"}};
+
+constexpr std::array kLevels{
+    Param{.key = "black", .name = "Black Point", .minimum = 0.0, .maximum = 95.0,
+          .fallback = 5.0, .suffix = "%"},
+    Param{.key = "white", .name = "White Point", .minimum = 5.0, .maximum = 100.0,
+          .fallback = 95.0, .suffix = "%"},
+    Param{.key = "gamma", .name = "Gamma", .minimum = 10.0, .maximum = 400.0,
+          .fallback = 100.0, .suffix = "%"}};
+
+constexpr std::array kBalance{
+    Param{.key = "red", .name = "Red", .minimum = 0.0, .maximum = 200.0, .fallback = 110.0,
+          .suffix = "%"},
+    Param{.key = "green", .name = "Green", .minimum = 0.0, .maximum = 200.0, .fallback = 100.0,
+          .suffix = "%"},
+    Param{.key = "blue", .name = "Blue", .minimum = 0.0, .maximum = 200.0, .fallback = 100.0,
+          .suffix = "%"}};
+
+constexpr std::array kTint{
+    Param{.key = "amount", .name = "Amount", .minimum = 0.0, .maximum = 100.0,
+          .fallback = 100.0, .suffix = "%"}};
+
+// A warm shadow and a cool highlight, which is the split-tone everybody reaches
+// for first and is visibly a tint rather than visibly nothing.
+constexpr std::array kTintColors{
+    EffectColorSpec{.key = "shadow", .name = "Shadows", .fallback = "#1a1030"},
+    EffectColorSpec{.key = "highlight", .name = "Highlights", .fallback = "#ffe8c0"}};
+
+constexpr std::array kSharpen{
+    Param{.key = "amount", .name = "Amount", .minimum = 0.0, .maximum = 300.0,
+          .fallback = 60.0, .suffix = "%"},
+    Param{.key = "radius", .name = "Radius", .minimum = 0.5, .maximum = 10.0, .fallback = 1.0,
+          .suffix = "px"}};
+
+constexpr std::array kDirectionalBlur{
+    Param{.key = "amount", .name = "Amount", .minimum = 0.0, .maximum = 50.0, .fallback = 8.0,
+          .suffix = "px"},
+    Param{.key = "angle", .name = "Angle", .minimum = -180.0, .maximum = 180.0,
+          .fallback = 0.0, .suffix = "°"}};
+
+constexpr std::array kPosterize{
+    Param{.key = "levels", .name = "Levels", .minimum = 2.0, .maximum = 32.0, .fallback = 6.0,
+          .suffix = ""}};
+
+constexpr std::array kThreshold{
+    Param{.key = "level", .name = "Level", .minimum = 0.0, .maximum = 100.0, .fallback = 50.0,
+          .suffix = "%"}};
+
 constexpr std::array kCatalog{
     EffectSpec{.type = "brightness", .name = "Brightness", .category = EffectCategory::Color,
                .params = kBrightness},
@@ -86,8 +147,22 @@ constexpr std::array kCatalog{
                .params = kGrayscale},
     EffectSpec{.type = "invert", .name = "Invert", .category = EffectCategory::Color,
                .params = kInvert},
+    EffectSpec{.type = "exposure", .name = "Exposure", .category = EffectCategory::Color,
+               .params = kExposure},
+    EffectSpec{.type = "gamma", .name = "Gamma", .category = EffectCategory::Color,
+               .params = kGamma},
+    EffectSpec{.type = "levels", .name = "Levels", .category = EffectCategory::Color,
+               .params = kLevels},
+    EffectSpec{.type = "balance", .name = "Colour Balance",
+               .category = EffectCategory::Color, .params = kBalance},
+    EffectSpec{.type = "tint", .name = "Tint", .category = EffectCategory::Color,
+               .params = kTint, .colors = kTintColors},
     EffectSpec{.type = "blur", .name = "Gaussian Blur",
                .category = EffectCategory::BlurAndSharpen, .params = kBlur},
+    EffectSpec{.type = "directionalblur", .name = "Directional Blur",
+               .category = EffectCategory::BlurAndSharpen, .params = kDirectionalBlur},
+    EffectSpec{.type = "sharpen", .name = "Sharpen",
+               .category = EffectCategory::BlurAndSharpen, .params = kSharpen},
     EffectSpec{.type = "chromakey", .name = "Chroma Key", .category = EffectCategory::Keying,
                .params = kChromaKey, .colors = kChromaKeyColors},
     EffectSpec{.type = "crop", .name = "Crop", .category = EffectCategory::Transform,
@@ -96,6 +171,10 @@ constexpr std::array kCatalog{
                .params = kFlip},
     EffectSpec{.type = "vignette", .name = "Vignette", .category = EffectCategory::Stylize,
                .params = kVignette},
+    EffectSpec{.type = "posterize", .name = "Posterize", .category = EffectCategory::Stylize,
+               .params = kPosterize},
+    EffectSpec{.type = "threshold", .name = "Threshold", .category = EffectCategory::Stylize,
+               .params = kThreshold},
 };
 
 }  // namespace

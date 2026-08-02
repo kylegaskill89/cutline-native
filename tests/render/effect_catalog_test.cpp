@@ -92,8 +92,10 @@ TEST(EffectCatalog, EveryEntryIsNamedAndUsable) {
 /// its one thing or it is indistinguishable from a button that failed. The
 /// rest arrive at the middle of a slider, which is what a slider is for: a
 /// Contrast that started at 300% would be the bug.
-constexpr std::string_view kStartsVisible[]{"grayscale", "invert", "flip", "vignette",
-                                            "chromakey"};
+constexpr std::string_view kStartsVisible[]{
+    "grayscale", "invert",   "flip",      "vignette",        "chromakey",
+    "exposure",  "gamma",    "levels",    "balance",         "tint",
+    "sharpen",   "posterize", "threshold", "directionalblur"};
 
 [[nodiscard]] bool starts_visible(std::string_view type) {
   return std::ranges::contains(kStartsVisible, type);
@@ -123,7 +125,12 @@ TEST(EffectCatalog, TheDefaultsAreTheOnesTheResolverAssumes) {
   // Vignette and flip are the deliberate exceptions: what a *missing* parameter
   // means and what a *new* effect is given are different questions there, which
   // is why the catalogue calls the field `fallback` rather than `neutral`.
-  const std::set<std::string_view> differs{"vignette", "flip"};
+  // The ones whose registry default is deliberately *not* their neutral value,
+  // so that adding them does something you can see. A missing parameter still
+  // reads as neutral, which is what keeps a hand-written project honest.
+  const std::set<std::string_view> differs{"vignette",  "flip",    "exposure",
+                                           "gamma",     "levels",  "balance",
+                                           "tint",      "sharpen", "directionalblur"};
 
   for (const EffectSpec& spec : effect_catalog()) {
     if (differs.contains(spec.type)) continue;

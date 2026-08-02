@@ -54,6 +54,27 @@ enum class EffectPassKind {
   Flip,
   /// One axis of a separable Gaussian. A blur is two of these.
   Blur,
+
+  // Everything below arrived after effects became passes, and between them they
+  // are the argument for having done it: each is a branch in one shader and an
+  // entry in the catalogue, and not one of them needed a field of its own in
+  // the root constants.
+
+  /// Black point, white point, gamma and exposure — the whole tone curve, which
+  /// three catalogue entries all reach through.
+  Levels,
+  /// A gain per channel.
+  Balance,
+  /// Shadows and highlights mapped to two colours.
+  Tint,
+  /// An unsharp mask.
+  Sharpen,
+  /// Quantised to a few levels per channel.
+  Posterize,
+  /// Luma above the level goes white, below goes black.
+  Threshold,
+  /// A Gaussian along one angle rather than across both axes.
+  DirectionalBlur,
 };
 
 /// How many floats a pass carries.
@@ -142,6 +163,34 @@ struct EffectPass {
 /// nothing here knows; the compositor expands this into its axes.
 [[nodiscard]] EffectPass blur_pass(float sigma) noexcept;
 
+/// A Gaussian along `radians` only, which is what a directional blur is: the
+/// same maths as one axis of the separable pair, aimed somewhere else.
+[[nodiscard]] EffectPass directional_blur_pass(float sigma, float radians) noexcept;
+
+/// The tone curve. `black` and `white` are the input points that map to nothing
+/// and to everything, `gamma` bends what is between them, and `exposure` is a
+/// multiplier in **linear light**, which is what makes a stop a stop.
+[[nodiscard]] EffectPass levels_pass(float black, float white, float gamma,
+                                     float exposure) noexcept;
+
+/// A gain per channel, applied in linear light.
+[[nodiscard]] EffectPass balance_pass(float red, float green, float blue) noexcept;
+
+/// Maps black to `shadow` and white to `highlight`, mixed in by `amount`.
+[[nodiscard]] EffectPass tint_pass(EffectColor shadow, EffectColor highlight,
+                                   float amount) noexcept;
+
+/// An unsharp mask: the difference between the pixel and its neighbours, added
+/// back. `radius` is in pixels of the layer.
+[[nodiscard]] EffectPass sharpen_pass(float amount, float radius) noexcept;
+
+/// Quantised to `levels` steps per channel. Two is the fewest that is still a
+/// picture.
+[[nodiscard]] EffectPass posterize_pass(float levels) noexcept;
+
+/// Luma above `level` goes white, below goes black.
+[[nodiscard]] EffectPass threshold_pass(float level) noexcept;
+
 // --------------------------------------------------------------- accessors --
 
 [[nodiscard]] float pass_brightness(const EffectPass& pass) noexcept;
@@ -156,6 +205,10 @@ struct EffectPass {
 [[nodiscard]] bool pass_flips_x(const EffectPass& pass) noexcept;
 [[nodiscard]] bool pass_flips_y(const EffectPass& pass) noexcept;
 [[nodiscard]] float pass_sigma(const EffectPass& pass) noexcept;
+[[nodiscard]] float pass_angle(const EffectPass& pass) noexcept;
+[[nodiscard]] std::array<float, 4> pass_levels(const EffectPass& pass) noexcept;
+[[nodiscard]] std::array<float, 3> pass_balance(const EffectPass& pass) noexcept;
+[[nodiscard]] float pass_amount(const EffectPass& pass) noexcept;
 
 // ------------------------------------------------------------------- plan --
 
