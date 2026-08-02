@@ -55,13 +55,14 @@ still opens the field rather than nudging the value somewhere nobody asked for.
 | Drag the number to scrub | yes, with fine/coarse modifiers | **done** — shift is ×10, control ×0.1 | — |
 | Click the number to type | yes | **done**, and the unit may be typed back in | — |
 | Slider | behind a disclosure triangle | **done** | — |
-| Paired X/Y on one row | Position and Anchor Point are one row of two numbers | two separate rows | control |
-| **Anchor Point** | a property of its own; scale and rotation happen about it | **absent from the model** — `Transform` has position, scale and rotation, and both happen about the clip's centre | model + compositor |
+| Paired X/Y on one row | Position and Anchor Point are one row of two numbers | **done** — both, one stopwatch each | — |
+| **Anchor Point** | a property of its own; scale and rotation happen about it | **done** — in pixels of the layer, keyframeable, and it needed no shader change | — |
 | Time remapping | Speed keyframed, in Effect Controls | Speed is explicitly not animatable | model |
 | Anti-flicker filter | a slider under Motion | none | model + shader |
-| Per-row reset button | a visible circular arrow | double-click the number, with no affordance saying so | control |
-| Per-section reset | one per `fx` group | none | wiring |
-| Greying a property another one governs | Uniform Scale greys Scale Width | Lock aspect ties them but leaves both live | wiring |
+| Per-row reset button | a visible circular arrow | **done**, and hidden on an animated row where it would write a keyframe holding the default | — |
+| Per-section reset | one per `fx` group | **done** — per effect, keyframes cleared with it | — |
+| Greying a property another one governs | Uniform Scale greys Scale Width | **done** — Lock aspect greys Scale Y and leaves it readable | — |
+| **Balance / pan** | a panner on every audio clip *and* every audio track | **done for the clip** — see §1.6; the track panner is not | model + control |
 | Live update while scrubbing | the picture follows the drag | **done** — one undo entry for the whole gesture | — |
 
 Two things fell out of building it and are worth keeping written down.
