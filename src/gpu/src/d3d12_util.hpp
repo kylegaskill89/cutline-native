@@ -61,32 +61,22 @@ struct alignas(16) ShaderParams {
 
   int full_range = 0;
   int blend = 0;
-  float flip[2]{1.0f, 1.0f};
+  int pass_kind = 0;
+  float pass_pad = 0.0f;
 
   float solid[4]{};
-
-  float brightness = 0.0f;
-  float contrast = 1.0f;
-  float saturation = 1.0f;
-  float hue_radians = 0.0f;
-
-  float invert = 0.0f;
-  float vignette = 0.0f;
-  float chroma_similarity = 0.0f;
-  float chroma_blend = 0.0f;
-
-  float crop[4]{};          ///< left, top, right, bottom
-  float chroma_color[4]{};  ///< rgb, then 1 when keying is on
-
-  float blur_step[2]{};      ///< one tap's UV offset, and the axis it runs along
-  float blur_sigma = 0.0f;   ///< pixels; zero means no blur
-  float blur_stride = 1.0f;  ///< pixels between taps
 
   float gradient[4]{};      ///< linear rgb of the far stop; w is 1 when set
   float gradient_dir[2]{};  ///< cos, sin of the gradient angle
   float gradient_pad[2]{};
+
+  /// Whatever the pass is. Eight floats, shared by every kind because only one
+  /// runs at a time — which is what took the ceiling off the catalogue: an
+  /// effect no longer needs a permanent field here.
+  float pass_a[4]{};
+  float pass_b[4]{};
 };
-static_assert(sizeof(ShaderParams) == 48 * sizeof(float),
+static_assert(sizeof(ShaderParams) == 36 * sizeof(float),
               "root constants must match the shader's cbuffer exactly");
 
 inline constexpr UINT kShaderParamCount = sizeof(ShaderParams) / sizeof(float);

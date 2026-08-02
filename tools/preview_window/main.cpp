@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <numbers>
 #include <print>
 #include <string>
 #include <vector>
@@ -86,8 +87,57 @@ struct AppState {
   bool flip_x = false;
   bool flip_y = false;
 
-  cutline::gpu::LayerEffects effects;
+  /// The knobs the keys turn. Kept as plain numbers here and turned into a
+  /// pass list when a frame is composed: this is a tool for poking at the
+  /// compositor by hand, so one key holding one value reads better than a
+  /// stack that has to be edited.
+  struct Knobs {
+    float brightness = 0.0f;
+    float contrast = 1.0f;
+    float saturation = 1.0f;
+    float hue_degrees = 0.0f;
+    bool invert = false;
+    float vignette = 0.0f;
+    float crop = 0.0f;
+    bool chroma_key = false;
+    float blur_sigma = 0.0f;
+  } effects;
 };
+
+/// The knobs as a pass list, in the order the old flat resolver applied them.
+[[nodiscard]] std::vector<cutline::gpu::EffectPass> passes_of(const AppState& state) {
+  using cutline::gpu::EffectPass;
+  using cutline::gpu::PassKind;
+
+  std::vector<EffectPass> passes;
+  const AppState::Knobs& knobs = state.effects;
+
+  if (knobs.brightness != 0.0f || knobs.contrast != 1.0f || knobs.saturation != 1.0f ||
+      knobs.hue_degrees != 0.0f) {
+    passes.push_back(EffectPass{
+        PassKind::Color,
+        {knobs.brightness, knobs.contrast, knobs.saturation,
+         static_cast<float>(knobs.hue_degrees * std::numbers::pi / 180.0)}});
+  }
+  if (knobs.invert) passes.push_back(EffectPass{PassKind::Invert, {}});
+  if (state.flip_x || state.flip_y) {
+    passes.push_back(EffectPass{
+        PassKind::Flip, {state.flip_x ? -1.0f : 1.0f, state.flip_y ? -1.0f : 1.0f}});
+  }
+  if (knobs.crop > 0.0f) {
+    passes.push_back(EffectPass{PassKind::Crop, {knobs.crop, knobs.crop, knobs.crop, knobs.crop}});
+  }
+  if (knobs.chroma_key) {
+    passes.push_back(EffectPass{PassKind::ChromaKey, {0.0f, 208.0f / 255.0f, 0.0f, 0.3f, 0.1f}});
+  }
+  if (knobs.vignette > 0.0f) {
+    passes.push_back(EffectPass{PassKind::Vignette, {knobs.vignette}});
+  }
+  if (knobs.blur_sigma > 0.0f) {
+    passes.push_back(EffectPass{PassKind::Blur, {knobs.blur_sigma}});
+  }
+  return passes;
+}
 
 /// Translates a decoded frame into the compositor's view of it. Only the
 /// layouts the decoder actually produces for our sources are handled; anything
@@ -145,7 +195,10 @@ struct AppState {
 /// Builds the layer stack for the current state: a matte underneath, the video
 /// over it. The geometry comes from core, exactly as the real renderer will
 /// compute it.
-[[nodiscard]] std::vector<Layer> build_layers(const AppState& state) {
+/// The passes go in `passes`, which the caller keeps alive: a layer borrows
+/// them and the compose call reads them.
+[[nodiscard]] std::vector<Layer> build_layers(const AppState& state,
+                                              const std::vector<cutline::gpu::EffectPass>& passes) {
   std::vector<Layer> layers;
 
   // A dark matte, so a transformed or partly transparent video layer visibly
@@ -173,9 +226,7 @@ struct AppState {
                 static_cast<float>(state.rotation)};
   video.opacity = state.opacity;
   video.blend = kBlendModes[state.blend].first;
-  video.effects = state.effects;
-  video.flip_x = state.flip_x;
-  video.flip_y = state.flip_y;
+  video.passes = passes;
   layers.push_back(video);
 
   return layers;
@@ -224,7 +275,8 @@ void update_title(HWND window, const AppState& state) {
 }
 
 void redraw(AppState& state) {
-  const std::vector<Layer> layers = build_layers(state);
+  const std::vector<cutline::gpu::EffectPass> passes = passes_of(state);
+  const std::vector<Layer> layers = build_layers(state, passes);
   if (auto ok = state.compositor->compose(layers); !ok) {
     std::println(stderr, "compose failed: {}", ok.error());
     return;
@@ -356,10 +408,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
           state->needs_redraw = true;
           break;
         case 'X':
-          state->effects.crop_left = state->effects.crop_left > 0.0f ? 0.0f : 0.15f;
-          state->effects.crop_right = state->effects.crop_left;
-          state->effects.crop_top = state->effects.crop_left;
-          state->effects.crop_bottom = state->effects.crop_left;
+          state->effects.crop = state->effects.crop > 0.0f ? 0.0f : 0.15f;
           state->needs_redraw = true;
           break;
         case 'K':

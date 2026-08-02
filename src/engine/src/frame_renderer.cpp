@@ -2,6 +2,7 @@
 
 #include "cutline/media/av_headers.hpp"
 #include "cutline/media/decoder.hpp"
+#include "cutline/render/effect_passes.hpp"
 #include "cutline/render/effects.hpp"
 #include "cutline/render/plan.hpp"
 
@@ -29,7 +30,6 @@ namespace {
 using gpu::BlendMode;
 using gpu::Color;
 using gpu::Layer;
-using gpu::LayerEffects;
 using media::VideoDecoder;
 
 /// How far ahead it is still worth decoding through rather than seeking.
@@ -74,26 +74,24 @@ constexpr double kAssumedFrameGap = 1.0 / 30.0;
   return Color::from_srgb(color.r, color.g, color.b, alpha);
 }
 
-/// Translates a resolved effect stack into the compositor's form. Flip lives on
-/// the layer rather than in the effects because it is geometry, applied in the
-/// vertex stage.
-[[nodiscard]] LayerEffects to_gpu_effects(const render::EffectParams& params) noexcept {
-  LayerEffects out;
-  out.brightness = params.brightness;
-  out.contrast = params.contrast;
-  out.saturation = params.saturation;
-  out.hue_degrees = params.hue_degrees;
-  out.invert = params.invert;
-  out.vignette = params.vignette;
-  out.crop_left = params.crop_left;
-  out.crop_top = params.crop_top;
-  out.crop_right = params.crop_right;
-  out.crop_bottom = params.crop_bottom;
-  out.blur_sigma = params.blur_sigma;
-  out.chroma_key = params.chroma_key;
-  out.chroma_similarity = params.chroma_similarity;
-  out.chroma_blend = params.chroma_blend;
-  out.chroma_color = to_linear(params.chroma_color);
+/// Translates one planned pass into the compositor's form.
+///
+/// The two types are the same shape and deliberately separate: `render` is pure
+/// and testable without a device, and `gpu` must not learn what a clip is. The
+/// kinds are declared in the same order in both, and this is the one place that
+/// depends on it.
+[[nodiscard]] gpu::EffectPass to_gpu_pass(const render::EffectPass& pass) noexcept {
+  gpu::EffectPass out;
+  out.kind = static_cast<gpu::PassKind>(pass.kind);
+  out.values = pass.values;
+  return out;
+}
+
+[[nodiscard]] std::vector<gpu::EffectPass> to_gpu_passes(
+    const std::vector<render::EffectPass>& passes) {
+  std::vector<gpu::EffectPass> out;
+  out.reserve(passes.size());
+  for (const render::EffectPass& pass : passes) out.push_back(to_gpu_pass(pass));
   return out;
 }
 
@@ -405,6 +403,13 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
   std::vector<Layer> layers;
   layers.reserve(planned.size());
 
+  // The layers borrow their passes, so the vectors have to outlive the compose
+  // call and must not move while it is being built up. Reserved for the same
+  // reason `views` is: a reallocation partway through leaves earlier layers
+  // pointing at freed memory.
+  std::vector<std::vector<gpu::EffectPass>> stacks;
+  stacks.reserve(planned.size());
+
   for (const render::PlannedLayer& source : planned) {
     Layer layer;
     layer.quad = {static_cast<float>(source.box.center_x),
@@ -415,13 +420,11 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
     layer.opacity = static_cast<float>(std::clamp(source.alpha, 0.0, 1.0));
     layer.blend = to_gpu_blend(source.blend);
 
-    const render::EffectParams effects =
-        source.clip == nullptr
-            ? render::EffectParams{}
-            : render::resolve_effect_params(*source.clip, t - source.clip->start);
-    layer.effects = to_gpu_effects(effects);
-    layer.flip_x = effects.flip_x;
-    layer.flip_y = effects.flip_y;
+    stacks.push_back(source.clip == nullptr
+                         ? std::vector<gpu::EffectPass>{}
+                         : to_gpu_passes(render::plan_effect_passes(
+                               *source.clip, t - source.clip->start)));
+    layer.passes = stacks.back();
 
     switch (source.content) {
       case render::LayerContent::Adjustment:

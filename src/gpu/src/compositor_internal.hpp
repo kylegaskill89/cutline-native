@@ -32,10 +32,14 @@ struct Compositor::Impl {
   ComPtr<ID3D12PipelineState> pipeline_add;
   ComPtr<ID3D12PipelineState> pipeline_blend;
   ComPtr<ID3D12PipelineState> pipeline_adjustment;
-  /// The layer drawn with blending off, into a scratch target, which is how
-  /// a blurred layer is captured before it is filtered.
-  ComPtr<ID3D12PipelineState> pipeline_raw;
-  ComPtr<ID3D12PipelineState> pipeline_blur;
+  /// The layer drawn with blending off into a scratch target, in its own
+  /// space, which is where an effect chain starts.
+  ComPtr<ID3D12PipelineState> pipeline_source;
+  /// The same for an adjustment layer, whose source is the backdrop.
+  ComPtr<ID3D12PipelineState> pipeline_adjust_source;
+  /// One effect over the scratch. Which effect is a root constant, so there is
+  /// one pipeline for all of them.
+  ComPtr<ID3D12PipelineState> pipeline_effect;
   ComPtr<ID3D12PipelineState> pipeline_present;
 
   ComPtr<ID3D12DescriptorHeap> rtv_heap;
@@ -46,8 +50,8 @@ struct Compositor::Impl {
 
   ComPtr<ID3D12Resource> scene;
   ComPtr<ID3D12Resource> backdrop;
-  /// Ping-pong targets for the separable blur. Allocated only when a layer
-  /// actually asks for one, because they are canvas-sized.
+  /// Ping-pong targets for the effect chain. Allocated only when a layer
+  /// actually has an effect on it, because they are canvas-sized.
   ComPtr<ID3D12Resource> scratch[2];
   ComPtr<ID3D12Resource> display;
   ComPtr<ID3D12Resource> readback;

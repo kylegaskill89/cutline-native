@@ -41,6 +41,10 @@ constexpr UINT kRtvCount = 4;
 /// Taps each side of centre in one blur pass, matching BLUR_TAPS in the shader.
 constexpr int kBlurTaps = 24;
 
+/// LAYOUT_CODED: a scratch target holding coded R'G'B' with straight alpha,
+/// which is what a layer becomes once its passes have run.
+constexpr int kCodedLayout = 2;
+
 /// How a layout decomposes into GPU textures. Chroma is half resolution in both
 /// axes for every layout handled here.
 [[nodiscard]] std::vector<PlaneDescription> describe_planes(const FrameView& frame) {
@@ -81,8 +85,7 @@ constexpr int kBlurTaps = 24;
     case PixelLayout::Yuv420p:
       return 1;
     case PixelLayout::Rgba8:
-      // 2 is the blur's own ping-pong texture, which is linear and opaque and
-      // means something different.
+      // 2 is `kCodedLayout`, a scratch target, which means something else.
       return 3;
   }
   return 1;
@@ -496,8 +499,12 @@ std::expected<std::unique_ptr<Compositor>, std::string> Compositor::create(
   if (!blend_ps) return std::unexpected(blend_ps.error());
   const auto adjustment_ps = read_file(shaders / "composite_adjustment_ps.cso");
   if (!adjustment_ps) return std::unexpected(adjustment_ps.error());
-  const auto blur_ps = read_file(shaders / "composite_blur_ps.cso");
-  if (!blur_ps) return std::unexpected(blur_ps.error());
+  const auto source_ps = read_file(shaders / "composite_source_ps.cso");
+  if (!source_ps) return std::unexpected(source_ps.error());
+  const auto adjust_source_ps = read_file(shaders / "composite_adjust_source_ps.cso");
+  if (!adjust_source_ps) return std::unexpected(adjust_source_ps.error());
+  const auto effect_ps = read_file(shaders / "composite_effect_ps.cso");
+  if (!effect_ps) return std::unexpected(effect_ps.error());
   const auto present_ps = read_file(shaders / "composite_present_ps.cso");
   if (!present_ps) return std::unexpected(present_ps.error());
 
@@ -557,16 +564,21 @@ std::expected<std::unique_ptr<Compositor>, std::string> Compositor::create(
       !ok) {
     return std::unexpected(ok.error());
   }
-  // Drawing a layer into a blur scratch target must not blend: the scratch
-  // holds the layer alone, and blending against a cleared target would
-  // premultiply the alpha that the composite back then applies again.
-  if (auto ok = make_pipeline(*layer_vs, *layer_ps, kSceneFormat, D3D12_BLEND_ONE,
-                              D3D12_BLEND_ZERO, false, impl->pipeline_raw);
+  // Everything that writes a scratch target does so with blending off: the
+  // scratch holds the layer alone, and blending against a cleared target would
+  // premultiply an alpha the composite then applies again.
+  if (auto ok = make_pipeline(*fullscreen_vs, *source_ps, kSceneFormat, D3D12_BLEND_ONE,
+                              D3D12_BLEND_ZERO, false, impl->pipeline_source);
       !ok) {
     return std::unexpected(ok.error());
   }
-  if (auto ok = make_pipeline(*fullscreen_vs, *blur_ps, kSceneFormat, D3D12_BLEND_ONE,
-                              D3D12_BLEND_ZERO, false, impl->pipeline_blur);
+  if (auto ok = make_pipeline(*fullscreen_vs, *adjust_source_ps, kSceneFormat, D3D12_BLEND_ONE,
+                              D3D12_BLEND_ZERO, false, impl->pipeline_adjust_source);
+      !ok) {
+    return std::unexpected(ok.error());
+  }
+  if (auto ok = make_pipeline(*fullscreen_vs, *effect_ps, kSceneFormat, D3D12_BLEND_ONE,
+                              D3D12_BLEND_ZERO, false, impl->pipeline_effect);
       !ok) {
     return std::unexpected(ok.error());
   }
@@ -612,10 +624,12 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
 
   // Resource creation waits for the GPU, so it cannot happen once the command
   // list is open.
-  const bool any_blur = std::ranges::any_of(layers, [](const Layer& layer) {
-    return layer.effects.blur_sigma > 0.0f && !layer.adjustment;
-  });
-  if (any_blur) {
+  // Any layer with an effect on it goes through the scratch, so the targets
+  // have to exist before the command list opens - creating a resource waits for
+  // the GPU, which cannot happen in the middle of recording.
+  const bool any_passes = std::ranges::any_of(
+      layers, [](const Layer& layer) { return !layer.passes.empty(); });
+  if (any_passes) {
     if (auto ok = d.ensure_scratch(); !ok) return std::unexpected(ok.error());
   }
   if (auto ok = d.gpu().begin(); !ok) return std::unexpected(ok.error());
@@ -654,10 +668,11 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     if (layer.opacity <= 0.0f) continue;
     if (layer.quad.width == 0.0f || layer.quad.height == 0.0f) continue;
 
-    // An adjustment layer is excluded: it reads the backdrop rather than
-    // drawing itself, so there is nothing to filter in isolation. Blurring what
-    // is beneath one would be a different feature.
-    const bool blurred = layer.effects.blur_sigma > 0.0f && !layer.adjustment;
+    // Effects are passes, and any of them means the layer goes through a
+    // scratch target first. An adjustment layer does too - its source is the
+    // backdrop rather than a picture of its own, but everything after that is
+    // the same chain.
+    const bool through_passes = !layer.passes.empty();
     const bool backdrop_needed = layer.adjustment || needs_backdrop(layer.blend);
     if (backdrop_needed) {
       // Snapshot what is underneath. The copy is why these modes cost more
@@ -695,8 +710,6 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     params.rotation[1] = std::sin(radians);
     params.opacity = std::clamp(layer.opacity, 0.0f, 1.0f);
     params.layout = shader_layout(layer);
-    params.flip[0] = layer.flip_x ? -1.0f : 1.0f;
-    params.flip[1] = layer.flip_y ? -1.0f : 1.0f;
     params.blend = static_cast<int>(layer.blend);
     params.solid[0] = layer.color.r;
     params.solid[1] = layer.color.g;
@@ -714,36 +727,17 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
       params.gradient_dir[1] = std::sin(gradient_radians);
     }
 
-    const LayerEffects& effects = layer.effects;
-    params.brightness = effects.brightness;
-    params.contrast = effects.contrast;
-    params.saturation = effects.saturation;
-    params.hue_radians = static_cast<float>(effects.hue_degrees * std::numbers::pi / 180.0);
-    params.invert = effects.invert ? 1.0f : 0.0f;
-    params.vignette = effects.vignette;
-    params.crop[0] = effects.crop_left;
-    params.crop[1] = effects.crop_top;
-    params.crop[2] = effects.crop_right;
-    params.crop[3] = effects.crop_bottom;
-    params.chroma_similarity = effects.chroma_similarity;
-    params.chroma_blend = effects.chroma_blend;
-    params.chroma_color[0] = effects.chroma_color.r;
-    params.chroma_color[1] = effects.chroma_color.g;
-    params.chroma_color[2] = effects.chroma_color.b;
-    // The shader keys off this rather than a separate flag, which keeps the
-    // whole decision inside one float4.
-    params.chroma_color[3] = effects.chroma_key ? 1.0f : 0.0f;
-
     if (layer.frame != nullptr) {
       params.color_space = shader_space(layer.frame->space);
       params.transfer = shader_transfer(layer.frame->transfer);
       params.full_range = layer.frame->full_range ? 1 : 0;
     }
 
-    if (blurred) {
-      // A blurred layer cannot be drawn straight onto the scene: filtering has
-      // to see the layer alone. It goes into a scratch target, gets blurred one
-      // axis at a time, and only then composites back.
+    // Which scratch target holds the layer as it stands. The chain ping-pongs
+    // between the two, and this is the one to read next.
+    int held = 0;
+
+    if (through_passes) {
       const D3D12_CPU_DESCRIPTOR_HANDLE scratch_rtv[2] = {d.rtv(kScratchRtv),
                                                           d.rtv(kScratchRtv + 1)};
 
@@ -754,64 +748,73 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
       commands->OMSetRenderTargets(1, &scratch_rtv[0], FALSE, nullptr);
       commands->ClearRenderTargetView(scratch_rtv[0], transparent, 0, nullptr);
 
-      commands->SetPipelineState(d.pipeline_raw.Get());
+      // The layer into the scratch, in its own space: unrotated, unscaled,
+      // filling it edge to edge. That is what gives every pass a uv running
+      // 0..1 across the picture, so a crop cuts where it says it does whatever
+      // the layer is doing on the canvas, and it leaves the rotation and the
+      // scaling to the very end where they cost one filtering step instead of
+      // one per pass.
+      commands->SetPipelineState(layer.adjustment ? d.pipeline_adjust_source.Get()
+                                                  : d.pipeline_source.Get());
       commands->SetGraphicsRootDescriptorTable(
           0, d.srv_gpu(static_cast<UINT>(i) * kSlotsPerLayer));
       commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &params, 0);
-      commands->DrawInstanced(6, 1, 0, 0);
+      commands->DrawInstanced(3, 1, 0, 0);
 
-      // Two passes at right angles. Taps are spread over three sigma, which is
-      // where a Gaussian has effectively fallen to nothing.
-      const float radius = std::max(1.0f, 3.0f * effects.blur_sigma);
-      const float stride = std::max(1.0f, radius / static_cast<float>(kBlurTaps));
+      // One draw per pass, and two for a blur - a separable Gaussian is two
+      // passes at right angles, which is what makes a large radius affordable.
+      for (const EffectPass& effect : layer.passes) {
+        const int draws = effect.kind == PassKind::Blur ? 2 : 1;
+        for (int draw = 0; draw < draws; ++draw) {
+          const int source = held;
+          const int destination = 1 - held;
 
-      ShaderParams blur = params;
-      blur.blur_sigma = effects.blur_sigma;
-      blur.blur_stride = stride;
+          ShaderParams pass = params;
+          pass.pass_kind = static_cast<int>(effect.kind);
+          std::copy_n(effect.values.begin(), 4, pass.pass_a);
+          std::copy_n(effect.values.begin() + 4, 4, pass.pass_b);
 
-      for (int axis = 0; axis < 2; ++axis) {
-        const int source = axis;
-        const int destination = 1 - axis;
+          if (effect.kind == PassKind::Blur) {
+            // Taps are spread over three sigma, where a Gaussian has
+            // effectively fallen to nothing, and the stride widens to cover
+            // that with a bounded number of them.
+            const float sigma = effect.values[0];
+            const float radius = std::max(1.0f, 3.0f * sigma);
+            const float stride = std::max(1.0f, radius / static_cast<float>(kBlurTaps));
+            pass.pass_a[1] = stride;
+            pass.pass_a[2] = draw == 0 ? stride / static_cast<float>(d.width) : 0.0f;
+            pass.pass_a[3] = draw == 0 ? 0.0f : stride / static_cast<float>(d.height);
+          }
 
-        const D3D12_RESOURCE_BARRIER swap[] = {
-            transition(d.scratch[source].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
-                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
-            transition(d.scratch[destination].Get(),
-                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                       D3D12_RESOURCE_STATE_RENDER_TARGET),
-        };
-        commands->ResourceBarrier(2, swap);
-        commands->OMSetRenderTargets(1, &scratch_rtv[destination], FALSE, nullptr);
-        commands->ClearRenderTargetView(scratch_rtv[destination], transparent, 0, nullptr);
+          const D3D12_RESOURCE_BARRIER swap[] = {
+              transition(d.scratch[source].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+              transition(d.scratch[destination].Get(),
+                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_RENDER_TARGET),
+          };
+          commands->ResourceBarrier(2, swap);
+          commands->OMSetRenderTargets(1, &scratch_rtv[destination], FALSE, nullptr);
+          commands->ClearRenderTargetView(scratch_rtv[destination], transparent, 0, nullptr);
 
-        blur.blur_step[0] = axis == 0 ? stride / static_cast<float>(d.width) : 0.0f;
-        blur.blur_step[1] = axis == 0 ? 0.0f : stride / static_cast<float>(d.height);
+          commands->SetPipelineState(d.pipeline_effect.Get());
+          commands->SetGraphicsRootDescriptorTable(0, d.srv_gpu(d.scratch_slot(source)));
+          commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &pass, 0);
+          commands->DrawInstanced(3, 1, 0, 0);
 
-        commands->SetPipelineState(d.pipeline_blur.Get());
-        commands->SetGraphicsRootDescriptorTable(0, d.srv_gpu(d.scratch_slot(source)));
-        commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &blur, 0);
-        commands->DrawInstanced(3, 1, 0, 0);
+          held = destination;
+        }
       }
 
-      // scratch[1] holds the finished layer; scratch[0] is already readable.
-      auto result_to_resource = transition(d.scratch[1].Get(),
+      auto result_to_resource = transition(d.scratch[held].Get(),
                                            D3D12_RESOURCE_STATE_RENDER_TARGET,
                                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
       commands->ResourceBarrier(1, &result_to_resource);
       commands->OMSetRenderTargets(1, &scene_rtv, FALSE, nullptr);
 
-      // Composite back over the whole canvas. The blurred copy is already in
-      // linear light with effects applied, so this pass only positions and
-      // blends it -- LAYOUT_TEXTURE tells the shader to skip everything else.
-      params.layout = 2;  // LAYOUT_TEXTURE
-      params.center[0] = static_cast<float>(d.width) * 0.5f;
-      params.center[1] = static_cast<float>(d.height) * 0.5f;
-      params.size[0] = static_cast<float>(d.width);
-      params.size[1] = static_cast<float>(d.height);
-      params.rotation[0] = 1.0f;
-      params.rotation[1] = 0.0f;
-      params.flip[0] = 1.0f;
-      params.flip[1] = 1.0f;
+      // The scratch holds coded values with straight alpha, and the composite
+      // draw is what applies the transfer function and positions the quad.
+      params.layout = kCodedLayout;
     }
 
     ID3D12PipelineState* pipeline =
@@ -821,8 +824,8 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
                                          : d.pipeline_normal.Get();
     commands->SetPipelineState(pipeline);
     commands->SetGraphicsRootDescriptorTable(
-        0, blurred ? d.srv_gpu(d.scratch_slot(1))
-                   : d.srv_gpu(static_cast<UINT>(i) * kSlotsPerLayer));
+        0, through_passes ? d.srv_gpu(d.scratch_slot(held))
+                          : d.srv_gpu(static_cast<UINT>(i) * kSlotsPerLayer));
     commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &params, 0);
     commands->DrawInstanced(6, 1, 0, 0);
   }

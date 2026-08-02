@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace cutline::gpu {
@@ -332,13 +333,42 @@ TEST_F(CompositorTest, ResizeChangesTheReadbackShape) {
 // filters are defined. These tests state the coded-space answer explicitly, so
 // moving the maths into linear light would fail them rather than pass quietly.
 
+/// The passes below are packed the way `render/effect_passes.hpp` packs them,
+/// which is the one place that decides. Named here so the tests read as what
+/// they mean rather than as four floats in an order nobody can check.
+[[nodiscard]] EffectPass colour(float brightness = 0.0f, float contrast = 1.0f,
+                                float saturation = 1.0f, float hue_radians = 0.0f) {
+  return EffectPass{PassKind::Color, {brightness, contrast, saturation, hue_radians}};
+}
+
+[[nodiscard]] EffectPass inverted() { return EffectPass{PassKind::Invert, {}}; }
+
+[[nodiscard]] EffectPass vignetted(float radians) {
+  return EffectPass{PassKind::Vignette, {radians}};
+}
+
+[[nodiscard]] EffectPass cropped(float left, float top, float right, float bottom) {
+  return EffectPass{PassKind::Crop, {left, top, right, bottom}};
+}
+
+[[nodiscard]] EffectPass keyed(Color key, float similarity = 0.3f, float blend = 0.1f) {
+  return EffectPass{PassKind::ChromaKey, {key.r, key.g, key.b, similarity, blend}};
+}
+
+[[nodiscard]] EffectPass blurred_by(float sigma) {
+  return EffectPass{PassKind::Blur, {sigma}};
+}
+
+/// The registry green, coded rather than linear: a key colour is a hex string.
+[[nodiscard]] Color key_green() { return Color{0.0f, 208.0f / 255.0f, 0.0f, 1.0f}; }
+
 /// A mid-grey fill, which is where most of the colour maths is easiest to
 /// reason about: coded 0.5 is neither clipped nor near a curve's knee.
-[[nodiscard]] Layer grey_fill(LayerEffects effects) {
+[[nodiscard]] Layer grey_fill(std::span<const EffectPass> passes) {
   Layer layer;
   layer.color = Color::from_srgb(0.5f, 0.5f, 0.5f);
   layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
-  layer.effects = effects;
+  layer.passes = passes;
   return layer;
 }
 
@@ -353,9 +383,7 @@ TEST_F(CompositorTest, NeutralEffectsLeaveTheLayerAlone) {
 TEST_F(CompositorTest, BrightnessOffsetsCodedLumaNotLinearLight) {
   // eq=brightness adds to luma in coded space: 0.5 + 0.25 = 0.75 coded, which
   // is 191 out of 255. In linear light the same offset would land near 226.
-  LayerEffects effects;
-  effects.brightness = 0.25f;
-
+  const std::vector<EffectPass> effects{colour(0.25f)};
   const Layer layer = grey_fill(effects);
   const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
   EXPECT_NEAR(centre.r, 191, 2);
@@ -363,22 +391,19 @@ TEST_F(CompositorTest, BrightnessOffsetsCodedLumaNotLinearLight) {
 
 TEST_F(CompositorTest, ContrastPivotsAboutTheCodedMidpoint) {
   // Mid grey is the pivot, so any contrast leaves it where it is.
-  LayerEffects effects;
-  effects.contrast = 2.0f;
-
+  const std::vector<EffectPass> effects{colour(0.0f, 2.0f)};
   const Layer layer = grey_fill(effects);
   const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
   EXPECT_NEAR(centre.r, 128, 2);
 }
 
 TEST_F(CompositorTest, ContrastPushesOffMidpointValuesApart) {
-  LayerEffects effects;
-  effects.contrast = 2.0f;
+  const std::vector<EffectPass> effects{colour(0.0f, 2.0f)};
 
   Layer layer;
   layer.color = Color::from_srgb(0.75f, 0.75f, 0.75f);
   layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
-  layer.effects = effects;
+  layer.passes = effects;
 
   // (0.75 - 0.5) * 2 + 0.5 = 1.0 coded.
   const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
@@ -386,13 +411,12 @@ TEST_F(CompositorTest, ContrastPushesOffMidpointValuesApart) {
 }
 
 TEST_F(CompositorTest, ZeroSaturationLeavesGreyRatherThanBlack) {
-  LayerEffects effects;
-  effects.saturation = 0.0f;
+  const std::vector<EffectPass> effects{colour(0.0f, 1.0f, 0.0f)};
 
   Layer layer;
   layer.color = Color::from_srgb(0.9f, 0.2f, 0.2f);
   layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
-  layer.effects = effects;
+  layer.passes = effects;
 
   const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
   EXPECT_NEAR(centre.r, centre.g, 2) << "desaturated pixels should be neutral";
@@ -405,10 +429,9 @@ TEST_F(CompositorTest, SaturationBoostPushesAColourFurtherFromGrey) {
   plain.color = Color::from_srgb(0.6f, 0.45f, 0.45f);
   plain.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
 
-  LayerEffects effects;
-  effects.saturation = 2.0f;
+  const std::vector<EffectPass> effects{colour(0.0f, 1.0f, 2.0f)};
   Layer boosted = plain;
-  boosted.effects = effects;
+  boosted.passes = effects;
 
   const Rgba before = pixel_at(render({&plain, 1}), kWidth / 2, kHeight / 2);
   const Rgba after = pixel_at(render({&boosted, 1}), kWidth / 2, kHeight / 2);
@@ -418,8 +441,7 @@ TEST_F(CompositorTest, SaturationBoostPushesAColourFurtherFromGrey) {
 TEST_F(CompositorTest, InvertFlipsCodedValues) {
   // Coded 0.5 inverts to coded 0.5, so a mid grey is its own inverse. Doing
   // this in linear light instead would move it noticeably.
-  LayerEffects effects;
-  effects.invert = true;
+  const std::vector<EffectPass> effects{inverted()};
 
   const Layer layer = grey_fill(effects);
   const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
@@ -427,13 +449,12 @@ TEST_F(CompositorTest, InvertFlipsCodedValues) {
 }
 
 TEST_F(CompositorTest, InvertTurnsWhiteToBlack) {
-  LayerEffects effects;
-  effects.invert = true;
+  const std::vector<EffectPass> effects{inverted()};
 
   Layer layer;
   layer.color = Color::from_srgb(1.0f, 1.0f, 1.0f);
   layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
-  layer.effects = effects;
+  layer.passes = effects;
 
   const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
   EXPECT_LE(centre.r, 2);
@@ -444,9 +465,8 @@ TEST_F(CompositorTest, HueRotationMovesColourWithoutKillingIt) {
   layer.color = Color::from_srgb(0.9f, 0.1f, 0.1f);
   layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
 
-  LayerEffects effects;
-  effects.hue_degrees = 120.0f;
-  layer.effects = effects;
+  const std::vector<EffectPass> effects{colour(0.0f, 1.0f, 1.0f, 2.0943951f)};
+  layer.passes = effects;
 
   const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
   EXPECT_LT(centre.r, 200) << "red should no longer dominate after a 120 degree rotation";
@@ -459,9 +479,8 @@ TEST_F(CompositorTest, AFullTurnOfHueIsTheIdentity) {
   plain.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
 
   Layer turned = plain;
-  LayerEffects effects;
-  effects.hue_degrees = 360.0f;
-  turned.effects = effects;
+  const std::vector<EffectPass> effects{colour(0.0f, 1.0f, 1.0f, 6.2831853f)};
+  turned.passes = effects;
 
   const Rgba before = pixel_at(render({&plain, 1}), kWidth / 2, kHeight / 2);
   const Rgba after = pixel_at(render({&turned, 1}), kWidth / 2, kHeight / 2);
@@ -473,9 +492,7 @@ TEST_F(CompositorTest, AFullTurnOfHueIsTheIdentity) {
 // -------------------------------------------------------------------- crop --
 
 TEST_F(CompositorTest, CropCutsEdgesToTransparentAndKeepsTheSize) {
-  LayerEffects effects;
-  effects.crop_left = 0.25f;
-  effects.crop_right = 0.25f;
+  const std::vector<EffectPass> effects{cropped(0.25f, 0.0f, 0.25f, 0.0f)};
 
   const Layer layer = grey_fill(effects);
   const Image image = render({&layer, 1});
@@ -490,8 +507,7 @@ TEST_F(CompositorTest, CropDoesNotMoveOrScaleWhatIsKept) {
   // The kept region stays exactly where it was, which is what distinguishes a
   // crop from a scale.
   Layer plain = grey_fill({});
-  LayerEffects effects;
-  effects.crop_top = 0.25f;
+  const std::vector<EffectPass> effects{cropped(0.0f, 0.25f, 0.0f, 0.0f)};
   Layer cropped = grey_fill(effects);
 
   const Rgba uncropped = pixel_at(render({&plain, 1}), kWidth / 2, kHeight / 2);
@@ -504,12 +520,11 @@ TEST_F(CompositorTest, CroppedEdgesRevealTheLayerBeneath) {
   bottom.color = {1.0f, 0.0f, 0.0f, 1.0f};
   bottom.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
 
-  LayerEffects effects;
-  effects.crop_left = 0.5f;
+  const std::vector<EffectPass> effects{cropped(0.5f, 0.0f, 0.0f, 0.0f)};
   Layer top;
   top.color = {0.0f, 1.0f, 0.0f, 1.0f};
   top.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
-  top.effects = effects;
+  top.passes = effects;
 
   const Layer layers[] = {bottom, top};
   const Image image = render(layers);
@@ -521,8 +536,7 @@ TEST_F(CompositorTest, CroppedEdgesRevealTheLayerBeneath) {
 // ---------------------------------------------------------------- vignette --
 
 TEST_F(CompositorTest, VignetteDarkensTheCornersAndSparesTheCentre) {
-  LayerEffects effects;
-  effects.vignette = 1.2f;  // radians, near the maximum
+  const std::vector<EffectPass> effects{vignetted(1.2f)};  // radians, near the maximum
 
   const Layer layer = grey_fill(effects);
   const Image image = render({&layer, 1});
@@ -535,8 +549,7 @@ TEST_F(CompositorTest, VignetteDarkensTheCornersAndSparesTheCentre) {
 
 TEST_F(CompositorTest, AZeroVignetteChangesNothing) {
   const Layer plain = grey_fill({});
-  LayerEffects effects;
-  effects.vignette = 0.0f;
+  const std::vector<EffectPass> effects{vignetted(0.0f)};
   const Layer explicitly_off = grey_fill(effects);
 
   const Rgba before = pixel_at(render({&plain, 1}), 1, 1);
@@ -547,29 +560,25 @@ TEST_F(CompositorTest, AZeroVignetteChangesNothing) {
 // -------------------------------------------------------------- chroma key --
 
 TEST_F(CompositorTest, ChromaKeyRemovesTheKeyColour) {
-  LayerEffects effects;
-  effects.chroma_key = true;
-  effects.chroma_similarity = 0.3f;
-  effects.chroma_blend = 0.1f;
+  const std::vector<EffectPass> effects{keyed(key_green(), 0.3f, 0.1f)};
 
   Layer layer;
   // Exactly the default key colour, so it must key out completely.
   layer.color = Color::from_srgb(0.0f, 208.0f / 255.0f, 0.0f);
   layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
-  layer.effects = effects;
+  layer.passes = effects;
 
   const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
   EXPECT_EQ(centre.a, 0);
 }
 
 TEST_F(CompositorTest, ChromaKeyLeavesUnrelatedColoursAlone) {
-  LayerEffects effects;
-  effects.chroma_key = true;
+  const std::vector<EffectPass> effects{keyed(key_green())};
 
   Layer layer;
   layer.color = Color::from_srgb(0.9f, 0.1f, 0.1f);  // red, far from the key
   layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
-  layer.effects = effects;
+  layer.passes = effects;
 
   const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
   EXPECT_EQ(centre.a, 255);
@@ -580,12 +589,11 @@ TEST_F(CompositorTest, ChromaKeyRevealsWhatIsBehindIt) {
   bottom.color = {1.0f, 0.0f, 0.0f, 1.0f};
   bottom.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
 
-  LayerEffects effects;
-  effects.chroma_key = true;
+  const std::vector<EffectPass> effects{keyed(key_green())};
   Layer green;
   green.color = Color::from_srgb(0.0f, 208.0f / 255.0f, 0.0f);
   green.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
-  green.effects = effects;
+  green.passes = effects;
 
   const Layer layers[] = {bottom, green};
   const Rgba centre = pixel_at(render(layers), kWidth / 2, kHeight / 2);
@@ -593,13 +601,12 @@ TEST_F(CompositorTest, ChromaKeyRevealsWhatIsBehindIt) {
 }
 
 TEST_F(CompositorTest, KeyingIsOffUnlessAskedFor) {
-  LayerEffects effects;
-  effects.chroma_key = false;
+  const std::vector<EffectPass> effects;
 
   Layer layer;
   layer.color = Color::from_srgb(0.0f, 208.0f / 255.0f, 0.0f);
   layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
-  layer.effects = effects;
+  layer.passes = effects;
 
   const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
   EXPECT_EQ(centre.a, 255) << "green should survive when keying is not enabled";
@@ -684,7 +691,8 @@ TEST_F(CompositorTest, AMatteWithoutAGradientIsStillFlat) {
 TEST_F(CompositorTest, EffectsApplyOnTopOfAGradient) {
   Layer layer =
       gradient_fill(Color::from_srgb(0.0f, 0.0f, 0.0f), Color::from_srgb(1.0f, 1.0f, 1.0f), 0.0f);
-  layer.effects.invert = true;
+  const std::vector<EffectPass> effects{inverted()};
+  layer.passes = effects;
 
   const Image image = render({&layer, 1});
   EXPECT_GT(pixel_at(image, 0, kHeight / 2).r, 235) << "the dark end should now be light";
@@ -693,9 +701,15 @@ TEST_F(CompositorTest, EffectsApplyOnTopOfAGradient) {
 
 // -------------------------------------------------------------------- blur --
 
-TEST_F(CompositorTest, BlurSoftensAHardEdge) {
+TEST_F(CompositorTest, BlurSoftensTheLayersOwnEdge) {
   // A half-covering white quad has a vertical edge down the middle. Blurring
   // must turn that step into a ramp.
+  //
+  // The ramp is *inside* the quad, not across it. A pass runs over the layer in
+  // its own space, so a blur has the layer to work with and nothing else — it
+  // softens the layer's edge inwards rather than growing the layer outwards.
+  // Premiere spreads past the edge instead, which needs a margin around the
+  // scratch that this does not have yet.
   Layer layer;
   layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
   layer.quad = {kWidth * 0.25f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
@@ -704,12 +718,55 @@ TEST_F(CompositorTest, BlurSoftensAHardEdge) {
   EXPECT_EQ(pixel_at(sharp, kWidth / 2 - 2, kHeight / 2).a, 255);
   EXPECT_EQ(pixel_at(sharp, kWidth / 2 + 2, kHeight / 2).a, 0);
 
-  layer.effects.blur_sigma = 4.0f;
+  const std::vector<EffectPass> effects{blurred_by(4.0f)};
+  layer.passes = effects;
   const Image soft = render({&layer, 1});
 
-  const int just_outside = pixel_at(soft, kWidth / 2 + 2, kHeight / 2).a;
-  EXPECT_GT(just_outside, 0) << "the edge should have bled past where it was";
-  EXPECT_LT(just_outside, 255);
+  const int just_inside = pixel_at(soft, kWidth / 2 - 2, kHeight / 2).a;
+  EXPECT_LT(just_inside, 255) << "the edge should have become a ramp";
+  EXPECT_GT(just_inside, 0) << "and not have vanished";
+  EXPECT_EQ(pixel_at(soft, kWidth / 4, kHeight / 2).a, 255) << "well inside is untouched";
+}
+
+TEST_F(CompositorTest, TheSameEffectsInADifferentOrderGiveADifferentPicture) {
+  // The claim the whole restructuring rests on, checked against pixels rather
+  // than against a plan. Under the flat resolver these two stacks produced one
+  // identical struct and one identical frame.
+  const std::vector<EffectPass> dark_first{colour(-0.3f), colour(0.0f, 3.0f)};
+  const std::vector<EffectPass> contrast_first{colour(0.0f, 3.0f), colour(-0.3f)};
+
+  Layer layer;
+  layer.color = Color::from_srgb(0.6f, 0.6f, 0.6f);
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  layer.passes = dark_first;
+  const int one = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2).r;
+  layer.passes = contrast_first;
+  const int other = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2).r;
+
+  EXPECT_NE(one, other) << "both came out " << one;
+}
+
+TEST_F(CompositorTest, AStackFarLongerThanTheOldBudgetStillDraws) {
+  // Eight effects on one layer, which the flat struct could not have carried:
+  // every one of them needed its own permanent field in sixty-four DWORDs of
+  // root constants, and twenty-eight were already spoken for. Passes share one
+  // block because only one runs at a time, so the length of a stack costs
+  // nothing but draws.
+  const std::vector<EffectPass> many{
+      colour(0.05f),        colour(0.0f, 1.1f), colour(0.0f, 1.0f, 1.2f),
+      inverted(),           inverted(),         vignetted(0.2f),
+      blurred_by(1.0f),     colour(0.0f, 0.95f)};
+
+  Layer layer;
+  layer.color = Color::from_srgb(0.5f, 0.5f, 0.5f);
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.passes = many;
+
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_GT(centre.a, 250) << "the layer survived its own stack";
+  EXPECT_GT(centre.r, 100);
+  EXPECT_LT(centre.r, 200);
 }
 
 TEST_F(CompositorTest, AZeroSigmaLeavesTheLayerUntouched) {
@@ -718,7 +775,8 @@ TEST_F(CompositorTest, AZeroSigmaLeavesTheLayerUntouched) {
   sharp.quad = {kWidth * 0.25f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
 
   Layer explicitly_zero = sharp;
-  explicitly_zero.effects.blur_sigma = 0.0f;
+  const std::vector<EffectPass> none{blurred_by(0.0f)};
+  explicitly_zero.passes = none;
 
   const Image a = render({&sharp, 1});
   const Image b = render({&explicitly_zero, 1});
@@ -729,8 +787,7 @@ TEST_F(CompositorTest, AZeroSigmaLeavesTheLayerUntouched) {
 TEST_F(CompositorTest, BlurPreservesAFlatFieldRatherThanDarkeningIt) {
   // The kernel must be normalised: blurring a uniform colour has to leave it
   // exactly where it was, and an unnormalised one shows up here first.
-  LayerEffects effects;
-  effects.blur_sigma = 6.0f;
+  const std::vector<EffectPass> effects{blurred_by(6.0f)};
 
   const Layer plain = grey_fill({});
   const Layer blurred = grey_fill(effects);
@@ -741,17 +798,16 @@ TEST_F(CompositorTest, BlurPreservesAFlatFieldRatherThanDarkeningIt) {
   EXPECT_NEAR(after.a, before.a, 2);
 }
 
-TEST_F(CompositorTest, BlurAppliesAfterTheColourEffects) {
-  // The stack is one pipeline: a blurred, inverted white layer must be a
-  // blurred black one, not an inverted blur of white.
-  LayerEffects effects;
-  effects.invert = true;
-  effects.blur_sigma = 3.0f;
+TEST_F(CompositorTest, PassesRunInTheOrderTheyAreListed) {
+  // Invert then blur is a blurred black layer; blur then invert would be an
+  // inverted blur of white. Under the flat resolver the two were the same
+  // thing, because the order was fixed and the stack was only a set.
+  const std::vector<EffectPass> effects{inverted(), blurred_by(3.0f)};
 
   Layer layer;
   layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
   layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
-  layer.effects = effects;
+  layer.passes = effects;
 
   const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
   EXPECT_LE(centre.r, 4) << "the inversion should have happened before the blur";
@@ -763,7 +819,8 @@ TEST_F(CompositorTest, ABlurredLayerStillComposesOverWhatIsBeneath) {
   Layer green;
   green.color = {0.0f, 1.0f, 0.0f, 1.0f};
   green.quad = {kWidth * 0.25f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
-  green.effects.blur_sigma = 3.0f;
+  const std::vector<EffectPass> soft{blurred_by(3.0f)};
+  green.passes = soft;
 
   const Layer layers[] = {red, green};
   const Image image = render(layers);
@@ -778,7 +835,8 @@ TEST_F(CompositorTest, BlurAndSharpLayersCanBeMixedInOneCompose) {
   Layer blurred;
   blurred.color = {0.0f, 0.0f, 1.0f, 1.0f};
   blurred.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
-  blurred.effects.blur_sigma = 5.0f;
+  const std::vector<EffectPass> soft{blurred_by(5.0f)};
+  blurred.passes = soft;
 
   Layer sharp;
   sharp.color = {0.0f, 1.0f, 0.0f, 1.0f};
@@ -795,18 +853,17 @@ TEST_F(CompositorTest, BlurAndSharpLayersCanBeMixedInOneCompose) {
 
 /// An adjustment layer covering the whole canvas, which is what one placed with
 /// a default transform amounts to.
-[[nodiscard]] Layer adjustment(LayerEffects effects, float strength = 1.0f) {
+[[nodiscard]] Layer adjustment(std::span<const EffectPass> passes, float strength = 1.0f) {
   Layer layer;
   layer.adjustment = true;
-  layer.effects = effects;
+  layer.passes = passes;
   layer.opacity = strength;
   layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
   return layer;
 }
 
 TEST_F(CompositorTest, AnAdjustmentLayerAffectsWhatIsBeneathIt) {
-  LayerEffects effects;
-  effects.invert = true;
+  const std::vector<EffectPass> effects{inverted()};
 
   const Layer white = fill({1.0f, 1.0f, 1.0f, 1.0f});
   const Layer layers[] = {white, adjustment(effects)};
@@ -826,8 +883,7 @@ TEST_F(CompositorTest, AnAdjustmentLayerDrawsNothingOfItsOwn) {
 TEST_F(CompositorTest, AdjustmentOpacityIsStrengthNotTransparency) {
   // Half strength should land halfway between the original and the fully
   // adjusted result, not make the layer half see-through.
-  LayerEffects effects;
-  effects.invert = true;
+  const std::vector<EffectPass> effects{inverted()};
 
   const Layer white = fill({1.0f, 1.0f, 1.0f, 1.0f});
   const Layer layers[] = {white, adjustment(effects, 0.5f)};
@@ -849,8 +905,7 @@ TEST_F(CompositorTest, ANeutralAdjustmentChangesNothing) {
 }
 
 TEST_F(CompositorTest, AnAdjustmentReachesOnlyItsOwnQuad) {
-  LayerEffects effects;
-  effects.invert = true;
+  const std::vector<EffectPass> effects{inverted()};
 
   Layer partial = adjustment(effects);
   // The left half only.
@@ -867,8 +922,7 @@ TEST_F(CompositorTest, AnAdjustmentReachesOnlyItsOwnQuad) {
 TEST_F(CompositorTest, AnAdjustmentStacksOnEverythingBelowNotJustTheLastLayer) {
   // Two layers underneath, the upper one covering half. Both halves must come
   // out adjusted.
-  LayerEffects effects;
-  effects.invert = true;
+  const std::vector<EffectPass> effects{inverted()};
 
   const Layer red = fill({1.0f, 0.0f, 0.0f, 1.0f});
 
@@ -890,8 +944,7 @@ TEST_F(CompositorTest, AnAdjustmentStacksOnEverythingBelowNotJustTheLastLayer) {
 }
 
 TEST_F(CompositorTest, LayersAboveAnAdjustmentAreNotAffectedByIt) {
-  LayerEffects effects;
-  effects.invert = true;
+  const std::vector<EffectPass> effects{inverted()};
 
   const Layer white = fill({1.0f, 1.0f, 1.0f, 1.0f});
   const Layer above = fill({0.0f, 1.0f, 0.0f, 1.0f});
@@ -1019,7 +1072,8 @@ TEST_F(CompositorTest, ARasterisedLayerTakesTheEffectsAppliedToIt) {
   layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
   // A title is a source like any other: the effect stack has to reach it the
   // same way it reaches a video frame.
-  layer.effects.saturation = 0.0f;
+  const std::vector<EffectPass> effects{colour(0.0f, 1.0f, 0.0f)};
+  layer.passes = effects;
 
   const std::array<Layer, 1> layers{layer};
   const Rgba grey = pixel_at(render(layers), 4, kHeight / 2);

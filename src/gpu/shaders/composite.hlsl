@@ -10,18 +10,35 @@
 // The scene target is 16-bit float and linear. The present pass writes to an
 // _SRGB render target, so the hardware performs the encode back to display
 // space on write; that is why it looks like a plain copy.
+//
+// ------------------------------------------------------------------ passes --
+//
+// Effects are **passes**, not fields. A layer with any effect on it is drawn
+// once into a scratch target in its own space, each effect runs over that
+// scratch in the order the stack lists it, and the result is positioned and
+// composited. A layer with no effects skips all of it and draws in one go.
+//
+// The scratch holds **coded** R'G'B' with straight alpha, not linear light,
+// because that is the space FFmpeg's filters are defined in and the spec names
+// those fragments as the authoritative behaviour. Compositing is still linear;
+// only the effect maths is not, and the transfer function is applied once at
+// the end, where the scratch becomes a layer again.
+//
+// A pass carries eight floats and no more, shared by every kind, because only
+// one runs at a time. That is what took the ceiling off: an effect no longer
+// needs a permanent field in the root constants, so the catalogue can grow and
+// a mask can belong to a single effect rather than to the whole stack.
 
 // Source pixel layouts. A negative layout means the layer has no texture at all
 // and draws its solid colour.
 #define LAYOUT_SOLID   -1
 #define LAYOUT_NV12     0
 #define LAYOUT_YUV420P  1
-// Already-composited linear RGBA: the blurred copy of a layer, drawn back onto
-// the scene. Effects have been applied already, so this path skips them.
-#define LAYOUT_TEXTURE  2
+// A scratch target holding coded R'G'B' with straight alpha: a layer that has
+// been through its effect passes and is on its way back onto the scene.
+#define LAYOUT_CODED    2
 // Rasterised sRGB RGBA with premultiplied alpha — a title, or anything else
-// drawn rather than decoded. Effects do apply here: it is a source like any
-// other, not a finished picture.
+// drawn rather than decoded.
 #define LAYOUT_RGBA     3
 
 // YUV-to-RGB matrices.
@@ -45,6 +62,15 @@
 #define BLEND_LIGHTEN    6
 #define BLEND_DIFFERENCE 7
 
+// One pass each, matching `render::EffectPassKind` value for value.
+#define PASS_COLOR     0
+#define PASS_INVERT    1
+#define PASS_VIGNETTE  2
+#define PASS_CROP      3
+#define PASS_CHROMAKEY 4
+#define PASS_FLIP      5
+#define PASS_BLUR      6
+
 // Laid out so no member straddles a 16-byte boundary, because these arrive as
 // root constants and HLSL packs a cbuffer in float4 rows.
 struct Params {
@@ -61,32 +87,20 @@ struct Params {
 
     int fullRange;
     int blend;
-    float2 flip;      // +1 or -1 per axis
+    int passKind;
+    float passPad;
 
     float4 solid;     // linear RGBA, used when layout is LAYOUT_SOLID
-
-    // ---- effects ----
-    float brightness; // eq=brightness, a luma offset
-    float contrast;   // eq=contrast, about the midpoint
-    float saturation; // eq=saturation times hue=s
-    float hueRadians; // hue=h
-
-    float invert;     // negate: 0 or 1
-    float vignette;   // vignette=a, in radians
-    float chromaSimilarity;
-    float chromaBlend;
-
-    float4 crop;      // left, top, right, bottom as fractions
-
-    float4 chromaColor;  // rgb of the key colour; w is 1 when keying is on
-
-    float2 blurStep;   // one tap's offset in UV, and the axis it runs along
-    float blurSigma;   // in pixels; zero means no blur
-    float blurStride;  // pixels between taps, widened when the radius is large
 
     float4 gradient;     // linear rgb of the far stop; w is 1 when there is one
     float2 gradientDir;  // cos, sin of the gradient angle
     float2 gradientPad;
+
+    // The pass, whatever it is. Eight floats, meaning what `passKind` says, and
+    // written by the makers in `render/effect_passes.hpp` — which is the one
+    // place the packing is stated.
+    float4 passA;     // values 0..3
+    float4 passB;     // values 4..7
 };
 
 ConstantBuffer<Params> params : register(b0);
@@ -96,6 +110,7 @@ ConstantBuffer<Params> params : register(b0);
 //
 //   NV12    t0 = Y,     t1 = UV interleaved
 //   planar  t0 = Y,     t1 = U,  t2 = V
+//   effect  t0 = the scratch this pass reads
 //   present t0 = scene
 //   t3      = backdrop, the scene as it stood before this layer
 //
@@ -145,9 +160,7 @@ VSOutput VSLayer(uint vertexId : SV_VertexID) {
     VSOutput output;
     output.position = float4(pixel.x / params.canvas.x * 2.0 - 1.0,
                              1.0 - pixel.y / params.canvas.y * 2.0, 0.0, 1.0);
-    // Flipping is a texture-space mirror, so it survives rotation rather than
-    // fighting it.
-    output.uv = (corner * params.flip) + 0.5;
+    output.uv = corner + 0.5;
     return output;
 }
 
@@ -158,8 +171,9 @@ float3 linearizeSrgb(float3 c) {
     return select(c <= 0.04045, c / 12.92, pow(abs(c + 0.055) / 1.055, 2.4));
 }
 
-// The forward direction, for the one case that needs it: a solid colour is
-// stored linear but effects are defined on coded values.
+// The forward direction, for the cases that need it: a solid colour is stored
+// linear but effects are defined on coded values, and so is the backdrop an
+// adjustment layer reads.
 float3 encodeSrgb(float3 c) {
     c = saturate(c);
     return select(c <= 0.0031308, c * 12.92, 1.055 * pow(c, 1.0 / 2.4) - 0.055);
@@ -234,13 +248,10 @@ float3 applyBlend(float3 base, float3 src, int mode) {
     return src;
 }
 
-// ----------------------------------------------------------------- effects --
+// ------------------------------------------------------------------ source --
 //
-// Effects run on *coded* R'G'B' -- after the YUV matrix, before the transfer
-// function -- because that is the space FFmpeg's filters are defined in, and
-// the spec names those fragments as the authoritative behaviour. Applying a
-// 200% contrast to linear light instead would be a large visible difference,
-// not a subtle one. Compositing is still linear; only the effect maths is not.
+// A layer's own pixels, decoded to coded R'G'B' with straight alpha and nothing
+// else done to them. Effects are passes and run afterwards.
 
 // The BT.601 matrix FFmpeg's eq and hue filters work in, with chroma centred on
 // zero rather than 0.5.
@@ -258,115 +269,45 @@ float3 yuv601ToRgb(float3 yuv) {
         yuv.x + 1.772 * yuv.y);
 }
 
-/// eq (brightness, contrast, saturation) and hue (rotation, saturation), which
-/// between them are every colour effect in the registry.
-float3 applyColorEffects(float3 coded) {
-    float3 yuv = rgbToYuv601(coded);
-
-    // vf_eq: v = (v - 0.5) * contrast + 0.5 + brightness, on luma.
-    yuv.x = (yuv.x - 0.5) * params.contrast + 0.5 + params.brightness;
-
-    // vf_hue rotates the chroma plane and scales it; eq's saturation scales it
-    // too, and the two are folded into one multiplier before they get here.
-    const float c = cos(params.hueRadians);
-    const float s = sin(params.hueRadians);
-    const float2 chroma = float2(yuv.y * c - yuv.z * s, yuv.y * s + yuv.z * c) * params.saturation;
-
-    float3 rgb = yuv601ToRgb(float3(yuv.x, chroma.x, chroma.y));
-
-    // negate, after everything else, exactly as a trailing filter would run.
-    rgb = lerp(rgb, 1.0 - rgb, params.invert);
-    return saturate(rgb);
-}
-
-/// The chroma keyer: BT.601 chroma distance from the key colour, feathered
-/// across `blend`. Deliberately the same approximation the reference used, and
-/// like it, not pixel-identical to ffmpeg's chromakey.
-float chromaKeyAlpha(float3 coded) {
-    if (params.chromaColor.w < 0.5) return 1.0;
-
-    const float3 keyYuv = rgbToYuv601(params.chromaColor.rgb);
-    const float3 pixelYuv = rgbToYuv601(coded);
-
-    const float distance = length(pixelYuv.yz - keyYuv.yz);
-    if (distance <= params.chromaSimilarity) return 0.0;
-    if (params.chromaBlend <= 0.0) return 1.0;
-    return saturate((distance - params.chromaSimilarity) / params.chromaBlend);
-}
-
-/// vf_vignette: cos of the angle scaled by the normalised distance from the
-/// centre, to the fourth power.
-float vignetteFactor(float2 uv) {
-    if (params.vignette <= 0.0) return 1.0;
-
-    // Normalised so the corner is 1, which is what makes the amount mean the
-    // same thing whatever the frame's aspect ratio.
-    const float2 offset = (uv - 0.5) * 2.0;
-    const float normalised = length(offset) / length(float2(1.0, 1.0));
-    const float c = cos(params.vignette * normalised);
-    return (c * c) * (c * c);
-}
-
-/// Crop cuts fractions off each edge and keeps the frame size, so what is cut
-/// becomes transparent rather than shrinking the picture.
-bool insideCrop(float2 uv) {
-    return uv.x >= params.crop.x && uv.x <= 1.0 - params.crop.z &&
-           uv.y >= params.crop.y && uv.y <= 1.0 - params.crop.w;
-}
-
-// ------------------------------------------------------------------ layers --
-
-/// The layer's own colour at this pixel, in linear light, before blending.
-float4 sourceColor(float2 uv) {
-    if (params.layout == LAYOUT_TEXTURE) return texture0.Sample(linearSampler, uv);
-
-    if (!insideCrop(uv)) return float4(0.0, 0.0, 0.0, 0.0);
-
-    if (params.layout == LAYOUT_RGBA) {
-        const float4 texel = texture0.Sample(linearSampler, uv);
-        // Premultiplied on the way in, because that is what survives bilinear
-        // filtering; divided back out here, because every effect below is
-        // defined on plain coded values.
-        const float3 coded = texel.a > 0.0 ? saturate(texel.rgb / texel.a) : float3(0.0, 0.0, 0.0);
-
-        // The keyer reads the unmodified pixel, as it does for video: a colour
-        // correction earlier in the stack must not pull the key colour out from
-        // under it.
-        const float alpha = texel.a * chromaKeyAlpha(coded);
-        const float3 adjusted = applyColorEffects(coded);
-        return float4(linearizeSrgb(adjusted) * vignetteFactor(uv), alpha);
-    }
-
-    if (params.layout == LAYOUT_SOLID) {
+/// The solid or gradient a matte draws, as coded values.
+float3 solidCoded(float2 uv) {
+    float3 base = params.solid.rgb;
+    if (params.gradient.w > 0.5) {
         // A linear gradient runs edge to edge through the quad's centre at the
         // given angle. The half-extent is the rect projected onto the gradient
         // direction, which is what keeps the ramp spanning the whole shape
         // rather than being clipped or leaving flat bands at the corners.
-        float3 base = params.solid.rgb;
-        if (params.gradient.w > 0.5) {
-            const float2 offset = (uv - 0.5) * params.size;
-            // Not named `half`: that is a scalar type in HLSL.
-            const float extent = abs(params.size.x * 0.5 * params.gradientDir.x) +
-                                 abs(params.size.y * 0.5 * params.gradientDir.y);
-            const float along = dot(offset, params.gradientDir);
-            const float t = extent > 0.0 ? saturate((along + extent) / (2.0 * extent)) : 0.0;
+        const float2 offset = (uv - 0.5) * params.size;
+        // Not named `half`: that is a scalar type in HLSL.
+        const float extent = abs(params.size.x * 0.5 * params.gradientDir.x) +
+                             abs(params.size.y * 0.5 * params.gradientDir.y);
+        const float along = dot(offset, params.gradientDir);
+        const float t = extent > 0.0 ? saturate((along + extent) / (2.0 * extent)) : 0.0;
 
-            // Coded, not linear: a gradient between two hex colours is specified
-            // the way a canvas draws it, so interpolating in linear light would
-            // move the midpoint away from what the author chose.
-            base = linearizeSrgb(lerp(encodeSrgb(params.solid.rgb),
-                                      encodeSrgb(params.gradient.rgb), t));
-        }
+        // Coded, not linear: a gradient between two hex colours is specified the
+        // way a canvas draws it, so interpolating in linear light would move the
+        // midpoint away from what the author chose.
+        return lerp(encodeSrgb(params.solid.rgb), encodeSrgb(params.gradient.rgb), t);
+    }
+    return encodeSrgb(base);
+}
 
-        // The solid arrives linear, but effects are defined on coded values, so
-        // it makes the same round trip a video frame does -- including the
-        // keyer, because an effect belongs to the layer, not to the layer's
-        // source. A matte is a degenerate case, but exempting it would be a
-        // rule with no reason behind it.
-        const float3 coded = encodeSrgb(base);
-        const float alpha = params.solid.a * chromaKeyAlpha(coded);
-        const float3 adjusted = applyColorEffects(coded);
-        return float4(linearizeSrgb(adjusted) * vignetteFactor(uv), alpha);
+/// The layer's own pixels at this uv: coded R'G'B', straight alpha.
+float4 codedSource(float2 uv) {
+    if (params.layout == LAYOUT_CODED) return texture0.Sample(linearSampler, uv);
+
+    if (params.layout == LAYOUT_RGBA) {
+        const float4 texel = texture0.Sample(linearSampler, uv);
+        // Premultiplied on the way in, because that is what survives bilinear
+        // filtering; divided back out here, because every pass is defined on
+        // plain coded values.
+        const float3 coded =
+            texel.a > 0.0 ? saturate(texel.rgb / texel.a) : float3(0.0, 0.0, 0.0);
+        return float4(coded, texel.a);
+    }
+
+    if (params.layout == LAYOUT_SOLID) {
+        return float4(solidCoded(uv), params.solid.a);
     }
 
     float y = texture0.Sample(linearSampler, uv).r;
@@ -389,14 +330,204 @@ float4 sourceColor(float2 uv) {
 
     // Chroma reconstruction can push values slightly outside the legal range;
     // clamping before the transfer function keeps pow() away from negatives.
-    const float3 coded = saturate(yuvToRgb(float3(y, chroma.x, chroma.y), params.colorSpace));
+    return float4(saturate(yuvToRgb(float3(y, chroma.x, chroma.y), params.colorSpace)), 1.0);
+}
 
-    // Keying reads the *unmodified* pixel, so a colour correction upstream in
-    // the stack cannot pull the key colour out from under the keyer.
-    const float alpha = chromaKeyAlpha(coded);
-    const float3 adjusted = applyColorEffects(coded);
+/// The layer in linear light, ready to composite. The transfer function is
+/// applied exactly here, once, whether the pixels came straight from a decoder
+/// or through a stack of passes.
+float4 sourceColor(float2 uv) {
+    const float4 coded = codedSource(uv);
+    return float4(toLinear(coded.rgb, params.transfer), coded.a);
+}
 
-    return float4(toLinear(adjusted, params.transfer) * vignetteFactor(uv), alpha);
+// ----------------------------------------------------------------- effects --
+//
+// One branch per kind, and nothing else. Each reads the scratch and writes the
+// scratch, both coded with straight alpha.
+
+/// eq (brightness, contrast, saturation) and hue (rotation, saturation), which
+/// between them are every colour effect in the registry.
+float3 colorPass(float3 coded) {
+    const float brightness = params.passA.x;
+    const float contrast   = params.passA.y;
+    const float saturation = params.passA.z;
+    const float hueRadians = params.passA.w;
+
+    float3 yuv = rgbToYuv601(coded);
+
+    // vf_eq: v = (v - 0.5) * contrast + 0.5 + brightness, on luma.
+    yuv.x = (yuv.x - 0.5) * contrast + 0.5 + brightness;
+
+    // vf_hue rotates the chroma plane and scales it; eq's saturation scales it
+    // too, and one effect may do both.
+    const float c = cos(hueRadians);
+    const float s = sin(hueRadians);
+    const float2 chroma = float2(yuv.y * c - yuv.z * s, yuv.y * s + yuv.z * c) * saturation;
+
+    return saturate(yuv601ToRgb(float3(yuv.x, chroma.x, chroma.y)));
+}
+
+/// The chroma keyer: BT.601 chroma distance from the key colour, feathered
+/// across `blend`. Deliberately the same approximation the reference used, and
+/// like it, not pixel-identical to ffmpeg's chromakey.
+float chromaKeyAlpha(float3 coded) {
+    const float3 keyRgb = params.passA.rgb;
+    const float similarity = params.passA.w;
+    const float blend = params.passB.x;
+
+    const float3 keyYuv = rgbToYuv601(keyRgb);
+    const float3 pixelYuv = rgbToYuv601(coded);
+
+    const float distance = length(pixelYuv.yz - keyYuv.yz);
+    if (distance <= similarity) return 0.0;
+    if (blend <= 0.0) return 1.0;
+    return saturate((distance - similarity) / blend);
+}
+
+/// vf_vignette: cos of the angle scaled by the normalised distance from the
+/// centre, to the fourth power.
+float vignetteFactor(float2 uv) {
+    const float angle = params.passA.x;
+    if (angle <= 0.0) return 1.0;
+
+    // Normalised so the corner is 1, which is what makes the amount mean the
+    // same thing whatever the frame's aspect ratio.
+    const float2 offset = (uv - 0.5) * 2.0;
+    const float normalised = length(offset) / length(float2(1.0, 1.0));
+    const float c = cos(angle * normalised);
+    return (c * c) * (c * c);
+}
+
+/// Crop cuts fractions off each edge and keeps the frame size, so what is cut
+/// becomes transparent rather than shrinking the picture.
+bool insideCrop(float2 uv) {
+    return uv.x >= params.passA.x && uv.x <= 1.0 - params.passA.z &&
+           uv.y >= params.passA.y && uv.y <= 1.0 - params.passA.w;
+}
+
+// One axis of a separable Gaussian. A 2D blur is two of these at right angles,
+// which is what makes a large radius affordable: 2n samples rather than n^2.
+//
+// The tap count is bounded, and the step widens to cover the radius when sigma
+// is large. That is an approximation -- above roughly sigma 10 it is sampling a
+// Gaussian rather than integrating one -- and it is the reason blur is the one
+// registry effect whose maths is not exact. The alternative, hundreds of taps
+// per pixel at 4K, is not worth it for an effect used at small radii in
+// practice.
+#define BLUR_TAPS 24
+
+/// A tap, with everything outside the layer treated as empty.
+///
+/// The scratch is filled edge to edge by the layer, so a sampler left to clamp
+/// would smear the last row of pixels outwards for ever and the layer would
+/// come back with a hard edge and a bar of stretched colour along it. Nothing
+/// is there, so nothing is what a tap outside should find, and the edge becomes
+/// the ramp a blur is supposed to make of it.
+float4 blurTap(float2 uv) {
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+    return texture0.Sample(linearSampler, uv);
+}
+
+float4 blurPass(float2 uv) {
+    const float sigma  = params.passA.x;
+    const float stride = params.passA.y;
+    const float2 step  = params.passA.zw;
+    if (sigma <= 0.0) return texture0.Sample(linearSampler, uv);
+
+    // Premultiplied while filtering, so a transparent neighbour contributes its
+    // coverage and not its colour. Blurring straight alpha pulls whatever
+    // happens to be stored in the transparent texels into the visible ones,
+    // which reads as a dark fringe round everything.
+    float4 centre = blurTap(uv);
+    float4 total = float4(centre.rgb * centre.a, centre.a);
+    float weightSum = 1.0;
+
+    // Weights come from the true Gaussian at the sampled distance, so widening
+    // the step keeps the shape even as it coarsens the sampling.
+    const float denominator = 2.0 * sigma * sigma;
+
+    [unroll]
+    for (int i = 1; i <= BLUR_TAPS; ++i) {
+        const float distance = float(i) * stride;
+        const float weight = exp(-(distance * distance) / denominator);
+        const float2 offset = step * float(i);
+
+        const float4 a = blurTap(uv + offset);
+        const float4 b = blurTap(uv - offset);
+        total += float4(a.rgb * a.a, a.a) * weight;
+        total += float4(b.rgb * b.a, b.a) * weight;
+        weightSum += 2.0 * weight;
+    }
+
+    total /= weightSum;
+    return float4(total.a > 0.0 ? total.rgb / total.a : float3(0.0, 0.0, 0.0), total.a);
+}
+
+/// One effect over the scratch. Coded in, coded out.
+float4 PSEffect(VSOutput input) : SV_Target {
+    if (params.passKind == PASS_BLUR) return blurPass(input.uv);
+
+    if (params.passKind == PASS_FLIP) {
+        // A mirror in texture space, which is why it survives the rotation the
+        // composite applies afterwards rather than fighting it.
+        const float2 mirrored = (input.uv - 0.5) * params.passA.xy + 0.5;
+        return texture0.Sample(linearSampler, mirrored);
+    }
+
+    float4 texel = texture0.Sample(linearSampler, input.uv);
+
+    if (params.passKind == PASS_COLOR) {
+        texel.rgb = colorPass(texel.rgb);
+    } else if (params.passKind == PASS_INVERT) {
+        texel.rgb = saturate(1.0 - texel.rgb);
+    } else if (params.passKind == PASS_VIGNETTE) {
+        // In linear light and back, because a vignette is a light falloff. Done
+        // on coded values it would darken the midtones far more than the ends,
+        // which is not what the filter it is named after does.
+        const float3 linearRgb = linearizeSrgb(texel.rgb) * vignetteFactor(input.uv);
+        texel.rgb = encodeSrgb(linearRgb);
+    } else if (params.passKind == PASS_CROP) {
+        if (!insideCrop(input.uv)) texel.a = 0.0;
+    } else if (params.passKind == PASS_CHROMAKEY) {
+        texel.a *= chromaKeyAlpha(texel.rgb);
+    }
+
+    return texel;
+}
+
+// ------------------------------------------------------------------ layers --
+
+/// A layer drawn into a scratch target, in its own space, before any effect.
+///
+/// Its own space rather than the canvas: the scratch is filled edge to edge by
+/// the layer, so every pass gets uv running 0..1 across the picture. That is
+/// what makes crop and vignette mean what they say however the layer is
+/// positioned, and it moves the rotation and the scaling to the very end, where
+/// they cost one filtering step instead of one per pass.
+float4 PSSource(VSOutput input) : SV_Target {
+    return codedSource(input.uv);
+}
+
+/// The same, for an adjustment layer, whose source is whatever is beneath it.
+///
+/// The backdrop is in canvas space and the scratch is in layer space, so this
+/// walks the quad's transform forwards for each scratch texel: exactly what
+/// `VSLayer` does to a corner, done per pixel.
+float4 PSAdjustSource(VSOutput input) : SV_Target {
+    const float2 local = (input.uv - 0.5) * params.size;
+    const float2 rotated = float2(
+        local.x * params.rotation.x - local.y * params.rotation.y,
+        local.x * params.rotation.y + local.y * params.rotation.x);
+    const float2 screen = (params.center + rotated) / params.canvas;
+
+    // Linear and possibly above 1.0; encoding clamps it. That is correct for
+    // the SDR pipeline this ships with and is one of the places that will need
+    // revisiting when HDR lands.
+    const float4 base = backdrop.Sample(linearSampler, screen);
+    return float4(encodeSrgb(base.rgb), 1.0);
 }
 
 // Normal and Add, where fixed-function blending does the combining.
@@ -421,61 +552,21 @@ float4 PSLayerBlend(VSOutput input) : SV_Target {
 }
 
 // An adjustment layer: everything already composited beneath it, put through
-// this layer's effect stack. It draws nothing of its own, which is why it reads
-// the backdrop instead of a source, and why opacity means strength here rather
-// than transparency.
+// this layer's effect stack. It draws nothing of its own, which is why opacity
+// means strength here rather than transparency.
 //
-// The backdrop is linear and may exceed 1.0; encoding to coded values clamps it.
-// That is correct for the SDR pipeline this ships with and is one of the places
-// that will need revisiting when HDR lands.
+// The passes have already run into the scratch; what is left is to put the
+// result back over the backdrop. Where a pass made the scratch transparent — a
+// crop, a key — the backdrop comes through untouched, which is what limiting an
+// adjustment's reach has to mean.
 float4 PSAdjustment(VSOutput input) : SV_Target {
     const float2 screen = input.position.xy / params.canvas;
     const float4 base = backdrop.Sample(linearSampler, screen);
 
-    // Cropping an adjustment layer limits where it reaches, so what falls
-    // outside must come through untouched rather than transparent.
-    if (!insideCrop(input.uv)) return base;
+    const float4 coded = texture0.Sample(linearSampler, input.uv);
+    const float3 result = linearizeSrgb(coded.rgb);
 
-    const float3 coded = encodeSrgb(base.rgb);
-    const float3 adjusted = applyColorEffects(coded);
-    const float3 result = linearizeSrgb(adjusted) * vignetteFactor(input.uv);
-
-    return float4(lerp(base.rgb, result, params.opacity), base.a);
-}
-
-// One axis of a separable Gaussian. A 2D blur is two of these at right angles,
-// which is what makes a large radius affordable: 2n samples rather than n^2.
-//
-// The tap count is bounded, and the step widens to cover the radius when sigma
-// is large. That is an approximation -- above roughly sigma 10 it is sampling a
-// Gaussian rather than integrating one -- and it is the reason blur is the one
-// registry effect whose maths is not exact. The alternative, hundreds of taps
-// per pixel at 4K, is not worth it for an effect used at small radii in
-// practice.
-#define BLUR_TAPS 24
-
-float4 PSBlur(VSOutput input) : SV_Target {
-    if (params.blurSigma <= 0.0) return texture0.Sample(linearSampler, input.uv);
-
-    float4 total = texture0.Sample(linearSampler, input.uv);
-    float weightSum = 1.0;
-
-    // Weights come from the true Gaussian at the sampled distance, so widening
-    // the step keeps the shape even as it coarsens the sampling.
-    const float denominator = 2.0 * params.blurSigma * params.blurSigma;
-
-    [unroll]
-    for (int i = 1; i <= BLUR_TAPS; ++i) {
-        const float distance = float(i) * params.blurStride;
-        const float weight = exp(-(distance * distance) / denominator);
-
-        const float2 offset = params.blurStep * float(i);
-        total += texture0.Sample(linearSampler, input.uv + offset) * weight;
-        total += texture0.Sample(linearSampler, input.uv - offset) * weight;
-        weightSum += 2.0 * weight;
-    }
-
-    return total / weightSum;
+    return float4(lerp(base.rgb, result, params.opacity * coded.a), base.a);
 }
 
 float4 PSPresent(VSOutput input) : SV_Target {

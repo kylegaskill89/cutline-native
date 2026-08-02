@@ -23,6 +23,8 @@
 #include "cutline/gpu/device.hpp"
 #include "cutline/gpu/frame_view.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <memory>
@@ -67,46 +69,40 @@ struct Quad {
   float rotation_deg = 0.0f;
 };
 
-/// A layer's visual effects, already resolved to plain numbers.
+/// What one effect pass does. Matches `render::EffectPassKind` value for value,
+/// and the shader branches on it directly.
+enum class PassKind {
+  Color,
+  Invert,
+  Vignette,
+  Crop,
+  ChromaKey,
+  Flip,
+  Blur,
+};
+
+/// How many floats a pass carries. Eight, shared by every kind, because only
+/// one pass runs at a time — which is what lets the catalogue grow without the
+/// root constants growing with it.
+inline constexpr std::size_t kPassValues = 8;
+
+/// One effect, ready to run.
 ///
-/// These run on *coded* values -- after the YUV matrix, before the transfer
-/// function -- because that is the space FFmpeg's filters are defined in, and
+/// The values mean what the kind says, packed by `render::effect_passes`. The
+/// compositor does not interpret them at all beyond the blur, whose two draws
+/// it has to expand: everything else goes to the shader as it arrives.
+///
+/// Effects run on *coded* values — after the YUV matrix, before the transfer
+/// function — because that is the space FFmpeg's filters are defined in, and
 /// the spec names those fragments as each effect's authoritative behaviour.
 /// Applying a 200% contrast to linear light instead would be a large visible
 /// difference, not a subtle one. Compositing stays linear; only the effect
 /// maths is not.
-///
-/// Defaults are neutral, so a default-constructed instance draws the layer
-/// untouched.
-struct LayerEffects {
-  float brightness = 0.0f;   ///< luma offset, -1..1
-  float contrast = 1.0f;     ///< multiplier about the midpoint
-  float saturation = 1.0f;   ///< chroma multiplier
-  float hue_degrees = 0.0f;  ///< chroma rotation
-  bool invert = false;
+struct EffectPass {
+  PassKind kind = PassKind::Color;
+  std::array<float, kPassValues> values{};
 
-  /// Vignette angle in radians. Zero leaves the edges alone.
-  float vignette = 0.0f;
-
-  /// Fractions cut from each edge. The layer keeps its size; what is cut goes
-  /// transparent rather than the picture shrinking.
-  float crop_left = 0.0f;
-  float crop_top = 0.0f;
-  float crop_right = 0.0f;
-  float crop_bottom = 0.0f;
-
-  /// Gaussian blur radius in pixels. A blurred layer costs two extra passes
-  /// and a pair of canvas-sized targets, so zero is a genuinely cheaper path
-  /// rather than just a neutral value.
-  float blur_sigma = 0.0f;
-
-  bool chroma_key = false;
-  float chroma_similarity = 0.3f;
-  float chroma_blend = 0.1f;
-  /// sRGB-coded, not linear. Defaults to #00d000, the registry green.
-  Color chroma_color{0.0f, 208.0f / 255.0f, 0.0f, 1.0f};
-
-  friend bool operator==(const LayerEffects&, const LayerEffects&) = default;
+  friend bool operator==(const EffectPass&, const EffectPass&) = default;
 };
 
 /// One thing to draw. A null `frame` draws `color` as a solid, which is what a
@@ -130,12 +126,20 @@ struct Layer {
   Quad quad;
   float opacity = 1.0f;
   BlendMode blend = BlendMode::Normal;
-  bool flip_x = false;
-  bool flip_y = false;
-  LayerEffects effects;
+
+  /// The effect stack, in the order it is applied.
+  ///
+  /// Empty is the cheap case and the common one: the layer is decoded,
+  /// positioned and composited in a single draw. Anything here instead draws
+  /// the layer once into a scratch target in its own space, runs each pass over
+  /// it, and composites the result — which is what buys the ordering, and what
+  /// leaves room for a mask to belong to one effect rather than to the stack.
+  ///
+  /// Borrowed: the span has to outlive the `compose` call and nothing more.
+  std::span<const EffectPass> passes;
 
   /// An adjustment layer draws nothing of its own: it puts everything already
-  /// composited beneath it through `effects`, within its own quad. `opacity`
+  /// composited beneath it through `passes`, within its own quad. `opacity`
   /// becomes the strength of that adjustment rather than a transparency, and
   /// `frame`, `color`, and `blend` are ignored.
   bool adjustment = false;

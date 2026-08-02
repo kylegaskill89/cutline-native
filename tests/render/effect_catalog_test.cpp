@@ -9,7 +9,7 @@
 
 #include "cutline/render/effect_catalog.hpp"
 
-#include "cutline/render/effects.hpp"
+#include "cutline/render/effect_passes.hpp"
 
 #include <gtest/gtest.h>
 
@@ -50,11 +50,13 @@ namespace {
   return clip;
 }
 
-TEST(EffectCatalog, EveryEntryIsAnEffectTheResolverKnows) {
+TEST(EffectCatalog, EveryEntryIsAnEffectThePlannerKnows) {
+  // Offered and not drawable is the failure this catches: an entry the panel
+  // lists, somebody adds, and nothing happens because the planner has no branch
+  // for that type.
   for (const EffectSpec& spec : effect_catalog()) {
-    const EffectParams resolved = resolve_effect_params(with_effect_at_maximum(spec), 0.0);
-    EXPECT_FALSE(resolved.is_neutral())
-        << spec.type << " resolved to nothing at its maximum, so the resolver does not "
+    EXPECT_FALSE(plan_effect_passes(with_effect_at_maximum(spec), 0.0).empty())
+        << spec.type << " planned no passes at its maximum, so the planner does not "
                         "recognise that type";
   }
 }
@@ -100,16 +102,15 @@ constexpr std::string_view kStartsVisible[]{"grayscale", "invert", "flip", "vign
 TEST(EffectCatalog, AnEffectWithNothingToSetArrivesDoingIt) {
   for (const EffectSpec& spec : effect_catalog()) {
     if (!starts_visible(spec.type)) continue;
-    const EffectParams resolved = resolve_effect_params(with_effect_at_defaults(spec), 0.0);
-    EXPECT_FALSE(resolved.is_neutral()) << spec.type << " at its defaults does nothing";
+    EXPECT_FALSE(plan_effect_passes(with_effect_at_defaults(spec), 0.0).empty())
+        << spec.type << " at its defaults does nothing";
   }
 }
 
 TEST(EffectCatalog, EveryOtherEffectArrivesNeutral) {
   for (const EffectSpec& spec : effect_catalog()) {
     if (starts_visible(spec.type)) continue;
-    const EffectParams resolved = resolve_effect_params(with_effect_at_defaults(spec), 0.0);
-    EXPECT_TRUE(resolved.is_neutral())
+    EXPECT_TRUE(plan_effect_passes(with_effect_at_defaults(spec), 0.0).empty())
         << spec.type << " changes the picture the moment it is added";
   }
 }
@@ -132,7 +133,8 @@ TEST(EffectCatalog, TheDefaultsAreTheOnesTheResolverAssumes) {
     core::Clip clip;
     clip.effects = {bare};
 
-    EXPECT_EQ(resolve_effect_params(clip, 0.0), resolve_effect_params(with_effect_at_defaults(spec), 0.0))
+    EXPECT_EQ(plan_effect_passes(clip, 0.0),
+              plan_effect_passes(with_effect_at_defaults(spec), 0.0))
         << spec.type << " means something different with its parameters missing";
   }
 }
