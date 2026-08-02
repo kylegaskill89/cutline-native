@@ -72,29 +72,86 @@ bool EffectsBrowser::matches(const EffectEntry& entry) const {
   return contains_fold(entry.name, filter_) || contains_fold(entry.folder, filter_);
 }
 
+namespace {
+
+/// A folder path split into its steps, with empty ones dropped.
+[[nodiscard]] std::vector<std::string_view> steps_of(std::string_view path) {
+  std::vector<std::string_view> steps;
+  std::size_t at = 0;
+  while (at <= path.size()) {
+    const std::size_t next = path.find(EffectsBrowser::kFolderSeparator, at);
+    const std::string_view step =
+        path.substr(at, next == std::string_view::npos ? std::string_view::npos : next - at);
+    if (!step.empty()) steps.push_back(step);
+    if (next == std::string_view::npos) break;
+    at = next + 1;
+  }
+  return steps;
+}
+
+/// The path up to and including `depth` steps.
+[[nodiscard]] std::string prefix_of(const std::vector<std::string_view>& steps,
+                                    std::size_t depth) {
+  std::string out;
+  for (std::size_t i = 0; i <= depth && i < steps.size(); ++i) {
+    if (!out.empty()) out += EffectsBrowser::kFolderSeparator;
+    out += steps[i];
+  }
+  return out;
+}
+
+}  // namespace
+
 void EffectsBrowser::rebuild() {
   rows_.clear();
 
   // In the order the catalogue gave them, so a folder's position is the
-  // registry's decision rather than the alphabet's.
-  std::vector<std::string> folders;
+  // registry's decision rather than the alphabet's. Paths rather than names, so
+  // two folders called Colour under different parents stay two folders.
+  std::vector<std::string> paths;
   for (const EffectEntry& entry : items_) {
-    if (std::ranges::find(folders, entry.folder) == folders.end()) folders.push_back(entry.folder);
+    if (std::ranges::find(paths, entry.folder) == paths.end()) paths.push_back(entry.folder);
   }
 
-  for (const std::string& folder : folders) {
+  // Which headings have been written already, so a parent shared by three
+  // children is drawn once. Walked in catalogue order, so the first entry that
+  // needs a folder is what decides where it sits.
+  std::vector<std::string> written;
+
+  for (const std::string& path : paths) {
     std::vector<const EffectEntry*> shown;
     for (const EffectEntry& entry : items_) {
-      if (entry.folder == folder && matches(entry)) shown.push_back(&entry);
+      if (entry.folder == path && matches(entry)) shown.push_back(&entry);
     }
     // A folder with nothing in it after filtering is not drawn at all. A column
     // of empty headings is the least useful possible answer to a search.
     if (shown.empty()) continue;
 
-    rows_.push_back(Row{.name = folder, .folder = folder, .is_folder = true});
-    if (!is_open(folder)) continue;
+    const std::vector<std::string_view> steps = steps_of(path);
+
+    // Every step of the path, so a nested folder brings its parents with it.
+    // Closed at any level hides everything below, which is what a tree means.
+    bool hidden = false;
+    for (std::size_t depth = 0; depth < steps.size(); ++depth) {
+      const std::string prefix = prefix_of(steps, depth);
+      if (std::ranges::find(written, prefix) == written.end()) {
+        if (!hidden) {
+          rows_.push_back(Row{.name = std::string(steps[depth]),
+                              .folder = prefix,
+                              .is_folder = true,
+                              .depth = depth});
+        }
+        written.push_back(prefix);
+      }
+      if (!is_open(prefix)) hidden = true;
+    }
+    if (hidden) continue;
+
     for (const EffectEntry* entry : shown) {
-      rows_.push_back(Row{.id = entry->id, .name = entry->name, .folder = folder});
+      rows_.push_back(Row{.id = entry->id,
+                          .name = entry->name,
+                          .folder = path,
+                          .depth = steps.size()});
     }
   }
 
@@ -179,8 +236,8 @@ void EffectsBrowser::paint_content(Painter& painter, const Theme& theme) const {
     }
     const SurfaceStyle& style =
         picked ? theme.style(Part::MenuItem, State::Selected) : panel;
-    painter.text(text_run(Rect{row.x + kChevron + kIndent, row.y,
-                               row.width - kChevron - kIndent - 4.0, row.height},
+    const double inset = kChevron + kIndent + static_cast<double>(entry.depth) * kIndent;
+    painter.text(text_run(Rect{row.x + inset, row.y, row.width - inset - 4.0, row.height},
                           entry.name, style, font_size_));
   }
 }

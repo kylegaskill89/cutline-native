@@ -36,8 +36,13 @@ struct EffectEntry {
   /// catalogue without the widget knowing a catalogue exists.
   std::string id;
   std::string name;
-  /// Which folder it sits under. Folders are made from these rather than
-  /// declared, so adding an effect in a new category needs nothing here.
+  /// Which folder it sits under, as a path: `Video Effects/Colour`. Folders are
+  /// made from these rather than declared, so adding an effect in a new
+  /// category needs nothing here — and nesting one needs nothing either, since
+  /// a deeper path is just a longer string.
+  ///
+  /// A leading or trailing separator, or an empty step, is skipped rather than
+  /// producing a folder with no name.
   std::string folder;
 
   friend bool operator==(const EffectEntry&, const EffectEntry&) = default;
@@ -45,13 +50,22 @@ struct EffectEntry {
 
 class EffectsBrowser : public Widget {
  public:
+  /// The separator between the steps of a folder path.
+  static constexpr char kFolderSeparator = '/';
+
   /// A row on screen: either a folder's heading or one entry under it.
   struct Row {
     /// Empty for a folder row, which is named by `folder`.
     std::string id;
+    /// The last step of the path for a folder, the entry's own name otherwise.
     std::string name;
+    /// The whole path, which is what `is_open` is keyed by — two folders called
+    /// Colour under different parents are two folders.
     std::string folder;
     bool is_folder = false;
+    /// How deep in the tree, from zero. What the row is indented by, and the
+    /// only thing about nesting the painting has to know.
+    std::size_t depth = 0;
 
     friend bool operator==(const Row&, const Row&) = default;
   };

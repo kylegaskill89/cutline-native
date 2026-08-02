@@ -395,5 +395,103 @@ TEST(EffectsBrowser, PaintsOnlyTheRowsOnScreen) {
   EXPECT_LT(texts, test.browser->rows().size());
 }
 
+
+// ------------------------------------------------------------------ nesting --
+//
+// A folder is a path, and the tree is made out of the paths rather than
+// declared anywhere. Twenty effects in five categories under one flat heading
+// each is a list nobody can scan.
+
+[[nodiscard]] std::vector<EffectEntry> nested_items() {
+  return {
+      EffectEntry{.id = "v:bright", .name = "Brightness", .folder = "Video Effects/Colour"},
+      EffectEntry{.id = "v:blur", .name = "Blur", .folder = "Video Effects/Blur"},
+      EffectEntry{.id = "a:eq", .name = "EQ", .folder = "Audio Effects"},
+  };
+}
+
+TEST(EffectsBrowserNesting, AParentIsDrawnOnceForAllItsChildren) {
+  EffectsBrowser browser;
+  browser.set_items(nested_items());
+
+  // Closed, the tree is its top level and nothing else.
+  ASSERT_EQ(browser.rows().size(), 2u);
+  EXPECT_EQ(browser.rows()[0].name, "Video Effects");
+  EXPECT_EQ(browser.rows()[0].depth, 0u);
+  EXPECT_EQ(browser.rows()[1].name, "Audio Effects");
+}
+
+TEST(EffectsBrowserNesting, OpeningAParentShowsItsFoldersRatherThanItsEffects) {
+  EffectsBrowser browser;
+  browser.set_items(nested_items());
+  browser.set_open("Video Effects", true);
+
+  ASSERT_EQ(browser.rows().size(), 4u);
+  EXPECT_EQ(browser.rows()[1].name, "Colour");
+  EXPECT_EQ(browser.rows()[1].depth, 1u);
+  EXPECT_TRUE(browser.rows()[1].is_folder);
+  EXPECT_EQ(browser.rows()[2].name, "Blur");
+}
+
+TEST(EffectsBrowserNesting, OpeningAChildShowsWhatIsInIt) {
+  EffectsBrowser browser;
+  browser.set_items(nested_items());
+  browser.set_open("Video Effects", true);
+  browser.set_open("Video Effects/Colour", true);
+
+  const std::vector<EffectsBrowser::Row>& rows = browser.rows();
+  ASSERT_EQ(rows.size(), 5u);
+  EXPECT_EQ(rows[2].id, "v:bright");
+  EXPECT_EQ(rows[2].depth, 2u) << "indented under its own folder";
+}
+
+TEST(EffectsBrowserNesting, AClosedParentHidesEverythingBelowIt) {
+  // Even a child that has been opened. Closed at any level means closed, which
+  // is what a tree is.
+  EffectsBrowser browser;
+  browser.set_items(nested_items());
+  browser.set_open("Video Effects/Colour", true);
+
+  EXPECT_EQ(browser.rows().size(), 2u);
+}
+
+TEST(EffectsBrowserNesting, TwoFoldersOfTheSameNameUnderDifferentParentsStayApart) {
+  EffectsBrowser browser;
+  browser.set_items({
+      EffectEntry{.id = "v:one", .name = "One", .folder = "Video Effects/Colour"},
+      EffectEntry{.id = "a:two", .name = "Two", .folder = "Audio Effects/Colour"},
+  });
+  browser.set_open("Video Effects", true);
+  browser.set_open("Video Effects/Colour", true);
+
+  const std::vector<EffectsBrowser::Row>& rows = browser.rows();
+  // The video Colour is open and the audio one is not, which could not be true
+  // if the two were keyed by name.
+  ASSERT_GE(rows.size(), 4u);
+  EXPECT_EQ(rows[2].id, "v:one");
+  EXPECT_EQ(rows[3].name, "Audio Effects");
+}
+
+TEST(EffectsBrowserNesting, ASearchOpensTheWholeTree) {
+  EffectsBrowser browser;
+  browser.set_items(nested_items());
+  browser.set_filter("bright");
+
+  const std::vector<EffectsBrowser::Row>& rows = browser.rows();
+  ASSERT_EQ(rows.size(), 3u) << "the two folders above it, and the effect";
+  EXPECT_EQ(rows.back().id, "v:bright");
+}
+
+TEST(EffectsBrowserNesting, AStraySeparatorDoesNotMakeANamelessFolder) {
+  EffectsBrowser browser;
+  browser.set_items({EffectEntry{.id = "x", .name = "X", .folder = "/Video Effects//Colour/"}});
+  browser.set_open("Video Effects", true);
+
+  const std::vector<EffectsBrowser::Row>& rows = browser.rows();
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].name, "Video Effects");
+  EXPECT_EQ(rows[1].name, "Colour");
+}
+
 }  // namespace
 }  // namespace cutline::ui

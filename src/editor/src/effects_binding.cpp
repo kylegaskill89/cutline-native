@@ -548,16 +548,19 @@ constexpr std::string_view kTransitionPrefix = "transition:";
 std::vector<LibraryEntry> effect_library() {
   std::vector<LibraryEntry> out;
 
-  // Qualified folder names, because the tree is one level deep: "Colour" alone
-  // would not say whether it held pictures or sound.
+  // Paths, not names. Twenty video effects in five categories under one flat
+  // heading each is a list nobody can scan; nested, the panel opens as three
+  // headings and you go down to what you want, which is Premiere's arrangement
+  // and everybody else's.
   for (const EffectChoice& choice : addable_effects()) {
     out.push_back(LibraryEntry{.id = std::string(kVideoPrefix) + choice.type,
                                .name = choice.name,
-                               .folder = "Video · " + choice.category});
+                               .folder = "Video Effects/" + choice.category});
   }
   for (const EffectChoice& choice : addable_audio_effects()) {
-    out.push_back(LibraryEntry{
-        .id = std::string(kAudioPrefix) + choice.type, .name = choice.name, .folder = "Audio"});
+    out.push_back(LibraryEntry{.id = std::string(kAudioPrefix) + choice.type,
+                               .name = choice.name,
+                               .folder = "Audio Effects"});
   }
   // Transitions last, and in the same panel, because that is where somebody
   // reaching for a cross-dissolve looks — not in a dropdown three sections down

@@ -282,8 +282,9 @@ struct LibraryEntry {
   /// `apply_library_entry`, which is the only thing that takes it apart.
   std::string id;
   std::string name;
-  /// The folder it sits under, already qualified: the tree is one level deep
-  /// and "Colour" alone would not say whether it held pictures or sound.
+  /// The folder it sits under, as a path: `Video Effects/Colour`. The browser
+  /// makes the tree out of these, so nesting one deeper needs nothing but a
+  /// longer string.
   std::string folder;
 
   friend bool operator==(const LibraryEntry&, const LibraryEntry&) = default;
