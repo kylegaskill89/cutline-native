@@ -478,6 +478,20 @@ struct App {
   /// reason `expanded_params` is: the panel is rebuilt on every edit.
   std::set<std::string> expanded_lanes;
 
+  /// Which keyframes are picked out, by the lane's *name* and the keyframe's
+  /// *time* rather than by index.
+  ///
+  /// On `App` for the same reason the open graphs are: the panel is rebuilt
+  /// from nothing on every edit, and a selection left in the widget is a
+  /// selection lost the moment anything is changed. That was survivable while
+  /// the only thing a selection did was wait for a menu; it stopped being
+  /// survivable when handles arrived, because dragging one is an edit and you
+  /// cannot drag a handle you can no longer see.
+  ///
+  /// By name and time because both move: adding an effect renumbers every lane
+  /// below it, and removing a keyframe renumbers the ones after it.
+  std::set<std::pair<std::string, double>> keyframe_selection;
+
   /// Which parameters are showing their slider, by the key `ParamRow` carries.
   ///
   /// Premiere's arrangement: the number is always there and the slider is
@@ -1866,6 +1880,24 @@ void build_keyframe_lanes(App& app, const std::string& clip_id) {
   view.set_model(std::move(shown));
   view.set_playhead(local_playhead(app, clip_id));
 
+  // What was selected, put back — matched by name and time, so a keyframe that
+  // has moved is still the same keyframe and one that has gone quietly drops
+  // out of the selection rather than taking whichever point inherited its
+  // index.
+  {
+    std::vector<cutline::ui::KeyframeHit> picked;
+    for (std::size_t lane = 0; lane < model.lanes.size(); ++lane) {
+      const cutline::editor::KeyframeLane& row = model.lanes[lane];
+      for (std::size_t at = 0; at < row.keys.size(); ++at) {
+        const auto wanted = std::pair{row.name, row.keys[at].t};
+        if (app.keyframe_selection.contains(wanted)) {
+          picked.push_back(cutline::ui::KeyframeHit{.lane = lane, .index = at, .found = true});
+        }
+      }
+    }
+    if (!picked.empty()) view.set_selection(std::move(picked));
+  }
+
   // Which graphs were open, put back. The panel is rebuilt from nothing on
   // every edit, so state left in the widget would mean easing a keyframe closed
   // the graph you were easing it in — which is exactly what it did.
@@ -1883,6 +1915,17 @@ void build_keyframe_lanes(App& app, const std::string& clip_id) {
   // a drag, and a lane index resolved against a newer model is a different
   // property.
   const std::vector<cutline::editor::KeyframeLane> lanes = model.lanes;
+
+  // Remembered as it changes, so the next rebuild can put it back.
+  view.set_on_select([&app, lanes_for_selection = model.lanes, control = &view] {
+    app.keyframe_selection.clear();
+    for (const cutline::ui::KeyframeHit& hit : control->selection()) {
+      if (hit.lane >= lanes_for_selection.size()) continue;
+      const cutline::editor::KeyframeLane& row = lanes_for_selection[hit.lane];
+      if (hit.index >= row.keys.size()) continue;
+      app.keyframe_selection.emplace(row.name, row.keys[hit.index].t);
+    }
+  });
 
   view.set_on_scrub([&app, clip_id](double t) {
     const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), clip_id);
