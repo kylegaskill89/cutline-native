@@ -123,6 +123,7 @@ struct Params {
 
     float maskOpacity;
     float maskInverted;
+
     // How much of the scratch is empty border, per side, as a fraction of it.
     //
     // A blur has to be able to spread *past* the layer, the way Premiere's
@@ -133,7 +134,13 @@ struct Params {
     // blur to reach into. Zero when nothing in the stack spreads, which is
     // almost every stack, and costs the layer nothing.
     float margin;
-    float marginPad;
+
+    // A free-drawn path's corners: where its run starts in the shared point
+    // buffer, and how many. A path is the one mask too big for the root
+    // constants, which is the whole reason that buffer exists.
+    float pathFirst;
+    float pathCount;
+    float2 pathPad;
 };
 
 
@@ -163,6 +170,12 @@ Texture2D<float4> texture0 : register(t0);
 Texture2D<float4> texture1 : register(t1);
 Texture2D<float4> texture2 : register(t2);
 Texture2D<float4> backdrop : register(t3);
+
+/// The corners of every free-drawn mask in the frame, one after another, each in
+/// fractions of its layer and measured *from the mask's own centre* — so moving
+/// the mask moves the path, and turning it turns the path, through exactly the
+/// transform the other two shapes already go through.
+StructuredBuffer<float2> maskPath : register(t4);
 
 SamplerState linearSampler : register(s0);
 
@@ -646,7 +659,40 @@ float maskCoverage(float2 uv) {
     // negative inside, positive outside, scaled so a feather means the same
     // fraction of the layer whichever shape it is softening.
     float distance;
-    if (params.maskShape < 1.5) {
+    if (params.maskShape > 2.5) {
+        // A path: the one shape whose description does not fit in the root
+        // constants, which is why the point buffer exists at all.
+        //
+        // Even-odd for what is inside — the rule that makes a shape drawn back
+        // over itself cut a hole rather than fill one — and the distance to the
+        // nearest edge for the rest, which is the same signed number the other
+        // two produce and so feathers and inverts identically.
+        const uint count = (uint)max(params.pathCount, 0.0);
+        const uint first = (uint)max(params.pathFirst, 0.0);
+        if (count < 3u) return 1.0;
+
+        bool inside = false;
+        float nearest = 1e9;
+        float2 previous = maskPath[first + count - 1u];
+
+        for (uint i = 0u; i < count; ++i) {
+            const float2 corner = maskPath[first + i];
+
+            // A ray to the left: an edge that straddles this row and crosses to
+            // the left of the point flips the answer.
+            if ((corner.y > local.y) != (previous.y > local.y)) {
+                const float t = (local.y - corner.y) / (previous.y - corner.y);
+                if (local.x < corner.x + t * (previous.x - corner.x)) inside = !inside;
+            }
+
+            const float2 edge = previous - corner;
+            const float along = saturate(dot(local - corner, edge) / max(dot(edge, edge), 1e-12));
+            nearest = min(nearest, length(local - (corner + edge * along)));
+            previous = corner;
+        }
+
+        distance = inside ? -nearest : nearest;
+    } else if (params.maskShape < 1.5) {
         // An ellipse: the normalised radius, brought back into layer units by
         // the smaller half-extent so a very flat ellipse does not feather far
         // more along one axis than the other.

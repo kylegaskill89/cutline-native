@@ -118,6 +118,14 @@ struct PassMask {
   /// 1 when the effect applies outside the shape instead.
   float inverted = 0.0f;
 
+  /// A free-drawn path's corners, each an offset from the mask's centre in
+  /// fractions of the layer. Empty for every other shape.
+  ///
+  /// Here rather than in `values` because there is no bound worth putting on a
+  /// drawn shape that would also fit in root constants — which is the whole
+  /// reason a path needs a buffer and the other two do not.
+  std::vector<std::array<float, 2>> points;
+
   [[nodiscard]] bool active() const noexcept { return shape > 0.0f; }
 
   friend bool operator==(const PassMask&, const PassMask&) = default;
@@ -136,7 +144,7 @@ struct EffectPass {
 };
 
 /// A mask as the shader wants it. An inactive one leaves the pass unmasked.
-[[nodiscard]] PassMask pass_mask(const core::Mask& mask) noexcept;
+[[nodiscard]] PassMask pass_mask(const core::Mask& mask);
 
 // ------------------------------------------------------------------ makers --
 //

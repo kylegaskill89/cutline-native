@@ -156,6 +156,16 @@ std::vector<MaskOverlayRef> mask_overlays(const core::Project& project,
     const auto [dx, dy] =
         turn((mask.x - 0.5) * frame->width, (mask.y - 0.5) * frame->height, frame->rotation);
 
+    // A path's corners are offsets from its centre in *layer* fractions, and
+    // the overlay wants them in canvas fractions. Scaled rather than turned:
+    // the overlay carries the rotation and applies it itself, exactly as it
+    // does for the half-extents of the other two shapes.
+    std::vector<std::pair<double, double>> points;
+    points.reserve(mask.points.size());
+    for (const core::MaskPoint& point : mask.points) {
+      points.emplace_back(point.x * frame->width, point.y * frame->height);
+    }
+
     out.push_back(MaskOverlayRef{
         .effect = i,
         .overlay = ui::MaskOverlay{
@@ -165,6 +175,7 @@ std::vector<MaskOverlayRef> mask_overlays(const core::Project& project,
             .width = mask.width * frame->width,
             .height = mask.height * frame->height,
             .rotation = mask.rotation + frame->rotation,
+            .points = std::move(points),
         }});
   }
   return out;
@@ -198,6 +209,23 @@ core::Project apply_mask_overlay(core::Project project, std::string_view clip_id
   set("mask.width", overlay.width / frame->width);
   set("mask.height", overlay.height / frame->height);
   set("mask.rotation", overlay.rotation - frame->rotation);
+
+  // The corners go straight back on the mask rather than through a parameter:
+  // a path is a shape rather than a number, and there is no keyframe for it to
+  // land on.
+  if (!overlay.points.empty()) {
+    const core::Clip* moved = core::find_clip(project, clip_id);
+    if (moved == nullptr || effect >= moved->effects.size()) return project;
+
+    core::Mask mask = moved->effects[effect].mask;
+    mask.points.clear();
+    mask.points.reserve(overlay.points.size());
+    for (const auto& [px, py] : overlay.points) {
+      mask.points.push_back(
+          core::MaskPoint{.x = px / frame->width, .y = py / frame->height});
+    }
+    project = core::set_effect_mask(std::move(project), clip_id, effect, std::move(mask));
+  }
   return project;
 }
 

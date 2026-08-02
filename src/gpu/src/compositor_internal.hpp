@@ -68,6 +68,20 @@ struct Compositor::Impl {
   ComPtr<ID3D12Resource> upload;
   std::size_t upload_capacity = 0;
 
+  /// Every free-drawn mask's corners in the frame, one path after another.
+  ///
+  /// A path is the one mask too big for the root constants, so it goes in a
+  /// buffer — and one buffer for the whole frame rather than one per pass,
+  /// because the command list is recorded once and submitted once: a buffer
+  /// rewritten between draws would be read by all of them with whatever it
+  /// ended up holding. Each pass carries its first index and its count instead.
+  ComPtr<ID3D12Resource> mask_points;
+  std::size_t mask_points_capacity = 0;
+
+  /// Makes the point buffer hold at least `points` of them, and writes the
+  /// descriptor every layer run reads it through.
+  [[nodiscard]] std::expected<void, std::string> ensure_mask_points(std::size_t points);
+
   int width = 0;
   int height = 0;
   /// Incremented by `create_targets`, so a cache downstream can tell a rebuilt

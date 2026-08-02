@@ -48,14 +48,21 @@ struct MonitorBox {
 /// and turning one into the other needs the clip's transform, which is the
 /// editor's business rather than this widget's.
 struct MaskOverlay {
-  /// 1 for an ellipse, 2 for a rectangle, matching `core::MaskShape`.
+  /// 1 for an ellipse, 2 for a rectangle, 3 for a free-drawn path, matching
+  /// `core::MaskShape`.
   int shape = 1;
   double x = 0.5;
   double y = 0.5;
-  /// Half-extents, as fractions of the canvas.
+  /// Half-extents, as fractions of the canvas. Meaningless for a path, which
+  /// is described by its corners instead.
   double width = 0.25;
   double height = 0.25;
   double rotation = 0.0;  ///< degrees, clockwise
+
+  /// A path's corners, each an offset from the centre above in fractions of the
+  /// canvas — the same units everything else here is in. Empty for the other
+  /// two shapes.
+  std::vector<std::pair<double, double>> points;
 
   friend bool operator==(const MaskOverlay&, const MaskOverlay&) = default;
 };
@@ -203,6 +210,9 @@ class MonitorView : public Widget {
   /// Where a mask's resize grip is, in widget pixels. Empty when there is no
   /// such mask or no picture to draw it over.
   [[nodiscard]] Rect mask_grip(std::size_t index) const;
+  /// The handle on one corner of a free-drawn path. Empty when the mask is not
+  /// one, or the corner is not there.
+  [[nodiscard]] Rect mask_corner_grip(std::size_t index, std::size_t corner) const;
 
   /// What a press at this point would take hold of.
   [[nodiscard]] TransformHandle handle_at(double x, double y) const;
@@ -274,6 +284,10 @@ class MonitorView : public Widget {
   /// accumulated.
   std::optional<std::size_t> mask_dragging_;
   bool mask_resizing_ = false;
+  /// Which corner of a free-drawn path is being dragged, when one is. A path
+  /// has no size handle: every corner is a handle, and moving one is the only
+  /// way its shape ever changes.
+  std::optional<std::size_t> mask_corner_;
   MaskOverlay mask_origin_;
 
   bool snapping_ = true;

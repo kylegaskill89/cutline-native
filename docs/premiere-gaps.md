@@ -416,20 +416,14 @@ much they cost somebody:
    panel with the clip and the sequence. With one clip selected it is obvious;
    with a timeline full of similar takes it is not.
 
-**Already listed, and still open.** Carried forward so this is one list rather
-than four:
-
-| | Where | Size |
-|---|---|---|
-| A free-draw mask path | §1.4 | machinery |
-| Catalogue depth beyond twenty | §1.5 | one branch each, now |
-
-Everything else that was listed is done: paired X/Y, a visible reset per row,
+**Already listed, and now closed.** Nothing carried forward from this section
+is still open. Everything that was listed is done: paired X/Y, a visible reset per row,
 resetting a whole effect, greying a governed property, the anchor point, both
 panners, audio-effect keyframes, bezier handles, effects as passes, masks and
 dragging them on the picture, nested folders, dropping an effect on the picture,
-named presets, user bins, and Effect Controls naming the clip it is showing —
-which turned out to have been done already and listed anyway.
+named presets, user bins, a free-drawn mask path, and Effect Controls naming the
+clip it is showing — which turned out to have been done already and listed
+anyway.
 
 **A mask animates through the machinery effects already had.** Each of its seven
 numbers answers to a reserved parameter name — `mask.x`, `mask.feather` and so
@@ -445,9 +439,17 @@ And dragging the shape goes through the same setter a number does, so it writes
 a keyframe when the property is animated — found on screen, where a drag moved
 the outline and the render ignored it.
 
-**The shape of what is left.** The structural work is finished and so is the
-feature list. What remains is the pen path, and as much catalogue as anybody
-wants — which is now a branch at a time rather than a budget.
+**The shape of what is left.** Nothing, for section 1. The structural work is
+finished, the feature list is finished, and the catalogue is a branch at a time
+rather than a budget whenever anybody wants more of it.
+
+The path was the last piece of machinery here, and the one that finally needed
+something the root constants could not hold: sixty-four DWORDs will carry a
+centre, a size and a rotation, and will not carry a shape somebody drew. So a
+path's corners go in a buffer — one buffer for the whole frame, because the
+command list is recorded once and submitted once, and a buffer rewritten between
+draws would be read by every one of them with whatever it ended up holding. Each
+pass is told where its own run starts instead.
 
 Bins also turned up a fault nobody had noticed in the tree they live in: a
 folder heading ignored its own depth, so a category inside a category started

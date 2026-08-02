@@ -7248,10 +7248,12 @@ template <typename T>
         app.session.apply(cutline::editor::set_effect_parameter_animated(
             app.session.project(), clip_id, 0, "amount", true, 0.0));
         // And a mask on one of them, so the seven rows and the checkbox it
-        // brings with it are laid out rather than only the shape chooser.
+        // brings with it are laid out rather than only the shape chooser. A
+        // free-drawn one, because it is the shape that draws the most: an
+        // outline of its own and a handle on every corner.
         app.session.apply(cutline::editor::set_effect_mask(
             app.session.project(), clip_id, 0,
-            cutline::editor::EffectMaskRow{.shape = cutline::core::MaskShape::Ellipse}));
+            cutline::editor::EffectMaskRow{.shape = cutline::core::MaskShape::Path}));
         // And one of its numbers animated, so a mask row is laid out wearing
         // the whole navigator — stopwatch, both arrows, the marker and the
         // curve picker — rather than the bare slider. It is the widest row the

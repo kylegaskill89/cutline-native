@@ -3,6 +3,8 @@
 #include "compositor_internal.hpp"
 
 #include <algorithm>
+#include <cstring>
+#include <map>
 #include <cmath>
 #include <cstring>
 #include <numbers>
@@ -292,6 +294,57 @@ std::expected<void, std::string> Compositor::Impl::ensure_scratch() {
       gpu().device->CreateShaderResourceView(backdrop.Get(), nullptr,
                                              srv_cpu(scratch_slot(i) + 3));
     }
+  }
+  return {};
+}
+
+std::expected<void, std::string> Compositor::Impl::ensure_mask_points(std::size_t points) {
+  const std::size_t wanted = std::max<std::size_t>(points, 1);
+  if (mask_points && wanted <= mask_points_capacity) return {};
+
+  gpu().wait_for_idle();
+
+  // Grown generously and never shrunk, like the descriptor heap: a frame with
+  // one more corner than the last should not reallocate.
+  const std::size_t capacity = std::max<std::size_t>(64, wanted * 2);
+  const D3D12_HEAP_PROPERTIES heap = heap_of(D3D12_HEAP_TYPE_UPLOAD);
+
+  D3D12_RESOURCE_DESC desc{};
+  desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  desc.Width = static_cast<UINT64>(capacity * sizeof(float) * 2);
+  desc.Height = 1;
+  desc.DepthOrArraySize = 1;
+  desc.MipLevels = 1;
+  desc.SampleDesc.Count = 1;
+  desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+  ComPtr<ID3D12Resource> buffer;
+  if (HRESULT hr = gpu().device->CreateCommittedResource(
+          &heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+          IID_PPV_ARGS(&buffer));
+      FAILED(hr)) {
+    return std::unexpected(
+        std::format("cannot create the mask point buffer: {}", hresult_string(hr)));
+  }
+
+  mask_points = std::move(buffer);
+  mask_points_capacity = capacity;
+
+  // An upload heap read straight by the shader: the points are a handful of
+  // floats rewritten every frame, and a copy to a default-heap buffer would
+  // cost a barrier and a transfer to save a read that is already cached.
+  D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+  view.Format = DXGI_FORMAT_UNKNOWN;
+  view.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+  view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  view.Buffer.NumElements = static_cast<UINT>(capacity);
+  view.Buffer.StructureByteStride = sizeof(float) * 2;
+
+  // Into every run of the table, because a path may be masking any pass of any
+  // layer and the run is chosen by which layer is being drawn.
+  for (UINT i = 0; i < layer_capacity + 3; ++i) {
+    gpu().device->CreateShaderResourceView(mask_points.Get(), &view,
+                                           srv_cpu(i * kSlotsPerLayer + 4));
   }
   return {};
 }
@@ -632,6 +685,36 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
   if (any_passes) {
     if (auto ok = d.ensure_scratch(); !ok) return std::unexpected(ok.error());
   }
+
+  // Every free-drawn mask's corners, gathered into one buffer before anything is
+  // recorded. One buffer for the frame rather than one per pass, because the
+  // command list is recorded once and submitted once — a buffer rewritten
+  // between draws would be read by all of them with whatever it ended up
+  // holding. Each pass is told where its own run starts instead.
+  std::vector<std::array<float, 2>> corners;
+  std::map<const EffectPass*, std::pair<UINT, UINT>> path_runs;
+  for (const Layer& layer : layers) {
+    for (const EffectPass& effect : layer.passes) {
+      if (effect.mask.points.empty()) continue;
+      const auto first = static_cast<UINT>(corners.size());
+      corners.insert(corners.end(), effect.mask.points.begin(), effect.mask.points.end());
+      path_runs.emplace(&effect,
+                        std::pair{first, static_cast<UINT>(effect.mask.points.size())});
+    }
+  }
+  if (!corners.empty()) {
+    if (auto ok = d.ensure_mask_points(corners.size()); !ok) {
+      return std::unexpected(ok.error());
+    }
+    void* mapped = nullptr;
+    const D3D12_RANGE nothing{0, 0};
+    if (HRESULT hr = d.mask_points->Map(0, &nothing, &mapped); FAILED(hr)) {
+      return std::unexpected(
+          std::format("cannot map the mask point buffer: {}", hresult_string(hr)));
+    }
+    std::memcpy(mapped, corners.data(), corners.size() * sizeof(corners[0]));
+    d.mask_points->Unmap(0, nullptr);
+  }
   if (auto ok = d.gpu().begin(); !ok) return std::unexpected(ok.error());
 
   // Uploads go in before any render target is bound, keeping the copies out of
@@ -818,6 +901,11 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
           pass.mask_feather = effect.mask.feather;
           pass.mask_opacity = effect.mask.opacity;
           pass.mask_inverted = effect.mask.inverted;
+
+          if (const auto run = path_runs.find(&effect); run != path_runs.end()) {
+            pass.path_first = static_cast<float>(run->second.first);
+            pass.path_count = static_cast<float>(run->second.second);
+          }
 
           // How wide a tap is depends on the target's size, which is the one
           // thing the plan cannot know — so every pass that samples its

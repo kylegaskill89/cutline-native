@@ -47,6 +47,7 @@ NLOHMANN_JSON_SERIALIZE_ENUM(MaskShape, {
                                             {MaskShape::None, "none"},
                                             {MaskShape::Ellipse, "ellipse"},
                                             {MaskShape::Rectangle, "rectangle"},
+                                            {MaskShape::Path, "path"},
                                         })
 
 NLOHMANN_JSON_SERIALIZE_ENUM(Interp, {
@@ -124,9 +125,18 @@ json write(const TextSpec& s) {
 }
 
 json write(const Mask& m) {
-  return {{"shape", m.shape}, {"x", m.x},           {"y", m.y},
-          {"width", m.width}, {"height", m.height}, {"rotation", m.rotation},
-          {"feather", m.feather}, {"opacity", m.opacity}, {"inverted", m.inverted}};
+  json j{{"shape", m.shape},     {"x", m.x},
+         {"y", m.y},             {"width", m.width},
+         {"height", m.height},   {"rotation", m.rotation},
+         {"feather", m.feather}, {"opacity", m.opacity},
+         {"inverted", m.inverted}};
+  // Only for a path. Every mask carries the field and almost none has corners.
+  if (!m.points.empty()) {
+    json points = json::array();
+    for (const MaskPoint& point : m.points) points.push_back({{"x", point.x}, {"y", point.y}});
+    j["points"] = std::move(points);
+  }
+  return j;
 }
 
 json write(const ClipEffect& e) {
@@ -365,6 +375,14 @@ ClipEffect read_clip_effect(const json& j) {
     e.mask.feather = read_or(*mask, "feather", e.mask.feather);
     e.mask.opacity = read_or(*mask, "opacity", e.mask.opacity);
     e.mask.inverted = read_or(*mask, "inverted", e.mask.inverted);
+    if (const auto points = mask->find("points");
+        points != mask->end() && points->is_array()) {
+      for (const auto& point : *points) {
+        if (!point.is_object() || e.mask.points.size() >= kMaxMaskPoints) continue;
+        e.mask.points.push_back(
+            MaskPoint{.x = read_or(point, "x", 0.0), .y = read_or(point, "y", 0.0)});
+      }
+    }
   }
   return e;
 }

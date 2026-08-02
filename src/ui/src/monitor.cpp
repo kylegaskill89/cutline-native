@@ -202,7 +202,10 @@ void MonitorView::paint_masks(Painter& painter, const Theme& theme) const {
     // is not a rectangle the painter can stroke and a rotated rectangle is not
     // one either. Thirty-two steps is smooth at any size this panel reaches.
     constexpr int kSteps = 32;
-    const int steps = mask.shape == 2 ? 4 : kSteps;
+    const int steps = mask.shape == 3 ? static_cast<int>(mask.points.size())
+                      : mask.shape == 2 ? 4
+                                        : kSteps;
+    if (steps <= 0) continue;
 
     double previous_x = 0.0;
     double previous_y = 0.0;
@@ -210,7 +213,13 @@ void MonitorView::paint_masks(Painter& painter, const Theme& theme) const {
       const double t = static_cast<double>(step) / static_cast<double>(steps);
       double lx = 0.0;
       double ly = 0.0;
-      if (mask.shape == 2) {
+      if (mask.shape == 3) {
+        // Its own corners, in the order they were drawn, closing on the first.
+        const std::pair<double, double>& corner =
+            mask.points[static_cast<std::size_t>(step) % mask.points.size()];
+        lx = corner.first * area.width;
+        ly = corner.second * area.height;
+      } else if (mask.shape == 2) {
         // The four corners, in order, closing back on the first.
         const double corner_x[4] = {-1.0, 1.0, 1.0, -1.0};
         const double corner_y[4] = {-1.0, -1.0, 1.0, 1.0};
@@ -231,6 +240,13 @@ void MonitorView::paint_masks(Painter& painter, const Theme& theme) const {
 
     const Rect grip = mask_grip(i);
     if (!grip.empty()) painter.fill(grip.inset(2.0), 0.0, Fill::solid(grip_ink));
+
+    // A path has a handle on every corner instead: each one is what shapes it,
+    // and a single grip would have nothing to mean.
+    for (std::size_t corner = 0; corner < mask.points.size(); ++corner) {
+      const Rect handle = mask_corner_grip(i, corner);
+      if (!handle.empty()) painter.fill(handle.inset(2.0), 0.0, Fill::solid(grip_ink));
+    }
   }
   painter.pop_clip();
 }
@@ -334,11 +350,53 @@ struct MaskBox {
   return {lx, ly};
 }
 
+/// Whether a point is inside a free-drawn path, by the same even-odd rule the
+/// shader fills it with — so what you can grab and what you can see agree.
+[[nodiscard]] bool inside_path(const MaskOverlay& mask, const Rect& area, double x, double y) {
+  if (mask.points.size() < 3 || area.width <= 0.0 || area.height <= 0.0) return false;
+
+  const auto [lx, ly] = rotate(x - (area.x + mask.x * area.width),
+                               y - (area.y + mask.y * area.height), -to_radians(mask.rotation));
+  const double px = lx / area.width;
+  const double py = ly / area.height;
+
+  bool inside = false;
+  for (std::size_t i = 0, previous = mask.points.size() - 1; i < mask.points.size();
+       previous = i++) {
+    const auto& [cx, cy] = mask.points[i];
+    const auto& [ox, oy] = mask.points[previous];
+    if ((cy > py) != (oy > py)) {
+      const double t = (py - cy) / (oy - cy);
+      if (px < cx + t * (ox - cx)) inside = !inside;
+    }
+  }
+  return inside;
+}
+
 }  // namespace
+
+Rect MonitorView::mask_corner_grip(std::size_t index, std::size_t corner) const {
+  const Rect area = picture();
+  if (area.empty() || index >= masks_.size()) return Rect{};
+
+  const MaskOverlay& mask = masks_[index];
+  if (mask.shape != 3 || corner >= mask.points.size()) return Rect{};
+
+  const auto [ox, oy] = rotate(mask.points[corner].first * area.width,
+                               mask.points[corner].second * area.height,
+                               to_radians(mask.rotation));
+  const double cx = area.x + mask.x * area.width + ox;
+  const double cy = area.y + mask.y * area.height + oy;
+  return Rect{cx - kHandleReach, cy - kHandleReach, kHandleReach * 2.0, kHandleReach * 2.0};
+}
 
 Rect MonitorView::mask_grip(std::size_t index) const {
   const Rect area = picture();
   if (area.empty() || index >= masks_.size()) return Rect{};
+  // A path has no size to grip: its corners are its handles, and one more in
+  // the middle of them would be a handle that means something different from
+  // every other handle on the shape.
+  if (masks_[index].shape == 3) return Rect{};
 
   // The bottom-right corner of the shape's own box, turned with it. One grip
   // rather than four: a mask is symmetric about its centre, so any corner says
@@ -357,6 +415,16 @@ std::optional<std::size_t> MonitorView::mask_at(double x, double y) const {
   // stack follows, and the one that makes the mask on top the one you grab.
   for (std::size_t i = masks_.size(); i-- > 0;) {
     if (mask_grip(i).contains(x, y)) return i;
+
+    if (masks_[i].shape == 3) {
+      // A corner first, then anywhere inside the shape, which moves the whole
+      // path — the same two things the other shapes offer.
+      for (std::size_t corner = 0; corner < masks_[i].points.size(); ++corner) {
+        if (mask_corner_grip(i, corner).contains(x, y)) return i;
+      }
+      if (inside_path(masks_[i], area, x, y)) return i;
+      continue;
+    }
 
     const MaskBox box = mask_box(masks_[i], area);
     if (box.half_w <= 0.0 || box.half_h <= 0.0) continue;
@@ -494,6 +562,16 @@ bool MonitorView::on_mouse_down(const MouseEvent& event) {
   if (const std::optional<std::size_t> mask = mask_at(event.x, event.y); mask.has_value()) {
     mask_dragging_ = mask;
     mask_resizing_ = mask_grip(*mask).contains(event.x, event.y);
+    mask_corner_.reset();
+    // A corner before the shape, so grabbing one of a path's handles reshapes
+    // it rather than moving the whole thing — the same order the layer's own
+    // handles are tested in, and for the same reason.
+    for (std::size_t corner = 0; corner < masks_[*mask].points.size(); ++corner) {
+      if (mask_corner_grip(*mask, corner).contains(event.x, event.y)) {
+        mask_corner_ = corner;
+        break;
+      }
+    }
     mask_origin_ = masks_[*mask];
     press_x_ = event.x;
     press_y_ = event.y;
@@ -528,7 +606,13 @@ void MonitorView::drag_mask(double x, double y) {
   const double dy = (y - press_y_) / area.height;
 
   MaskOverlay next = mask_origin_;
-  if (mask_resizing_) {
+  if (mask_corner_.has_value() && *mask_corner_ < next.points.size()) {
+    // In the path's own frame, so dragging a corner of a turned shape moves it
+    // where the pointer went rather than where the rotation sends it.
+    const auto [lx, ly] = rotate(dx, dy, -to_radians(next.rotation));
+    next.points[*mask_corner_].first = mask_origin_.points[*mask_corner_].first + lx;
+    next.points[*mask_corner_].second = mask_origin_.points[*mask_corner_].second + ly;
+  } else if (mask_resizing_) {
     // In the mask's own frame, so dragging a corner of a turned shape grows it
     // along its own axes rather than the screen's.
     const auto [lx, ly] = rotate(dx, dy, -to_radians(next.rotation));
@@ -546,6 +630,7 @@ bool MonitorView::on_mouse_up(const MouseEvent& event) {
     const std::size_t index = *mask_dragging_;
     mask_dragging_.reset();
     mask_resizing_ = false;
+    mask_corner_.reset();
     if (index < masks_.size() && masks_[index] != mask_origin_ && on_mask_commit_) {
       on_mask_commit_(index, masks_[index]);
     }

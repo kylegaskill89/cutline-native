@@ -1230,6 +1230,85 @@ TEST_F(CompositorTest, AStackThatDoesNotSpreadKeepsTheWholeScratch) {
   EXPECT_EQ(pixel_at(cropped_only, kWidth / 4 + 2, kHeight / 2).a, 255) << "right of it";
 }
 
+TEST_F(CompositorTest, AFreeDrawnPathMasksTheShapeItEncloses) {
+  // The one mask too big for the root constants: its corners go in a buffer and
+  // the pass carries where its run starts. A triangle covering the top-left of
+  // the layer, cropping only what is inside it.
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  EffectPass crop = cropped(0.0f, 0.0f, 0.0f, 0.9f);
+  crop.mask = PassMask{.shape = 3.0f, .x = 0.5f, .y = 0.5f};
+  // Offsets from the mask's centre: a right-angled triangle in the top-left
+  // quarter of the layer.
+  crop.mask.points = {{-0.5f, -0.5f}, {0.0f, -0.5f}, {-0.5f, 0.0f}};
+
+  const std::vector<EffectPass> effects{crop};
+  layer.passes = effects;
+  const Image masked = render({&layer, 1});
+
+  EXPECT_EQ(pixel_at(masked, kWidth / 8, kHeight / 8).a, 0) << "inside the triangle";
+  EXPECT_EQ(pixel_at(masked, kWidth * 7 / 8, kHeight / 8).a, 255) << "outside it, across";
+  EXPECT_EQ(pixel_at(masked, kWidth / 8, kHeight * 7 / 8).a, 255) << "outside it, down";
+  // The far corner of the enclosing square is outside the hypotenuse.
+  EXPECT_EQ(pixel_at(masked, kWidth * 3 / 8, kHeight * 3 / 8).a, 255) << "past the diagonal";
+}
+
+TEST_F(CompositorTest, APathWithTooFewCornersMasksNothing) {
+  // Two points enclose nothing. Treating that as an empty mask would make an
+  // effect vanish while a path was being drawn; treating it as no mask at all
+  // is what the other shapes do when they have no size.
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  EffectPass crop = cropped(0.0f, 0.0f, 0.0f, 0.9f);
+  crop.mask = PassMask{.shape = 3.0f, .x = 0.5f, .y = 0.5f};
+  crop.mask.points = {{-0.4f, -0.4f}, {0.4f, -0.4f}};
+
+  const std::vector<EffectPass> effects{crop};
+  layer.passes = effects;
+  const Image masked = render({&layer, 1});
+
+  EXPECT_EQ(pixel_at(masked, kWidth / 2, kHeight / 8).a, 0)
+      << "the crop should have applied everywhere";
+}
+
+TEST_F(CompositorTest, TwoPathsInOneFrameEachGetTheirOwnCorners) {
+  // Every path in the frame shares one buffer, because the command list is
+  // recorded once — so each pass is told where its own run starts. Getting that
+  // wrong gives both layers the first path's shape.
+  Layer left;
+  left.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  left.quad = {kWidth * 0.25f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
+
+  EffectPass top_left = cropped(0.0f, 0.0f, 0.0f, 0.9f);
+  top_left.mask = PassMask{.shape = 3.0f, .x = 0.5f, .y = 0.5f};
+  top_left.mask.points = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, -0.1f}, {-0.5f, -0.1f}};
+  const std::vector<EffectPass> left_passes{top_left};
+  left.passes = left_passes;
+
+  Layer right;
+  right.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  right.quad = {kWidth * 0.75f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
+
+  EffectPass bottom_right = cropped(0.0f, 0.0f, 0.0f, 0.9f);
+  bottom_right.mask = PassMask{.shape = 3.0f, .x = 0.5f, .y = 0.5f};
+  bottom_right.mask.points = {{-0.5f, 0.1f}, {0.5f, 0.1f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
+  const std::vector<EffectPass> right_passes{bottom_right};
+  right.passes = right_passes;
+
+  const Layer both[] = {left, right};
+  const Image masked = render(both);
+
+  // The left layer loses its top band, the right one loses its bottom band.
+  EXPECT_EQ(pixel_at(masked, kWidth / 4, kHeight / 8).a, 0) << "left, top";
+  EXPECT_EQ(pixel_at(masked, kWidth / 4, kHeight * 7 / 8).a, 255) << "left, bottom";
+  EXPECT_EQ(pixel_at(masked, kWidth * 3 / 4, kHeight / 8).a, 255) << "right, top";
+  EXPECT_EQ(pixel_at(masked, kWidth * 3 / 4, kHeight * 7 / 8).a, 0) << "right, bottom";
+}
+
 TEST_F(CompositorTest, AMaskStaysPutWhenTheStackAlsoBlurs) {
   // The margin means scratch coordinates and the layer's own are no longer the
   // same thing, and a mask is in the layer's. Reading the wrong one would slide

@@ -1085,10 +1085,48 @@ TEST(EffectMask, AnEffectThatIsNotThereChangesNothing) {
 }
 
 TEST(EffectMask, EveryShapeIsOfferedAndNamed) {
-  EXPECT_EQ(mask_shapes().size(), 3u);
+  EXPECT_EQ(mask_shapes().size(), 4u);
   for (const core::MaskShape shape : mask_shapes()) {
     EXPECT_FALSE(mask_shape_name(shape).empty());
   }
+}
+
+TEST(EffectMask, ChoosingFreeDrawGivesAShapeToPullAbout) {
+  // Premiere hands you a pen and an empty frame. A rectangle you can drag from
+  // the first moment is the same feature with nothing to learn first, and the
+  // first corner you move makes it yours.
+  Project p = add_effect(one_clip(), "c1", "blur");
+  p = set_effect_mask(std::move(p), "c1", 0,
+                      EffectMaskRow{.shape = core::MaskShape::Path, .width = 30.0,
+                                    .height = 20.0});
+
+  const core::Mask& mask = only_clip(p).effects[0].mask;
+  EXPECT_EQ(mask.shape, core::MaskShape::Path);
+  ASSERT_EQ(mask.points.size(), 4u);
+  EXPECT_DOUBLE_EQ(mask.points[0].x, -0.3);
+  EXPECT_DOUBLE_EQ(mask.points[0].y, -0.2);
+  EXPECT_DOUBLE_EQ(mask.points[2].x, 0.3);
+  EXPECT_DOUBLE_EQ(mask.points[2].y, 0.2);
+}
+
+TEST(EffectMask, ThePathSurvivesAnEditToEveryOtherNumber) {
+  // The panel's row does not carry the corners, so rewriting the mask from it
+  // would erase a drawn path every time its feather was touched.
+  Project p = add_effect(one_clip(), "c1", "blur");
+  p = set_effect_mask(std::move(p), "c1", 0, EffectMaskRow{.shape = core::MaskShape::Path});
+
+  core::Mask drawn = only_clip(p).effects[0].mask;
+  drawn.points = {core::MaskPoint{-0.4, -0.1}, core::MaskPoint{0.2, -0.3},
+                  core::MaskPoint{0.1, 0.4}};
+  p = core::set_effect_mask(std::move(p), "c1", 0, drawn);
+
+  p = set_effect_mask(std::move(p), "c1", 0,
+                      EffectMaskRow{.shape = core::MaskShape::Path, .feather = 10.0});
+
+  const core::Mask& after = only_clip(p).effects[0].mask;
+  ASSERT_EQ(after.points.size(), 3u) << "the corners were thrown away";
+  EXPECT_DOUBLE_EQ(after.points[1].x, 0.2);
+  EXPECT_DOUBLE_EQ(after.feather, 0.1);
 }
 
 }  // namespace

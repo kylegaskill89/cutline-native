@@ -187,7 +187,27 @@ struct Transition {
 
 /// The shape a mask cuts. `None` is an effect that applies everywhere, which is
 /// what every effect did before there were masks.
-enum class MaskShape { None, Ellipse, Rectangle };
+enum class MaskShape { None, Ellipse, Rectangle, Path };
+
+/// One corner of a free-drawn mask, in fractions of the layer and measured from
+/// the mask's own centre — so the position and rotation above move and turn the
+/// whole path, through exactly the transform the other two shapes go through.
+///
+/// Straight lines between them: a curve is a different feature, and one that
+/// would want a handle either side of every point.
+struct MaskPoint {
+  double x = 0.0;
+  double y = 0.0;
+
+  friend bool operator==(const MaskPoint&, const MaskPoint&) = default;
+};
+
+/// The most points one path may carry.
+///
+/// A cap rather than no cap, because the shape has to reach the shader and the
+/// shader reads it per pixel. Sixty-four is more corners than anybody draws by
+/// hand around a face or a sign, and it keeps the buffer a fixed size.
+inline constexpr std::size_t kMaxMaskPoints = 64;
 
 /// Where one effect applies.
 ///
@@ -225,7 +245,23 @@ struct Mask {
   /// The effect applies *outside* the shape instead. Premiere's Inverted.
   bool inverted = false;
 
+  /// The corners, for `MaskShape::Path` and ignored otherwise. Closed
+  /// implicitly: the last point joins the first, because an open mask is not a
+  /// region and there would be nothing to fill.
+  ///
+  /// Not keyframed. The numbers above are, and a path that animated would want
+  /// a keyframe per point with the points themselves able to come and go — a
+  /// different feature wearing the same word.
+  std::vector<MaskPoint> points;
+
   [[nodiscard]] bool active() const noexcept { return shape != MaskShape::None; }
+
+  /// A path needs three points to enclose anything. Fewer is a shape nobody can
+  /// see, which reads as a mask that has stopped working.
+  [[nodiscard]] bool usable() const noexcept {
+    if (shape != MaskShape::Path) return active();
+    return points.size() >= 3;
+  }
 
   friend bool operator==(const Mask&, const Mask&) = default;
 };

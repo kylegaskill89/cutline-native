@@ -113,6 +113,11 @@ struct PassMask {
   float opacity = 1.0f;
   float inverted = 0.0f;
 
+  /// A free-drawn path's corners, each an offset from the mask's centre in
+  /// fractions of the layer. Empty for every other shape, which is every mask
+  /// that fits in the root constants.
+  std::vector<std::array<float, 2>> points;
+
   friend bool operator==(const PassMask&, const PassMask&) = default;
 };
 

@@ -90,7 +90,12 @@ struct alignas(16) ShaderParams {
   /// How much of the scratch is empty border, per side, as a fraction of it.
   /// Zero for everything that is not a layer being drawn through the passes.
   float margin = 0.0f;
-  float margin_pad = 0.0f;
+  /// A free-drawn path's corners: where they start in the shared point buffer,
+  /// and how many. A path is the one mask too big for the root constants, which
+  /// is the whole reason that buffer exists.
+  float path_first = 0.0f;
+  float path_count = 0.0f;
+  float path_pad[2]{};  ///< to the next sixteen-byte row, which HLSL requires
 };
 
 /// The most of the scratch a margin may take, per side.
@@ -100,13 +105,14 @@ struct alignas(16) ShaderParams {
 /// each side leaves the layer three fifths of the scratch, which is the point
 /// where the softness it buys stops being worth the sharpness it costs.
 inline constexpr float kMaxScratchMargin = 0.2f;
-static_assert(sizeof(ShaderParams) == 48 * sizeof(float),
+static_assert(sizeof(ShaderParams) == 52 * sizeof(float),
               "root constants must match the shader's cbuffer exactly");
 
 inline constexpr UINT kShaderParamCount = sizeof(ShaderParams) / sizeof(float);
 
-/// The descriptor table every pass binds: three plane slots plus a backdrop.
-inline constexpr UINT kSlotsPerLayer = 4;
+/// The descriptor table every pass binds: three plane slots, a backdrop, and
+/// the shared buffer of mask-path corners.
+inline constexpr UINT kSlotsPerLayer = 5;
 
 /// Builds the root signature both the compositor and the presenter use.
 [[nodiscard]] std::expected<ComPtr<ID3D12RootSignature>, std::string> create_root_signature(

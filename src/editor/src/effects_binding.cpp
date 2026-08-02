@@ -55,6 +55,10 @@ namespace {
 /// number in this panel keeps.
 constexpr double kEffectPercent = 100.0;
 
+/// The smallest half-extent a seeded path starts with, so choosing Free Draw on
+/// a mask that had been squashed to nothing still gives something to grab.
+constexpr double kMinPathExtent = 0.05;
+
 /// The mask as a panel reads it.
 [[nodiscard]] EffectMaskRow mask_row(const core::Mask& mask) {
   return EffectMaskRow{
@@ -183,7 +187,7 @@ std::vector<EffectParamRow> mask_param_rows(const core::ClipEffect& effect, doub
 
 std::span<const core::MaskShape> mask_shapes() noexcept {
   static constexpr std::array kShapes{core::MaskShape::None, core::MaskShape::Ellipse,
-                                      core::MaskShape::Rectangle};
+                                      core::MaskShape::Rectangle, core::MaskShape::Path};
   return kShapes;
 }
 
@@ -192,24 +196,45 @@ std::string_view mask_shape_name(core::MaskShape shape) noexcept {
     case core::MaskShape::None: return "None";
     case core::MaskShape::Ellipse: return "Ellipse";
     case core::MaskShape::Rectangle: return "Rectangle";
+    case core::MaskShape::Path: return "Free Draw";
   }
   return "None";
 }
 
 core::Project set_effect_mask(core::Project project, std::string_view clip_id,
                               std::size_t index, const EffectMaskRow& row) {
-  return core::set_effect_mask(std::move(project), clip_id, index,
-                               core::Mask{
-                                   .shape = row.shape,
-                                   .x = row.x / kEffectPercent,
-                                   .y = row.y / kEffectPercent,
-                                   .width = row.width / kEffectPercent,
-                                   .height = row.height / kEffectPercent,
-                                   .rotation = row.rotation,
-                                   .feather = row.feather / kEffectPercent,
-                                   .opacity = row.opacity / kEffectPercent,
-                                   .inverted = row.inverted,
-                               });
+  core::Mask mask{
+      .shape = row.shape,
+      .x = row.x / kEffectPercent,
+      .y = row.y / kEffectPercent,
+      .width = row.width / kEffectPercent,
+      .height = row.height / kEffectPercent,
+      .rotation = row.rotation,
+      .feather = row.feather / kEffectPercent,
+      .opacity = row.opacity / kEffectPercent,
+      .inverted = row.inverted,
+  };
+
+  // The corners survive a change to any other number, because the panel's row
+  // does not carry them and rewriting the mask from it would otherwise erase a
+  // path every time its feather was touched.
+  if (const core::ClipEffect* effect = effect_at(project, clip_id, index); effect != nullptr) {
+    mask.points = effect->mask.points;
+  }
+
+  // A path chosen with no corners yet starts as the rectangle it replaces, so
+  // there is a shape on the picture to pull about. Premiere hands you a pen and
+  // an empty frame; a shape you can drag from the first moment is the same
+  // feature with nothing to learn first, and the first corner you move makes it
+  // yours.
+  if (mask.shape == core::MaskShape::Path && mask.points.size() < 3) {
+    const double half_w = std::max(kMinPathExtent, mask.width);
+    const double half_h = std::max(kMinPathExtent, mask.height);
+    mask.points = {core::MaskPoint{-half_w, -half_h}, core::MaskPoint{half_w, -half_h},
+                   core::MaskPoint{half_w, half_h}, core::MaskPoint{-half_w, half_h}};
+  }
+
+  return core::set_effect_mask(std::move(project), clip_id, index, std::move(mask));
 }
 
 core::Project clear_effect_mask(core::Project project, std::string_view clip_id,

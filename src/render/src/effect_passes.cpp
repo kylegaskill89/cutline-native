@@ -186,8 +186,28 @@ EffectPass threshold_pass(float level) noexcept {
   return pass;
 }
 
-PassMask pass_mask(const core::Mask& mask) noexcept {
-  if (!mask.active()) return PassMask{};
+namespace {
+
+/// A path's corners as the shader wants them, and nothing for the other shapes.
+[[nodiscard]] std::vector<std::array<float, 2>> path_points(const core::Mask& mask) {
+  if (mask.shape != core::MaskShape::Path) return {};
+
+  std::vector<std::array<float, 2>> out;
+  out.reserve(std::min(mask.points.size(), core::kMaxMaskPoints));
+  for (const core::MaskPoint& point : mask.points) {
+    if (out.size() >= core::kMaxMaskPoints) break;
+    out.push_back({static_cast<float>(point.x), static_cast<float>(point.y)});
+  }
+  return out;
+}
+
+}  // namespace
+
+PassMask pass_mask(const core::Mask& mask) {
+  // A path with fewer than three corners encloses nothing, which on screen is a
+  // mask that has stopped working rather than one being drawn — so it masks
+  // nothing at all until the third point lands.
+  if (!mask.usable()) return PassMask{};
 
   const double radians = mask.rotation * std::numbers::pi / 180.0;
   return PassMask{
@@ -201,6 +221,7 @@ PassMask pass_mask(const core::Mask& mask) noexcept {
       .feather = static_cast<float>(std::max(0.0, mask.feather)),
       .opacity = static_cast<float>(std::clamp(mask.opacity, 0.0, 1.0)),
       .inverted = mask.inverted ? 1.0f : 0.0f,
+      .points = path_points(mask),
   };
 }
 
