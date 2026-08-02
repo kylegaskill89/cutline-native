@@ -6466,6 +6466,10 @@ template <typename T>
           app.session.apply(cutline::editor::add_audio_effect(app.session.project(), audio_clip,
                                                               choice.type));
         }
+        // The panner animated, so its row is laid out with the keyframe
+        // controls on it rather than only in its resting arrangement.
+        app.session.apply(cutline::editor::set_clip_parameter_animated(
+            app.session.project(), audio_clip, cutline::editor::ClipParam::Pan, true, 0.0));
         refresh_inspector(app);
         app.main.host->update_layout(context);
         app.main.host->paint(*painter, theme);

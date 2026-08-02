@@ -68,6 +68,13 @@ Project set_clip_gain(Project p, std::string_view clip_id, double gain) {
   return p;
 }
 
+Project set_clip_pan(Project p, std::string_view clip_id, double pan) {
+  Clip* c = find_clip(p, clip_id);
+  if (c == nullptr) return p;
+  c->pan = std::clamp(pan, -1.0, 1.0);
+  return p;
+}
+
 Project set_canvas(Project p, int width, int height) {
   p.canvas_w = std::clamp(width, kMinCanvas, kMaxCanvas);
   p.canvas_h = std::clamp(height, kMinCanvas, kMaxCanvas);

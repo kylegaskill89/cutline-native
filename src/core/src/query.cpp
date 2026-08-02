@@ -95,6 +95,10 @@ double animated_opacity(const Clip& c, double local_t) noexcept {
 
 double animated_value(const Clip& c, AnimProp prop, double local_t) noexcept {
   if (prop == AnimProp::Opacity) return animated_opacity(c, local_t);
+  // Not part of the transform, and it is the only animatable property that is
+  // about sound rather than picture. Handled here rather than being smuggled
+  // into `Transform` as a field the compositor would then have to ignore.
+  if (prop == AnimProp::Pan) return pan_at(c, local_t);
   const Transform tr = animated_transform(c, local_t);
   switch (prop) {
     case AnimProp::X:
@@ -112,9 +116,16 @@ double animated_value(const Clip& c, AnimProp prop, double local_t) noexcept {
     case AnimProp::AnchorY:
       return tr.anchor_y;
     case AnimProp::Opacity:
+    case AnimProp::Pan:
       break;
   }
-  return tr.x;  // unreachable; Opacity is handled above
+  return tr.x;  // unreachable; Opacity and Pan are handled above
+}
+
+double pan_at(const Clip& c, double local_t) noexcept {
+  const std::vector<Keyframe>& kfs = c.keyframes[anim_prop_index(AnimProp::Pan)];
+  const double v = kfs.empty() ? c.pan : eval_keyframes(kfs, local_t);
+  return std::clamp(v, -1.0, 1.0);
 }
 
 bool is_gain_animated(const Clip& c) noexcept { return !c.gain_keyframes.empty(); }

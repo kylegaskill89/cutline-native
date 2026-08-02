@@ -38,6 +38,7 @@ constexpr std::array<ClipParam, 8> kMotionParams{
     case ClipParam::Rotation: return core::AnimProp::Rotation;
     case ClipParam::AnchorX: return core::AnimProp::AnchorX;
     case ClipParam::AnchorY: return core::AnimProp::AnchorY;
+    case ClipParam::Pan: return core::AnimProp::Pan;
     default: return std::nullopt;
   }
 }
@@ -119,8 +120,13 @@ KeyframeModel clip_keyframes(const core::Project& project, std::string_view clip
     add(ParamRef{.param = param}, std::string(param_name(param)),
         clip->keyframes[core::anim_prop_index(*prop)]);
   }
+  // The two audio properties, after the picture ones and in the order the
+  // inspector shows them. Gain is not in `kMotionParams` because it does not
+  // live in the keyframe array; pan is not because it is not motion.
   add(ParamRef{.param = ClipParam::Gain}, std::string(param_name(ClipParam::Gain)),
       clip->gain_keyframes);
+  add(ParamRef{.param = ClipParam::Pan}, std::string(param_name(ClipParam::Pan)),
+      clip->keyframes[core::anim_prop_index(core::AnimProp::Pan)]);
 
   for (std::size_t i = 0; i < clip->effects.size(); ++i) {
     const core::ClipEffect& effect = clip->effects[i];

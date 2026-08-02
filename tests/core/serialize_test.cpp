@@ -62,6 +62,7 @@ Project rich_project() {
   c.group_id = "g1";
   c.gain = 0.75;
   c.gain_keyframes = {{.t = 0.0, .v = 0.2, .e = Interp::Ease}, {.t = 4.0, .v = 1.0}};
+  c.pan = -0.25;
   c.opacity = 0.9;
   c.fade_in = 0.5;
   c.fade_out = 0.25;
@@ -81,6 +82,7 @@ Project rich_project() {
                                                {.t = 2.0, .v = 1.0}};
   c.keyframes[anim_prop_index(AnimProp::Opacity)] = {{.t = 1.0, .v = 0.5}};
   c.keyframes[anim_prop_index(AnimProp::AnchorY)] = {{.t = 0.0, .v = 0.5}, {.t = 3.0, .v = 0.0}};
+  c.keyframes[anim_prop_index(AnimProp::Pan)] = {{.t = 0.0, .v = -1.0}, {.t = 2.0, .v = 1.0}};
 
   ClipEffect blur;
   blur.type = "blur";
@@ -158,6 +160,7 @@ TEST(Serialize, AbsentFieldsFallBackToDefaults) {
 
   const Clip& c = p.tracks[0].clips[0];
   EXPECT_DOUBLE_EQ(c.gain, 1.0);
+  EXPECT_DOUBLE_EQ(c.pan, 0.0) << "a file written before there was a panner is centred";
   EXPECT_DOUBLE_EQ(c.opacity, 1.0);
   EXPECT_DOUBLE_EQ(c.speed, 1.0);
   EXPECT_EQ(c.blend, BlendMode::Normal);

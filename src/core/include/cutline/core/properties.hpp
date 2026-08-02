@@ -35,6 +35,17 @@ namespace cutline::core {
 /// Sets the clip's linear audio gain, clamped to the allowed range.
 [[nodiscard]] Project set_clip_gain(Project p, std::string_view clip_id, double gain);
 
+/// Sets where the clip sits across the stereo image: -1 hard left, 0 centred,
+/// 1 hard right. Clamped to that range.
+///
+/// Balance rather than a constant-power pan. What the mixer has in front of it
+/// is an interleaved stereo bus, and turning that bus is a matter of letting
+/// one side through less — a constant-power law belongs to placing a *mono*
+/// source in a field, which is a different control on a different signal.
+/// Centre is therefore untouched rather than pulled down 3 dB, which is what
+/// keeps every project made before there was a panner sounding the same.
+[[nodiscard]] Project set_clip_pan(Project p, std::string_view clip_id, double pan);
+
 /// Sets a fade duration, clamped so the two fades together never exceed the
 /// clip's length.
 [[nodiscard]] Project set_clip_fade(Project p, std::string_view clip_id, ClipEdge edge,

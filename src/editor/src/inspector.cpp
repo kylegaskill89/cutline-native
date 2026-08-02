@@ -48,6 +48,7 @@ constexpr double kSliderMaxSpeed = 4.0;
     case ClipParam::Rotation: return core::AnimProp::Rotation;
     case ClipParam::AnchorX: return core::AnimProp::AnchorX;
     case ClipParam::AnchorY: return core::AnimProp::AnchorY;
+    case ClipParam::Pan: return core::AnimProp::Pan;
     default: return std::nullopt;
   }
 }
@@ -62,6 +63,9 @@ constexpr double kSliderMaxSpeed = 4.0;
     case ClipParam::Opacity:
     case ClipParam::ScaleX:
     case ClipParam::ScaleY:
+    // -100 to 100, which is what Premiere's panner reads and what the two ends
+    // of it are called: L100 and R100.
+    case ClipParam::Pan:
       return kPercent;
     default:
       return 1.0;
@@ -200,6 +204,7 @@ std::string_view to_string(ClipParam param) noexcept {
     case ClipParam::AnchorY: return "anchor_y";
     case ClipParam::Speed: return "speed";
     case ClipParam::Gain: return "gain";
+    case ClipParam::Pan: return "pan";
     case ClipParam::FadeIn: return "fade_in";
     case ClipParam::FadeOut: return "fade_out";
   }
@@ -221,6 +226,9 @@ std::string_view param_name(ClipParam param) noexcept {
     // Volume rather than Gain: it is what the control is called everywhere
     // else, and the row shows decibels.
     case ClipParam::Gain: return "Volume";
+    // Premiere's word for it on a stereo clip, and this is a balance rather
+    // than a pan — see `core::set_clip_pan`.
+    case ClipParam::Pan: return "Balance";
     case ClipParam::FadeIn: return "Fade In";
     case ClipParam::FadeOut: return "Fade Out";
   }
@@ -349,6 +357,15 @@ std::vector<ParamSpec> clip_parameters(const core::Project& project, std::string
                             // Unity, which is where a volume control resets to.
                             .fallback = 0.0,
                             .suffix = "dB"});
+
+    // The panner. Under Volume, where Premiere puts it, and with no unit: L and
+    // R are the unit and they are at the ends of the travel rather than after
+    // the number.
+    out.push_back(ParamSpec{.param = ClipParam::Pan,
+                            .name = std::string(param_name(ClipParam::Pan)),
+                            .range = {.minimum = -100.0, .maximum = 100.0},
+                            .value = clip->pan * kPercent,
+                            .fallback = 0.0});
   }
 
   out.push_back(ParamSpec{.param = ClipParam::Speed,
@@ -430,6 +447,9 @@ core::Project set_clip_parameter(core::Project project, std::string_view clip_id
 
     case ClipParam::Gain:
       return core::set_clip_gain(std::move(project), clip_id, gain_stored(value));
+
+    case ClipParam::Pan:
+      return core::set_clip_pan(std::move(project), clip_id, value / kPercent);
 
     case ClipParam::FadeIn:
       return core::set_clip_fade(std::move(project), clip_id, core::ClipEdge::In, value);

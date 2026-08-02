@@ -314,6 +314,16 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
       // Gain and fades before the effects, matching the reference's chain.
       const auto gain = static_cast<float>(render::audio_gain_at(voice.planned, now));
       for (std::size_t c = 0; c < channels; ++c) impl_->voice_block[i * channels + c] *= gain;
+
+      // The panner, on the two sides of a stereo bus and nothing else. A bus
+      // with one channel has no sides to balance, and one with more than two
+      // has sides this control does not name — turning only the first two of a
+      // 5.1 mix would be worse than leaving it alone.
+      if (channels == 2) {
+        const render::StereoGain pan = render::audio_pan_at(voice.planned, now);
+        impl_->voice_block[i * channels] *= static_cast<float>(pan.left);
+        impl_->voice_block[i * channels + 1] *= static_cast<float>(pan.right);
+      }
     }
 
     voice.chain.process(impl_->voice_block);

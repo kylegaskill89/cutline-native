@@ -99,6 +99,11 @@ struct SourceRange {
 /// present and the constant gain otherwise. Clamped to 0..kMaxGain.
 [[nodiscard]] double gain_at(const Clip& c, double local_t) noexcept;
 
+/// Where the clip sits across the stereo image at clip-local `local_t`, from
+/// automation when present and the constant pan otherwise. Clamped to -1..1,
+/// where -1 is hard left and 1 hard right.
+[[nodiscard]] double pan_at(const Clip& c, double local_t) noexcept;
+
 /// Whether an audio track is heard: not muted, and — if any audio track is
 /// soloed — only soloed tracks play.
 [[nodiscard]] bool is_track_audible(const Project& p, const Track& track) noexcept;

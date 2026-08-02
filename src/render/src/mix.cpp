@@ -97,6 +97,18 @@ double audio_gain_at(const PlannedAudioClip& planned, double t) noexcept {
   return std::max(gain, 0.0);
 }
 
+StereoGain audio_pan_at(const PlannedAudioClip& planned, double t) noexcept {
+  if (planned.clip == nullptr) return {};
+
+  const double local = t - planned.start;
+  const double pan = core::pan_at(*planned.clip, local);
+
+  // Balance: one side is let through less and the other is left alone. Centre
+  // is exactly unity on both, so a project made before there was a panner
+  // sounds the same to the sample.
+  return {.left = pan > 0.0 ? 1.0 - pan : 1.0, .right = pan < 0.0 ? 1.0 + pan : 1.0};
+}
+
 double audio_source_time_at(const PlannedAudioClip& planned, double t) noexcept {
   if (planned.clip == nullptr) return 0.0;
   const double wanted = core::source_time_at(*planned.clip, t);

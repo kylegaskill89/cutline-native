@@ -290,6 +290,55 @@ TEST(AudioGain, AutomationAndFadesCombine) {
   EXPECT_NEAR(audio_gain_at(only(p), 9.0), 0.25, 1e-9);
 }
 
+// -------------------------------------------------------------------- pan --
+//
+// Balance, not constant power: one side is let through less and the other is
+// left alone. The centre being exactly unity on both sides is the property that
+// matters most — it is what makes every project written before there was a
+// panner sound the same to the sample.
+
+TEST(AudioPan, CentredIsUnityOnBothSides) {
+  const Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
+  EXPECT_EQ(audio_pan_at(only(p), 2.0), (StereoGain{.left = 1.0, .right = 1.0}));
+}
+
+TEST(AudioPan, HardLeftSilencesTheRightAndLeavesTheLeftAlone) {
+  Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
+  p.tracks[0].clips[0].pan = -1.0;
+  const StereoGain gain = audio_pan_at(only(p), 2.0);
+  EXPECT_DOUBLE_EQ(gain.left, 1.0) << "no boost, ever";
+  EXPECT_DOUBLE_EQ(gain.right, 0.0);
+}
+
+TEST(AudioPan, HalfRightTrimsTheLeftByHalf) {
+  Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
+  p.tracks[0].clips[0].pan = 0.5;
+  const StereoGain gain = audio_pan_at(only(p), 2.0);
+  EXPECT_DOUBLE_EQ(gain.left, 0.5);
+  EXPECT_DOUBLE_EQ(gain.right, 1.0);
+}
+
+TEST(AudioPan, IsAutomatedInClipLocalTime) {
+  Project p = project({audio_track("a1", {clip("c", "m", 10.0, 10.0)})});
+  p = core::set_keyframe(std::move(p), "c", core::AnimProp::Pan, 0.0, -1.0);
+  p = core::set_keyframe(std::move(p), "c", core::AnimProp::Pan, 10.0, 1.0);
+
+  // Timeline 15 is local 5, which is the middle of the sweep.
+  EXPECT_NEAR(audio_pan_at(only(p), 10.0).right, 0.0, 1e-9);
+  EXPECT_NEAR(audio_pan_at(only(p), 15.0).left, 1.0, 1e-9);
+  EXPECT_NEAR(audio_pan_at(only(p), 15.0).right, 1.0, 1e-9);
+  EXPECT_NEAR(audio_pan_at(only(p), 20.0).left, 0.0, 1e-9);
+}
+
+TEST(AudioPan, DoesNotFade) {
+  // The fades belong to the gain. A clip fading out does not also drift across
+  // the image, which is what multiplying the ramp in here would do.
+  Project p = project({audio_track("a1", {clip("c", "m", 0.0, 10.0)})});
+  p.tracks[0].clips[0].fade_out = 2.0;
+  p.tracks[0].clips[0].pan = -0.5;
+  EXPECT_EQ(audio_pan_at(only(p), 2.0), audio_pan_at(only(p), 9.0));
+}
+
 // ------------------------------------------------------------ source time --
 
 TEST(AudioSourceTime, TracksTheTimelineThroughTheTrim) {

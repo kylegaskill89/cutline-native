@@ -54,13 +54,13 @@ enum class ClipEdge { In, Out };
 /// The enumerators double as indices into `Clip::keyframes`.
 /// New enumerators go on the *end*: a saved file names its keyframe lists
 /// rather than numbering them, but everything in memory indexes by position.
-enum class AnimProp { X, Y, ScaleX, ScaleY, Rotation, Opacity, AnchorX, AnchorY };
+enum class AnimProp { X, Y, ScaleX, ScaleY, Rotation, Opacity, AnchorX, AnchorY, Pan };
 
-inline constexpr std::size_t kAnimPropCount = 8;
+inline constexpr std::size_t kAnimPropCount = 9;
 
 inline constexpr std::array<AnimProp, kAnimPropCount> kAnimProps{
-    AnimProp::X,       AnimProp::Y,        AnimProp::ScaleX,  AnimProp::ScaleY,
-    AnimProp::Rotation, AnimProp::Opacity, AnimProp::AnchorX, AnimProp::AnchorY,
+    AnimProp::X,        AnimProp::Y,       AnimProp::ScaleX,  AnimProp::ScaleY, AnimProp::Rotation,
+    AnimProp::Opacity,  AnimProp::AnchorX, AnimProp::AnchorY, AnimProp::Pan,
 };
 
 [[nodiscard]] constexpr std::size_t anim_prop_index(AnimProp prop) noexcept {
@@ -232,6 +232,12 @@ struct Clip {
   double gain = 1.0;
   /// Volume automation, clip-local. Non-empty overrides `gain`.
   std::vector<Keyframe> gain_keyframes;
+
+  /// Where the clip sits across the stereo image: -1 hard left, 0 centred,
+  /// 1 hard right. Automated through `AnimProp::Pan` rather than a list of its
+  /// own, unlike gain — gain predates the keyframe array and keeps its own
+  /// list for that reason alone.
+  double pan = 0.0;
 
   double opacity = 1.0;
   /// Fade durations in seconds — alpha for video, gain for audio.

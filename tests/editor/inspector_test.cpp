@@ -488,6 +488,57 @@ TEST(AnchorPoint, IsNotOfferedForAudio) {
   EXPECT_FALSE(has(specs, ClipParam::AnchorY));
 }
 
+// -------------------------------------------------------------- balance --
+//
+// Shown -100 to 100 because that is what a panner reads, stored -1 to 1.
+
+TEST(Balance, IsOfferedOnAudioAndNotOnPicture) {
+  const Project p = sample_project();
+  EXPECT_TRUE(has(clip_parameters(p, "a1c"), ClipParam::Pan));
+  EXPECT_FALSE(has(clip_parameters(p, "c1"), ClipParam::Pan));
+}
+
+TEST(Balance, StartsCentredAndReadsInHundredths) {
+  const std::optional<ParamSpec> row =
+      find(clip_parameters(sample_project(), "a1c"), ClipParam::Pan);
+  ASSERT_TRUE(row.has_value());
+  EXPECT_DOUBLE_EQ(row->value, 0.0);
+  EXPECT_DOUBLE_EQ(row->fallback, 0.0);
+  EXPECT_DOUBLE_EQ(row->range.minimum, -100.0);
+  EXPECT_DOUBLE_EQ(row->range.maximum, 100.0);
+}
+
+TEST(Balance, WritesTheFractionTheModelStores) {
+  Project p = set_clip_parameter(sample_project(), "a1c", ClipParam::Pan, -50.0);
+  EXPECT_DOUBLE_EQ(p.tracks[1].clips.front().pan, -0.5);
+  EXPECT_DOUBLE_EQ(find(clip_parameters(p, "a1c"), ClipParam::Pan)->value, -50.0);
+}
+
+TEST(Balance, CannotBeDraggedPastEitherEnd) {
+  const Project p = set_clip_parameter(sample_project(), "a1c", ClipParam::Pan, 400.0);
+  EXPECT_DOUBLE_EQ(p.tracks[1].clips.front().pan, 1.0);
+}
+
+TEST(Balance, CanBeAnimated) {
+  Project p = set_clip_parameter_animated(sample_project(), "a1c", ClipParam::Pan, true, 0.0);
+  p = set_clip_parameter(std::move(p), "a1c", ClipParam::Pan, 100.0, 4.0);
+
+  const std::optional<ParamSpec> row = find(clip_parameters(p, "a1c", 2.0), ClipParam::Pan);
+  ASSERT_TRUE(row.has_value());
+  EXPECT_TRUE(row->animated);
+  EXPECT_DOUBLE_EQ(row->value, 50.0) << "halfway across";
+  // And the stored value is left alone, the way every animated property is.
+  EXPECT_DOUBLE_EQ(p.tracks[1].clips.front().pan, 0.0);
+}
+
+TEST(Balance, ComesAfterVolume) {
+  const std::vector<ParamSpec> specs = clip_parameters(sample_project(), "a1c");
+  const auto index = [&specs](ClipParam param) {
+    return std::ranges::find(specs, param, &ParamSpec::param) - specs.begin();
+  };
+  EXPECT_GT(index(ClipParam::Pan), index(ClipParam::Gain));
+}
+
 TEST(Inspector, TurningTheStopwatchOffKeepsTheValueAtThatTime) {
   Project p = set_clip_parameter(sample_project(), "c1", ClipParam::Opacity, 0.0);
   p = set_clip_parameter_animated(std::move(p), "c1", ClipParam::Opacity, true, 0.0);

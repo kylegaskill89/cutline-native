@@ -34,6 +34,7 @@ enum class ClipParam {
   AnchorY,
   Speed,
   Gain,
+  Pan,
   FadeIn,
   FadeOut,
 };

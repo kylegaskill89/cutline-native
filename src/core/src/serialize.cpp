@@ -54,7 +54,7 @@ namespace {
 /// Keyframe lists are stored under property names rather than array positions,
 /// so reordering the AnimProp enumerators cannot silently reinterpret a file.
 constexpr std::array<const char*, kAnimPropCount> kAnimPropNames{
-    "x", "y", "scale_x", "scale_y", "rotation", "opacity", "anchor_x", "anchor_y",
+    "x", "y", "scale_x", "scale_y", "rotation", "opacity", "anchor_x", "anchor_y", "pan",
 };
 
 // ------------------------------------------------------------------ writing --
@@ -158,6 +158,7 @@ json write(const Clip& c) {
          {"source_out", c.source_out},
          {"start", c.start},
          {"gain", c.gain},
+         {"pan", c.pan},
          {"opacity", c.opacity},
          {"fade_in", c.fade_in},
          {"fade_out", c.fade_out},
@@ -366,6 +367,7 @@ Clip read_clip(const json& j) {
   c.start = read_or(j, "start", 0.0);
   c.group_id = read_optional<std::string>(j, "group_id");
   c.gain = read_or(j, "gain", 1.0);
+  c.pan = read_or(j, "pan", 0.0);
   c.opacity = read_or(j, "opacity", 1.0);
   c.fade_in = read_or(j, "fade_in", 0.0);
   c.fade_out = read_or(j, "fade_out", 0.0);

@@ -67,6 +67,24 @@ struct PlannedAudioClip {
 /// ends up quiet, not merely one of the two.
 [[nodiscard]] double audio_gain_at(const PlannedAudioClip& planned, double t) noexcept;
 
+/// What a clip's pan does to the two sides of the bus.
+struct StereoGain {
+  double left = 1.0;
+  double right = 1.0;
+
+  friend bool operator==(const StereoGain&, const StereoGain&) = default;
+};
+
+/// The clip's pan at timeline time `t`, as a gain for each side.
+///
+/// Balance, not a constant-power pan: one side is let through less and the
+/// other left alone, so a centred clip is untouched. See `set_clip_pan` for
+/// why that is the right law for what the mixer actually has in front of it.
+///
+/// Separate from `audio_gain_at` because it is a different shape of answer and
+/// because the fades belong to the gain: a pan does not fade.
+[[nodiscard]] StereoGain audio_pan_at(const PlannedAudioClip& planned, double t) noexcept;
+
 /// The source time playing at timeline time `t`, clamped inside the clip's
 /// trim so a rounding error at a boundary cannot pull in audio from beyond it.
 [[nodiscard]] double audio_source_time_at(const PlannedAudioClip& planned, double t) noexcept;

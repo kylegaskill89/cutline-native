@@ -139,6 +139,18 @@ class ToneSource {
   return std::sqrt(sum / static_cast<double>(samples.size()));
 }
 
+/// The same, over one side of the stereo bus only. What a panner is judged by:
+/// the two channels stop being the same signal.
+[[nodiscard]] double rms_of_channel(const std::vector<float>& samples, std::size_t channel) {
+  double sum = 0.0;
+  std::size_t counted = 0;
+  for (std::size_t i = channel; i < samples.size(); i += kChannels) {
+    sum += static_cast<double>(samples[i]) * samples[i];
+    ++counted;
+  }
+  return counted == 0 ? 0.0 : std::sqrt(sum / static_cast<double>(counted));
+}
+
 /// A full-scale sine has an RMS of its amplitude over root two.
 [[nodiscard]] double expected_rms(double amplitude) {
   return amplitude / std::numbers::sqrt2;
@@ -187,6 +199,51 @@ TEST(AudioMixer, GainScalesTheClip) {
   const auto samples = mix_span(*mixer, 0.0, 2.0);
   std::vector<float> settled(samples.begin() + kRate, samples.end());
   EXPECT_NEAR(rms_of(settled), expected_rms(kToneAmplitude * 0.5), 0.03);
+}
+
+TEST(AudioMixer, PanningHardLeftEmptiesTheRightAndLeavesTheLeftAlone) {
+  Project p = one_clip_project();
+  p.tracks[0].clips[0].pan = -1.0;
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  const auto samples = mix_span(*mixer, 0.0, 2.0);
+  std::vector<float> settled(samples.begin() + kRate * kChannels, samples.end());
+
+  // Balance rather than constant power: the side that stays is at exactly the
+  // level it had, not three decibels above it.
+  EXPECT_NEAR(rms_of_channel(settled, 0), expected_rms(kToneAmplitude), 0.03);
+  EXPECT_LT(rms_of_channel(settled, 1), 0.001);
+}
+
+TEST(AudioMixer, PanningHalfRightTrimsTheLeftByHalf) {
+  Project p = one_clip_project();
+  p.tracks[0].clips[0].pan = 0.5;
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  const auto samples = mix_span(*mixer, 0.0, 2.0);
+  std::vector<float> settled(samples.begin() + kRate * kChannels, samples.end());
+
+  EXPECT_NEAR(rms_of_channel(settled, 0), expected_rms(kToneAmplitude * 0.5), 0.03);
+  EXPECT_NEAR(rms_of_channel(settled, 1), expected_rms(kToneAmplitude), 0.03);
+}
+
+TEST(AudioMixer, ACentredClipIsUntouchedByThePanner) {
+  // The property that matters most: every project made before there was a
+  // panner has to sound exactly as it did.
+  auto plain = mixer_for(one_clip_project());
+  ASSERT_NE(plain, nullptr);
+  const auto before = mix_span(*plain, 0.0, 2.0);
+
+  Project p = one_clip_project();
+  p.tracks[0].clips[0].pan = 0.0;
+  auto panned = mixer_for(p);
+  ASSERT_NE(panned, nullptr);
+  const auto after = mix_span(*panned, 0.0, 2.0);
+
+  ASSERT_EQ(before.size(), after.size());
+  for (std::size_t i = 0; i < before.size(); ++i) ASSERT_FLOAT_EQ(before[i], after[i]) << i;
 }
 
 TEST(AudioMixer, NothingIsHeardBeforeOrAfterAClip) {
