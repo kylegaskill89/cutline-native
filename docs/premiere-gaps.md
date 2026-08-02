@@ -310,10 +310,12 @@ not match one made after:
 - **The keyer sees the stack.** It used to read the unmodified pixel always. Now
   it reads whatever precedes it, and putting it first is how to get the old
   behaviour.
-- **Blur is in the layer's own pixels**, so scaling a layer scales its blur, and
-  it softens the layer's edge inwards rather than spreading past the quad.
-  Premiere spreads past it. That needs a margin around the scratch and is
-  **owed**.
+- **Blur is in the layer's own pixels**, so scaling a layer scales its blur —
+  and it spreads past the quad the way Premiere's does. A stack that spreads
+  draws the layer smaller, into the middle of the scratch, and the composite
+  grows the quad back by the same factor: the picture lands where it would have,
+  with room around it to reach into. The margin is sized to the reach of the
+  widest spreading pass, so a stack that does not spread pays nothing.
 - **Flip is a pass**, so it sits somewhere in the stack rather than being
   applied to the quad before everything else.
 
@@ -416,7 +418,6 @@ than four:
 | | Where | Size |
 |---|---|---|
 | A free-draw mask path | §1.4 | machinery |
-| A margin round the effect scratch, so a blur spreads past the quad | §1.3 | machinery |
 | Catalogue depth beyond twenty | §1.5 | one branch each, now |
 
 Everything else that was listed is done: paired X/Y, a visible reset per row,
@@ -441,9 +442,8 @@ a keyframe when the property is animated — found on screen, where a drag moved
 the outline and the render ignored it.
 
 **The shape of what is left.** The structural work is finished and so is the
-feature list. What remains is one follow-up the mask turned up, one the pass
-chain turned up, and as much catalogue as anybody wants — which is now a branch
-at a time rather than a budget.
+feature list. What remains is the pen path, and as much catalogue as anybody
+wants — which is now a branch at a time rather than a budget.
 
 Bins also turned up a fault nobody had noticed in the tree they live in: a
 folder heading ignored its own depth, so a category inside a category started

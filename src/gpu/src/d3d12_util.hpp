@@ -87,8 +87,19 @@ struct alignas(16) ShaderParams {
 
   float mask_opacity = 1.0f;
   float mask_inverted = 0.0f;
-  float mask_pad[2]{};
+  /// How much of the scratch is empty border, per side, as a fraction of it.
+  /// Zero for everything that is not a layer being drawn through the passes.
+  float margin = 0.0f;
+  float margin_pad = 0.0f;
 };
+
+/// The most of the scratch a margin may take, per side.
+///
+/// A margin is resolution the layer does not get, so an enormous blur has to
+/// stop asking for more at some point and start being clipped instead. A fifth
+/// each side leaves the layer three fifths of the scratch, which is the point
+/// where the softness it buys stops being worth the sharpness it costs.
+inline constexpr float kMaxScratchMargin = 0.2f;
 static_assert(sizeof(ShaderParams) == 48 * sizeof(float),
               "root constants must match the shader's cbuffer exactly");
 

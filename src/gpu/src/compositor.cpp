@@ -737,6 +737,37 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     // between the two, and this is the one to read next.
     int held = 0;
 
+    // How much empty border the scratch needs, per side, as a fraction of it.
+    //
+    // A blur has to be able to spread past the layer the way Premiere's does,
+    // and it can only spread into pixels that exist — so a stack that spreads
+    // draws the layer smaller, into the middle of the scratch, and the
+    // composite grows the quad back by the same factor.
+    //
+    // Sized to the reach of the widest spreading pass rather than to some fixed
+    // amount, so a layer that does not spread pays nothing and one that does
+    // loses exactly the resolution it needed to. Measured against the shorter
+    // side, so the margin is at least that many pixels on both axes.
+    //
+    // The layer then occupies `span` of the scratch, which makes the blur wider
+    // relative to it — so the reach it needs is `3σ·span`, and the fraction
+    // solves to r/(1+2r).
+    float margin = 0.0f;
+    if (through_passes) {
+      const auto shorter = static_cast<float>(std::min(d.width, d.height));
+      float reach = 0.0f;
+      for (const EffectPass& effect : layer.passes) {
+        if (effect.kind != PassKind::Blur && effect.kind != PassKind::DirectionalBlur) continue;
+        reach = std::max(reach, 3.0f * std::max(0.0f, effect.values[0]));
+      }
+      if (reach > 0.0f && shorter > 0.0f) {
+        const float r = reach / shorter;
+        margin = std::min(kMaxScratchMargin, r / (1.0f + 2.0f * r));
+      }
+    }
+    const float span = 1.0f - 2.0f * margin;
+    params.margin = margin;
+
     if (through_passes) {
       const D3D12_CPU_DESCRIPTOR_HANDLE scratch_rtv[2] = {d.rtv(kScratchRtv),
                                                           d.rtv(kScratchRtv + 1)};
@@ -798,7 +829,11 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
             // Taps are spread over three sigma, where a Gaussian has
             // effectively fallen to nothing, and the stride widens to cover
             // that with a bounded number of them.
-            const float sigma = effect.values[0];
+            // Scaled by the span: sigma is in the layer's own pixels, and the
+            // margin made those smaller in the scratch. Without this the blur
+            // would widen every time the margin grew, which is a loop.
+            const float sigma = effect.values[0] * span;
+            pass.pass_a[0] = sigma;
             const float radius = std::max(1.0f, 3.0f * sigma);
             const float stride = std::max(1.0f, radius / static_cast<float>(kBlurTaps));
             pass.pass_a[1] = stride;
@@ -812,7 +847,7 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
               pass.pass_a[3] = std::sin(angle) * stride * texel_y;
             }
           } else if (effect.kind == PassKind::Sharpen) {
-            const float radius = std::max(0.0f, effect.values[1]);
+            const float radius = std::max(0.0f, effect.values[1]) * span;
             pass.pass_a[2] = radius * texel_x;
             pass.pass_a[3] = radius * texel_y;
           }

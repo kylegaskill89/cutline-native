@@ -120,10 +120,30 @@ struct Params {
 
     float maskOpacity;
     float maskInverted;
-    float2 maskPad;
+    // How much of the scratch is empty border, per side, as a fraction of it.
+    //
+    // A blur has to be able to spread *past* the layer, the way Premiere's
+    // does, and it can only spread into pixels that exist. So a layer whose
+    // stack contains a spreading pass is drawn smaller, into the middle of the
+    // scratch, and the composite grows the quad back by the same amount — the
+    // picture lands exactly where it would have, with room around it for the
+    // blur to reach into. Zero when nothing in the stack spreads, which is
+    // almost every stack, and costs the layer nothing.
+    float margin;
+    float marginPad;
 };
 
+
 ConstantBuffer<Params> params : register(b0);
+/// Scratch coordinates to the layer's own, which is what every pass that means
+/// something *geometric* works in: a crop, a vignette, a mask.
+///
+/// Sampling still uses the scratch's own uv. The two are the same thing without
+/// a margin, and the moment there is one they are not.
+float2 layerUv(float2 uv) {
+    const float span = 1.0 - 2.0 * params.margin;
+    return span > 0.0 ? (uv - params.margin) / span : uv;
+}
 
 // One table of four slots serves every pass, so the bindings are named for
 // their position rather than their meaning:
@@ -168,9 +188,17 @@ VSOutput VSLayer(uint vertexId : SV_VertexID) {
     };
     const float2 corner = corners[vertexId];
 
+    // Grown by the margin, so the empty border the scratch was given is drawn
+    // rather than cropped away — that border is where a blur has spread to. The
+    // layer's own pixels land exactly where they would have without one, since
+    // the growth is about the centre and the picture inside the scratch shrank
+    // by the same factor.
+    const float span = 1.0 - 2.0 * params.margin;
+    const float grown = span > 0.0 ? 1.0 / span : 1.0;
+
     // Canvas y runs downwards, so the ordinary rotation matrix already turns
     // clockwise on screen, matching how rotation is stored.
-    const float2 local = corner * params.size;
+    const float2 local = corner * params.size * grown;
     const float2 rotated = float2(
         local.x * params.rotation.x - local.y * params.rotation.y,
         local.x * params.rotation.y + local.y * params.rotation.x);
@@ -619,7 +647,11 @@ float4 PSEffect(VSOutput input) : SV_Target {
     } else if (params.passKind == PASS_FLIP) {
         // A mirror in texture space, which is why it survives the rotation the
         // composite applies afterwards rather than fighting it.
-        const float2 mirrored = (input.uv - 0.5) * params.passA.xy + 0.5;
+        // Mirrored about the *layer's* centre, not the scratch's, or a margin
+        // would slide the picture sideways as well as flipping it.
+        const float2 span = float2(1.0, 1.0) - 2.0 * params.margin;
+        const float2 mirrored = (layerUv(input.uv) - 0.5) * params.passA.xy * span
+                              + 0.5 * span + params.margin;
         after = texture0.Sample(linearSampler, mirrored);
     } else {
         after = before;
@@ -631,10 +663,10 @@ float4 PSEffect(VSOutput input) : SV_Target {
             // In linear light and back, because a vignette is a light falloff.
             // Done on coded values it would darken the midtones far more than
             // the ends, which is not what the filter it is named after does.
-            const float3 linearRgb = linearizeSrgb(after.rgb) * vignetteFactor(input.uv);
+            const float3 linearRgb = linearizeSrgb(after.rgb) * vignetteFactor(layerUv(input.uv));
             after.rgb = encodeSrgb(linearRgb);
         } else if (params.passKind == PASS_CROP) {
-            if (!insideCrop(input.uv)) after.a = 0.0;
+            if (!insideCrop(layerUv(input.uv))) after.a = 0.0;
         } else if (params.passKind == PASS_CHROMAKEY) {
             after.a *= chromaKeyAlpha(after.rgb);
         } else if (params.passKind == PASS_LEVELS) {
@@ -659,7 +691,7 @@ float4 PSEffect(VSOutput input) : SV_Target {
     // what was there, by how much of this pixel the mask covers. An effect
     // never has to know it is masked, which is what makes masking something the
     // whole catalogue gets rather than something each entry implements.
-    const float coverage = maskCoverage(input.uv);
+    const float coverage = maskCoverage(layerUv(input.uv));
     if (coverage >= 1.0) return after;
     return lerp(before, after, coverage);
 }
@@ -674,7 +706,14 @@ float4 PSEffect(VSOutput input) : SV_Target {
 /// positioned, and it moves the rotation and the scaling to the very end, where
 /// they cost one filtering step instead of one per pass.
 float4 PSSource(VSOutput input) : SV_Target {
-    return codedSource(input.uv);
+    const float2 layer = layerUv(input.uv);
+    // The border is genuinely empty rather than a clamped edge pixel: it is
+    // what a blur spreads into, and a smeared copy of the edge would be a
+    // border that glows instead of one that fades.
+    if (layer.x < 0.0 || layer.x > 1.0 || layer.y < 0.0 || layer.y > 1.0) {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+    return codedSource(layer);
 }
 
 /// The same, for an adjustment layer, whose source is whatever is beneath it.
@@ -683,7 +722,7 @@ float4 PSSource(VSOutput input) : SV_Target {
 /// walks the quad's transform forwards for each scratch texel: exactly what
 /// `VSLayer` does to a corner, done per pixel.
 float4 PSAdjustSource(VSOutput input) : SV_Target {
-    const float2 local = (input.uv - 0.5) * params.size;
+    const float2 local = (layerUv(input.uv) - 0.5) * params.size;
     const float2 rotated = float2(
         local.x * params.rotation.x - local.y * params.rotation.y,
         local.x * params.rotation.y + local.y * params.rotation.x);

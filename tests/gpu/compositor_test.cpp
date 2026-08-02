@@ -1079,12 +1079,6 @@ TEST_F(CompositorTest, AnUnmaskedPassStillAppliesEverywhere) {
 TEST_F(CompositorTest, BlurSoftensTheLayersOwnEdge) {
   // A half-covering white quad has a vertical edge down the middle. Blurring
   // must turn that step into a ramp.
-  //
-  // The ramp is *inside* the quad, not across it. A pass runs over the layer in
-  // its own space, so a blur has the layer to work with and nothing else — it
-  // softens the layer's edge inwards rather than growing the layer outwards.
-  // Premiere spreads past the edge instead, which needs a margin around the
-  // scratch that this does not have yet.
   Layer layer;
   layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
   layer.quad = {kWidth * 0.25f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
@@ -1101,6 +1095,79 @@ TEST_F(CompositorTest, BlurSoftensTheLayersOwnEdge) {
   EXPECT_LT(just_inside, 255) << "the edge should have become a ramp";
   EXPECT_GT(just_inside, 0) << "and not have vanished";
   EXPECT_EQ(pixel_at(soft, kWidth / 4, kHeight / 2).a, 255) << "well inside is untouched";
+}
+
+TEST_F(CompositorTest, ABlurSpreadsPastTheLayersEdge) {
+  // Premiere's does, and for a while ours could not: a pass sees the layer
+  // alone, filling the scratch edge to edge, so there were no pixels outside it
+  // to spread into and the softening went inwards only.
+  //
+  // A stack that spreads now draws the layer smaller, into the middle of the
+  // scratch, and the composite grows the quad back by the same factor — the
+  // picture lands where it would have, with room around it to reach into.
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.25f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
+
+  ASSERT_EQ(pixel_at(render({&layer, 1}), kWidth / 2 + 3, kHeight / 2).a, 0)
+      << "nothing outside the quad to begin with";
+
+  const std::vector<EffectPass> effects{blurred_by(4.0f)};
+  layer.passes = effects;
+  const Image soft = render({&layer, 1});
+
+  EXPECT_GT(pixel_at(soft, kWidth / 2 + 3, kHeight / 2).a, 0)
+      << "the blur stopped dead at the edge of the quad";
+  // And it fades with distance rather than filling the frame.
+  EXPECT_LT(pixel_at(soft, kWidth / 2 + 6, kHeight / 2).a,
+            pixel_at(soft, kWidth / 2 + 3, kHeight / 2).a);
+  EXPECT_EQ(pixel_at(soft, kWidth - 2, kHeight / 2).a, 0) << "it reached the far side";
+}
+
+TEST_F(CompositorTest, AStackThatDoesNotSpreadKeepsTheWholeScratch) {
+  // The margin is resolution the layer does not get, so it is only taken when
+  // something asks for it. A crop is a hard edge in the layer's own space and
+  // has to stay exactly where it was put whether or not anything else in the
+  // stack spreads.
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  const std::vector<EffectPass> effects{cropped(0.25f, 0.0f, 0.0f, 0.0f)};
+  layer.passes = effects;
+  const Image cropped_only = render({&layer, 1});
+
+  EXPECT_EQ(pixel_at(cropped_only, kWidth / 4 - 2, kHeight / 2).a, 0) << "left of the crop";
+  EXPECT_EQ(pixel_at(cropped_only, kWidth / 4 + 2, kHeight / 2).a, 255) << "right of it";
+}
+
+TEST_F(CompositorTest, AMaskStaysPutWhenTheStackAlsoBlurs) {
+  // The margin means scratch coordinates and the layer's own are no longer the
+  // same thing, and a mask is in the layer's. Reading the wrong one would slide
+  // every mask sideways the moment a blur was added to the stack.
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  // A crop masked to the left half: the right half keeps its picture whatever
+  // the crop says, because the mask does not cover it.
+  EffectPass crop = cropped(0.0f, 0.0f, 0.9f, 0.0f);
+  crop.mask = PassMask{.shape = 2.0f, .x = 0.25f, .y = 0.5f, .width = 0.25f, .height = 0.5f};
+
+  const std::vector<EffectPass> alone{crop};
+  layer.passes = alone;
+  const Image without = render({&layer, 1});
+
+  const std::vector<EffectPass> with_blur{crop, blurred_by(3.0f)};
+  layer.passes = with_blur;
+  const Image with = render({&layer, 1});
+
+  // The masked crop bites out of the left quarter in both, and the far right is
+  // untouched in both. A mask that had slid would fail one of the two.
+  EXPECT_EQ(pixel_at(without, kWidth / 4, kHeight / 2).a, 0);
+  EXPECT_LT(pixel_at(with, kWidth / 4, kHeight / 2).a, 128) << "the mask moved";
+  EXPECT_EQ(pixel_at(without, kWidth - 4, kHeight / 2).a, 255);
+  EXPECT_GT(pixel_at(with, kWidth - 4, kHeight / 2).a, 128) << "the mask moved the other way";
 }
 
 TEST_F(CompositorTest, TheSameEffectsInADifferentOrderGiveADifferentPicture) {
