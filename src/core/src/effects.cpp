@@ -198,6 +198,52 @@ Project clear_effect_keyframes(Project p, std::string_view clip_id, std::size_t 
   return p;
 }
 
+// -------------------------------------------- audio effect param keyframes --
+
+Project set_audio_effect_keyframe(Project p, std::string_view clip_id, std::size_t index,
+                                  std::string key, double local_t, double v) {
+  AudioClipEffect* effect = find_audio_effect(p, clip_id, index);
+  if (effect == nullptr) return p;
+  upsert_keyframe(effect->keyframes[std::move(key)], local_t, v);
+  return p;
+}
+
+Interp audio_effect_keyframe_interp_of(const AudioClipEffect& effect,
+                                       std::string_view key) noexcept {
+  const auto it = effect.keyframes.find(std::string(key));
+  return it == effect.keyframes.end() ? Interp::Linear : keyframe_list_interp(it->second);
+}
+
+Project set_audio_effect_keyframe_interp(Project p, std::string_view clip_id, std::size_t index,
+                                         std::string_view key, Interp mode) {
+  AudioClipEffect* effect = find_audio_effect(p, clip_id, index);
+  if (effect == nullptr) return p;
+  const auto it = effect->keyframes.find(std::string(key));
+  if (it == effect->keyframes.end()) return p;
+  set_keyframe_list_interp(it->second, mode);
+  return p;
+}
+
+Project remove_audio_effect_keyframe_at(Project p, std::string_view clip_id, std::size_t index,
+                                        std::string_view key, double local_t) {
+  AudioClipEffect* effect = find_audio_effect(p, clip_id, index);
+  if (effect == nullptr) return p;
+  const auto it = effect->keyframes.find(std::string(key));
+  if (it == effect->keyframes.end()) return p;
+  remove_keyframe_near(it->second, local_t);
+  // An emptied parameter stops being animated, falling back to its static value.
+  if (it->second.empty()) effect->keyframes.erase(it);
+  return p;
+}
+
+Project clear_audio_effect_keyframes(Project p, std::string_view clip_id, std::size_t index,
+                                     std::string_view key) {
+  AudioClipEffect* effect = find_audio_effect(p, clip_id, index);
+  if (effect == nullptr) return p;
+  effect->keyframes.erase(std::string(key));
+  return p;
+}
+
 // ------------------------------------------------------------ audio stack --
 
 Project add_audio_effect(Project p, std::string_view clip_id, std::string type,

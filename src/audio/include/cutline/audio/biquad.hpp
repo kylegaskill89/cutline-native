@@ -57,6 +57,15 @@ class Biquad {
   /// Filters a contiguous run of single-channel samples in place.
   void process(std::span<float> samples) noexcept;
 
+  /// Takes `shape`'s coefficients and keeps its own history.
+  ///
+  /// What an animated parameter needs: the filter has to become a different
+  /// filter without forgetting the samples it has already seen, because those
+  /// samples really did precede the ones about to arrive. Assigning a freshly
+  /// built filter over this one would zero the state instead, which is heard as
+  /// a click every time the block boundary moves the cutoff.
+  void retune(const Biquad& shape) noexcept;
+
   /// Forgets the filter's history. Needed whenever playback jumps, since the
   /// state describes samples that are no longer what came before.
   void reset() noexcept;

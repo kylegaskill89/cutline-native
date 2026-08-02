@@ -95,6 +95,7 @@ Project rich_project() {
   AudioClipEffect eq;
   eq.type = "equalizer";
   eq.params = {{"freq", 1000.0}, {"gain", -3.0}};
+  eq.keyframes["freq"] = {{.t = 0.0, .v = 200.0}, {.t = 2.0, .v = 8000.0, .e = Interp::Ease}};
   c.audio_effects = {eq};
 
   Track v;

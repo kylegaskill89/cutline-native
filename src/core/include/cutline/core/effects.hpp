@@ -109,6 +109,30 @@ namespace cutline::core {
 [[nodiscard]] Project set_audio_effect_param(Project p, std::string_view clip_id,
                                              std::size_t index, std::string key, double value);
 
+// -------------------------------------------- audio effect param keyframes --
+//
+// The same four operations the visual stack has, on the same shape of map. They
+// are separate functions rather than one templated pair because the two stacks
+// are separate types in the model and a caller always knows which it means.
+
+[[nodiscard]] Project set_audio_effect_keyframe(Project p, std::string_view clip_id,
+                                                std::size_t index, std::string key,
+                                                double local_t, double v);
+
+[[nodiscard]] Interp audio_effect_keyframe_interp_of(const AudioClipEffect& effect,
+                                                     std::string_view key) noexcept;
+
+[[nodiscard]] Project set_audio_effect_keyframe_interp(Project p, std::string_view clip_id,
+                                                       std::size_t index, std::string_view key,
+                                                       Interp mode);
+
+[[nodiscard]] Project remove_audio_effect_keyframe_at(Project p, std::string_view clip_id,
+                                                      std::size_t index, std::string_view key,
+                                                      double local_t);
+
+[[nodiscard]] Project clear_audio_effect_keyframes(Project p, std::string_view clip_id,
+                                                   std::size_t index, std::string_view key);
+
 /// The audio counterparts of `append_clip_effects` and `clear_clip_effects`.
 /// Both stacks are pasted by one gesture, so both need the same pair.
 [[nodiscard]] Project append_audio_effects(Project p, std::string_view clip_id,

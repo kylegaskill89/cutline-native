@@ -205,6 +205,13 @@ struct AudioClipEffect {
   std::string type;
   bool enabled = true;
   std::map<std::string, double> params;
+  /// Per-parameter animation, exactly as `ClipEffect` has it. An animated
+  /// parameter's `params` entry is ignored in favour of its keyframes.
+  ///
+  /// The sound is retuned at block boundaries rather than per sample: a filter
+  /// carries state that assumes its own coefficients, and moving them under it
+  /// every sample is how an IIR filter is made to ring.
+  std::map<std::string, std::vector<Keyframe>> keyframes;
 
   friend bool operator==(const AudioClipEffect&, const AudioClipEffect&) = default;
 };

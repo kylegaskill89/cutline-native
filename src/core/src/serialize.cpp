@@ -125,6 +125,11 @@ json write(const ClipEffect& e) {
 json write(const AudioClipEffect& e) {
   json j{{"type", e.type}, {"enabled", e.enabled}};
   put_unless_empty(j, "params", e.params);
+  if (!e.keyframes.empty()) {
+    json kfs = json::object();
+    for (const auto& [key, list] : e.keyframes) kfs[key] = write(list);
+    j["keyframes"] = std::move(kfs);
+  }
   return j;
 }
 
@@ -321,6 +326,11 @@ AudioClipEffect read_audio_effect(const json& j) {
   e.type = read_or(j, "type", std::string{});
   e.enabled = read_or(j, "enabled", true);
   e.params = read_or(j, "params", std::map<std::string, double>{});
+
+  const auto kfs = j.find("keyframes");
+  if (kfs != j.end() && kfs->is_object()) {
+    for (const auto& [key, list] : kfs->items()) e.keyframes[key] = read_keyframes(list);
+  }
   return e;
 }
 

@@ -203,7 +203,7 @@ core::Project set_effect_parameter_interp(core::Project project, std::string_vie
 // ------------------------------------------------------------ audio stack --
 
 std::vector<EffectRow> clip_audio_effects(const core::Project& project,
-                                          std::string_view clip_id) {
+                                          std::string_view clip_id, double local_t) {
   const core::Clip* clip = core::find_clip(project, clip_id);
   if (clip == nullptr) return {};
 
@@ -235,14 +235,107 @@ std::vector<EffectRow> clip_audio_effects(const core::Project& project,
           // Through the registry rather than straight off the map, so a
           // parameter the stored effect does not carry reads as its default
           // instead of as zero.
-          .value = audio::audio_effect_param(effect, param.key),
+          .value = audio::audio_effect_param(effect, param.key, local_t),
           .fallback = param.fallback,
           .suffix = std::string(param.unit),
       });
+
+      EffectParamRow& row_param = row.params.back();
+      row_param.animated = audio::audio_effect_param_animated(effect, param.key);
+      if (row_param.animated) {
+        const auto keys = effect.keyframes.find(std::string(param.key));
+        row_param.keyed_here =
+            keys != effect.keyframes.end() &&
+            std::ranges::any_of(keys->second, [local_t](const core::Keyframe& frame) {
+              return std::abs(frame.t - local_t) <= core::kKeyframeMatchEps;
+            });
+        row_param.interp = core::audio_effect_keyframe_interp_of(effect, param.key);
+      }
     }
     rows.push_back(std::move(row));
   }
   return rows;
+}
+
+namespace {
+
+/// The audio effect at `index`, or null.
+[[nodiscard]] const core::AudioClipEffect* audio_effect_at(const core::Project& project,
+                                                           std::string_view clip_id,
+                                                           std::size_t index) {
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr || index >= clip->audio_effects.size()) return nullptr;
+  return &clip->audio_effects[index];
+}
+
+}  // namespace
+
+core::Project set_audio_effect_parameter(core::Project project, std::string_view clip_id,
+                                         std::size_t index, std::string_view key, double value,
+                                         double local_t) {
+  const core::AudioClipEffect* effect = audio_effect_at(project, clip_id, index);
+  if (effect == nullptr) return project;
+
+  if (audio::audio_effect_param_animated(*effect, key)) {
+    return core::set_audio_effect_keyframe(std::move(project), clip_id, index, std::string(key),
+                                           local_t, value);
+  }
+  return core::set_audio_effect_param(std::move(project), clip_id, index, std::string(key),
+                                      value);
+}
+
+core::Project set_audio_effect_parameter_animated(core::Project project,
+                                                  std::string_view clip_id, std::size_t index,
+                                                  std::string_view key, bool animated,
+                                                  double local_t) {
+  const core::AudioClipEffect* effect = audio_effect_at(project, clip_id, index);
+  if (effect == nullptr) return project;
+
+  const bool already = audio::audio_effect_param_animated(*effect, key);
+  if (already == animated) return project;
+
+  // Read before either edit, so pressing the stopwatch changes nothing about
+  // the sound at this instant — the same contract every other stopwatch keeps.
+  const double current = audio::audio_effect_param(*effect, key, local_t);
+
+  if (animated) {
+    return core::set_audio_effect_keyframe(std::move(project), clip_id, index, std::string(key),
+                                           local_t, current);
+  }
+
+  project = core::clear_audio_effect_keyframes(std::move(project), clip_id, index, key);
+  return core::set_audio_effect_param(std::move(project), clip_id, index, std::string(key),
+                                      current);
+}
+
+core::Project toggle_audio_effect_keyframe(core::Project project, std::string_view clip_id,
+                                           std::size_t index, std::string_view key,
+                                           double local_t) {
+  const core::AudioClipEffect* effect = audio_effect_at(project, clip_id, index);
+  if (effect == nullptr) return project;
+  // Not animated: there is no list to add to, and silently starting one here
+  // would make the stopwatch and this marker mean the same thing.
+  if (!audio::audio_effect_param_animated(*effect, key)) return project;
+
+  const auto keys = effect->keyframes.find(std::string(key));
+  if (keys != effect->keyframes.end() &&
+      std::ranges::any_of(keys->second, [local_t](const core::Keyframe& frame) {
+        return std::abs(frame.t - local_t) <= core::kKeyframeMatchEps;
+      })) {
+    return core::remove_audio_effect_keyframe_at(std::move(project), clip_id, index, key,
+                                                 local_t);
+  }
+  return core::set_audio_effect_keyframe(std::move(project), clip_id, index, std::string(key),
+                                         local_t, audio::audio_effect_param(*effect, key,
+                                                                            local_t));
+}
+
+core::Project set_audio_effect_parameter_interp(core::Project project, std::string_view clip_id,
+                                                std::size_t index, std::string_view key,
+                                                core::Interp mode) {
+  const core::AudioClipEffect* effect = audio_effect_at(project, clip_id, index);
+  if (effect == nullptr || !audio::audio_effect_param_animated(*effect, key)) return project;
+  return core::set_audio_effect_keyframe_interp(std::move(project), clip_id, index, key, mode);
 }
 
 std::vector<EffectChoice> addable_audio_effects() {
@@ -361,6 +454,11 @@ core::Project reset_audio_effect(core::Project project, std::string_view clip_id
   if (def == nullptr) return project;
 
   for (const audio::AudioEffectParamDef& param : def->params) {
+    // Keyframes first. Setting an animated parameter writes a keyframe rather
+    // than the stored value, so a reset that left the animation running would
+    // put one keyframe at the playhead holding the default and leave the rest
+    // of the sweep exactly as it was.
+    project = core::clear_audio_effect_keyframes(std::move(project), clip_id, index, param.key);
     project = core::set_audio_effect_param(std::move(project), clip_id, index,
                                            std::string(param.key), param.fallback);
   }

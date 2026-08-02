@@ -47,10 +47,23 @@ struct AudioEffectDef {
 /// without the effect it names.
 [[nodiscard]] const AudioEffectDef* audio_effect_def(std::string_view id) noexcept;
 
-/// A parameter's value, falling back to the registry default when absent or
-/// not finite. Missing is not zero — an absent cutoff means 100 Hz, not DC.
+/// A parameter's value at clip-local time `local_t`, falling back to the
+/// registry default when absent or not finite. Missing is not zero — an absent
+/// cutoff means 100 Hz, not DC.
+///
+/// An animated parameter is read from its keyframes and its stored value is
+/// ignored, exactly as the visual side works.
 [[nodiscard]] double audio_effect_param(const core::AudioClipEffect& effect,
-                                        std::string_view key) noexcept;
+                                        std::string_view key, double local_t = 0.0) noexcept;
+
+/// Whether a parameter is driven by keyframes rather than by its stored value.
+[[nodiscard]] bool audio_effect_param_animated(const core::AudioClipEffect& effect,
+                                               std::string_view key) noexcept;
+
+/// Whether anything in a stack is animated, so a caller can tell a chain that
+/// never needs retuning from one that does.
+[[nodiscard]] bool audio_effects_animated(
+    std::span<const core::AudioClipEffect> effects) noexcept;
 
 /// A clip's effect stack, realised as something that can process samples.
 ///
@@ -67,8 +80,26 @@ class EffectChain {
   EffectChain(const EffectChain&) = delete;
   EffectChain& operator=(const EffectChain&) = delete;
 
+  /// Builds the stack as it stands at clip-local time `local_t`.
+  ///
+  /// A stage whose parameters make it neutral is dropped — unless the parameter
+  /// that makes it neutral is animated, in which case it is kept, because a
+  /// stage dropped at build time can never come back and a gain sweeping up
+  /// from nothing starts at nothing.
   [[nodiscard]] static EffectChain build(std::span<const core::AudioClipEffect> effects,
-                                         double sample_rate, int channels);
+                                         double sample_rate, int channels,
+                                         double local_t = 0.0);
+
+  /// Re-reads every animated parameter at `local_t` and retunes the stages,
+  /// keeping their state.
+  ///
+  /// Meant to be called once per block. Doing it per sample would be both
+  /// expensive and wrong: recomputing an IIR filter's coefficients under state
+  /// that assumes the old ones is how a filter is made to ring.
+  void retune(double local_t) noexcept;
+
+  /// True when nothing in the stack is animated, so `retune` would do nothing.
+  [[nodiscard]] bool fixed() const noexcept;
 
   /// Processes one interleaved block in place. Splitting a buffer across calls
   /// gives the same samples as processing it whole, which is what lets the

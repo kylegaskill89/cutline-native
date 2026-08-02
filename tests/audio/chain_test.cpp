@@ -218,6 +218,98 @@ TEST(EffectChain, ProcessingIsUnaffectedByBlockBoundaries) {
   for (std::size_t i = 0; i < whole.size(); ++i) EXPECT_FLOAT_EQ(split[i], whole[i]) << "at " << i;
 }
 
+// ------------------------------------------------------------- automation --
+//
+// An animated parameter is read at a clip-local time and the stages are retuned
+// without being rebuilt. The two things worth pinning down are that the sweep
+// actually reaches the far end, and that retuning does not throw away the
+// filter state — a filter that forgot its history at every grid step would
+// click rather than sweep.
+
+[[nodiscard]] core::AudioClipEffect animated(std::string type, std::string key,
+                                             std::vector<core::Keyframe> keys) {
+  core::AudioClipEffect e = effect(std::move(type));
+  e.keyframes[std::move(key)] = std::move(keys);
+  return e;
+}
+
+TEST(EffectChainAutomation, AKeyframedParameterIsReadAtTheTimeAsked) {
+  // A cutoff sweeping from 200 Hz to 8 kHz over four seconds. At the start a
+  // 500 Hz tone is through the pass band; at the end it is well below the
+  // corner and mostly gone.
+  const auto stack = std::vector{
+      animated("highpass", "freq", {{.t = 0.0, .v = 200.0}, {.t = 4.0, .v = 8000.0}})};
+
+  auto early = EffectChain::build(stack, kRate, kChannels, 0.0);
+  auto tone = stereo_sine(500.0);
+  early.process(tone);
+  EXPECT_GT(settled_peak(tone), 0.5);
+
+  auto late = EffectChain::build(stack, kRate, kChannels, 4.0);
+  auto same = stereo_sine(500.0);
+  late.process(same);
+  EXPECT_LT(settled_peak(same), 0.2);
+}
+
+TEST(EffectChainAutomation, RetuningReachesTheSamePlaceAsBuildingThere) {
+  const auto stack = std::vector{
+      animated("gain", "gain", {{.t = 0.0, .v = 0.0}, {.t = 4.0, .v = -12.0}})};
+
+  auto swept = EffectChain::build(stack, kRate, kChannels, 0.0);
+  swept.retune(4.0);
+  auto a = stereo_sine(1000.0);
+  swept.process(a);
+
+  auto built = EffectChain::build(stack, kRate, kChannels, 4.0);
+  auto b = stereo_sine(1000.0);
+  built.process(b);
+
+  EXPECT_NEAR(settled_peak(a), settled_peak(b), 1e-4);
+}
+
+TEST(EffectChainAutomation, RetuningAFilterKeepsItsHistory) {
+  // The whole reason `Biquad::retune` exists. Retuning to the coefficients it
+  // already has must be a no-op; assigning a freshly built filter over it would
+  // zero the state instead, and the output would jump.
+  const auto stack = std::vector{
+      animated("lowpass", "freq", {{.t = 0.0, .v = 800.0}, {.t = 4.0, .v = 800.0}})};
+
+  auto retuned = EffectChain::build(stack, kRate, kChannels, 0.0);
+  auto steady = EffectChain::build(stack, kRate, kChannels, 0.0);
+
+  auto a = stereo_sine(1000.0, 1.0, 1024);
+  auto b = a;
+  const std::span<float> all(a);
+  for (std::size_t at = 0; at < 1024; at += 64) {
+    retuned.retune(static_cast<double>(at) / kRate);
+    retuned.process(all.subspan(at * kChannels, 64 * kChannels));
+  }
+  steady.process(b);
+
+  for (std::size_t i = 0; i < a.size(); ++i) ASSERT_FLOAT_EQ(a[i], b[i]) << "at " << i;
+}
+
+TEST(EffectChainAutomation, AnAnimatedNeutralEffectIsKeptRatherThanDropped) {
+  // A gain sweeping up from silence is neutral at the instant the chain is
+  // built. Dropped there, it could never come back: a stage that does not exist
+  // cannot appear halfway through a block.
+  const auto stack = std::vector{
+      animated("gain", "gain", {{.t = 0.0, .v = 0.0}, {.t = 4.0, .v = 12.0}})};
+
+  auto chain = EffectChain::build(stack, kRate, kChannels, 0.0);
+  EXPECT_FALSE(chain.empty());
+  EXPECT_FALSE(chain.fixed());
+
+  chain.retune(4.0);
+  auto samples = stereo_sine(1000.0, 0.1);
+  chain.process(samples);
+  EXPECT_NEAR(settled_peak(samples), 0.1 * db_to_linear(12.0), 0.01);
+}
+
+TEST(EffectChainAutomation, AStackWithNoKeyframesSaysSo) {
+  EXPECT_TRUE(chain_of({effect("highpass", {{"freq", 500.0}})}).fixed());
+}
+
 TEST(EffectChain, ResetReturnsTheChainToItsInitialState) {
   auto chain = chain_of({effect("highpass", {{"freq", 400.0}})});
 

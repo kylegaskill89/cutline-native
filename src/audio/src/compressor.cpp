@@ -26,6 +26,15 @@ Compressor::Compressor(CompressorSettings settings, double sample_rate, int chan
   settings_.knee_db = std::max(settings_.knee_db, 0.0);
 }
 
+void Compressor::retune(CompressorSettings settings, double sample_rate) noexcept {
+  settings_ = settings;
+  attack_coefficient_ = coefficient_for(settings_.attack_ms, sample_rate);
+  release_coefficient_ = coefficient_for(settings_.release_ms, sample_rate);
+  makeup_ = db_to_linear(settings_.makeup_db);
+  settings_.ratio = std::max(settings_.ratio, 1.0);
+  settings_.knee_db = std::max(settings_.knee_db, 0.0);
+}
+
 bool Compressor::transparent() const noexcept {
   return settings_.ratio <= 1.0 && settings_.makeup_db == 0.0;
 }

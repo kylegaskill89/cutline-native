@@ -1576,10 +1576,10 @@ void build_effect_controls(App& app, const std::string& clip_id) {
 
 /// The audio effect stack, for an audio clip.
 ///
-/// Shorter than the visual one and not because it was cut down: the audio
-/// registry has no colours and `AudioClipEffect` has no keyframes, so there is
-/// no swatch and no stopwatch to build. What is here is the same header and the
-/// same parameter rows, from the same structs.
+/// Shorter than the visual one by exactly one thing: the audio registry has no
+/// colour parameters, so there is no swatch to build. Everything else — the
+/// header, the parameter rows, the stopwatch, the keyframe navigator — is the
+/// same code over the same structs.
 void build_audio_effect_controls(App& app, const std::string& clip_id) {
   auto& header = app.inspector->emplace<Box>(Axis::Horizontal);
   header.emplace<Label>("Audio Effects").set_bold(true);
@@ -1590,8 +1590,8 @@ void build_audio_effect_controls(App& app, const std::string& clip_id) {
     open_effect_menu(app, clip_id, control->bounds(), true);
   });
 
-  const std::vector<cutline::editor::EffectRow> rows =
-      cutline::editor::clip_audio_effects(app.session.project(), clip_id);
+  const std::vector<cutline::editor::EffectRow> rows = cutline::editor::clip_audio_effects(
+      app.session.project(), clip_id, local_playhead(app, clip_id));
   if (rows.empty()) {
     app.inspector->emplace<Label>("No effects").set_small(true);
     return;
@@ -1626,29 +1626,66 @@ void build_audio_effect_controls(App& app, const std::string& clip_id) {
     }
 
     for (const cutline::editor::EffectParamRow& param : row.params) {
+      const cutline::editor::ParamRef ref{
+          .effect = row.index, .audio = true, .key = param.key};
+      const std::vector<cutline::core::Keyframe> keys =
+          param.animated ? lane_keys(app, clip_id, ref)
+                         : std::vector<cutline::core::Keyframe>{};
+      const double here = local_playhead(app, clip_id);
+
       const ParamRow control{.name = param.name,
                              .suffix = param.suffix,
                              .key = "afx." + std::to_string(row.index) + "." + param.key,
                              .range = param.range,
                              .value = param.value,
                              .fallback = param.fallback,
-                             // No stopwatch: the model has nowhere to put an
-                             // audio effect keyframe, and offering one would be
-                             // a button that could not do what it said.
-                             .animatable = false};
+                             .animatable = true,
+                             .animated = param.animated,
+                             .keyed_here = param.keyed_here,
+                             .has_previous =
+                                 cutline::editor::keyframe_before(keys, here).has_value(),
+                             .has_next = cutline::editor::keyframe_after(keys, here).has_value(),
+                             .interp = param.interp};
 
-      // And no `preview` either, for the same reason there is no stopwatch:
-      // there is nothing here for a preview to show.
+      // No `preview`. A live gesture on this changes the *sound*, and there is
+      // no way to hear a value the document does not hold yet — the mixer plays
+      // the session's project. Committing on release is the whole gesture.
       build_param_row(
           app, control,
-          {.commit = [&app, clip_id, index = row.index, key = param.key](double value) {
-            app.session.apply(cutline::core::set_audio_effect_param(
-                app.session.project(), clip_id, index, key, value));
-            // No `invalidate_preview`: this changes the sound and not one
-            // pixel. The player notices the project has moved on by itself, on
-            // the next frame.
-            app.inspector_stale = true;
-          }});
+          {.commit =
+               [&app, clip_id, index = row.index, key = param.key](double value) {
+                 app.session.apply(cutline::editor::set_audio_effect_parameter(
+                     app.session.project(), clip_id, index, key, value,
+                     local_playhead(app, clip_id)));
+                 // No `invalidate_preview`: this changes the sound and not one
+                 // pixel. The player notices the project has moved on by
+                 // itself, on the next frame.
+                 app.inspector_stale = true;
+               },
+           .animate =
+               [&app, clip_id, index = row.index, key = param.key](bool animated) {
+                 app.session.apply(cutline::editor::set_audio_effect_parameter_animated(
+                     app.session.project(), clip_id, index, key, animated,
+                     local_playhead(app, clip_id)));
+                 app.inspector_stale = true;
+               },
+           .keyframe =
+               [&app, clip_id, index = row.index, key = param.key] {
+                 app.session.apply(cutline::editor::toggle_audio_effect_keyframe(
+                     app.session.project(), clip_id, index, key,
+                     local_playhead(app, clip_id)));
+                 app.inspector_stale = true;
+               },
+           .interp =
+               [&app, clip_id, index = row.index,
+                key = param.key](cutline::core::Interp mode) {
+                 app.session.apply(cutline::editor::set_audio_effect_parameter_interp(
+                     app.session.project(), clip_id, index, key, mode));
+                 app.inspector_stale = true;
+               },
+           .step = [&app, clip_id, ref](int direction) {
+             step_to_keyframe(app, clip_id, ref, direction);
+           }});
     }
   }
 }
@@ -6470,6 +6507,15 @@ template <typename T>
         // controls on it rather than only in its resting arrangement.
         app.session.apply(cutline::editor::set_clip_parameter_animated(
             app.session.project(), audio_clip, cutline::editor::ClipParam::Pan, true, 0.0));
+        // And an audio effect parameter, which is the same row in the other
+        // stack and has the registry's longest labels on it.
+        for (const cutline::editor::EffectRow& row :
+             cutline::editor::clip_audio_effects(app.session.project(), audio_clip)) {
+          for (const cutline::editor::EffectParamRow& param : row.params) {
+            app.session.apply(cutline::editor::set_audio_effect_parameter_animated(
+                app.session.project(), audio_clip, row.index, param.key, true, 0.0));
+          }
+        }
         refresh_inspector(app);
         app.main.host->update_layout(context);
         app.main.host->paint(*painter, theme);

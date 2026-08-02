@@ -419,6 +419,60 @@ TEST(AudioMixer, MixingInBlocksMatchesMixingItWhole) {
   for (std::size_t i = 0; i < whole.size(); ++i) EXPECT_FLOAT_EQ(split[i], whole[i]) << "at " << i;
 }
 
+TEST(AudioMixer, AnAnimatedEffectSweepsOverTheClip) {
+  // A gain rising 24 dB across four seconds. Measured near each end, because
+  // what is being asserted is that the automation is read at all — the exact
+  // curve is `eval_keyframes`, which has its own tests.
+  Project p = one_clip_project();
+  core::AudioClipEffect sweep;
+  sweep.type = "gain";
+  sweep.keyframes["gain"] = {{.t = 0.0, .v = -24.0}, {.t = 4.0, .v = 0.0}};
+  p.tracks[0].clips[0].audio_effects = {sweep};
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  const double quiet = rms_of(mix_span(*mixer, 0.2, 0.3));
+  mixer->reset();
+  const double loud = rms_of(mix_span(*mixer, 3.6, 0.3));
+
+  EXPECT_GT(loud, quiet * 4.0) << "quiet " << quiet << ", loud " << loud;
+}
+
+TEST(AudioMixer, AnAnimatedEffectSoundsTheSameWhateverTheBlockSize) {
+  // The guarantee this mixer already made, extended to automation. The preview
+  // and the exporter ask for different buffer sizes, and a chain retuned once
+  // per call would follow a different curve in each — the export would not be
+  // what was heard. The retune grid is aligned to the timeline for this reason,
+  // and this is the test that says so.
+  const auto project_with_sweep = [] {
+    Project p = one_clip_project();
+    core::AudioClipEffect sweep;
+    sweep.type = "lowpass";
+    sweep.keyframes["freq"] = {{.t = 0.0, .v = 800.0}, {.t = 4.0, .v = 12000.0}};
+    p.tracks[0].clips[0].audio_effects = {sweep};
+    return p;
+  };
+
+  auto whole_mixer = mixer_for(project_with_sweep());
+  auto split_mixer = mixer_for(project_with_sweep());
+  ASSERT_NE(whole_mixer, nullptr);
+  ASSERT_NE(split_mixer, nullptr);
+
+  const auto whole = mix_span(*whole_mixer, 0.0, 1.0);
+
+  std::vector<float> split;
+  double at = 0.0;
+  for (const std::size_t frames : {801u, 12000u, 5u, 35194u}) {
+    std::vector<float> block(frames * kChannels);
+    ASSERT_TRUE(split_mixer->mix(at, block).has_value());
+    split.insert(split.end(), block.begin(), block.end());
+    at += static_cast<double>(frames) / kRate;
+  }
+
+  ASSERT_EQ(split.size(), whole.size());
+  for (std::size_t i = 0; i < whole.size(); ++i) EXPECT_FLOAT_EQ(split[i], whole[i]) << "at " << i;
+}
+
 TEST(AudioMixer, TheOutputBlockMustBeWholeFrames) {
   auto mixer = mixer_for(one_clip_project());
   ASSERT_NE(mixer, nullptr);

@@ -162,17 +162,19 @@ struct EffectChoice {
 // struct. Two differences, both in what is absent rather than what is here:
 //
 //   - **No colours.** Nothing in the audio registry takes one.
-//   - **No keyframes.** `AudioClipEffect` holds parameters and nothing else, so
-//     `animated` and `keyed_here` are always false and a panel must not offer a
-//     stopwatch. Clip gain *is* automatable — that is a different property with
-//     its own rubber band, not part of this stack.
+//   - **Keyframes, but retuned at a control rate.** `AudioClipEffect` carries the
+//     same per-parameter keyframe map `ClipEffect` does. The one difference is
+//     under the panel rather than in it: a filter carries state that assumes its
+//     own coefficients, so the chain is re-read on a fixed grid of frames rather
+//     than per sample. Nothing here has to know that.
 //
 // The registry already exists, in `cutline::audio`: each effect declares its
 // parameters once with ranges, steps, defaults and units, exactly as the video
 // catalogue does. There was nothing to write here but the join.
 
 [[nodiscard]] std::vector<EffectRow> clip_audio_effects(const core::Project& project,
-                                                        std::string_view clip_id);
+                                                        std::string_view clip_id,
+                                                        double local_t = 0.0);
 
 [[nodiscard]] std::vector<EffectChoice> addable_audio_effects();
 
@@ -181,6 +183,33 @@ struct EffectChoice {
 /// somebody moves a slider.
 [[nodiscard]] core::Project add_audio_effect(core::Project project, std::string_view clip_id,
                                              std::string_view type);
+
+/// The same four operations the visual stack has, on the audio one.
+///
+/// Sound is retuned on a fixed grid rather than per sample — see
+/// `audio::EffectChain::retune`. That is invisible from here: as far as the
+/// panel is concerned an audio parameter animates exactly as a visual one does.
+[[nodiscard]] core::Project set_audio_effect_parameter(core::Project project,
+                                                       std::string_view clip_id,
+                                                       std::size_t index, std::string_view key,
+                                                       double value, double local_t = 0.0);
+
+[[nodiscard]] core::Project set_audio_effect_parameter_animated(core::Project project,
+                                                                std::string_view clip_id,
+                                                                std::size_t index,
+                                                                std::string_view key,
+                                                                bool animated, double local_t);
+
+[[nodiscard]] core::Project toggle_audio_effect_keyframe(core::Project project,
+                                                         std::string_view clip_id,
+                                                         std::size_t index, std::string_view key,
+                                                         double local_t);
+
+[[nodiscard]] core::Project set_audio_effect_parameter_interp(core::Project project,
+                                                              std::string_view clip_id,
+                                                              std::size_t index,
+                                                              std::string_view key,
+                                                              core::Interp mode);
 
 /// Puts every parameter of one effect back to its catalogue default.
 ///
@@ -191,8 +220,8 @@ struct EffectChoice {
 [[nodiscard]] core::Project reset_effect(core::Project project, std::string_view clip_id,
                                          std::size_t index);
 
-/// The same for an entry in the audio stack, which has no colours and no
-/// keyframes to put back.
+/// The same for an entry in the audio stack, which has no colours. Keyframes
+/// are cleared with it, for the same reason they are on the visual side.
 [[nodiscard]] core::Project reset_audio_effect(core::Project project, std::string_view clip_id,
                                                std::size_t index);
 

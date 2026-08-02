@@ -147,6 +147,14 @@ void Biquad::process(std::span<float> samples) noexcept {
   for (float& sample : samples) sample = process(sample);
 }
 
+void Biquad::retune(const Biquad& shape) noexcept {
+  b0_ = shape.b0_;
+  b1_ = shape.b1_;
+  b2_ = shape.b2_;
+  a1_ = shape.a1_;
+  a2_ = shape.a2_;
+}
+
 void Biquad::reset() noexcept {
   z1_ = 0.0;
   z2_ = 0.0;

@@ -43,6 +43,17 @@ class Compressor {
   /// two gives the same samples as processing it whole.
   void process(std::span<float> interleaved) noexcept;
 
+  /// Takes new settings and keeps the envelope.
+  ///
+  /// What an animated threshold or ratio needs. Rebuilding the compressor
+  /// instead would reset the gain reduction to zero at every block boundary,
+  /// which is heard as the compressor letting go and grabbing again several
+  /// times a second.
+  ///
+  /// `sample_rate` is passed again because attack and release are stored as
+  /// per-sample coefficients rather than as the times they came from.
+  void retune(CompressorSettings settings, double sample_rate) noexcept;
+
   void reset() noexcept;
 
   /// The gain reduction currently being applied, in dB (negative or zero).

@@ -38,6 +38,10 @@ struct ParamRef {
   static constexpr std::size_t kMotion = static_cast<std::size_t>(-1);
 
   std::size_t effect = kMotion;
+  /// Which stack `effect` indexes: the audio one rather than the visual one.
+  /// Meaningless when `motion()`, and the two stacks are numbered separately,
+  /// so an index alone does not say which clip parameter is meant.
+  bool audio = false;
   /// Which transform property. Meaningful when `effect` is `kMotion`.
   ClipParam param = ClipParam::Opacity;
   /// Which of the effect's parameters. Meaningful otherwise.

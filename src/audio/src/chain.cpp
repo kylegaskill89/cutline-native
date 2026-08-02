@@ -2,6 +2,7 @@
 
 #include "cutline/audio/biquad.hpp"
 #include "cutline/audio/compressor.hpp"
+#include "cutline/core/keyframe.hpp"
 
 #include <algorithm>
 #include <array>
@@ -65,11 +66,34 @@ const AudioEffectDef* audio_effect_def(std::string_view id) noexcept {
   return found == kDefs.end() ? nullptr : &*found;
 }
 
-double audio_effect_param(const core::AudioClipEffect& effect, std::string_view key) noexcept {
+bool audio_effect_param_animated(const core::AudioClipEffect& effect,
+                                 std::string_view key) noexcept {
+  const auto found = effect.keyframes.find(std::string(key));
+  return found != effect.keyframes.end() && !found->second.empty();
+}
+
+bool audio_effects_animated(std::span<const core::AudioClipEffect> effects) noexcept {
+  return std::ranges::any_of(effects, [](const core::AudioClipEffect& effect) {
+    return effect.enabled && std::ranges::any_of(effect.keyframes, [](const auto& entry) {
+             return !entry.second.empty();
+           });
+  });
+}
+
+double audio_effect_param(const core::AudioClipEffect& effect, std::string_view key,
+                          double local_t) noexcept {
   double fallback = 0.0;
   if (const AudioEffectDef* def = audio_effect_def(effect.type); def != nullptr) {
     const auto param = std::ranges::find(def->params, key, &AudioEffectParamDef::key);
     if (param != def->params.end()) fallback = param->fallback;
+  }
+
+  // Keyframes win outright, the way they do everywhere else: an animated
+  // parameter's stored number is not a value, it is a leftover.
+  if (const auto keys = effect.keyframes.find(std::string(key));
+      keys != effect.keyframes.end() && !keys->second.empty()) {
+    const double animated = core::eval_keyframes(keys->second, local_t);
+    return std::isfinite(animated) ? animated : fallback;
   }
 
   const auto found = effect.params.find(std::string(key));
@@ -83,7 +107,13 @@ namespace {
 
 /// One link in the chain. A filter needs its own state per channel, since the
 /// state is a memory of that channel's own past.
+///
+/// It keeps a copy of the effect it came from, which is what lets an animated
+/// parameter be re-read later without the chain having to be handed the stack
+/// again. A copy rather than a pointer: the mixer runs on its own thread and
+/// the project it was built from is edited on another one.
 struct Stage {
+  core::AudioClipEffect source;
   std::vector<Biquad> filters;
   std::optional<Compressor> compressor;
   float gain = 1.0f;
@@ -112,11 +142,65 @@ struct Stage {
   }
 };
 
-/// Copies one configured filter into a per-channel bank.
-[[nodiscard]] Stage filter_stage(const Biquad& prototype, int channels) {
-  Stage stage;
-  stage.filters.assign(static_cast<std::size_t>(std::max(channels, 1)), prototype);
-  return stage;
+/// The filter an effect describes at `local_t`, or nothing when it is not one
+/// of the filter types.
+///
+/// One function rather than a branch in `build` and another in `retune`. Two
+/// copies of these formulas would eventually disagree, and the symptom would be
+/// a stack that sounds different the moment a parameter is animated.
+[[nodiscard]] std::optional<Biquad> filter_shape(const core::AudioClipEffect& effect,
+                                                 double sample_rate, double local_t) {
+  const auto value = [&effect, local_t](std::string_view key) {
+    return audio_effect_param(effect, key, local_t);
+  };
+
+  if (effect.type == "highpass") return Biquad::high_pass(sample_rate, value("freq"));
+  if (effect.type == "lowpass") return Biquad::low_pass(sample_rate, value("freq"));
+  if (effect.type == "bass") {
+    return Biquad::low_shelf(sample_rate, kBassFrequency, value("gain"));
+  }
+  if (effect.type == "treble") {
+    return Biquad::high_shelf(sample_rate, kTrebleFrequency, value("gain"));
+  }
+  if (effect.type == "eqband") {
+    return Biquad::peaking(sample_rate, value("freq"), value("gain"), value("q"));
+  }
+  if (effect.type == "notch") {
+    return Biquad::band_reject(sample_rate, value("freq"), value("q"));
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] CompressorSettings compressor_shape(const core::AudioClipEffect& effect,
+                                                  double local_t) {
+  CompressorSettings settings;
+  settings.threshold_db = audio_effect_param(effect, "threshold", local_t);
+  settings.ratio = audio_effect_param(effect, "ratio", local_t);
+  return settings;
+}
+
+/// Whether an effect earns a stage at all.
+///
+/// A neutral effect costs time and changes nothing, so it is dropped — but only
+/// when the parameter that makes it neutral is a fixed number. Animated, it has
+/// to be kept: a gain sweeping up from silence is neutral at the instant the
+/// chain is built and is the whole point a moment later, and a stage that was
+/// never built cannot appear halfway through a block.
+[[nodiscard]] bool contributes(const core::AudioClipEffect& effect, double local_t) {
+  const auto decided_by = [&effect, local_t](std::string_view key, auto&& neutral) {
+    return audio_effect_param_animated(effect, key) ||
+           !neutral(audio_effect_param(effect, key, local_t));
+  };
+  const auto silent_gain = [](double db) { return std::abs(db) < kNeutralGainDb; };
+
+  if (effect.type == "bass" || effect.type == "treble" || effect.type == "eqband" ||
+      effect.type == "gain") {
+    return decided_by("gain", silent_gain);
+  }
+  if (effect.type == "compressor") {
+    return decided_by("ratio", [](double ratio) { return ratio <= 1.0; });
+  }
+  return true;  // a filter is never neutral enough to be worth dropping
 }
 
 }  // namespace
@@ -124,6 +208,8 @@ struct Stage {
 struct EffectChain::Impl {
   std::vector<Stage> stages;
   std::size_t channels = 2;
+  double sample_rate = 0.0;
+  bool animated = false;
 };
 
 EffectChain::EffectChain() : impl_(std::make_unique<Impl>()) {}
@@ -132,63 +218,59 @@ EffectChain::EffectChain(EffectChain&&) noexcept = default;
 EffectChain& EffectChain::operator=(EffectChain&&) noexcept = default;
 
 EffectChain EffectChain::build(std::span<const core::AudioClipEffect> effects,
-                               double sample_rate, int channels) {
+                               double sample_rate, int channels, double local_t) {
   EffectChain chain;
   chain.impl_->channels = static_cast<std::size_t>(std::max(channels, 1));
+  chain.impl_->sample_rate = sample_rate;
   if (!(sample_rate > 0.0)) return chain;
 
   for (const core::AudioClipEffect& effect : effects) {
     if (!effect.enabled) continue;
     if (audio_effect_def(effect.type) == nullptr) continue;
+    if (!contributes(effect, local_t)) continue;
 
-    const auto value = [&effect](std::string_view key) {
-      return audio_effect_param(effect, key);
-    };
+    Stage stage;
+    stage.source = effect;
 
-    if (effect.type == "highpass") {
-      chain.impl_->stages.push_back(
-          filter_stage(Biquad::high_pass(sample_rate, value("freq")), channels));
-    } else if (effect.type == "lowpass") {
-      chain.impl_->stages.push_back(
-          filter_stage(Biquad::low_pass(sample_rate, value("freq")), channels));
-    } else if (effect.type == "bass") {
-      const double gain_db = value("gain");
-      if (std::abs(gain_db) < kNeutralGainDb) continue;
-      chain.impl_->stages.push_back(
-          filter_stage(Biquad::low_shelf(sample_rate, kBassFrequency, gain_db), channels));
-    } else if (effect.type == "treble") {
-      const double gain_db = value("gain");
-      if (std::abs(gain_db) < kNeutralGainDb) continue;
-      chain.impl_->stages.push_back(
-          filter_stage(Biquad::high_shelf(sample_rate, kTrebleFrequency, gain_db), channels));
-    } else if (effect.type == "eqband") {
-      const double gain_db = value("gain");
-      if (std::abs(gain_db) < kNeutralGainDb) continue;
-      chain.impl_->stages.push_back(filter_stage(
-          Biquad::peaking(sample_rate, value("freq"), gain_db, value("q")), channels));
-    } else if (effect.type == "notch") {
-      chain.impl_->stages.push_back(filter_stage(
-          Biquad::band_reject(sample_rate, value("freq"), value("q")), channels));
+    if (const std::optional<Biquad> shape = filter_shape(effect, sample_rate, local_t);
+        shape.has_value()) {
+      stage.filters.assign(static_cast<std::size_t>(std::max(channels, 1)), *shape);
     } else if (effect.type == "compressor") {
-      const double ratio = value("ratio");
-      if (ratio <= 1.0) continue;  // 1:1 does nothing
-      CompressorSettings settings;
-      settings.threshold_db = value("threshold");
-      settings.ratio = ratio;
-      Stage stage;
-      stage.compressor.emplace(settings, sample_rate, channels);
-      chain.impl_->stages.push_back(std::move(stage));
+      stage.compressor.emplace(compressor_shape(effect, local_t), sample_rate, channels);
     } else if (effect.type == "gain") {
-      const double gain_db = value("gain");
-      if (std::abs(gain_db) < kNeutralGainDb) continue;
-      Stage stage;
-      stage.gain = static_cast<float>(db_to_linear(gain_db));
-      chain.impl_->stages.push_back(std::move(stage));
+      stage.gain = static_cast<float>(db_to_linear(audio_effect_param(effect, "gain", local_t)));
+    } else {
+      continue;  // known to the registry but not to the builder
     }
+
+    chain.impl_->stages.push_back(std::move(stage));
   }
 
+  chain.impl_->animated = audio_effects_animated(effects);
   return chain;
 }
+
+void EffectChain::retune(double local_t) noexcept {
+  if (!impl_->animated) return;
+  const double sample_rate = impl_->sample_rate;
+
+  for (Stage& stage : impl_->stages) {
+    if (!stage.filters.empty()) {
+      const std::optional<Biquad> shape = filter_shape(stage.source, sample_rate, local_t);
+      if (!shape.has_value()) continue;
+      // Coefficients only. The state is a memory of samples that really did
+      // come before these, whatever the filter has since become.
+      for (Biquad& filter : stage.filters) filter.retune(*shape);
+    } else if (stage.compressor) {
+      stage.compressor->retune(compressor_shape(stage.source, local_t), sample_rate);
+    } else {
+      stage.gain =
+          static_cast<float>(db_to_linear(audio_effect_param(stage.source, "gain", local_t)));
+    }
+  }
+}
+
+bool EffectChain::fixed() const noexcept { return !impl_->animated; }
 
 void EffectChain::process(std::span<float> interleaved) noexcept {
   const std::size_t channels = impl_->channels;

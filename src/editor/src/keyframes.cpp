@@ -1,6 +1,7 @@
 #include "cutline/editor/keyframes.hpp"
 
 #include "cutline/core/query.hpp"
+#include "cutline/audio/chain.hpp"
 #include "cutline/render/effect_catalog.hpp"
 
 #include <algorithm>
@@ -55,6 +56,13 @@ constexpr std::array<ClipParam, 8> kMotionParams{
     const auto prop = anim_prop_of(ref.param);
     if (!prop.has_value()) return nullptr;
     return &clip.keyframes[core::anim_prop_index(*prop)];
+  }
+
+  if (ref.audio) {
+    if (ref.effect >= clip.audio_effects.size()) return nullptr;
+    auto& keys = clip.audio_effects[ref.effect].keyframes;
+    const auto found = keys.find(ref.key);
+    return found == keys.end() ? nullptr : &found->second;
   }
 
   if (ref.effect >= clip.effects.size()) return nullptr;
@@ -144,6 +152,23 @@ KeyframeModel clip_keyframes(const core::Project& project, std::string_view clip
       // Qualified, because "Amount" says nothing when three effects have one.
       add(ParamRef{.effect = i, .key = std::string(param.key)},
           effect_name + " — " + std::string(param.name), found->second);
+    }
+  }
+
+  // The audio stack's lanes, after the visual ones. Same shape, a different
+  // registry: the two stacks are numbered separately, which is why a lane
+  // reference carries which of them it means as well as an index.
+  for (std::size_t i = 0; i < clip->audio_effects.size(); ++i) {
+    const core::AudioClipEffect& effect = clip->audio_effects[i];
+    const audio::AudioEffectDef* def = audio::audio_effect_def(effect.type);
+    if (def == nullptr) continue;
+    const std::string effect_name(def->name);
+
+    for (const audio::AudioEffectParamDef& param : def->params) {
+      const auto found = effect.keyframes.find(std::string(param.key));
+      if (found == effect.keyframes.end()) continue;
+      add(ParamRef{.effect = i, .audio = true, .key = std::string(param.key)},
+          effect_name + " — " + std::string(param.label), found->second);
     }
   }
 

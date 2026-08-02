@@ -740,6 +740,123 @@ TEST(ResetAudioEffect, PutsEveryParameterBackToItsDefault) {
   EXPECT_DOUBLE_EQ(row.value, row.fallback);
 }
 
+// ------------------------------------------------ audio effect keyframes --
+
+/// One audio clip, long enough for keyframes to be spread over.
+[[nodiscard]] Project audio_clip_project() {
+  Clip c;
+  c.id = "a1";
+  c.media_id = "m1";
+  c.kind = TrackKind::Audio;
+  c.source_out = 5.0;
+
+  Track t;
+  t.id = "a";
+  t.kind = TrackKind::Audio;
+  t.clips = {std::move(c)};
+
+  Project p;
+  p.tracks = {std::move(t)};
+  return p;
+}
+
+//
+// The same four operations the visual stack has. What is worth testing here is
+// the join rather than the keyframe machinery, which `core` already covers.
+
+TEST(AudioEffectKeyframes, TheStopwatchKeepsTheValueItHad) {
+  Project p = audio_clip_project();
+  p = add_audio_effect(std::move(p), "a1", "lowpass");
+  p = core::set_audio_effect_param(std::move(p), "a1", 0, "freq", 4000.0);
+
+  p = set_audio_effect_parameter_animated(std::move(p), "a1", 0, "freq", true, 2.0);
+
+  const std::vector<EffectRow> rows = clip_audio_effects(p, "a1", 2.0);
+  const EffectParamRow& row = rows.front().params.front();
+  EXPECT_TRUE(row.animated);
+  EXPECT_TRUE(row.keyed_here);
+  EXPECT_DOUBLE_EQ(row.value, 4000.0) << "pressing the stopwatch must not change the sound";
+}
+
+TEST(AudioEffectKeyframes, AnAnimatedParameterIsReadAtTheTimeAsked) {
+  Project p = audio_clip_project();
+  p = add_audio_effect(std::move(p), "a1", "lowpass");
+  p = set_audio_effect_parameter_animated(std::move(p), "a1", 0, "freq", true, 0.0);
+  p = set_audio_effect_parameter(std::move(p), "a1", 0, "freq", 800.0, 0.0);
+  p = set_audio_effect_parameter(std::move(p), "a1", 0, "freq", 12000.0, 4.0);
+
+  EXPECT_DOUBLE_EQ(clip_audio_effects(p, "a1", 0.0).front().params.front().value, 800.0);
+  EXPECT_DOUBLE_EQ(clip_audio_effects(p, "a1", 2.0).front().params.front().value, 6400.0);
+}
+
+TEST(AudioEffectKeyframes, SettingAnAnimatedParameterWritesAKeyframe) {
+  Project p = audio_clip_project();
+  p = add_audio_effect(std::move(p), "a1", "lowpass");
+  const double stored = p.tracks.front().clips.front().audio_effects.front().params.at("freq");
+
+  p = set_audio_effect_parameter_animated(std::move(p), "a1", 0, "freq", true, 0.0);
+  p = set_audio_effect_parameter(std::move(p), "a1", 0, "freq", 300.0, 3.0);
+
+  const core::AudioClipEffect& effect =
+      p.tracks.front().clips.front().audio_effects.front();
+  EXPECT_EQ(effect.keyframes.at("freq").size(), 2u);
+  EXPECT_DOUBLE_EQ(effect.params.at("freq"), stored) << "the stored value is left alone";
+}
+
+TEST(AudioEffectKeyframes, TurningTheStopwatchOffKeepsTheValueAtThatTime) {
+  Project p = audio_clip_project();
+  p = add_audio_effect(std::move(p), "a1", "lowpass");
+  p = set_audio_effect_parameter_animated(std::move(p), "a1", 0, "freq", true, 0.0);
+  p = set_audio_effect_parameter(std::move(p), "a1", 0, "freq", 800.0, 0.0);
+  p = set_audio_effect_parameter(std::move(p), "a1", 0, "freq", 12000.0, 4.0);
+
+  p = set_audio_effect_parameter_animated(std::move(p), "a1", 0, "freq", false, 2.0);
+
+  const core::AudioClipEffect& effect =
+      p.tracks.front().clips.front().audio_effects.front();
+  EXPECT_TRUE(effect.keyframes.empty());
+  EXPECT_DOUBLE_EQ(effect.params.at("freq"), 6400.0) << "halfway along the sweep";
+}
+
+TEST(AudioEffectKeyframes, AMarkerDoesNothingUntilTheStopwatchIsOn) {
+  Project p = audio_clip_project();
+  p = add_audio_effect(std::move(p), "a1", "lowpass");
+  EXPECT_EQ(toggle_audio_effect_keyframe(p, "a1", 0, "freq", 1.0), p);
+}
+
+TEST(AudioEffectKeyframes, AMarkerAddsAndTakesAwayWithoutBendingTheCurve) {
+  Project p = audio_clip_project();
+  p = add_audio_effect(std::move(p), "a1", "lowpass");
+  p = set_audio_effect_parameter_animated(std::move(p), "a1", 0, "freq", true, 0.0);
+  p = set_audio_effect_parameter(std::move(p), "a1", 0, "freq", 12000.0, 4.0);
+
+  const Project added = toggle_audio_effect_keyframe(p, "a1", 0, "freq", 2.0);
+  EXPECT_EQ(added.tracks.front().clips.front().audio_effects.front().keyframes.at("freq").size(),
+            3u);
+  EXPECT_DOUBLE_EQ(clip_audio_effects(added, "a1", 2.0).front().params.front().value,
+                   clip_audio_effects(p, "a1", 2.0).front().params.front().value);
+
+  EXPECT_EQ(toggle_audio_effect_keyframe(added, "a1", 0, "freq", 2.0), p);
+}
+
+TEST(AudioEffectKeyframes, ResettingAnEffectClearsThemToo) {
+  Project p = audio_clip_project();
+  p = add_audio_effect(std::move(p), "a1", "lowpass");
+  p = set_audio_effect_parameter_animated(std::move(p), "a1", 0, "freq", true, 0.0);
+  p = set_audio_effect_parameter(std::move(p), "a1", 0, "freq", 300.0, 3.0);
+
+  const Project reset = reset_audio_effect(p, "a1", 0);
+  EXPECT_TRUE(reset.tracks.front().clips.front().audio_effects.front().keyframes.empty());
+}
+
+TEST(AudioEffectKeyframes, AnEffectThatIsNotThereChangesNothing) {
+  const Project p = audio_clip_project();
+  EXPECT_EQ(set_audio_effect_parameter(p, "a1", 7, "freq", 100.0), p);
+  EXPECT_EQ(set_audio_effect_parameter_animated(p, "a1", 7, "freq", true, 0.0), p);
+  EXPECT_EQ(toggle_audio_effect_keyframe(p, "a1", 7, "freq", 0.0), p);
+  EXPECT_EQ(set_audio_effect_parameter_interp(p, "a1", 7, "freq", core::Interp::Ease), p);
+}
+
 TEST(CopyOneEffect, TakesJustThatEffect) {
   Project p = add_effect(one_clip(), "c1", "blur");
   p = add_effect(std::move(p), "c1", "vignette");

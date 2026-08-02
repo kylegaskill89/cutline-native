@@ -41,6 +41,16 @@ struct SourceKey {
 /// the start.
 constexpr double kDecodeMargin = 0.05;
 
+/// How often an animated effect parameter is re-read, in frames.
+///
+/// A control rate rather than a sample rate. Sixty-four frames is about a
+/// millisecond and a half at 48 kHz — finer than any automation curve anybody
+/// draws, and coarse enough that recomputing a filter's coefficients is not
+/// what the mixer spends its time on. Aligned to the timeline rather than to
+/// the caller's buffer, which is what keeps the preview and the export the
+/// same.
+constexpr std::int64_t kControlBlock = 64;
+
 /// One planned clip, with the samples and DSP it needs.
 struct Voice {
   render::PlannedAudioClip planned;
@@ -187,9 +197,11 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
   for (const render::PlannedAudioClip& entry : planned) {
     Voice voice;
     voice.planned = entry;
+    // Built at the clip's own start, which is where playback of it begins and
+    // therefore what an animated parameter is worth the first time it is heard.
     voice.chain = audio::EffectChain::build(entry.clip->audio_effects,
                                             static_cast<double>(settings.sample_rate),
-                                            settings.channels);
+                                            settings.channels, 0.0);
 
     if (entry.media != nullptr && !entry.media->path.empty()) {
       // Only the clip's own trim, not the whole file.
@@ -326,7 +338,41 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
       }
     }
 
-    voice.chain.process(impl_->voice_block);
+    if (voice.chain.fixed()) {
+      voice.chain.process(impl_->voice_block);
+    } else {
+      // An animated stack is retuned on a fixed grid **aligned to the
+      // timeline**, not once per call.
+      //
+      // Retuning per call would have been simpler and would have made the
+      // preview and the export disagree: they ask for different buffer sizes,
+      // so a sweep would land on different coefficients in each. Aligning the
+      // grid to absolute sample positions means splitting a buffer anywhere
+      // gives the same samples, which is the guarantee the rest of this mixer
+      // already keeps.
+      //
+      // Per sample would be both expensive and wrong — moving an IIR filter's
+      // coefficients under state that assumes the old ones is how a filter is
+      // made to ring. A grid step is a millisecond and a half at 48 kHz, which
+      // no sweep anybody writes can outrun.
+      std::size_t at = 0;
+      while (at < span) {
+        const std::int64_t absolute = base + static_cast<std::int64_t>(first + at);
+        const std::int64_t into = ((absolute % kControlBlock) + kControlBlock) % kControlBlock;
+        const auto until = static_cast<std::size_t>(kControlBlock - into);
+        const std::size_t chunk = std::min(span - at, until);
+
+        // Retuned to the time of the grid step this chunk sits *in*, not to
+        // where the chunk happens to begin. A call that starts halfway through
+        // a step has to use the coefficients that step already had, or the
+        // sound would depend on where the caller's buffer boundaries fell —
+        // which is the whole thing this grid exists to prevent.
+        voice.chain.retune(static_cast<double>(absolute - into) / rate - voice.planned.start);
+        voice.chain.process(
+            std::span(impl_->voice_block).subspan(at * channels, chunk * channels));
+        at += chunk;
+      }
+    }
 
     // A plain sum: `normalize=0`, so tracks add rather than being scaled down
     // by how many of them there are.
