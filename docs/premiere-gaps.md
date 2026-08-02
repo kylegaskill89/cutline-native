@@ -341,8 +341,12 @@ much they cost somebody:
    centre, and the difference is one rotated offset computed in `layer_box`.
    Shown in pixels of the layer, paired on one row, keyframeable like the rest
    of the transform. Files written before it read back centred.
-2. **No panner.** Nothing in the model carries pan. Premiere has one on every
-   audio clip, and it is not an effect — it is part of what a clip *is*.
+2. ~~**No panner.**~~ **Done** for the clip. `Clip::pan`, animated through
+   `AnimProp::Pan`, shown as Balance from -100 to 100 under Volume. It is a
+   balance rather than a constant-power pan, because what the mixer has is a
+   stereo bus; centre is exactly unity, so nothing written before it sounds
+   different. Premiere also has a panner on every audio *track* — that is a
+   track property and a mixer control, and it is not done.
 3. **Audio effect parameters cannot be keyframed at all.** `AudioClipEffect`
    holds a type, an enabled flag and a map of numbers. Clip gain is automatable
    and nothing else about the sound is. The video side has had per-parameter
@@ -375,13 +379,16 @@ than four:
 Paired X/Y on one row, a visible reset per row, resetting a whole effect and
 greying a governed property are all done, and are no longer listed.
 
-**The shape of what is left.** Nine of the seventeen remain. Six of those are
+**The shape of what is left.** Eight of the seventeen remain, plus the track
+panner the clip one turned up. Six of those are
 not independent: masks, catalogue depth and per-effect anything all wait on
-effects becoming passes rather than fields, and bezier handles, the panner and
-audio keyframes are each a change to the model with a serialiser and a
-compatibility question attached. The anchor point was the fourth of that second
-cluster and turned out to be the cheap one — the others are not, because none of
-them can be expressed as an offset the existing geometry already carries.
+effects becoming passes rather than fields, and bezier handles and audio-effect
+keyframes are each a change to the model with a serialiser and a compatibility
+question attached. Two of that second cluster are now done and both were cheaper
+than expected — the anchor point because it is an offset the existing geometry
+already carries, the panner because the keyframe array took it without being
+widened. Neither of those escapes applies to what is left: a bezier handle is a
+new field *inside* `Keyframe`, and an audio effect has no keyframe map at all.
 
 ---
 
