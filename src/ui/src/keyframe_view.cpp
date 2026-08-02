@@ -395,8 +395,8 @@ void KeyframeView::paint_graph(Painter& painter, const Theme& theme, std::size_t
   if (curve.size() < 2 || model_.duration < kShortest) return;
 
   const SurfaceStyle& panel = theme.style(Part::Panel, State::Normal);
-  const Color faint{panel.text.r, panel.text.g, panel.text.b, 0.35};
-  painter.fill(box, 0.0, Fill::solid(Color{panel.text.r, panel.text.g, panel.text.b, 0.04}));
+  const Color faint{panel.text.r, panel.text.g, panel.text.b, 0.35f};
+  painter.fill(box, 0.0, Fill::solid(Color{panel.text.r, panel.text.g, panel.text.b, 0.04f}));
 
   // Against the curve's own highest and lowest rather than against the
   // parameter's range: a rotation that moves by two degrees over a clip is a
@@ -451,18 +451,18 @@ void KeyframeView::paint_graph(Painter& painter, const Theme& theme, std::size_t
       const double anchor_x = x_of(row.times[picked.index]);
       const double anchor_y = y_of(row.values[picked.index]);
       for (const KeyframeHandle side : {KeyframeHandle::Out, KeyframeHandle::In}) {
-        const Rect box = handle_rect(lane, picked.index, side);
-        if (box.empty()) continue;
+        const Rect grip = handle_rect(lane, picked.index, side);
+        if (grip.empty()) continue;
 
         // Solid on a segment that is listening to it, hollow on one that is
         // not: a keyframe still set to Linear shows where its handles *would*
         // be, and pulling one is what switches the segment over. A filled
         // control that did nothing would be a lie.
         const bool live = row.handles[picked.index].bezier;
-        const double cx = box.x + box.width / 2.0;
-        const double cy = box.y + box.height / 2.0;
+        const double cx = grip.x + grip.width / 2.0;
+        const double cy = grip.y + grip.height / 2.0;
         painter.line(anchor_x, anchor_y, cx, cy, live ? theme.accent : faint, 1.0);
-        painter.fill(box, 0.0, Fill::solid(live ? theme.accent : faint));
+        painter.fill(grip, 0.0, Fill::solid(live ? theme.accent : faint));
       }
     }
   }
@@ -510,7 +510,7 @@ void KeyframeView::paint_content(Painter& painter, const Theme& theme) const {
     // Alternating rows, so a diamond can be traced back to its property across
     // a panel's width without counting.
     if (lane % 2 == 1) {
-      painter.fill(row, 0.0, Fill::solid(Color{panel.text.r, panel.text.g, panel.text.b, 0.05}));
+      painter.fill(row, 0.0, Fill::solid(Color{panel.text.r, panel.text.g, panel.text.b, 0.05f}));
     }
 
     // The chevron, for a lane that has a curve to show. Right for closed and
@@ -570,7 +570,7 @@ void KeyframeView::paint_content(Painter& painter, const Theme& theme) const {
 
   if (!marquee_.empty()) {
     painter.fill(marquee_, 0.0,
-                 Fill::solid(Color{theme.accent.r, theme.accent.g, theme.accent.b, 0.15}));
+                 Fill::solid(Color{theme.accent.r, theme.accent.g, theme.accent.b, 0.15f}));
     painter.stroke(marquee_, 0.0, theme.accent, 1.0);
   }
 }
