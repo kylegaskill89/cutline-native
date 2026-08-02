@@ -29,6 +29,30 @@ namespace cutline::core {
 
 /// One parameter's value at clip-local `local_t` — animated, or the static
 /// value, or zero when the parameter is absent.
+/// The keys a mask's own numbers answer to.
+///
+/// A mask is animated through the *same* machinery as any other effect
+/// parameter, by giving each of its numbers a reserved parameter name. That is
+/// the whole of the feature: the stopwatch, the keyframe navigator, the curve
+/// editor, the marks on the clip, copying a stack, saving a preset and the file
+/// format all work on effect parameters, and none of them needed to learn what
+/// a mask is.
+///
+/// The *value* still lives on the `Mask`, which stays the one home for it — the
+/// monitor drags it, the file writes it, and a parameter map holding a second
+/// copy would be two truths about one number. Only the keyframes live under
+/// these names.
+inline constexpr std::string_view kMaskParamPrefix = "mask.";
+
+/// The mask number a reserved key names, or null when it is not one of them.
+///
+/// Returns a pointer-to-member so the one mapping from name to field is written
+/// down once, and reading and writing cannot disagree about it.
+[[nodiscard]] double Mask::* mask_param_field(std::string_view key) noexcept;
+
+/// Every mask key, in the order a panel should show them.
+[[nodiscard]] std::span<const std::string_view> mask_param_keys() noexcept;
+
 [[nodiscard]] double effect_param_at(const ClipEffect& effect, std::string_view key,
                                      double local_t) noexcept;
 

@@ -1613,55 +1613,81 @@ void build_effect_mask(App& app, const std::string& clip_id,
 
   if (mask.shape == cutline::core::MaskShape::None) return;
 
-  // One writer for every number on the mask, so each row is a name, a range and
-  // which field it sets rather than five copies of the same lambda.
-  const auto number = [&app, clip_id, index = row.index, mask](
-                          std::string name, double value, cutline::ui::ValueRange range,
-                          std::string suffix, double fallback,
-                          double cutline::editor::EffectMaskRow::*field) {
-    // Keyed by the row's own name, which is what the disclosure state is
-    // remembered against and is unique within the card by construction.
-    const std::string key = "mask." + std::to_string(index) + "." + name;
-    const ParamRow control{.name = std::move(name),
-                           .suffix = std::move(suffix),
-                           .key = key,
-                           .range = range,
-                           .value = value,
-                           .fallback = fallback};
+  // Every number on the mask is an ordinary animatable parameter row, under the
+  // reserved keys `core::mask_param_keys` names. That is the whole of mask
+  // animation: the stopwatch, the keyframe navigator, the curve picker and the
+  // marks on the clip are the ones effect parameters already had, and not one
+  // of them had to learn what a mask is.
+  //
+  // The panel shows fractions of the layer as percentages, so each value is
+  // scaled on the way out and back — the model keeps one unit and the screen
+  // shows another, exactly as position and scale do.
+  for (const cutline::editor::EffectParamRow& param : row.mask_params) {
+    const double scale = cutline::editor::mask_param_scale(param.key);
+    const cutline::editor::ParamRef ref{.effect = row.index, .key = param.key};
+    const std::vector<cutline::core::Keyframe> keys =
+        param.animated ? lane_keys(app, clip_id, ref) : std::vector<cutline::core::Keyframe>{};
+    const double here = local_playhead(app, clip_id);
 
-    const auto edited = [&app, clip_id, index, mask, field](double set) {
-      cutline::editor::EffectMaskRow next = mask;
-      next.*field = set;
-      return cutline::editor::set_effect_mask(app.session.project(), clip_id, index, next);
+    const ParamRow control{
+        .name = param.name,
+        .suffix = param.suffix,
+        // Keyed by the effect's place in the stack too: two effects can both
+        // carry a mask, and both would call a row Mask Width.
+        .key = "fx." + std::to_string(row.index) + "." + param.key,
+        .range = param.range,
+        .value = param.value,
+        .fallback = param.fallback,
+        .animatable = true,
+        .animated = param.animated,
+        .keyed_here = param.keyed_here,
+        .has_previous = cutline::editor::keyframe_before(keys, here).has_value(),
+        .has_next = cutline::editor::keyframe_after(keys, here).has_value(),
+        .interp = param.interp};
+
+    const auto edited = [&app, clip_id, index = row.index, key = param.key, scale](double set) {
+      return cutline::editor::set_effect_parameter(app.session.project(), clip_id, index, key,
+                                                   set / scale, local_playhead(app, clip_id));
     };
 
-    build_param_row(app, control,
-                    {.commit =
-                         [&app, edited](double set) {
-                           app.session.apply(edited(set));
-                           invalidate_preview(app);
-                           refresh_handles(app);
-                           app.inspector_stale = true;
-                         },
-                     .preview = edited});
-  };
-
-  // Position and size reach past the layer on purpose: a mask parked off the
-  // edge is how one is brought in from the side.
-  number("Mask Position X", mask.x, {.minimum = -50.0, .maximum = 150.0}, "%", 50.0,
-         &cutline::editor::EffectMaskRow::x);
-  number("Mask Position Y", mask.y, {.minimum = -50.0, .maximum = 150.0}, "%", 50.0,
-         &cutline::editor::EffectMaskRow::y);
-  number("Mask Width", mask.width, {.minimum = 0.0, .maximum = 100.0}, "%", 25.0,
-         &cutline::editor::EffectMaskRow::width);
-  number("Mask Height", mask.height, {.minimum = 0.0, .maximum = 100.0}, "%", 25.0,
-         &cutline::editor::EffectMaskRow::height);
-  number("Mask Rotation", mask.rotation, {.minimum = -180.0, .maximum = 180.0},
-         "\xc2\xb0", 0.0, &cutline::editor::EffectMaskRow::rotation);
-  number("Mask Feather", mask.feather, {.minimum = 0.0, .maximum = 50.0}, "%", 0.0,
-         &cutline::editor::EffectMaskRow::feather);
-  number("Mask Opacity", mask.opacity, {.minimum = 0.0, .maximum = 100.0}, "%", 100.0,
-         &cutline::editor::EffectMaskRow::opacity);
+    build_param_row(
+        app, control,
+        {.commit =
+             [&app, edited](double set) {
+               app.session.apply(edited(set));
+               invalidate_preview(app);
+               // The shape is drawn on the picture as well as described here.
+               refresh_handles(app);
+               app.inspector_stale = true;
+             },
+         .preview = edited,
+         .animate =
+             [&app, clip_id, index = row.index, key = param.key](bool animated) {
+               app.session.apply(cutline::editor::set_effect_parameter_animated(
+                   app.session.project(), clip_id, index, key, animated,
+                   local_playhead(app, clip_id)));
+               invalidate_preview(app);
+               app.inspector_stale = true;
+             },
+         .keyframe =
+             [&app, clip_id, index = row.index, key = param.key] {
+               app.session.apply(cutline::editor::toggle_effect_keyframe(
+                   app.session.project(), clip_id, index, key, local_playhead(app, clip_id)));
+               refresh_timeline(app);
+               invalidate_preview(app);
+               app.inspector_stale = true;
+             },
+         .interp =
+             [&app, clip_id, index = row.index, key = param.key](cutline::core::Interp mode) {
+               app.session.apply(cutline::editor::set_effect_parameter_interp(
+                   app.session.project(), clip_id, index, key, mode));
+               invalidate_preview(app);
+               app.inspector_stale = true;
+             },
+         .step = [&app, clip_id, ref](int direction) {
+           step_to_keyframe(app, clip_id, ref, direction);
+         }});
+  }
 
   auto& inverted = app.inspector->emplace<Checkbox>("Mask Inverted", mask.inverted);
   inverted.set_on_change([&app, clip_id, index = row.index, mask](bool on) {
@@ -7226,6 +7252,12 @@ template <typename T>
         app.session.apply(cutline::editor::set_effect_mask(
             app.session.project(), clip_id, 0,
             cutline::editor::EffectMaskRow{.shape = cutline::core::MaskShape::Ellipse}));
+        // And one of its numbers animated, so a mask row is laid out wearing
+        // the whole navigator — stopwatch, both arrows, the marker and the
+        // curve picker — rather than the bare slider. It is the widest row the
+        // mask has, which is what decides whether the arrangement fits.
+        app.session.apply(cutline::editor::set_effect_parameter_animated(
+            app.session.project(), clip_id, 0, "mask.rotation", true, 0.0));
       }
 
       app.timeline_media = sample_timeline_media();

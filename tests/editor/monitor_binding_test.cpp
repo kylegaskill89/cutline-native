@@ -9,6 +9,7 @@
 #include "cutline/editor/monitor_binding.hpp"
 
 #include "cutline/core/animate.hpp"
+#include "cutline/core/effects.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/editor/inspector.hpp"
 
@@ -343,6 +344,62 @@ TEST(MaskOverlays, AnEffectThatIsNotThereChangesNothing) {
       with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse});
   EXPECT_EQ(apply_mask_overlay(p, "c1", 7, ui::MaskOverlay{}, 2.0), p);
   EXPECT_EQ(apply_mask_overlay(p, "nope", 0, ui::MaskOverlay{}, 2.0), p);
+}
+
+// ------------------------------------------------------ an animated mask --
+
+TEST(MaskOverlays, AnAnimatedMaskIsDrawnWhereItIsRatherThanWhereItWasStored) {
+  // The outline on the picture and the shape the renderer uses have to be the
+  // same shape. Reading the stored mask instead meant that the moment one of its
+  // numbers was animated the outline stopped meaning anything.
+  core::Project p = with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse});
+  p = core::set_effect_keyframe(std::move(p), "c1", 0, "mask.x", 0.0, 0.25);
+  p = core::set_effect_keyframe(std::move(p), "c1", 0, "mask.x", 2.0, 0.75);
+
+  // The clip starts at 2 s, so these are clip-local 0 and 2.
+  const std::vector<MaskOverlayRef> at_start = mask_overlays(p, "c1", 2.0);
+  ASSERT_EQ(at_start.size(), 1u);
+  EXPECT_NEAR(at_start[0].overlay.x, 0.25, 1e-9);
+
+  const std::vector<MaskOverlayRef> at_end = mask_overlays(p, "c1", 4.0);
+  ASSERT_EQ(at_end.size(), 1u);
+  EXPECT_NEAR(at_end[0].overlay.x, 0.75, 1e-9);
+}
+
+TEST(MaskOverlays, DraggingAnAnimatedMaskWritesAKeyframe) {
+  // Found on screen: dragging the shape moved the outline and the render
+  // ignored it, because the drag wrote the stored number and the animation
+  // overrode it on the way out. A drag on the picture and a drag on a number
+  // have to be the same edit, which is what going through `set_effect_parameter`
+  // buys — the same rule `apply_monitor_box` already followed.
+  core::Project p = with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse});
+  p = core::set_effect_keyframe(std::move(p), "c1", 0, "mask.x", 0.0, 0.5);
+
+  ui::MaskOverlay moved = mask_overlays(p, "c1", 4.0).front().overlay;
+  moved.x = 0.8;
+  p = apply_mask_overlay(std::move(p), "c1", 0, moved, 4.0);
+
+  const std::vector<core::Keyframe>& keys =
+      p.tracks.front().clips.front().effects[0].keyframes.at("mask.x");
+  ASSERT_EQ(keys.size(), 2u) << "the drag did not leave a keyframe behind";
+  EXPECT_DOUBLE_EQ(keys[1].t, 2.0) << "at the moment it was dragged, clip-local";
+  EXPECT_NEAR(keys[1].v, 0.8, 1e-9);
+
+  // And the one it was already holding is untouched.
+  EXPECT_DOUBLE_EQ(keys[0].t, 0.0);
+  EXPECT_NEAR(keys[0].v, 0.5, 1e-9);
+}
+
+TEST(MaskOverlays, DraggingAMaskThatIsNotAnimatedStillJustMovesIt) {
+  core::Project p = with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse});
+
+  ui::MaskOverlay moved = mask_overlays(p, "c1", 4.0).front().overlay;
+  moved.x = 0.8;
+  p = apply_mask_overlay(std::move(p), "c1", 0, moved, 4.0);
+
+  const core::ClipEffect& effect = p.tracks.front().clips.front().effects[0];
+  EXPECT_TRUE(effect.keyframes.empty()) << "a drag invented an animation";
+  EXPECT_NEAR(effect.mask.x, 0.8, 1e-9);
 }
 
 }  // namespace

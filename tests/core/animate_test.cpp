@@ -347,5 +347,91 @@ TEST(AudioEffects, OutOfRangeIndicesAreNoOps) {
   EXPECT_EQ(set_audio_effect_param(before, "c1", 3, "x", 1.0), before);
 }
 
+// -------------------------------------------------------- animating a mask --
+
+/// A clip with one effect carrying an ellipse.
+[[nodiscard]] Project masked_project() {
+  Project p = one_clip_project();
+  p = add_clip_effect(std::move(p), "c1", "blur", {{"amount", 4.0}});
+  return set_effect_mask(std::move(p), "c1", 0,
+                         Mask{.shape = MaskShape::Ellipse, .x = 0.25, .width = 0.1});
+}
+
+[[nodiscard]] const ClipEffect& only_effect(const Project& p) { return only_clip(p).effects[0]; }
+
+TEST(MaskAnimation, AMaskNumberIsSetOnTheMaskRatherThanTheParameters) {
+  // The mask is the one home for the value. A parameter map holding a second
+  // copy would be two truths about one number, and whichever the renderer read
+  // would be the wrong one half the time.
+  Project p = masked_project();
+  p = set_clip_effect_param(std::move(p), "c1", 0, "mask.width", 0.4);
+
+  EXPECT_DOUBLE_EQ(only_effect(p).mask.width, 0.4);
+  EXPECT_FALSE(only_effect(p).params.contains("mask.width"));
+  EXPECT_DOUBLE_EQ(effect_param_at(only_effect(p), "mask.width", 0.0), 0.4);
+}
+
+TEST(MaskAnimation, KeyframesOnAMaskResolveOntoTheMask) {
+  Project p = masked_project();
+  p = set_effect_keyframe(std::move(p), "c1", 0, "mask.x", 0.0, 0.2);
+  p = set_effect_keyframe(std::move(p), "c1", 0, "mask.x", 2.0, 0.8);
+
+  ASSERT_TRUE(is_effect_param_animated(only_effect(p), "mask.x"));
+
+  const std::vector<ClipEffect> at_start = resolved_effects(only_clip(p), 0.0);
+  ASSERT_EQ(at_start.size(), 1u);
+  EXPECT_DOUBLE_EQ(at_start[0].mask.x, 0.2);
+  // Folded onto the mask, not left in the parameters where nothing reads it.
+  EXPECT_FALSE(at_start[0].params.contains("mask.x"));
+
+  const std::vector<ClipEffect> midway = resolved_effects(only_clip(p), 1.0);
+  EXPECT_DOUBLE_EQ(midway[0].mask.x, 0.5);
+
+  const std::vector<ClipEffect> at_end = resolved_effects(only_clip(p), 2.0);
+  EXPECT_DOUBLE_EQ(at_end[0].mask.x, 0.8);
+}
+
+TEST(MaskAnimation, AnAnimatedNumberLeavesTheOthersAlone) {
+  Project p = masked_project();
+  p = set_effect_keyframe(std::move(p), "c1", 0, "mask.x", 0.0, 0.9);
+
+  const std::vector<ClipEffect> resolved = resolved_effects(only_clip(p), 0.0);
+  ASSERT_EQ(resolved.size(), 1u);
+  EXPECT_DOUBLE_EQ(resolved[0].mask.x, 0.9);
+  EXPECT_DOUBLE_EQ(resolved[0].mask.width, 0.1) << "an unanimated number moved";
+  EXPECT_EQ(resolved[0].mask.shape, MaskShape::Ellipse);
+}
+
+TEST(MaskAnimation, TheShapeAndTheInversionAreNotNumbers) {
+  // A keyframe between two of them would have to mean something halfway
+  // between an ellipse and a rectangle.
+  EXPECT_EQ(mask_param_field("mask.shape"), nullptr);
+  EXPECT_EQ(mask_param_field("mask.inverted"), nullptr);
+  EXPECT_EQ(mask_param_field("amount"), nullptr);
+  EXPECT_NE(mask_param_field("mask.feather"), nullptr);
+}
+
+TEST(MaskAnimation, EveryOfferedKeyNamesAField) {
+  // The list a panel builds its rows from and the mapping a value is written
+  // through are two lists, and this is what keeps them one.
+  for (const std::string_view key : mask_param_keys()) {
+    EXPECT_NE(mask_param_field(key), nullptr) << key;
+  }
+}
+
+TEST(MaskAnimation, AMaskKeyframeCountsAsOneOnTheClip) {
+  // Which is what draws the mark on the clip in the timeline, and what tells
+  // the keyframe panel there is a lane to show.
+  Project p = masked_project();
+  EXPECT_FALSE(clip_has_effect_keyframes(only_clip(p)));
+
+  p = set_effect_keyframe(std::move(p), "c1", 0, "mask.feather", 1.5, 0.3);
+  EXPECT_TRUE(clip_has_effect_keyframes(only_clip(p)));
+
+  const std::vector<double> times = effect_keyframe_times(only_clip(p));
+  ASSERT_EQ(times.size(), 1u);
+  EXPECT_DOUBLE_EQ(times[0], 1.5);
+}
+
 }  // namespace
 }  // namespace cutline::core

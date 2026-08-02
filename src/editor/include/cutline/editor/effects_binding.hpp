@@ -84,6 +84,22 @@ struct EffectMaskRow {
   friend bool operator==(const EffectMaskRow&, const EffectMaskRow&) = default;
 };
 
+/// The mask's numbers as ordinary parameter rows.
+///
+/// A mask is animated through the same machinery as any other effect parameter,
+/// under the reserved keys `core::mask_param_keys` names — so the panel builds
+/// these exactly as it builds an effect's own rows, stopwatch and all, and the
+/// keyframe editor, the marks on the clip and the curve picker needed to learn
+/// nothing.
+///
+/// Values are in the units the panel shows: a percentage of the layer, except
+/// rotation, which is degrees in both.
+[[nodiscard]] std::vector<EffectParamRow> mask_param_rows(const core::ClipEffect& effect,
+                                                          double local_t);
+
+/// What a mask number is multiplied by to show it and divided by to set it.
+[[nodiscard]] double mask_param_scale(std::string_view key) noexcept;
+
 /// The shapes a mask can be, in the order a control should offer them, and what
 /// each is called on screen.
 [[nodiscard]] std::span<const core::MaskShape> mask_shapes() noexcept;
@@ -108,6 +124,11 @@ struct EffectRow {
   /// Where the effect applies. A shape of `None` is everywhere, and is what
   /// almost every effect says.
   EffectMaskRow mask;
+  /// The same numbers again, as animatable rows. Both, because they answer
+  /// different questions: the shape on the picture is dragged as a whole and
+  /// wants all of it at once, and the panel wants a row at a time with its own
+  /// stopwatch. Empty while the shape is `None`.
+  std::vector<EffectParamRow> mask_params;
 
   friend bool operator==(const EffectRow&, const EffectRow&) = default;
 };

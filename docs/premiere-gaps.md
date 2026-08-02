@@ -341,8 +341,8 @@ masking for nothing.
 | Rotation | yes | **done** | — |
 | A mask per effect | yes | **done** | — |
 | Pen / free-draw path | yes | none — a path needs a buffer rather than root constants, and a winding rule | machinery |
-| Dragging the shape on the monitor | yes | numbers in the panel only | control |
-| Animating a mask | keyframed path, and tracking | none | model |
+| Dragging the shape on the monitor | yes | **done**, and it writes a keyframe when the number is animated | — |
+| Animating a mask | keyframed path, and tracking | **done** for every number it has; a path is the part that is missing | — |
 | Tracking | per-frame analysis | none, and belongs with neither of the above | machinery |
 
 Tracking is beyond all of it: it is per-frame analysis, a different kind of work
@@ -416,7 +416,6 @@ than four:
 | | Where | Size |
 |---|---|---|
 | A free-draw mask path | §1.4 | machinery |
-| Animating a mask | §1.4 | **model** |
 | A margin round the effect scratch, so a blur spreads past the quad | §1.3 | machinery |
 | Catalogue depth beyond twenty | §1.5 | one branch each, now |
 
@@ -427,8 +426,22 @@ dragging them on the picture, nested folders, dropping an effect on the picture,
 named presets, user bins, and Effect Controls naming the clip it is showing —
 which turned out to have been done already and listed anyway.
 
+**A mask animates through the machinery effects already had.** Each of its seven
+numbers answers to a reserved parameter name — `mask.x`, `mask.feather` and so
+on — so the stopwatch, the keyframe navigator, the curve picker, the marks on
+the clip, the copy of a stack, a saved preset and the file format all carry a
+mask's animation without one of them having learned what a mask is. The value
+still lives on the mask, which stays its one home; only the keyframes live under
+a parameter name.
+
+Two things had to follow it. The outline on the picture is drawn from the
+*resolved* mask, or it stops meaning anything the moment a number is animated.
+And dragging the shape goes through the same setter a number does, so it writes
+a keyframe when the property is animated — found on screen, where a drag moved
+the outline and the render ignored it.
+
 **The shape of what is left.** The structural work is finished and so is the
-feature list. What remains is two follow-ups the mask turned up, one the pass
+feature list. What remains is one follow-up the mask turned up, one the pass
 chain turned up, and as much catalogue as anybody wants — which is now a branch
 at a time rather than a budget.
 

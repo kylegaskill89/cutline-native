@@ -1,5 +1,7 @@
 #include "cutline/editor/monitor_binding.hpp"
 
+#include "cutline/editor/effects_binding.hpp"
+
 #include "cutline/core/layout.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/core/effects.hpp"
@@ -137,10 +139,17 @@ std::vector<MaskOverlayRef> mask_overlays(const core::Project& project,
   const std::optional<ui::MonitorBox> frame = mask_frame(project, *clip, t);
   if (!frame.has_value()) return {};
 
+  // Resolved, so an animated mask is drawn where it is *now* rather than where
+  // it was stored. The shape on the picture and the shape the renderer uses
+  // have to be the same shape, or the outline stops meaning anything the moment
+  // one of its numbers is animated.
+  const std::vector<core::ClipEffect> effects =
+      core::resolved_effects(*clip, t - clip->start);
+
   std::vector<MaskOverlayRef> out;
-  for (std::size_t i = 0; i < clip->effects.size(); ++i) {
-    const core::Mask& mask = clip->effects[i].mask;
-    if (!mask.active() || !clip->effects[i].enabled) continue;
+  for (std::size_t i = 0; i < effects.size(); ++i) {
+    const core::Mask& mask = effects[i].mask;
+    if (!mask.active() || !effects[i].enabled) continue;
 
     // The mask's centre as an offset from the layer's, in layer fractions,
     // turned with the layer and scaled by its drawn size.
@@ -174,13 +183,22 @@ core::Project apply_mask_overlay(core::Project project, std::string_view clip_id
   // the other way, divided by the layer's drawn size.
   const auto [dx, dy] = turn(overlay.x - frame->x, overlay.y - frame->y, -frame->rotation);
 
-  core::Mask mask = clip->effects[effect].mask;
-  mask.x = dx / frame->width + 0.5;
-  mask.y = dy / frame->height + 0.5;
-  mask.width = overlay.width / frame->width;
-  mask.height = overlay.height / frame->height;
-  mask.rotation = overlay.rotation - frame->rotation;
-  return core::set_effect_mask(std::move(project), clip_id, effect, std::move(mask));
+  // Through `set_effect_parameter` rather than straight onto the mask, for the
+  // same reason `apply_monitor_box` goes through `set_clip_parameter`: a drag on
+  // the picture and a drag on a number have to be the same edit, keyframes and
+  // all. Written onto the mask, a drag would be silently thrown away the moment
+  // that number was animated — the shape would move and the render would not.
+  const double local_t = t - clip->start;
+  const auto set = [&](std::string_view key, double value) {
+    project = set_effect_parameter(std::move(project), clip_id, effect, key, value, local_t);
+  };
+
+  set("mask.x", (dx / frame->width) + 0.5);
+  set("mask.y", (dy / frame->height) + 0.5);
+  set("mask.width", overlay.width / frame->width);
+  set("mask.height", overlay.height / frame->height);
+  set("mask.rotation", overlay.rotation - frame->rotation);
+  return project;
 }
 
 core::Project apply_monitor_box(core::Project project, std::string_view clip_id,

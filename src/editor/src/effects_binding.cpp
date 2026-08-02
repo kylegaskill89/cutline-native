@@ -91,6 +91,7 @@ std::vector<EffectRow> clip_effects(const core::Project& project, std::string_vi
     row.enabled = effect.enabled;
     row.unknown = spec == nullptr;
     row.mask = mask_row(effect.mask);
+    row.mask_params = mask_param_rows(effect, local_t);
     if (spec == nullptr) {
       out.push_back(std::move(row));
       continue;
@@ -126,6 +127,58 @@ std::vector<EffectRow> clip_effects(const core::Project& project, std::string_vi
   }
 
   return out;
+}
+
+double mask_param_scale(std::string_view key) noexcept {
+  // Rotation is degrees on both sides. Everything else is a fraction of the
+  // layer, shown as a percentage like every other fraction in this panel.
+  return key == "mask.rotation" ? 1.0 : kEffectPercent;
+}
+
+std::vector<EffectParamRow> mask_param_rows(const core::ClipEffect& effect, double local_t) {
+  if (!effect.mask.active()) return {};
+
+  /// Name, range and reset value per key. The ranges reach past the layer on
+  /// purpose for position and size: a mask parked off the edge is how one is
+  /// brought in from the side.
+  struct Spec {
+    std::string_view key;
+    std::string_view name;
+    double minimum;
+    double maximum;
+    double fallback;
+    std::string_view suffix;
+  };
+  static constexpr std::array<Spec, 7> kSpecs{{
+      {"mask.x", "Mask Position X", -50.0, 150.0, 50.0, "%"},
+      {"mask.y", "Mask Position Y", -50.0, 150.0, 50.0, "%"},
+      {"mask.width", "Mask Width", 0.0, 100.0, 25.0, "%"},
+      {"mask.height", "Mask Height", 0.0, 100.0, 25.0, "%"},
+      {"mask.rotation", "Mask Rotation", -180.0, 180.0, 0.0, "\xc2\xb0"},
+      {"mask.feather", "Mask Feather", 0.0, 50.0, 0.0, "%"},
+      {"mask.opacity", "Mask Opacity", 0.0, 100.0, 100.0, "%"},
+  }};
+
+  std::vector<EffectParamRow> rows;
+  rows.reserve(kSpecs.size());
+  for (const Spec& spec : kSpecs) {
+    const bool animated = core::is_effect_param_animated(effect, spec.key);
+    const double scale = mask_param_scale(spec.key);
+    rows.push_back(EffectParamRow{
+        .key = std::string(spec.key),
+        .name = std::string(spec.name),
+        .range = {.minimum = spec.minimum, .maximum = spec.maximum},
+        // Through `effect_param_at` whether or not it is animated: that is the
+        // one reader that knows a mask number lives on the mask, and going
+        // round it here is how the two would come to disagree.
+        .value = core::effect_param_at(effect, spec.key, local_t) * scale,
+        .fallback = spec.fallback,
+        .suffix = std::string(spec.suffix),
+        .animated = animated,
+        .keyed_here = animated && keyed_at(effect, spec.key, local_t),
+        .interp = core::effect_keyframe_interp_of(effect, spec.key)});
+  }
+  return rows;
 }
 
 std::span<const core::MaskShape> mask_shapes() noexcept {

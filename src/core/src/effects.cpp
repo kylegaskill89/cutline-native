@@ -3,6 +3,7 @@
 #include "cutline/core/query.hpp"
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 namespace cutline::core {
@@ -39,6 +40,29 @@ bool move_within(StackT& stack, std::size_t index, int direction) {
 
 // ----------------------------------------------------------------- queries --
 
+double Mask::* mask_param_field(std::string_view key) noexcept {
+  // Written down once, so reading a mask number and writing it cannot come to
+  // disagree about which field a name means.
+  if (key == "mask.x") return &Mask::x;
+  if (key == "mask.y") return &Mask::y;
+  if (key == "mask.width") return &Mask::width;
+  if (key == "mask.height") return &Mask::height;
+  if (key == "mask.rotation") return &Mask::rotation;
+  if (key == "mask.feather") return &Mask::feather;
+  if (key == "mask.opacity") return &Mask::opacity;
+  // Not the shape and not `inverted`: neither is a number, and a keyframe
+  // between two of them would have to mean something halfway between an ellipse
+  // and a rectangle.
+  return nullptr;
+}
+
+std::span<const std::string_view> mask_param_keys() noexcept {
+  static constexpr std::array<std::string_view, 7> kKeys{
+      "mask.x",        "mask.y",       "mask.width",  "mask.height",
+      "mask.rotation", "mask.feather", "mask.opacity"};
+  return kKeys;
+}
+
 bool is_effect_param_animated(const ClipEffect& effect, std::string_view key) noexcept {
   const auto it = effect.keyframes.find(std::string(key));
   return it != effect.keyframes.end() && !it->second.empty();
@@ -49,6 +73,12 @@ double effect_param_at(const ClipEffect& effect, std::string_view key, double lo
   if (animated != effect.keyframes.end() && !animated->second.empty()) {
     return eval_keyframes(animated->second, local_t);
   }
+  // A mask's numbers live on the mask, which is their one home. Only their
+  // keyframes are kept under a parameter name.
+  if (double Mask::* field = mask_param_field(key); field != nullptr) {
+    return effect.mask.*field;
+  }
+
   const auto stat = effect.params.find(std::string(key));
   return stat != effect.params.end() ? stat->second : 0.0;
 }
@@ -59,7 +89,15 @@ std::vector<ClipEffect> resolved_effects(const Clip& c, double local_t) {
   for (const ClipEffect& effect : c.effects) {
     ClipEffect resolved = effect;
     for (const auto& [key, kfs] : effect.keyframes) {
-      if (!kfs.empty()) resolved.params[key] = eval_keyframes(kfs, local_t);
+      if (kfs.empty()) continue;
+      // A mask's animation is folded onto the mask rather than into the
+      // parameters, because that is where everything downstream reads it — the
+      // renderer, the shapes drawn on the picture, and the pass planner.
+      if (double Mask::* field = mask_param_field(key); field != nullptr) {
+        resolved.mask.*field = eval_keyframes(kfs, local_t);
+        continue;
+      }
+      resolved.params[key] = eval_keyframes(kfs, local_t);
     }
     // The renderer reads params only, so the animation is fully folded away.
     resolved.keyframes.clear();
@@ -141,6 +179,15 @@ Project set_clip_effect_param(Project p, std::string_view clip_id, std::size_t i
                               std::string key, double value) {
   ClipEffect* effect = find_effect(p, clip_id, index);
   if (effect == nullptr) return p;
+
+  // A mask number goes to the mask. Everything that sets an effect parameter
+  // comes through here, so this is what lets a mask be animated by exactly the
+  // machinery an ordinary parameter is — one reserved name and no new path.
+  if (double Mask::* field = mask_param_field(key); field != nullptr) {
+    effect->mask.*field = value;
+    return p;
+  }
+
   effect->params[std::move(key)] = value;
   return p;
 }
