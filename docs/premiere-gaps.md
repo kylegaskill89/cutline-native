@@ -101,28 +101,32 @@ length across its width, which is what Premiere's does before anybody zooms.
 | Zoom and scroll the lanes | yes | **done** — wheel zooms about the pointer, shift-wheel scrolls | — |
 | Delete a selected keyframe | Delete | **done**, and on the menu | — |
 | Velocity graph | expandable value and speed curves | **done** — both, in one box per lane | — |
-| Bezier handles on the graph | dragged to shape the speed | **not possible** — see below | model |
+| Bezier handles on the graph | dragged to shape the speed | **done** — see below | — |
 | Copy and paste keyframes | yes | **done** — Ctrl+C and Ctrl+V, pasting at the playhead | — |
 
-#### The one part of §1.2 that cannot be built as things stand
+#### The part of §1.2 that needed a model change — **done**
 
 The graph draws both curves Premiere's does: the **value** across the lane, and
 the **speed** under it as the slope of the first. They are sampled through
 `core::eval_keyframes` rather than reimplemented, so the picture is drawn from
-the same numbers the renderer uses — an ease reads as an S over an arch, a hold
-as a step over nothing.
+the same numbers the renderer uses.
 
-What cannot be built is **dragging the handles**. Premiere's velocity graph is
-not only a picture: each keyframe has two bezier control points, and pulling
-them is how a speed is shaped. `core::Keyframe` has a time, a value and one of
-three modes. There is nowhere to put a handle.
+Dragging the handles needed `Keyframe` to have somewhere to put them, and it now
+does: two handles in **normalised segment space**, x a fraction of the segment's
+duration and y a fraction of its value change, measured from the keyframe's own
+end. That is what makes a handle mean the same shape whatever the segment's
+length or height.
 
-Adding them is a real model change rather than a wiring job — `Keyframe` grows
-two offsets, the resolver learns a cubic, the serialiser learns to write them,
-and every project file written before it has to keep loading. It also makes the
-three modes into presets over a continuous space, which is what Premiere's seven
-actually are. Worth doing, and worth doing deliberately rather than as the tail
-of a panel.
+The defaults are a third and a third, which are the control points of the cubic
+that *is* a straight line — so a keyframe switched to Bezier and left alone
+animates exactly as a linear one did. Linear, Hold and Ease survive: Ease stays
+smoothstep rather than becoming its bezier approximation, so every project
+written before this renders to the same numbers, and Hold is not a curve at all
+and could not be a preset over this space even in principle.
+
+Handles are shown for the *selected* keyframes only, and drawn hollow on a
+segment that is not listening to them yet — pulling one is what switches the
+segment over.
 
 Two things that came out of building it are worth keeping.
 
@@ -269,63 +273,88 @@ a D3D12 root signature may hold 64 DWORDs in total. Ours holds 49: one for the
 descriptor table and 48 for `ShaderParams`, of which 28 are already effect
 parameters.
 
-**Fifteen DWORDs are left, and a mask needs about eight of them.**
+**Fifteen DWORDs were left, and a mask needed about eight of them.** — **done**.
 
-So the claim in an earlier draft of this document — that a new effect is "an
-afternoon", the catalogue and the resolver taking one in two places — is wrong
-in the way that matters. It is true for the next one or two and then it is not
-true at all. Premiere's several dozen effects cannot be reached by adding fields
-to this struct, and the last few that fit would be spent by whichever feature
-happened to ask first.
+Effects are **passes**, not fields. A layer with any effect on it is drawn once
+into a scratch target in its own space, each effect runs over that scratch in
+stack order, and the result is positioned and composited; a layer with no
+effects still draws in one go. A pass carries eight floats shared by every
+kind, because only one runs at a time.
 
-What unblocks both is the same change: **effects become passes rather than
-fields**. Each effect gets its own shader and its own small constant buffer, the
-compositor runs the stack as a chain of render targets, and the budget stops
-being global. That is how the reference does it and how any of this scales. It
-also happens to be what per-effect masks need, since a mask is then a property
-of a pass rather than of a layer.
+The root constants went from forty-eight DWORDs to forty-eight — the total is
+the same, and it is now *reusable*. That is the part that mattered: an effect no
+longer holds a permanent field, so the catalogue grew from eleven to twenty
+without the signature moving, and a mask found somewhere to live that belongs to
+one effect rather than to the whole stack.
 
-It is not a small change — it touches the compositor's whole draw path, costs
-intermediate targets per effect, and needs the blur's existing two-pass special
-case folded into the general mechanism. It is also the single highest-value
-piece of work left in section 1, because everything after it gets cheaper.
+Four things changed about what is drawn, all of them the point rather than side
+effects, and all of them recorded here because a project made before them will
+not match one made after:
 
-#### 1.4 Masks
+- **Order matters.** Invert then blur is a blurred black layer; blur then invert
+  is an inverted blur of white. Before, the two were the same picture.
+- **The keyer sees the stack.** It used to read the unmodified pixel always. Now
+  it reads whatever precedes it, and putting it first is how to get the old
+  behaviour.
+- **Blur is in the layer's own pixels**, so scaling a layer scales its blur, and
+  it softens the layer's edge inwards rather than spreading past the quad.
+  Premiere spreads past it. That needs a margin around the scratch and is
+  **owed**.
+- **Flip is a pass**, so it sits somewhere in the stack rather than being
+  applied to the quad before everything else.
+
+#### 1.4 Masks — **done, except the pen and the animation**
 
 Premiere puts three mask tools on **every** effect — ellipse, rectangle, pen —
 with path, feather, opacity, expansion, inversion, and per-frame tracking. It is
 how anything gets applied to part of a picture rather than all of it.
 
-We have none of it, and nothing underneath it: no mask in the model, no mask in
-the compositor, no path type.
+`core::Mask` is now a shape, a centre, half-extents, a rotation, a feather, an
+opacity and an inverted flag, on **one effect** rather than on the clip — which
+is what Premiere means by a mask and what the flat effect struct could not
+express at all. Everything is a fraction of the layer, so a mask keeps its place
+when the clip is scaled.
 
-There is a real decision here, and it is not mine to make:
+The shader applies it the same way for every kind of pass: work out what the
+effect did, work out how much of the pixel the mask covers, mix between the two.
+An effect never learns that it is masked, so a new one in the catalogue gets
+masking for nothing.
 
-- **A mask per clip** fits in the budget above and could be built now — shape,
-  feather, expansion, inversion, and handles on the monitor. It is genuinely
-  useful and it is *not* what Premiere does.
-- **A mask per effect** is what Premiere does, and it needs the pass
-  restructuring first.
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Ellipse and rectangle | yes | **done** | — |
+| Feather, opacity, inversion | yes | **done** — opacity is the *effect's* strength, not the layer's transparency | — |
+| Rotation | yes | **done** | — |
+| A mask per effect | yes | **done** | — |
+| Pen / free-draw path | yes | none — a path needs a buffer rather than root constants, and a winding rule | machinery |
+| Dragging the shape on the monitor | yes | numbers in the panel only | control |
+| Animating a mask | keyframed path, and tracking | none | model |
+| Tracking | per-frame analysis | none, and belongs with neither of the above | machinery |
 
-Tracking is beyond both and belongs with neither: it is per-frame analysis, a
-different kind of work from anything here now.
-
-`docs/architecture.md` calls arbitrary masks out as something the rewrite makes
-*cheap*. That is true of the drawing and false of everything around it.
+Tracking is beyond all of it: it is per-frame analysis, a different kind of work
+from anything here now.
 
 #### 1.5 Catalogue depth
 
-Eleven video effects against Premiere's several dozen, in five categories
-against eighteen. Worth listing because "we have effects" and "we have the
-effects somebody reaches for" are different claims — but see the budget above:
-this is a **structural** gap wearing a content gap's clothes.
+Twenty video effects, up from eleven, in five categories. The structural gap
+underneath this is gone: an entry is now one branch in one shader and one line
+in the registry, and costs nothing permanent.
 
-The ones whose absence would be noticed first, roughly in order: **Lumetri
+Added since: **Exposure**, **Gamma**, **Levels**, **Colour Balance**, **Tint**,
+**Directional Blur**, **Sharpen**, **Posterize**, **Threshold**. Three of those
+reach one kind of pass, which is the clearest sign the ceiling has gone — an
+entry is a name and some numbers rather than a slot in a struct.
+
+Still absent, roughly in the order their absence would be noticed: **Lumetri
 Color** (or an equivalent grading control — curves, wheels, HSL secondaries),
-**Gaussian Blur with directional and radial variants**, **Sharpen**, **Noise**,
-**Lens Distortion**, **Drop Shadow**, **Track Matte Key**, **Ultra Key** (ours
-is a simple chroma key), **Warp Stabilizer**, **Transform** (the effect, which
-unlike Motion sits in the stack and can be reordered).
+**Radial Blur**, **Noise**, **Lens Distortion**, **Drop Shadow**, **Track Matte
+Key**, **Ultra Key** (ours is a simple chroma key), **Warp Stabilizer**, and
+**Transform** (the effect, which unlike Motion sits in the stack and can be
+reordered).
+
+Of those, Drop Shadow and Track Matte Key want something the pass chain does not
+have yet — a second texture to read besides the layer itself. Noise wants a time
+the pass does not carry. The rest are branches.
 
 ### 1.6 Audit: what section 1 is still missing
 
@@ -342,19 +371,21 @@ much they cost somebody:
    centre, and the difference is one rotated offset computed in `layer_box`.
    Shown in pixels of the layer, paired on one row, keyframeable like the rest
    of the transform. Files written before it read back centred.
-2. ~~**No panner.**~~ **Done** for the clip. `Clip::pan`, animated through
-   `AnimProp::Pan`, shown as Balance from -100 to 100 under Volume. It is a
-   balance rather than a constant-power pan, because what the mixer has is a
-   stereo bus; centre is exactly unity, so nothing written before it sounds
-   different. Premiere also has a panner on every audio *track* — that is a
-   track property and a mixer control, and it is not done.
-3. **Audio effect parameters cannot be keyframed at all.** `AudioClipEffect`
-   holds a type, an enabled flag and a map of numbers. Clip gain is automatable
-   and nothing else about the sound is. The video side has had per-parameter
-   keyframes since phase 1.
-4. **An effect applies to one clip, not the selection.** Both the double-click
-   and the drop take `selection.front()`. Premiere applies to every selected
-   clip, which is the whole reason to select several.
+2. ~~**No panner.**~~ **Done**, on the clip and on the track. `Clip::pan` and
+   `Track::pan`, shown as Balance from -100 to 100. Balances rather than
+   constant-power pans, because what the mixer has is a stereo bus; centre is
+   exactly unity, so nothing written before them sounds different. The two
+   multiply their sides rather than adding their pans, so a clip hard left on a
+   track panned hard right is silent. The track fader came with it, since a
+   panner without one is half a mixer.
+3. ~~**Audio effect parameters cannot be keyframed.**~~ **Done.**
+   `AudioClipEffect` carries the same keyframe map `ClipEffect` does, and the
+   panel is the same loop. The sound is retuned on a fixed grid of frames
+   aligned to the *timeline* rather than to the caller's buffer, so the preview
+   and the export follow the same curve.
+4. **An effect applies to one clip, not the selection.** The double-click and
+   the drop both take the whole selection now; what is still true is narrower —
+   nothing else that edits a stack does. Worth re-checking rather than trusted.
 5. ~~**Effects cannot be reordered by dragging.**~~ **Done.** The up and down
    buttons stay; `ui::GrabRow` adds the drag, with an insertion line across the
    top of the card it would land above.
@@ -370,26 +401,26 @@ than four:
 
 | | Where | Size |
 |---|---|---|
-| Bezier handles on the velocity graph | §1.2 | **model** |
-| Drag an effect onto the program monitor | §1.3 | control |
-| Nested folders in the library | §1.3 | control |
 | User bins, and named presets | §1.3 | machinery |
-| Masks | §1.4 | **decision, then machinery** |
-| Catalogue depth | §1.5 | **blocked on the root-constant budget** |
+| A free-draw mask path, and animating a mask | §1.4 | **machinery / model** |
+| Dragging a mask on the monitor | §1.4 | control |
+| A margin round the effect scratch, so a blur spreads past the quad | §1.3 | machinery |
+| Effect Controls does not name the clip it is showing | §1.6 | control |
+| Catalogue depth beyond twenty | §1.5 | one branch each, now |
 
-Paired X/Y on one row, a visible reset per row, resetting a whole effect and
-greying a governed property are all done, and are no longer listed.
+Everything else that was listed is done: paired X/Y, a visible reset per row,
+resetting a whole effect, greying a governed property, the anchor point, both
+panners, audio-effect keyframes, bezier handles, effects as passes, masks,
+nested folders, and dropping an effect on the picture.
 
-**The shape of what is left.** Eight of the seventeen remain, plus the track
-panner the clip one turned up. Six of those are
-not independent: masks, catalogue depth and per-effect anything all wait on
-effects becoming passes rather than fields, and bezier handles and audio-effect
-keyframes are each a change to the model with a serialiser and a compatibility
-question attached. Two of that second cluster are now done and both were cheaper
-than expected — the anchor point because it is an offset the existing geometry
-already carries, the panner because the keyframe array took it without being
-widened. Neither of those escapes applies to what is left: a bezier handle is a
-new field *inside* `Keyframe`, and an audio effect has no keyframe map at all.
+**The shape of what is left.** The structural work is finished. What remains is
+a bin system, three follow-ups the mask and the pass chain each turned up, and
+as much catalogue as anybody wants — which is now a branch at a time rather than
+a budget.
+
+Two things are owed as *verification* rather than as work: the bezier handle
+drag and the pass rendering have both been checked against tests and a real
+graphics device, and neither has been driven by hand on screen.
 
 ---
 
