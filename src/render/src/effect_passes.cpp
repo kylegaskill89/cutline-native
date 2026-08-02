@@ -102,6 +102,24 @@ EffectPass blur_pass(float sigma) noexcept {
   return pass;
 }
 
+PassMask pass_mask(const core::Mask& mask) noexcept {
+  if (!mask.active()) return PassMask{};
+
+  const double radians = mask.rotation * std::numbers::pi / 180.0;
+  return PassMask{
+      .shape = static_cast<float>(static_cast<int>(mask.shape)),
+      .x = static_cast<float>(mask.x),
+      .y = static_cast<float>(mask.y),
+      .width = static_cast<float>(std::max(0.0, mask.width)),
+      .height = static_cast<float>(std::max(0.0, mask.height)),
+      .cos_rotation = static_cast<float>(std::cos(radians)),
+      .sin_rotation = static_cast<float>(std::sin(radians)),
+      .feather = static_cast<float>(std::max(0.0, mask.feather)),
+      .opacity = static_cast<float>(std::clamp(mask.opacity, 0.0, 1.0)),
+      .inverted = mask.inverted ? 1.0f : 0.0f,
+  };
+}
+
 // --------------------------------------------------------------- accessors --
 
 float pass_brightness(const EffectPass& pass) noexcept { return pass.values[0]; }
@@ -131,6 +149,7 @@ std::vector<EffectPass> plan_effect_passes(const core::Clip& clip, double local_
 
   for (const core::ClipEffect& effect : core::resolved_effects(clip, local_t)) {
     if (!effect.enabled) continue;
+    const std::size_t before = passes.size();
 
     // Every branch is one effect becoming one pass. The conversions are the
     // same ones the flat resolver makes — the FFmpeg fragments in the spec are
@@ -203,6 +222,12 @@ std::vector<EffectPass> plan_effect_passes(const core::Clip& clip, double local_
     }
     // An unknown type is ignored rather than rejected: a project written by a
     // newer version should still open, minus the effect it cannot draw.
+
+    // Whatever this effect became — a pass, two, or none — carries its mask.
+    // A blur is two draws and both of them are masked, which is what keeps the
+    // two axes agreeing about where the blur is.
+    const PassMask mask = pass_mask(effect.mask);
+    for (std::size_t at = before; at < passes.size(); ++at) passes[at].mask = mask;
   }
 
   return passes;

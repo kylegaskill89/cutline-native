@@ -699,6 +699,204 @@ TEST_F(CompositorTest, EffectsApplyOnTopOfAGradient) {
   EXPECT_LT(pixel_at(image, kWidth - 1, kHeight / 2).r, 20);
 }
 
+// -------------------------------------------------------------------- mask --
+//
+// A mask belongs to one pass, and the shader applies it the same way whatever
+// the pass is: work out the effect, work out the coverage, mix between the two.
+// So these test one effect and trust the rest, which is the point of doing it
+// in one place.
+
+/// An ellipse in the middle of the layer, a quarter of it across.
+[[nodiscard]] PassMask ellipse(float radius = 0.25f) {
+  PassMask mask;
+  mask.shape = 1.0f;
+  mask.width = radius;
+  mask.height = radius;
+  return mask;
+}
+
+[[nodiscard]] PassMask rectangle(float half_width, float half_height) {
+  PassMask mask;
+  mask.shape = 2.0f;
+  mask.width = half_width;
+  mask.height = half_height;
+  return mask;
+}
+
+TEST_F(CompositorTest, AMaskedEffectAppliesInsideAndNotOutside) {
+  EffectPass pass = inverted();
+  pass.mask = ellipse();
+  const std::vector<EffectPass> effects{pass};
+
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.passes = effects;
+
+  const Image image = render({&layer, 1});
+  EXPECT_LE(pixel_at(image, kWidth / 2, kHeight / 2).r, 4) << "inverted in the middle";
+  EXPECT_GE(pixel_at(image, 2, 2).r, 250) << "and left alone in the corner";
+}
+
+TEST_F(CompositorTest, AnInvertedMaskSwapsWhichSideIsAffected) {
+  EffectPass pass = inverted();
+  pass.mask = ellipse();
+  pass.mask.inverted = 1.0f;
+  const std::vector<EffectPass> effects{pass};
+
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.passes = effects;
+
+  const Image image = render({&layer, 1});
+  EXPECT_GE(pixel_at(image, kWidth / 2, kHeight / 2).r, 250) << "the middle is spared";
+  EXPECT_LE(pixel_at(image, 2, 2).r, 4) << "and the corner is not";
+}
+
+TEST_F(CompositorTest, AMaskOpacityIsTheEffectsStrengthNotTheLayers) {
+  // Half a mask is half an inversion, not a half-transparent layer. The
+  // distinction matters: a mask that thinned the picture would show whatever is
+  // beneath it, and there is nothing beneath this one.
+  EffectPass pass = inverted();
+  pass.mask = ellipse();
+  pass.mask.opacity = 0.5f;
+  const std::vector<EffectPass> effects{pass};
+
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.passes = effects;
+
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_NEAR(centre.r, 128, 6) << "halfway between white and its inverse";
+  EXPECT_EQ(centre.a, 255) << "and still fully opaque";
+}
+
+TEST_F(CompositorTest, AFeatheredMaskRampsAcrossItsEdge) {
+  EffectPass pass = inverted();
+  pass.mask = ellipse(0.3f);
+  pass.mask.feather = 0.15f;
+  const std::vector<EffectPass> effects{pass};
+
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.passes = effects;
+
+  const Image image = render({&layer, 1});
+  // Straight out from the centre: fully inverted, then partly, then untouched.
+  const int inside = pixel_at(image, kWidth / 2, kHeight / 2).r;
+  const int edge = pixel_at(image, kWidth / 2 + static_cast<int>(kWidth * 0.3f), kHeight / 2).r;
+  const int outside = pixel_at(image, kWidth - 2, kHeight / 2).r;
+
+  EXPECT_LE(inside, 4);
+  EXPECT_GT(edge, inside);
+  EXPECT_LT(edge, outside);
+  EXPECT_GE(outside, 250);
+}
+
+TEST_F(CompositorTest, AHardMaskHasNoRamp) {
+  EffectPass pass = inverted();
+  pass.mask = ellipse(0.3f);
+  const std::vector<EffectPass> effects{pass};
+
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.passes = effects;
+
+  const Image image = render({&layer, 1});
+  // A pixel either side of where the edge falls, with a couple to spare for the
+  // sampling grid: one fully inverted, one untouched, nothing in between.
+  EXPECT_LE(pixel_at(image, kWidth / 2 + static_cast<int>(kWidth * 0.28f), kHeight / 2).r, 4);
+  EXPECT_GE(pixel_at(image, kWidth / 2 + static_cast<int>(kWidth * 0.32f), kHeight / 2).r, 250);
+}
+
+TEST_F(CompositorTest, ARectangleMaskHasCornersAnEllipseDoesNot) {
+  // The same half-extents either way. A corner of the box is inside the
+  // rectangle and outside the ellipse, which is the whole difference between
+  // the two shapes and the only thing worth asserting about it.
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  EffectPass boxed = inverted();
+  boxed.mask = rectangle(0.3f, 0.3f);
+  const std::vector<EffectPass> box{boxed};
+
+  EffectPass rounded = inverted();
+  rounded.mask = ellipse(0.3f);
+  const std::vector<EffectPass> round{rounded};
+
+  // Just inside the rectangle's corner, comfortably outside the ellipse.
+  const int x = kWidth / 2 + static_cast<int>(kWidth * 0.26f);
+  const int y = kHeight / 2 + static_cast<int>(kHeight * 0.26f);
+
+  layer.passes = box;
+  EXPECT_LE(pixel_at(render({&layer, 1}), x, y).r, 4) << "the corner is inside a rectangle";
+  layer.passes = round;
+  EXPECT_GE(pixel_at(render({&layer, 1}), x, y).r, 250) << "and outside an ellipse";
+}
+
+TEST_F(CompositorTest, TwoEffectsCanBeMaskedDifferently) {
+  // The thing the flat effect struct could not express at all: a mask belongs
+  // to one effect rather than to the clip.
+  EffectPass left = inverted();
+  left.mask = rectangle(0.25f, 0.5f);
+  left.mask.x = 0.25f;
+
+  EffectPass right = colour(0.0f, 1.0f, 0.0f);  // drained of colour
+  right.mask = rectangle(0.25f, 0.5f);
+  right.mask.x = 0.75f;
+
+  const std::vector<EffectPass> effects{left, right};
+
+  Layer layer;
+  layer.color = Color::from_srgb(0.8f, 0.2f, 0.2f);
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.passes = effects;
+
+  const Image image = render({&layer, 1});
+  const Rgba inverted_side = pixel_at(image, kWidth / 4, kHeight / 2);
+  const Rgba drained_side = pixel_at(image, kWidth * 3 / 4, kHeight / 2);
+
+  EXPECT_LT(inverted_side.r, inverted_side.b) << "the left was inverted";
+  EXPECT_NEAR(drained_side.r, drained_side.g, 3) << "the right was drained";
+  EXPECT_NEAR(drained_side.g, drained_side.b, 3);
+}
+
+TEST_F(CompositorTest, AMaskTurnsWithItsOwnRotation) {
+  // A tall thin rectangle laid on its side reaches across rather than up.
+  EffectPass pass = inverted();
+  pass.mask = rectangle(0.1f, 0.45f);
+  pass.mask.cos_rotation = 0.0f;  // a quarter turn
+  pass.mask.sin_rotation = 1.0f;
+  const std::vector<EffectPass> effects{pass};
+
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.passes = effects;
+
+  const Image image = render({&layer, 1});
+  EXPECT_LE(pixel_at(image, 4, kHeight / 2).r, 4) << "it reaches to the sides";
+  EXPECT_GE(pixel_at(image, kWidth / 2, 4).r, 250) << "and not to the top";
+}
+
+TEST_F(CompositorTest, AnUnmaskedPassStillAppliesEverywhere) {
+  const std::vector<EffectPass> effects{inverted()};
+
+  Layer layer;
+  layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  layer.passes = effects;
+
+  const Image image = render({&layer, 1});
+  EXPECT_LE(pixel_at(image, kWidth / 2, kHeight / 2).r, 4);
+  EXPECT_LE(pixel_at(image, 2, 2).r, 4);
+}
+
 // -------------------------------------------------------------------- blur --
 
 TEST_F(CompositorTest, BlurSoftensTheLayersOwnEdge) {

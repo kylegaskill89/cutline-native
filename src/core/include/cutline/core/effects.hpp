@@ -75,6 +75,15 @@ namespace cutline::core {
                                             std::size_t index, std::string key,
                                             std::string value);
 
+/// Sets where one effect applies. `MaskShape::None` takes the mask off again.
+///
+/// The whole mask at once rather than a field at a time: it is one shape, every
+/// number in it means something only alongside the others, and a caller that
+/// could move an edge without knowing the centre would be a caller that could
+/// leave it inside out.
+[[nodiscard]] Project set_effect_mask(Project p, std::string_view clip_id, std::size_t index,
+                                      Mask mask);
+
 // -------------------------------------------------- effect param keyframes --
 
 [[nodiscard]] Project set_effect_keyframe(Project p, std::string_view clip_id, std::size_t index,

@@ -1005,5 +1005,91 @@ TEST(ApplyLibraryEntry, AClipThatIsNotThereChangesNothing) {
   EXPECT_EQ(apply_library_entry(p, "nope", "video:blur"), p);
 }
 
+
+// ------------------------------------------------------------------ mask --
+//
+// A mask belongs to one effect. The panel reads and writes percentages; the
+// model keeps fractions of the layer, so a mask survives the clip being scaled.
+
+TEST(EffectMask, AnEffectStartsWithNone) {
+  const Project p = add_effect(one_clip(), "c1", "blur");
+  const std::vector<EffectRow> rows = clip_effects(p, "c1");
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows.front().mask.shape, core::MaskShape::None);
+}
+
+TEST(EffectMask, IsShownInPercentagesAndStoredInFractions) {
+  Project p = add_effect(one_clip(), "c1", "blur");
+  p = set_effect_mask(std::move(p), "c1", 0,
+                      EffectMaskRow{.shape = core::MaskShape::Ellipse,
+                                    .x = 25.0,
+                                    .y = 75.0,
+                                    .width = 10.0,
+                                    .height = 20.0,
+                                    .rotation = 30.0,
+                                    .feather = 5.0,
+                                    .opacity = 50.0,
+                                    .inverted = true});
+
+  const core::Mask& stored = only_clip(p).effects.front().mask;
+  EXPECT_DOUBLE_EQ(stored.x, 0.25);
+  EXPECT_DOUBLE_EQ(stored.feather, 0.05);
+  EXPECT_DOUBLE_EQ(stored.opacity, 0.5);
+  EXPECT_DOUBLE_EQ(stored.rotation, 30.0) << "degrees are degrees either way";
+  EXPECT_TRUE(stored.inverted);
+
+  const std::vector<EffectRow> rows = clip_effects(p, "c1");
+  EXPECT_DOUBLE_EQ(rows.front().mask.x, 25.0);
+  EXPECT_DOUBLE_EQ(rows.front().mask.opacity, 50.0);
+}
+
+TEST(EffectMask, ClearingItLeavesTheEffectApplyingEverywhere) {
+  Project p = add_effect(one_clip(), "c1", "blur");
+  p = set_effect_mask(std::move(p), "c1", 0, EffectMaskRow{.shape = core::MaskShape::Ellipse});
+  ASSERT_TRUE(only_clip(p).effects.front().mask.active());
+
+  p = clear_effect_mask(std::move(p), "c1", 0);
+  EXPECT_FALSE(only_clip(p).effects.front().mask.active());
+}
+
+TEST(EffectMask, EachEffectHasItsOwn) {
+  Project p = add_effect(one_clip(), "c1", "blur");
+  p = add_effect(std::move(p), "c1", "contrast");
+  p = set_effect_mask(std::move(p), "c1", 1,
+                      EffectMaskRow{.shape = core::MaskShape::Rectangle, .x = 10.0});
+
+  const std::vector<EffectRow> rows = clip_effects(p, "c1");
+  EXPECT_EQ(rows[0].mask.shape, core::MaskShape::None);
+  EXPECT_EQ(rows[1].mask.shape, core::MaskShape::Rectangle);
+  EXPECT_DOUBLE_EQ(rows[1].mask.x, 10.0);
+}
+
+TEST(EffectMask, ANonsenseMaskIsClampedRatherThanRefused) {
+  Project p = add_effect(one_clip(), "c1", "blur");
+  p = set_effect_mask(std::move(p), "c1", 0,
+                      EffectMaskRow{.shape = core::MaskShape::Ellipse,
+                                    .width = -30.0,
+                                    .feather = -10.0,
+                                    .opacity = 400.0});
+
+  const core::Mask& stored = only_clip(p).effects.front().mask;
+  EXPECT_DOUBLE_EQ(stored.width, 0.0);
+  EXPECT_DOUBLE_EQ(stored.feather, 0.0);
+  EXPECT_DOUBLE_EQ(stored.opacity, 1.0);
+}
+
+TEST(EffectMask, AnEffectThatIsNotThereChangesNothing) {
+  const Project p = add_effect(one_clip(), "c1", "blur");
+  EXPECT_EQ(set_effect_mask(p, "c1", 7, EffectMaskRow{.shape = core::MaskShape::Ellipse}), p);
+  EXPECT_EQ(set_effect_mask(p, "nope", 0, EffectMaskRow{.shape = core::MaskShape::Ellipse}), p);
+}
+
+TEST(EffectMask, EveryShapeIsOfferedAndNamed) {
+  EXPECT_EQ(mask_shapes().size(), 3u);
+  for (const core::MaskShape shape : mask_shapes()) {
+    EXPECT_FALSE(mask_shape_name(shape).empty());
+  }
+}
+
 }  // namespace
 }  // namespace cutline::editor

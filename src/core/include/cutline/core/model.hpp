@@ -185,6 +185,51 @@ struct Transition {
   friend bool operator==(const Transition&, const Transition&) = default;
 };
 
+/// The shape a mask cuts. `None` is an effect that applies everywhere, which is
+/// what every effect did before there were masks.
+enum class MaskShape { None, Ellipse, Rectangle };
+
+/// Where one effect applies.
+///
+/// A mask belongs to a **single effect**, not to the clip and not to the stack.
+/// That is what Premiere means by one, and it is the thing the old flat effect
+/// struct could not express at all: once a stack has been folded into one set
+/// of numbers there is nothing left for a mask to belong to.
+///
+/// Everything is a fraction of the layer rather than a pixel count, so a mask
+/// keeps its place when the clip is scaled, and means the same thing whatever
+/// resolution the project is exported at.
+struct Mask {
+  MaskShape shape = MaskShape::None;
+
+  /// Centre, where (0.5, 0.5) is the middle of the layer.
+  double x = 0.5;
+  double y = 0.5;
+  /// Half-extents: the ellipse's radii, or half the rectangle's sides.
+  double width = 0.25;
+  double height = 0.25;
+  /// Clockwise, in degrees, about the mask's own centre.
+  double rotation = 0.0;
+
+  /// How far the edge is softened, as a fraction of the layer. Zero is a hard
+  /// edge, which is almost never what anybody wants and is still the honest
+  /// default: a feather nobody asked for is a mask that does not go where it
+  /// was put.
+  double feather = 0.0;
+
+  /// How strongly the effect applies inside the shape. This is the effect's
+  /// strength, not the layer's transparency — a mask at half opacity is half
+  /// the blur, not a half-visible clip.
+  double opacity = 1.0;
+
+  /// The effect applies *outside* the shape instead. Premiere's Inverted.
+  bool inverted = false;
+
+  [[nodiscard]] bool active() const noexcept { return shape != MaskShape::None; }
+
+  friend bool operator==(const Mask&, const Mask&) = default;
+};
+
 /// One entry in a clip's visual effect stack. `type` keys the effect registry.
 struct ClipEffect {
   std::string type;
@@ -196,6 +241,9 @@ struct ClipEffect {
   /// Per-parameter animation. An animated parameter's `params` entry is ignored
   /// in favour of its keyframes.
   std::map<std::string, std::vector<Keyframe>> keyframes;
+
+  /// Where this effect applies. `MaskShape::None` is everywhere.
+  Mask mask;
 
   friend bool operator==(const ClipEffect&, const ClipEffect&) = default;
 };

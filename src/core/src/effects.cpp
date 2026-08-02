@@ -153,6 +153,22 @@ Project set_clip_effect_color(Project p, std::string_view clip_id, std::size_t i
   return p;
 }
 
+Project set_effect_mask(Project p, std::string_view clip_id, std::size_t index, Mask mask) {
+  ClipEffect* effect = find_effect(p, clip_id, index);
+  if (effect == nullptr) return p;
+
+  // Clamped where a value has no meaning outside a range. Position is not:
+  // a mask parked off the layer is a perfectly ordinary way to animate one in
+  // from the edge, and it is the caller's business.
+  mask.width = std::max(0.0, mask.width);
+  mask.height = std::max(0.0, mask.height);
+  mask.feather = std::max(0.0, mask.feather);
+  mask.opacity = std::clamp(mask.opacity, 0.0, 1.0);
+
+  effect->mask = std::move(mask);
+  return p;
+}
+
 // -------------------------------------------------- effect param keyframes --
 
 Project set_effect_keyframe(Project p, std::string_view clip_id, std::size_t index,

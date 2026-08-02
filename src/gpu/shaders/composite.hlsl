@@ -101,6 +101,19 @@ struct Params {
     // place the packing is stated.
     float4 passA;     // values 0..3
     float4 passB;     // values 4..7
+
+    // Where the pass applies. `maskShape` of 0 is everywhere, which costs one
+    // comparison and is what almost every pass says.
+    float maskShape;      // 0 none, 1 ellipse, 2 rectangle
+    float2 maskCenter;
+    float maskFeather;
+
+    float2 maskSize;      // half-extents, fractions of the layer
+    float2 maskRotation;  // cos, sin
+
+    float maskOpacity;
+    float maskInverted;
+    float2 maskPad;
 };
 
 ConstantBuffer<Params> params : register(b0);
@@ -466,36 +479,98 @@ float4 blurPass(float2 uv) {
     return float4(total.a > 0.0 ? total.rgb / total.a : float3(0.0, 0.0, 0.0), total.a);
 }
 
+// -------------------------------------------------------------------- mask --
+
+/// How much of this pixel the pass applies to: 1 fully, 0 not at all.
+///
+/// One function for every kind of pass, because a mask has nothing to do with
+/// what the effect *is*. That is the whole reason it lives here rather than
+/// inside each branch, and it is why adding an effect gets masking for nothing.
+float maskCoverage(float2 uv) {
+    if (params.maskShape < 0.5) return 1.0;
+
+    // Into the mask's own frame: offset from its centre, turned by its rotation.
+    // The inverse turn, because the point is being brought into the shape rather
+    // than the shape being drawn.
+    const float2 offset = uv - params.maskCenter;
+    const float2 local = float2(
+         offset.x * params.maskRotation.x + offset.y * params.maskRotation.y,
+        -offset.x * params.maskRotation.y + offset.y * params.maskRotation.x);
+
+    const float2 extent = max(params.maskSize, 1e-6);
+    const float feather = max(params.maskFeather, 0.0);
+
+    // Distance from the edge in the same units for both shapes: 0 on the edge,
+    // negative inside, positive outside, scaled so a feather means the same
+    // fraction of the layer whichever shape it is softening.
+    float distance;
+    if (params.maskShape < 1.5) {
+        // An ellipse: the normalised radius, brought back into layer units by
+        // the smaller half-extent so a very flat ellipse does not feather far
+        // more along one axis than the other.
+        const float2 scaled = local / extent;
+        const float radius = length(scaled);
+        distance = (radius - 1.0) * min(extent.x, extent.y);
+    } else {
+        // A rectangle: the usual signed distance, which is exact outside and a
+        // good enough approximation within the corner radius a feather covers.
+        const float2 away = abs(local) - extent;
+        distance = length(max(away, 0.0)) + min(max(away.x, away.y), 0.0);
+    }
+
+    // Softened across the feather, centred on the edge, so half the softness
+    // falls inside the shape and half outside — which is where the eye expects
+    // the edge of a feathered mask to be.
+    float inside;
+    if (feather <= 0.0) {
+        inside = distance <= 0.0 ? 1.0 : 0.0;
+    } else {
+        inside = saturate(0.5 - distance / feather);
+        inside = inside * inside * (3.0 - 2.0 * inside);  // smoothstep
+    }
+
+    if (params.maskInverted > 0.5) inside = 1.0 - inside;
+    return inside * params.maskOpacity;
+}
+
 /// One effect over the scratch. Coded in, coded out.
 float4 PSEffect(VSOutput input) : SV_Target {
-    if (params.passKind == PASS_BLUR) return blurPass(input.uv);
+    const float4 before = texture0.Sample(linearSampler, input.uv);
 
-    if (params.passKind == PASS_FLIP) {
+    float4 after;
+    if (params.passKind == PASS_BLUR) {
+        after = blurPass(input.uv);
+    } else if (params.passKind == PASS_FLIP) {
         // A mirror in texture space, which is why it survives the rotation the
         // composite applies afterwards rather than fighting it.
         const float2 mirrored = (input.uv - 0.5) * params.passA.xy + 0.5;
-        return texture0.Sample(linearSampler, mirrored);
+        after = texture0.Sample(linearSampler, mirrored);
+    } else {
+        after = before;
+        if (params.passKind == PASS_COLOR) {
+            after.rgb = colorPass(after.rgb);
+        } else if (params.passKind == PASS_INVERT) {
+            after.rgb = saturate(1.0 - after.rgb);
+        } else if (params.passKind == PASS_VIGNETTE) {
+            // In linear light and back, because a vignette is a light falloff.
+            // Done on coded values it would darken the midtones far more than
+            // the ends, which is not what the filter it is named after does.
+            const float3 linearRgb = linearizeSrgb(after.rgb) * vignetteFactor(input.uv);
+            after.rgb = encodeSrgb(linearRgb);
+        } else if (params.passKind == PASS_CROP) {
+            if (!insideCrop(input.uv)) after.a = 0.0;
+        } else if (params.passKind == PASS_CHROMAKEY) {
+            after.a *= chromaKeyAlpha(after.rgb);
+        }
     }
 
-    float4 texel = texture0.Sample(linearSampler, input.uv);
-
-    if (params.passKind == PASS_COLOR) {
-        texel.rgb = colorPass(texel.rgb);
-    } else if (params.passKind == PASS_INVERT) {
-        texel.rgb = saturate(1.0 - texel.rgb);
-    } else if (params.passKind == PASS_VIGNETTE) {
-        // In linear light and back, because a vignette is a light falloff. Done
-        // on coded values it would darken the midtones far more than the ends,
-        // which is not what the filter it is named after does.
-        const float3 linearRgb = linearizeSrgb(texel.rgb) * vignetteFactor(input.uv);
-        texel.rgb = encodeSrgb(linearRgb);
-    } else if (params.passKind == PASS_CROP) {
-        if (!insideCrop(input.uv)) texel.a = 0.0;
-    } else if (params.passKind == PASS_CHROMAKEY) {
-        texel.a *= chromaKeyAlpha(texel.rgb);
-    }
-
-    return texel;
+    // The mask, the same way for every kind: what the effect did, mixed with
+    // what was there, by how much of this pixel the mask covers. An effect
+    // never has to know it is masked, which is what makes masking something the
+    // whole catalogue gets rather than something each entry implements.
+    const float coverage = maskCoverage(input.uv);
+    if (coverage >= 1.0) return after;
+    return lerp(before, after, coverage);
 }
 
 // ------------------------------------------------------------------ layers --

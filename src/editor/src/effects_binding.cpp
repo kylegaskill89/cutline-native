@@ -49,6 +49,29 @@ namespace {
 
 }  // namespace
 
+namespace {
+
+/// Fractions are stored, percentages are shown — the same split every other
+/// number in this panel keeps.
+constexpr double kEffectPercent = 100.0;
+
+/// The mask as a panel reads it.
+[[nodiscard]] EffectMaskRow mask_row(const core::Mask& mask) {
+  return EffectMaskRow{
+      .shape = mask.shape,
+      .x = mask.x * kEffectPercent,
+      .y = mask.y * kEffectPercent,
+      .width = mask.width * kEffectPercent,
+      .height = mask.height * kEffectPercent,
+      .rotation = mask.rotation,
+      .feather = mask.feather * kEffectPercent,
+      .opacity = mask.opacity * kEffectPercent,
+      .inverted = mask.inverted,
+  };
+}
+
+}  // namespace
+
 std::vector<EffectRow> clip_effects(const core::Project& project, std::string_view clip_id,
                                     double local_t) {
   const core::Clip* clip = core::find_clip(project, clip_id);
@@ -67,6 +90,7 @@ std::vector<EffectRow> clip_effects(const core::Project& project, std::string_vi
     row.name = spec != nullptr ? std::string(spec->name) : effect.type;
     row.enabled = effect.enabled;
     row.unknown = spec == nullptr;
+    row.mask = mask_row(effect.mask);
     if (spec == nullptr) {
       out.push_back(std::move(row));
       continue;
@@ -102,6 +126,42 @@ std::vector<EffectRow> clip_effects(const core::Project& project, std::string_vi
   }
 
   return out;
+}
+
+std::span<const core::MaskShape> mask_shapes() noexcept {
+  static constexpr std::array kShapes{core::MaskShape::None, core::MaskShape::Ellipse,
+                                      core::MaskShape::Rectangle};
+  return kShapes;
+}
+
+std::string_view mask_shape_name(core::MaskShape shape) noexcept {
+  switch (shape) {
+    case core::MaskShape::None: return "None";
+    case core::MaskShape::Ellipse: return "Ellipse";
+    case core::MaskShape::Rectangle: return "Rectangle";
+  }
+  return "None";
+}
+
+core::Project set_effect_mask(core::Project project, std::string_view clip_id,
+                              std::size_t index, const EffectMaskRow& row) {
+  return core::set_effect_mask(std::move(project), clip_id, index,
+                               core::Mask{
+                                   .shape = row.shape,
+                                   .x = row.x / kEffectPercent,
+                                   .y = row.y / kEffectPercent,
+                                   .width = row.width / kEffectPercent,
+                                   .height = row.height / kEffectPercent,
+                                   .rotation = row.rotation,
+                                   .feather = row.feather / kEffectPercent,
+                                   .opacity = row.opacity / kEffectPercent,
+                                   .inverted = row.inverted,
+                               });
+}
+
+core::Project clear_effect_mask(core::Project project, std::string_view clip_id,
+                                std::size_t index) {
+  return core::set_effect_mask(std::move(project), clip_id, index, core::Mask{});
 }
 
 std::vector<EffectChoice> addable_effects() {

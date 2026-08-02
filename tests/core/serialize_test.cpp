@@ -90,6 +90,15 @@ Project rich_project() {
   blur.params = {{"amount", 4.5}};
   blur.colors = {{"key", "#00d000"}};
   blur.keyframes["amount"] = {{.t = 0.0, .v = 0.0}, {.t = 1.0, .v = 9.0, .e = Interp::Ease}};
+  blur.mask = Mask{.shape = MaskShape::Ellipse,
+                   .x = 0.3,
+                   .y = 0.4,
+                   .width = 0.2,
+                   .height = 0.1,
+                   .rotation = 15.0,
+                   .feather = 0.05,
+                   .opacity = 0.75,
+                   .inverted = true};
   c.effects = {blur};
 
   AudioClipEffect eq;
@@ -189,6 +198,20 @@ TEST(Serialize, ATransformWrittenBeforeThereWasAnAnchorIsCentred) {
   EXPECT_DOUBLE_EQ(t.rotation, 45.0);
   EXPECT_DOUBLE_EQ(t.anchor_x, 0.5);
   EXPECT_DOUBLE_EQ(t.anchor_y, 0.5);
+}
+
+TEST(Serialize, AnEffectWrittenBeforeThereWereMasksAppliesEverywhere) {
+  const auto loaded = from_json(R"({
+    "version": 1,
+    "project": {
+      "tracks": [{"id": "v1", "kind": "video", "clips": [
+        {"id": "c1", "media_id": "m1", "effects": [{"type": "blur", "params": {"amount": 4}}]}
+      ]}]
+    }
+  })");
+
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_FALSE(loaded->project.tracks[0].clips[0].effects[0].mask.active());
 }
 
 TEST(Serialize, RejectsMalformedInput) {

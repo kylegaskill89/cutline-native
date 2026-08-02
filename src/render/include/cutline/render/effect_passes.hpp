@@ -63,6 +63,39 @@ enum class EffectPassKind {
 /// it is *fixed and shared*, so adding an effect never widens anything.
 inline constexpr std::size_t kPassValues = 8;
 
+/// Where a pass applies, if it is masked.
+///
+/// A mask belongs to one pass, which is the thing the flat effect struct could
+/// not express: once a stack has been folded into one set of numbers there is
+/// nothing left for a mask to belong to. Every kind of pass takes one, and the
+/// shader applies it the same way for all of them — work out the effect, work
+/// out the coverage, and mix between the two. An effect never has to know it is
+/// masked.
+///
+/// In fractions of the layer, like everything else about a pass, so a mask
+/// keeps its place when the clip is scaled.
+struct PassMask {
+  /// 0 for no mask, 1 for an ellipse, 2 for a rectangle — `core::MaskShape` as
+  /// the shader reads it.
+  float shape = 0.0f;
+  float x = 0.5f;
+  float y = 0.5f;
+  float width = 0.25f;
+  float height = 0.25f;
+  /// cos and sin of the mask's own rotation, so the shader has no trigonometry
+  /// to do per pixel.
+  float cos_rotation = 1.0f;
+  float sin_rotation = 0.0f;
+  float feather = 0.0f;
+  float opacity = 1.0f;
+  /// 1 when the effect applies outside the shape instead.
+  float inverted = 0.0f;
+
+  [[nodiscard]] bool active() const noexcept { return shape > 0.0f; }
+
+  friend bool operator==(const PassMask&, const PassMask&) = default;
+};
+
 /// One effect, ready to run.
 struct EffectPass {
   EffectPassKind kind = EffectPassKind::Color;
@@ -70,9 +103,13 @@ struct EffectPass {
   /// what depends on `kind` — see the makers below, which are the only things
   /// that write them.
   std::array<float, kPassValues> values{};
+  PassMask mask;
 
   friend bool operator==(const EffectPass&, const EffectPass&) = default;
 };
+
+/// A mask as the shader wants it. An inactive one leaves the pass unmasked.
+[[nodiscard]] PassMask pass_mask(const core::Mask& mask) noexcept;
 
 // ------------------------------------------------------------------ makers --
 //

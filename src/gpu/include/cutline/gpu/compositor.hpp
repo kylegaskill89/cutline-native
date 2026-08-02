@@ -86,6 +86,26 @@ enum class PassKind {
 /// root constants growing with it.
 inline constexpr std::size_t kPassValues = 8;
 
+/// Where one effect applies. A shape of zero is everywhere.
+///
+/// Mirrors `render::PassMask`, and carries the rotation already resolved to a
+/// cosine and a sine because the shader would otherwise do the trigonometry per
+/// pixel.
+struct PassMask {
+  float shape = 0.0f;
+  float x = 0.5f;
+  float y = 0.5f;
+  float width = 0.25f;
+  float height = 0.25f;
+  float cos_rotation = 1.0f;
+  float sin_rotation = 0.0f;
+  float feather = 0.0f;
+  float opacity = 1.0f;
+  float inverted = 0.0f;
+
+  friend bool operator==(const PassMask&, const PassMask&) = default;
+};
+
 /// One effect, ready to run.
 ///
 /// The values mean what the kind says, packed by `render::effect_passes`. The
@@ -101,6 +121,7 @@ inline constexpr std::size_t kPassValues = 8;
 struct EffectPass {
   PassKind kind = PassKind::Color;
   std::array<float, kPassValues> values{};
+  PassMask mask;
 
   friend bool operator==(const EffectPass&, const EffectPass&) = default;
 };

@@ -774,6 +774,17 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
           std::copy_n(effect.values.begin(), 4, pass.pass_a);
           std::copy_n(effect.values.begin() + 4, 4, pass.pass_b);
 
+          pass.mask_shape = effect.mask.shape;
+          pass.mask_center[0] = effect.mask.x;
+          pass.mask_center[1] = effect.mask.y;
+          pass.mask_size[0] = effect.mask.width;
+          pass.mask_size[1] = effect.mask.height;
+          pass.mask_rotation[0] = effect.mask.cos_rotation;
+          pass.mask_rotation[1] = effect.mask.sin_rotation;
+          pass.mask_feather = effect.mask.feather;
+          pass.mask_opacity = effect.mask.opacity;
+          pass.mask_inverted = effect.mask.inverted;
+
           if (effect.kind == PassKind::Blur) {
             // Taps are spread over three sigma, where a Gaussian has
             // effectively fallen to nothing, and the stride widens to cover

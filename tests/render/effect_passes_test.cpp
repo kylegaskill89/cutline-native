@@ -216,5 +216,75 @@ TEST(EffectPasses, EveryKindPacksIntoTheSharedBudget) {
   EXPECT_EQ(pass.values.size(), kPassValues);
 }
 
+
+// ------------------------------------------------------------------- mask --
+
+TEST(EffectPasses, APassIsUnmaskedUnlessTheEffectSaysOtherwise) {
+  const std::vector<EffectPass> passes =
+      plan_effect_passes(clip_with({effect("brightness", {{"amount", 10.0}})}), 0.0);
+  ASSERT_EQ(passes.size(), 1u);
+  EXPECT_FALSE(passes[0].mask.active());
+}
+
+TEST(EffectPasses, AMaskReachesThePassThatCarriesIt) {
+  ClipEffect masked = effect("brightness", {{"amount", 10.0}});
+  masked.mask = core::Mask{.shape = core::MaskShape::Ellipse,
+                           .x = 0.25,
+                           .y = 0.75,
+                           .width = 0.1,
+                           .height = 0.2,
+                           .rotation = 90.0,
+                           .feather = 0.05,
+                           .opacity = 0.5,
+                           .inverted = true};
+
+  const std::vector<EffectPass> passes = plan_effect_passes(clip_with({masked}), 0.0);
+  ASSERT_EQ(passes.size(), 1u);
+
+  const PassMask& mask = passes[0].mask;
+  EXPECT_TRUE(mask.active());
+  EXPECT_NEAR(mask.x, 0.25f, 1e-6);
+  EXPECT_NEAR(mask.width, 0.1f, 1e-6);
+  EXPECT_NEAR(mask.feather, 0.05f, 1e-6);
+  EXPECT_NEAR(mask.opacity, 0.5f, 1e-6);
+  EXPECT_NEAR(mask.inverted, 1.0f, 1e-6);
+  // Resolved to a cosine and a sine here so the shader has none to do per pixel.
+  EXPECT_NEAR(mask.cos_rotation, 0.0f, 1e-6);
+  EXPECT_NEAR(mask.sin_rotation, 1.0f, 1e-6);
+}
+
+TEST(EffectPasses, BothHalvesOfABlurCarryTheSameMask) {
+  // A blur is one pass here and two draws in the compositor, and both axes have
+  // to agree about where the blur is or the mask would smear across its own
+  // edge on one of them.
+  ClipEffect masked = effect("blur", {{"amount", 5.0}});
+  masked.mask = core::Mask{.shape = core::MaskShape::Rectangle};
+
+  const std::vector<EffectPass> passes = plan_effect_passes(clip_with({masked}), 0.0);
+  ASSERT_EQ(passes.size(), 1u);
+  EXPECT_TRUE(passes[0].mask.active());
+}
+
+TEST(EffectPasses, EachEffectKeepsItsOwnMask) {
+  ClipEffect first = effect("brightness", {{"amount", 10.0}});
+  first.mask = core::Mask{.shape = core::MaskShape::Ellipse, .x = 0.25};
+  ClipEffect second = effect("contrast", {{"amount", 150.0}});
+  second.mask = core::Mask{.shape = core::MaskShape::Rectangle, .x = 0.75};
+
+  const std::vector<EffectPass> passes = plan_effect_passes(clip_with({first, second}), 0.0);
+  ASSERT_EQ(passes.size(), 2u);
+  EXPECT_NEAR(passes[0].mask.x, 0.25f, 1e-6);
+  EXPECT_NEAR(passes[1].mask.x, 0.75f, 1e-6);
+}
+
+TEST(EffectPasses, AMaskWithNoShapeIsNoMask) {
+  ClipEffect masked = effect("brightness", {{"amount", 10.0}});
+  masked.mask = core::Mask{.shape = core::MaskShape::None, .feather = 0.5};
+
+  const std::vector<EffectPass> passes = plan_effect_passes(clip_with({masked}), 0.0);
+  ASSERT_EQ(passes.size(), 1u);
+  EXPECT_FALSE(passes[0].mask.active());
+}
+
 }  // namespace
 }  // namespace cutline::render

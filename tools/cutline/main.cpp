@@ -1427,6 +1427,105 @@ void build_effect_clipboard_row(App& app, const std::string& clip_id) {
                     !(clip->effects.empty() && clip->audio_effects.empty()));
 }
 
+/// Where one effect applies.
+///
+/// A mask belongs to a single effect, which is what Premiere means by one and
+/// what the flat effect struct could not express at all. The shape chooser is
+/// always there; everything else appears only once there is a shape, because a
+/// feather on nothing is a control that cannot do anything.
+///
+/// No overlay on the monitor yet: this is numbers, and dragging the shape on
+/// the picture is the obvious next thing and a different piece of work.
+void build_effect_mask(App& app, const std::string& clip_id,
+                       const cutline::editor::EffectRow& row) {
+  const cutline::editor::EffectMaskRow& mask = row.mask;
+
+  auto& line = app.inspector->emplace<Box>(Axis::Horizontal);
+  line.emplace<Label>("Mask").set_small(true);
+  line.emplace<Spacer>();
+
+  std::vector<std::string> names;
+  std::size_t chosen = 0;
+  for (const cutline::core::MaskShape shape : cutline::editor::mask_shapes()) {
+    if (shape == mask.shape) chosen = names.size();
+    names.emplace_back(cutline::editor::mask_shape_name(shape));
+  }
+
+  auto& shapes = line.emplace<Dropdown>(std::move(names), chosen);
+  shapes.set_on_change([&app, clip_id, index = row.index, current = mask](std::size_t at) {
+    const std::span<const cutline::core::MaskShape> offered = cutline::editor::mask_shapes();
+    if (at >= offered.size()) return;
+
+    cutline::editor::EffectMaskRow next = current;
+    next.shape = offered[at];
+    app.session.apply(
+        cutline::editor::set_effect_mask(app.session.project(), clip_id, index, next));
+    invalidate_preview(app);
+    app.inspector_stale = true;
+  });
+
+  if (mask.shape == cutline::core::MaskShape::None) return;
+
+  // One writer for every number on the mask, so each row is a name, a range and
+  // which field it sets rather than five copies of the same lambda.
+  const auto number = [&app, clip_id, index = row.index, mask](
+                          std::string name, double value, cutline::ui::ValueRange range,
+                          std::string suffix, double fallback,
+                          double cutline::editor::EffectMaskRow::*field) {
+    // Keyed by the row's own name, which is what the disclosure state is
+    // remembered against and is unique within the card by construction.
+    const std::string key = "mask." + std::to_string(index) + "." + name;
+    const ParamRow control{.name = std::move(name),
+                           .suffix = std::move(suffix),
+                           .key = key,
+                           .range = range,
+                           .value = value,
+                           .fallback = fallback};
+
+    const auto edited = [&app, clip_id, index, mask, field](double set) {
+      cutline::editor::EffectMaskRow next = mask;
+      next.*field = set;
+      return cutline::editor::set_effect_mask(app.session.project(), clip_id, index, next);
+    };
+
+    build_param_row(app, control,
+                    {.commit =
+                         [&app, edited](double set) {
+                           app.session.apply(edited(set));
+                           invalidate_preview(app);
+                           app.inspector_stale = true;
+                         },
+                     .preview = edited});
+  };
+
+  // Position and size reach past the layer on purpose: a mask parked off the
+  // edge is how one is brought in from the side.
+  number("Mask Position X", mask.x, {.minimum = -50.0, .maximum = 150.0}, "%", 50.0,
+         &cutline::editor::EffectMaskRow::x);
+  number("Mask Position Y", mask.y, {.minimum = -50.0, .maximum = 150.0}, "%", 50.0,
+         &cutline::editor::EffectMaskRow::y);
+  number("Mask Width", mask.width, {.minimum = 0.0, .maximum = 100.0}, "%", 25.0,
+         &cutline::editor::EffectMaskRow::width);
+  number("Mask Height", mask.height, {.minimum = 0.0, .maximum = 100.0}, "%", 25.0,
+         &cutline::editor::EffectMaskRow::height);
+  number("Mask Rotation", mask.rotation, {.minimum = -180.0, .maximum = 180.0},
+         "\xc2\xb0", 0.0, &cutline::editor::EffectMaskRow::rotation);
+  number("Mask Feather", mask.feather, {.minimum = 0.0, .maximum = 50.0}, "%", 0.0,
+         &cutline::editor::EffectMaskRow::feather);
+  number("Mask Opacity", mask.opacity, {.minimum = 0.0, .maximum = 100.0}, "%", 100.0,
+         &cutline::editor::EffectMaskRow::opacity);
+
+  auto& inverted = app.inspector->emplace<Checkbox>("Mask Inverted", mask.inverted);
+  inverted.set_on_change([&app, clip_id, index = row.index, mask](bool on) {
+    cutline::editor::EffectMaskRow next = mask;
+    next.inverted = on;
+    app.session.apply(
+        cutline::editor::set_effect_mask(app.session.project(), clip_id, index, next));
+    invalidate_preview(app);
+    app.inspector_stale = true;
+  });
+}
+
 /// The order of the rows is the order the effects apply in, which is why moving
 /// one is an edit rather than a view preference — a blur before a crop and a
 /// blur after it are different pictures.
@@ -1571,6 +1670,8 @@ void build_effect_controls(App& app, const std::string& clip_id) {
             // above it — and nothing else in the panel depends on this value.
           });
     }
+
+    build_effect_mask(app, clip_id, row);
   }
 }
 
@@ -6522,6 +6623,11 @@ template <typename T>
             app.session.project(), clip_id, cutline::editor::ClipParam::AnchorY, true, 0.0));
         app.session.apply(cutline::editor::set_effect_parameter_animated(
             app.session.project(), clip_id, 0, "amount", true, 0.0));
+        // And a mask on one of them, so the seven rows and the checkbox it
+        // brings with it are laid out rather than only the shape chooser.
+        app.session.apply(cutline::editor::set_effect_mask(
+            app.session.project(), clip_id, 0,
+            cutline::editor::EffectMaskRow{.shape = cutline::core::MaskShape::Ellipse}));
       }
 
       app.timeline_media = sample_timeline_media();

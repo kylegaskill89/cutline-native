@@ -84,6 +84,10 @@ constexpr double kAssumedFrameGap = 1.0 / 30.0;
   gpu::EffectPass out;
   out.kind = static_cast<gpu::PassKind>(pass.kind);
   out.values = pass.values;
+  out.mask = {pass.mask.shape,        pass.mask.x,            pass.mask.y,
+              pass.mask.width,        pass.mask.height,       pass.mask.cos_rotation,
+              pass.mask.sin_rotation, pass.mask.feather,      pass.mask.opacity,
+              pass.mask.inverted};
   return out;
 }
 

@@ -75,8 +75,21 @@ struct alignas(16) ShaderParams {
   /// effect no longer needs a permanent field here.
   float pass_a[4]{};
   float pass_b[4]{};
+
+  /// Where the pass applies. Zero shape is everywhere, which is what nearly
+  /// every pass says and costs one comparison to answer.
+  float mask_shape = 0.0f;
+  float mask_center[2]{0.5f, 0.5f};
+  float mask_feather = 0.0f;
+
+  float mask_size[2]{0.25f, 0.25f};
+  float mask_rotation[2]{1.0f, 0.0f};
+
+  float mask_opacity = 1.0f;
+  float mask_inverted = 0.0f;
+  float mask_pad[2]{};
 };
-static_assert(sizeof(ShaderParams) == 36 * sizeof(float),
+static_assert(sizeof(ShaderParams) == 48 * sizeof(float),
               "root constants must match the shader's cbuffer exactly");
 
 inline constexpr UINT kShaderParamCount = sizeof(ShaderParams) / sizeof(float);

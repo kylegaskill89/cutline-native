@@ -43,6 +43,12 @@ NLOHMANN_JSON_SERIALIZE_ENUM(TextAlign, {
                                             {TextAlign::Right, "right"},
                                         })
 
+NLOHMANN_JSON_SERIALIZE_ENUM(MaskShape, {
+                                            {MaskShape::None, "none"},
+                                            {MaskShape::Ellipse, "ellipse"},
+                                            {MaskShape::Rectangle, "rectangle"},
+                                        })
+
 NLOHMANN_JSON_SERIALIZE_ENUM(Interp, {
                                          {Interp::Linear, "linear"},
                                          {Interp::Hold, "hold"},
@@ -117,8 +123,18 @@ json write(const TextSpec& s) {
   return j;
 }
 
+json write(const Mask& m) {
+  return {{"shape", m.shape}, {"x", m.x},           {"y", m.y},
+          {"width", m.width}, {"height", m.height}, {"rotation", m.rotation},
+          {"feather", m.feather}, {"opacity", m.opacity}, {"inverted", m.inverted}};
+}
+
 json write(const ClipEffect& e) {
   json j{{"type", e.type}, {"enabled", e.enabled}};
+  // Only when there is one. Every effect carries the field and almost none has
+  // a shape, so writing it always would put nine keys saying "nothing" onto
+  // every entry in every project.
+  if (e.mask.active()) j["mask"] = write(e.mask);
   put_unless_empty(j, "params", e.params);
   put_unless_empty(j, "colors", e.colors);
   if (!e.keyframes.empty()) {
@@ -335,6 +351,18 @@ ClipEffect read_clip_effect(const json& j) {
   const auto kfs = j.find("keyframes");
   if (kfs != j.end() && kfs->is_object()) {
     for (const auto& [key, list] : kfs->items()) e.keyframes[key] = read_keyframes(list);
+  }
+
+  if (const auto mask = j.find("mask"); mask != j.end() && mask->is_object()) {
+    e.mask.shape = read_or(*mask, "shape", MaskShape::None);
+    e.mask.x = read_or(*mask, "x", e.mask.x);
+    e.mask.y = read_or(*mask, "y", e.mask.y);
+    e.mask.width = read_or(*mask, "width", e.mask.width);
+    e.mask.height = read_or(*mask, "height", e.mask.height);
+    e.mask.rotation = read_or(*mask, "rotation", e.mask.rotation);
+    e.mask.feather = read_or(*mask, "feather", e.mask.feather);
+    e.mask.opacity = read_or(*mask, "opacity", e.mask.opacity);
+    e.mask.inverted = read_or(*mask, "inverted", e.mask.inverted);
   }
   return e;
 }

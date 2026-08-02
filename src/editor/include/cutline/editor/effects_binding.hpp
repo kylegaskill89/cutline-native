@@ -65,6 +65,30 @@ struct EffectColorRow {
   friend bool operator==(const EffectColorRow&, const EffectColorRow&) = default;
 };
 
+/// The mask on one effect, as a panel reads it.
+///
+/// Values in display units, like everything else here: the model keeps
+/// fractions of the layer and this shows percentages, which is what the numbers
+/// on a mask read as everywhere else.
+struct EffectMaskRow {
+  core::MaskShape shape = core::MaskShape::None;
+  double x = 50.0;
+  double y = 50.0;
+  double width = 25.0;
+  double height = 25.0;
+  double rotation = 0.0;
+  double feather = 0.0;
+  double opacity = 100.0;
+  bool inverted = false;
+
+  friend bool operator==(const EffectMaskRow&, const EffectMaskRow&) = default;
+};
+
+/// The shapes a mask can be, in the order a control should offer them, and what
+/// each is called on screen.
+[[nodiscard]] std::span<const core::MaskShape> mask_shapes() noexcept;
+[[nodiscard]] std::string_view mask_shape_name(core::MaskShape shape) noexcept;
+
 /// One effect in the stack, in stack order.
 struct EffectRow {
   /// Position in the clip's stack, which is what every core operation takes.
@@ -81,6 +105,9 @@ struct EffectRow {
   bool unknown = false;
   std::vector<EffectParamRow> params;
   std::vector<EffectColorRow> colors;
+  /// Where the effect applies. A shape of `None` is everywhere, and is what
+  /// almost every effect says.
+  EffectMaskRow mask;
 
   friend bool operator==(const EffectRow&, const EffectRow&) = default;
 };
@@ -115,6 +142,21 @@ struct EffectChoice {
 /// the undo entry.
 [[nodiscard]] core::Project add_effect(core::Project project, std::string_view clip_id,
                                        std::string_view type);
+
+// ------------------------------------------------------------------- mask --
+
+/// Sets where one effect applies, taking display units.
+///
+/// Choosing a shape for an effect that had none gives it a mask covering the
+/// middle of the layer rather than one of no size: a mask nobody can see is
+/// indistinguishable from the control not working, which is the same reason a
+/// freshly added vignette is visible.
+[[nodiscard]] core::Project set_effect_mask(core::Project project, std::string_view clip_id,
+                                            std::size_t index, const EffectMaskRow& mask);
+
+/// Turns the mask off, leaving the effect applying everywhere.
+[[nodiscard]] core::Project clear_effect_mask(core::Project project, std::string_view clip_id,
+                                              std::size_t index);
 
 // -------------------------------------------------------------- keyframes --
 
