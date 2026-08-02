@@ -672,5 +672,44 @@ TEST(TransformOverlay, SelectingAndThenNotLeavesNoHandlesBehind) {
   EXPECT_FALSE(fixture.monitor.transform().has_value());
 }
 
+
+// ------------------------------------------------------------ drop target --
+
+TEST(MonitorDrop, IsNotLitUnlessSomethingWouldLandOnIt) {
+  MonitorView monitor;
+  monitor.arrange(Rect{0.0, 0.0, 320.0, 200.0}, flat_context());
+  EXPECT_FALSE(monitor.drop_lit());
+}
+
+TEST(MonitorDrop, OutlinesThePictureWhileSomethingWouldLand) {
+  // The whole picture is the target, because there is nothing smaller to aim
+  // at: what lands is decided by what is on screen, not by where the pointer
+  // is inside it.
+  MonitorView monitor;
+  monitor.arrange(Rect{0.0, 0.0, 320.0, 200.0}, flat_context());
+
+  RecordingPainter plain;
+  monitor.paint(plain, default_theme());
+
+  monitor.set_drop_lit(true);
+  EXPECT_TRUE(monitor.drop_lit());
+
+  RecordingPainter lit;
+  monitor.paint(lit, default_theme());
+  EXPECT_GT(lit.count(DrawCall::Kind::Stroke), plain.count(DrawCall::Kind::Stroke));
+}
+
+TEST(MonitorDrop, TurnsBackOffAgain) {
+  MonitorView monitor;
+  monitor.arrange(Rect{0.0, 0.0, 320.0, 200.0}, flat_context());
+  monitor.set_drop_lit(true);
+  monitor.set_drop_lit(false);
+
+  RecordingPainter painter;
+  monitor.paint(painter, default_theme());
+  EXPECT_TRUE(painter.clips_balanced());
+  EXPECT_FALSE(monitor.drop_lit());
+}
+
 }  // namespace
 }  // namespace cutline::ui

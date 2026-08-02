@@ -106,6 +106,13 @@ void MonitorView::set_canvas_aspect(double aspect) noexcept {
   if (aspect > 0.0) canvas_aspect_ = aspect;
 }
 
+void MonitorView::set_drop_lit(bool lit) noexcept {
+  if (drop_lit_ == lit) return;
+  drop_lit_ = lit;
+  // A fresh frame and nothing more: nothing in the tree has moved.
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
 Rect MonitorView::picture() const {
   // The frame's own shape when there is one, the sequence's when there is not.
   // Using the panel's shape while empty would make the picture jump into a
@@ -131,6 +138,16 @@ void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
 
   const SurfaceStyle& style = theme.style(part(), state());
 
+  // A drop landing here outlines the whole picture, because the whole picture
+  // is the target: there is nothing smaller to aim at, and the clip it would
+  // reach is whichever one is on screen.
+  const auto outline_if_dropping = [&] {
+    if (!drop_lit_) return;
+    const SurfaceStyle& selected = theme.style(Part::Button, State::Selected);
+    const Color ink = selected.border.a > 0.0 ? selected.border : selected.text;
+    painter.stroke(area.inset(-2.0), 0.0, ink, 2.0);
+  };
+
   if (!has_picture()) {
     // The shape of the sequence, drawn as a well, so it is obvious that this
     // is where the picture goes rather than looking like a broken panel.
@@ -140,6 +157,7 @@ void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
       painter.text(text_run(area, placeholder_, empty, theme.metrics.small_font_size,
                             TextAlign::Center, false));
     }
+    outline_if_dropping();
     return;
   }
 
@@ -152,6 +170,7 @@ void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
   // picture with edges rather than as a hole in the panel.
   if (style.border.a > 0.0) painter.stroke(area, 0.0, style.border, 1.0);
 
+  outline_if_dropping();
   paint_overlay(painter, theme);
 }
 

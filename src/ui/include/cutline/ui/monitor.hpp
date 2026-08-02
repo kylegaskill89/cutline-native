@@ -116,6 +116,14 @@ class MonitorView : public Widget {
   /// What is shown under the picture when there is none.
   void set_placeholder(std::string text) { placeholder_ = std::move(text); }
 
+  /// Whether something dragged from elsewhere would land here.
+  ///
+  /// Drawn as an outline round the picture while it is true. The monitor has no
+  /// idea what is being dragged or what landing would mean — the panel that
+  /// owns the drag decides both, and this is only how it says so.
+  [[nodiscard]] bool drop_lit() const noexcept { return drop_lit_; }
+  void set_drop_lit(bool lit) noexcept;
+
   /// Where the picture goes: the largest rectangle of the right shape that
   /// fits, centred. Empty only when there is no room at all.
   [[nodiscard]] Rect picture() const;
@@ -202,6 +210,7 @@ class MonitorView : public Widget {
   std::function<void(const MonitorBox&)> on_change_;
   std::function<void(const MonitorBox&)> on_commit_;
 
+  bool drop_lit_ = false;
   bool snapping_ = true;
   bool aspect_locked_ = false;
   std::vector<SnapGuide> guides_;

@@ -4537,9 +4537,55 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
 /// Nothing when the pointer is not over a clip, or over one the entry could not
 /// be applied to: a video effect over a waveform is a drop that has to decline
 /// rather than land somewhere approximate.
+/// What a drop on the program monitor would land on: whatever the monitor is
+/// showing at the playhead.
+///
+/// Premiere's rule, and it is the one that makes the gesture worth having —
+/// what you are looking at is what you are dropping onto, and there is nothing
+/// to aim at because the picture is the target. The topmost video clip under
+/// the playhead, because that is the one on screen.
+///
+/// Nothing when the pointer is not over the monitor, when nothing is under the
+/// playhead, or when the entry could not be applied to what is: a transition
+/// dropped on the picture has no join to sit on and declines rather than
+/// landing somewhere approximate.
+[[nodiscard]] std::optional<std::string> monitor_drop_target(const App& app,
+                                                             const std::string& id, double x,
+                                                             double y) {
+  if (app.monitor == nullptr || id.empty()) return std::nullopt;
+  if (!app.monitor->bounds().contains(x, y)) return std::nullopt;
+
+  const cutline::core::Project& project = app.session.project();
+  const double t = app.session.playhead();
+
+  std::optional<std::string> found;
+  for (const cutline::core::Track& track : project.tracks) {
+    if (track.kind != cutline::core::TrackKind::Video || track.hidden) continue;
+    for (const cutline::core::Clip& clip : track.clips) {
+      if (clip.disabled) continue;
+      const double end = clip.start + cutline::core::clip_duration(clip);
+      if (t < clip.start || t >= end) continue;
+      // Later tracks are drawn over earlier ones, so the last match is the one
+      // on screen.
+      found = clip.id;
+    }
+  }
+
+  if (!found.has_value()) return std::nullopt;
+  if (!cutline::editor::library_entry_fits(project, *found, id)) return std::nullopt;
+  return found;
+}
+
 [[nodiscard]] std::optional<std::string> library_drop_target(const App& app,
                                                              const std::string& id, double x,
                                                              double y) {
+  // The monitor first: it sits above the timeline and a drag crossing one on
+  // the way to the other should land on whichever it is actually over.
+  if (const std::optional<std::string> shown = monitor_drop_target(app, id, x, y);
+      shown.has_value()) {
+    return shown;
+  }
+
   if (app.timeline == nullptr || id.empty()) return std::nullopt;
 
   const std::optional<cutline::ui::BlockRef> block = app.timeline->block_at(x, y);
@@ -4563,6 +4609,17 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
 /// nothing still tidies up after itself.
 void show_library_drop(App& app, const std::string& id, double x, double y) {
   if (app.timeline == nullptr) return;
+
+  // Over the monitor, the whole picture is the target, so the timeline's
+  // outline comes off and the monitor lights instead. Two outlines at once
+  // would say the drop was going to two places.
+  const bool over_monitor = !id.empty() && monitor_drop_target(app, id, x, y).has_value();
+  if (app.monitor != nullptr) app.monitor->set_drop_lit(over_monitor);
+  if (over_monitor) {
+    app.timeline->set_drop_target(std::nullopt);
+    return;
+  }
+
   if (id.empty()) {
     app.timeline->set_drop_target(std::nullopt);
     return;
