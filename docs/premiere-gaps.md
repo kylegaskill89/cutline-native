@@ -401,26 +401,28 @@ than four:
 
 | | Where | Size |
 |---|---|---|
-| User bins, and named presets | §1.3 | machinery |
-| A free-draw mask path, and animating a mask | §1.4 | **machinery / model** |
-| Dragging a mask on the monitor | §1.4 | control |
+| User bins for media | §1.3 | machinery |
+| A free-draw mask path | §1.4 | machinery |
+| Animating a mask | §1.4 | **model** |
 | A margin round the effect scratch, so a blur spreads past the quad | §1.3 | machinery |
-| Effect Controls does not name the clip it is showing | §1.6 | control |
 | Catalogue depth beyond twenty | §1.5 | one branch each, now |
 
 Everything else that was listed is done: paired X/Y, a visible reset per row,
 resetting a whole effect, greying a governed property, the anchor point, both
-panners, audio-effect keyframes, bezier handles, effects as passes, masks,
-nested folders, and dropping an effect on the picture.
+panners, audio-effect keyframes, bezier handles, effects as passes, masks and
+dragging them on the picture, nested folders, dropping an effect on the picture,
+named presets, and Effect Controls naming the clip it is showing — which turned
+out to have been done already and listed anyway.
 
-**The shape of what is left.** The structural work is finished. What remains is
-a bin system, three follow-ups the mask and the pass chain each turned up, and
-as much catalogue as anybody wants — which is now a branch at a time rather than
-a budget.
+**The shape of what is left.** The structural work is finished and so is the
+feature list. What remains is bins, two follow-ups the mask turned up, one the
+pass chain turned up, and as much catalogue as anybody wants — which is now a
+branch at a time rather than a budget.
 
-Two things are owed as *verification* rather than as work: the bezier handle
-drag and the pass rendering have both been checked against tests and a real
-graphics device, and neither has been driven by hand on screen.
+Everything above has been driven by hand on screen as well as tested. That pass
+found two faults nothing else would have: a keyframe selection thrown away by
+the panel rebuild, so a bezier handle could be dragged exactly once; and the
+mixer naming a track by its internal id.
 
 ---
 
