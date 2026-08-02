@@ -158,6 +158,7 @@ void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
                             TextAlign::Center, false));
     }
     outline_if_dropping();
+    paint_masks(painter, theme);
     return;
   }
 
@@ -171,7 +172,67 @@ void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
   if (style.border.a > 0.0) painter.stroke(area, 0.0, style.border, 1.0);
 
   outline_if_dropping();
+  paint_masks(painter, theme);
   paint_overlay(painter, theme);
+}
+
+void MonitorView::paint_masks(Painter& painter, const Theme& theme) const {
+  const Rect area = picture();
+  if (area.empty() || masks_.empty()) return;
+
+  const SurfaceStyle& panel = theme.style(Part::Panel, State::Normal);
+  // White rather than the accent, and thin. A mask outline sits *inside* the
+  // picture where the transform box sits around it, and the two in the same
+  // colour would read as one shape with a line through it.
+  const Color ink{1.0f, 1.0f, 1.0f, 0.85f};
+  const Color grip_ink = theme.style(Part::Button, State::Selected).border.a > 0.0
+                             ? theme.style(Part::Button, State::Selected).border
+                             : panel.text;
+
+  painter.push_clip(area, 0.0);
+  for (std::size_t i = 0; i < masks_.size(); ++i) {
+    const MaskOverlay& mask = masks_[i];
+    const double cx = area.x + mask.x * area.width;
+    const double cy = area.y + mask.y * area.height;
+    const double half_w = std::abs(mask.width) * area.width;
+    const double half_h = std::abs(mask.height) * area.height;
+    const double radians = to_radians(mask.rotation);
+
+    // Drawn as a closed run of segments either way, because a rotated ellipse
+    // is not a rectangle the painter can stroke and a rotated rectangle is not
+    // one either. Thirty-two steps is smooth at any size this panel reaches.
+    constexpr int kSteps = 32;
+    const int steps = mask.shape == 2 ? 4 : kSteps;
+
+    double previous_x = 0.0;
+    double previous_y = 0.0;
+    for (int step = 0; step <= steps; ++step) {
+      const double t = static_cast<double>(step) / static_cast<double>(steps);
+      double lx = 0.0;
+      double ly = 0.0;
+      if (mask.shape == 2) {
+        // The four corners, in order, closing back on the first.
+        const double corner_x[4] = {-1.0, 1.0, 1.0, -1.0};
+        const double corner_y[4] = {-1.0, -1.0, 1.0, 1.0};
+        lx = corner_x[step % 4] * half_w;
+        ly = corner_y[step % 4] * half_h;
+      } else {
+        const double angle = t * 2.0 * std::numbers::pi;
+        lx = std::cos(angle) * half_w;
+        ly = std::sin(angle) * half_h;
+      }
+      const auto [rx, ry] = rotate(lx, ly, radians);
+      const double x = cx + rx;
+      const double y = cy + ry;
+      if (step > 0) painter.line(previous_x, previous_y, x, y, ink, 1.0);
+      previous_x = x;
+      previous_y = y;
+    }
+
+    const Rect grip = mask_grip(i);
+    if (!grip.empty()) painter.fill(grip.inset(2.0), 0.0, Fill::solid(grip_ink));
+  }
+  painter.pop_clip();
 }
 
 void MonitorView::paint_overlay(Painter& painter, const Theme& theme) const {
@@ -236,6 +297,80 @@ void MonitorView::set_transform(std::optional<MonitorBox> box) {
     dragging_ = TransformHandle::None;
     guides_.clear();
   }
+}
+
+// ------------------------------------------------------------------- masks --
+
+void MonitorView::set_masks(std::vector<MaskOverlay> masks) {
+  if (masks == masks_) return;
+  masks_ = std::move(masks);
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
+namespace {
+
+/// A mask's centre and half-extents in widget pixels.
+struct MaskBox {
+  double cx = 0.0;
+  double cy = 0.0;
+  double half_w = 0.0;
+  double half_h = 0.0;
+  double radians = 0.0;
+};
+
+[[nodiscard]] MaskBox mask_box(const MaskOverlay& mask, const Rect& area) {
+  return MaskBox{
+      .cx = area.x + mask.x * area.width,
+      .cy = area.y + mask.y * area.height,
+      .half_w = std::abs(mask.width) * area.width,
+      .half_h = std::abs(mask.height) * area.height,
+      .radians = to_radians(mask.rotation),
+  };
+}
+
+/// A point brought into the mask's own frame, where the shape is axis-aligned.
+[[nodiscard]] std::pair<double, double> into_mask(const MaskBox& box, double x, double y) {
+  const auto [lx, ly] = rotate(x - box.cx, y - box.cy, -box.radians);
+  return {lx, ly};
+}
+
+}  // namespace
+
+Rect MonitorView::mask_grip(std::size_t index) const {
+  const Rect area = picture();
+  if (area.empty() || index >= masks_.size()) return Rect{};
+
+  // The bottom-right corner of the shape's own box, turned with it. One grip
+  // rather than four: a mask is symmetric about its centre, so any corner says
+  // the same thing, and three more would crowd a shape that is often small.
+  const MaskBox box = mask_box(masks_[index], area);
+  const auto [ox, oy] = rotate(box.half_w, box.half_h, box.radians);
+  return Rect{box.cx + ox - kHandleReach, box.cy + oy - kHandleReach, kHandleReach * 2.0,
+              kHandleReach * 2.0};
+}
+
+std::optional<std::size_t> MonitorView::mask_at(double x, double y) const {
+  const Rect area = picture();
+  if (area.empty()) return std::nullopt;
+
+  // Backwards, so the last drawn is the first found — the same rule the layer
+  // stack follows, and the one that makes the mask on top the one you grab.
+  for (std::size_t i = masks_.size(); i-- > 0;) {
+    if (mask_grip(i).contains(x, y)) return i;
+
+    const MaskBox box = mask_box(masks_[i], area);
+    if (box.half_w <= 0.0 || box.half_h <= 0.0) continue;
+    const auto [lx, ly] = into_mask(box, x, y);
+
+    if (masks_[i].shape == 2) {
+      if (std::abs(lx) <= box.half_w && std::abs(ly) <= box.half_h) return i;
+    } else {
+      const double nx = lx / box.half_w;
+      const double ny = ly / box.half_h;
+      if (nx * nx + ny * ny <= 1.0) return i;
+    }
+  }
+  return std::nullopt;
 }
 
 std::pair<double, double> MonitorView::centre_px() const {
@@ -331,27 +466,92 @@ TransformHandle MonitorView::handle_at(double x, double y) const {
 }
 
 bool MonitorView::on_mouse_down(const MouseEvent& event) {
-  if (!box_.has_value() || event.button != MouseButton::Left) return false;
+  if (event.button != MouseButton::Left) return false;
 
-  const TransformHandle handle = handle_at(event.x, event.y);
-  if (handle == TransformHandle::None) return false;
+  // Three things want this press, and the order between them is the whole of
+  // what makes both gestures reachable.
+  //
+  // The layer's *edge and corner* handles come first: they are small, they sit
+  // where a mask may well also be, and a corner a mask had swallowed would
+  // leave the layer impossible to resize.
+  //
+  // A mask comes next — ahead of `Move`, which means "anywhere inside the
+  // layer". Taking `Move` first would swallow every mask on the picture, which
+  // is exactly what it did the first time this was tried.
+  const TransformHandle handle = box_.has_value() ? handle_at(event.x, event.y)
+                                                  : TransformHandle::None;
+  const auto take_layer = [&] {
+    dragging_ = handle;
+    origin_ = *box_;
+    press_x_ = event.x;
+    press_y_ = event.y;
+    guides_.clear();
+    return true;
+  };
 
-  dragging_ = handle;
-  origin_ = *box_;
-  press_x_ = event.x;
-  press_y_ = event.y;
-  guides_.clear();
-  return true;
+  if (handle != TransformHandle::None && handle != TransformHandle::Move) return take_layer();
+
+  if (const std::optional<std::size_t> mask = mask_at(event.x, event.y); mask.has_value()) {
+    mask_dragging_ = mask;
+    mask_resizing_ = mask_grip(*mask).contains(event.x, event.y);
+    mask_origin_ = masks_[*mask];
+    press_x_ = event.x;
+    press_y_ = event.y;
+    return true;
+  }
+
+  if (handle == TransformHandle::Move) return take_layer();
+  return false;
 }
 
 bool MonitorView::on_mouse_move(const MouseEvent& event) {
+  if (mask_dragging_.has_value()) {
+    drag_mask(event.x, event.y);
+    if (on_mask_change_) on_mask_change_(*mask_dragging_, masks_[*mask_dragging_]);
+    return true;
+  }
+
   if (dragging_ == TransformHandle::None || !box_.has_value()) return false;
   drag_to(event.x, event.y, event.modifiers);
   if (on_change_) on_change_(*box_);
   return true;
 }
 
+void MonitorView::drag_mask(double x, double y) {
+  const Rect area = picture();
+  if (!mask_dragging_.has_value() || area.empty()) return;
+  if (area.width <= 0.0 || area.height <= 0.0) return;
+
+  // From the press rather than accumulated, so a drag that goes out and comes
+  // back lands where it started rather than somewhere it drifted to.
+  const double dx = (x - press_x_) / area.width;
+  const double dy = (y - press_y_) / area.height;
+
+  MaskOverlay next = mask_origin_;
+  if (mask_resizing_) {
+    // In the mask's own frame, so dragging a corner of a turned shape grows it
+    // along its own axes rather than the screen's.
+    const auto [lx, ly] = rotate(dx, dy, -to_radians(next.rotation));
+    next.width = std::max(kMinMaskExtent, mask_origin_.width + lx);
+    next.height = std::max(kMinMaskExtent, mask_origin_.height + ly);
+  } else {
+    next.x = mask_origin_.x + dx;
+    next.y = mask_origin_.y + dy;
+  }
+  masks_[*mask_dragging_] = next;
+}
+
 bool MonitorView::on_mouse_up(const MouseEvent& event) {
+  if (mask_dragging_.has_value()) {
+    const std::size_t index = *mask_dragging_;
+    mask_dragging_.reset();
+    mask_resizing_ = false;
+    if (index < masks_.size() && masks_[index] != mask_origin_ && on_mask_commit_) {
+      on_mask_commit_(index, masks_[index]);
+    }
+    return true;
+  }
+
   if (dragging_ == TransformHandle::None) return false;
 
   drag_to(event.x, event.y, event.modifiers);

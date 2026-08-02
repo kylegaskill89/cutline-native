@@ -492,6 +492,11 @@ struct App {
   /// below it, and removing a keyframe renumbers the ones after it.
   std::set<std::pair<std::string, double>> keyframe_selection;
 
+  /// Which effect each shape on the monitor belongs to, in the order the
+  /// monitor was handed them. The widget draws shapes and has never heard of an
+  /// effect stack, so the mapping back lives here.
+  std::vector<std::size_t> mask_effects;
+
   /// Which parameters are showing their slider, by the key `ParamRow` carries.
   ///
   /// Premiere's arrangement: the number is always there and the slider is
@@ -1475,6 +1480,9 @@ void build_effect_mask(App& app, const std::string& clip_id,
     app.session.apply(
         cutline::editor::set_effect_mask(app.session.project(), clip_id, index, next));
     invalidate_preview(app);
+    // The shape is drawn on the picture as well as described here, and the
+    // monitor is handed its shapes rather than working them out.
+    refresh_handles(app);
     app.inspector_stale = true;
   });
 
@@ -1507,6 +1515,7 @@ void build_effect_mask(App& app, const std::string& clip_id,
                          [&app, edited](double set) {
                            app.session.apply(edited(set));
                            invalidate_preview(app);
+                           refresh_handles(app);
                            app.inspector_stale = true;
                          },
                      .preview = edited});
@@ -1536,6 +1545,7 @@ void build_effect_mask(App& app, const std::string& clip_id,
     app.session.apply(
         cutline::editor::set_effect_mask(app.session.project(), clip_id, index, next));
     invalidate_preview(app);
+    refresh_handles(app);
     app.inspector_stale = true;
   });
 }
@@ -2748,6 +2758,20 @@ void refresh_handles(App& app) {
       selection.empty()
           ? std::nullopt
           : cutline::editor::monitor_box(document, selection.front(), app.session.playhead()));
+
+  // The masks on whatever is selected, drawn where they actually fall on the
+  // frame. Which effect each belongs to is remembered here, because the widget
+  // knows only that it has some shapes to draw.
+  app.mask_effects.clear();
+  std::vector<cutline::ui::MaskOverlay> shapes;
+  if (!selection.empty()) {
+    for (const cutline::editor::MaskOverlayRef& mask : cutline::editor::mask_overlays(
+             document, selection.front(), app.session.playhead())) {
+      app.mask_effects.push_back(mask.effect);
+      shapes.push_back(mask.overlay);
+    }
+  }
+  app.monitor->set_masks(std::move(shapes));
 }
 
 /// What the sort button says, and what pressing it moves to next.
@@ -4223,6 +4247,33 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     // Live on every pixel so the preview follows the drag, and once on release
     // so the whole gesture is one entry in the undo stack — the same split the
     // timeline and every slider use.
+    // A mask dragged on the picture. The same bargain as everything else
+    // dragged here: rendered against a copy while the button is down, written
+    // once on release, so the whole gesture is one undo entry.
+    picture.set_on_mask_change([app](std::size_t index, const cutline::ui::MaskOverlay& shape) {
+      if (index >= app->mask_effects.size()) return;
+      const auto selection = app->session.selection();
+      if (selection.empty()) return;
+
+      app->live_gesture = true;
+      app->live_project = cutline::editor::apply_mask_overlay(
+          app->session.project(), selection.front(), app->mask_effects[index], shape,
+          app->session.playhead());
+      invalidate_preview(*app);
+    });
+    picture.set_on_mask_commit([app](std::size_t index, const cutline::ui::MaskOverlay& shape) {
+      if (index >= app->mask_effects.size()) return;
+      const auto selection = app->session.selection();
+      if (selection.empty()) return;
+
+      app->session.apply(cutline::editor::apply_mask_overlay(
+          app->session.project(), selection.front(), app->mask_effects[index], shape,
+          app->session.playhead()));
+      app->live_gesture = false;
+      invalidate_preview(*app);
+      app->inspector_stale = true;
+    });
+
     picture.set_on_transform_change([app](const cutline::ui::MonitorBox& box) {
       const auto selection = app->session.selection();
       if (selection.empty()) return;

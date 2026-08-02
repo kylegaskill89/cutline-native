@@ -16,8 +16,10 @@
 #include "cutline/core/model.hpp"
 #include "cutline/ui/monitor.hpp"
 
+#include <cstddef>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace cutline::editor {
 
@@ -41,5 +43,40 @@ namespace cutline::editor {
 /// Returns the project unchanged when it cannot apply, like every other edit.
 [[nodiscard]] core::Project apply_monitor_box(core::Project project, std::string_view clip_id,
                                               const ui::MonitorBox& box, double t);
+
+// ------------------------------------------------------------------ masks --
+
+/// One masked effect on a clip, as the monitor should draw it.
+struct MaskOverlayRef {
+  /// Which effect in the clip's stack it belongs to.
+  std::size_t effect = 0;
+  ui::MaskOverlay overlay;
+
+  friend bool operator==(const MaskOverlayRef&, const MaskOverlayRef&) = default;
+};
+
+/// Every mask on `clip_id` at time `t`, in canvas fractions.
+///
+/// A mask is stored in fractions of the **layer**, which is what keeps it in
+/// place when the clip is scaled. The monitor works in fractions of the
+/// **canvas**, because a shape on the frame is a place on the frame. Turning
+/// one into the other needs the clip's transform, and this is the only layer
+/// that knows both — the same reason `monitor_box` lives here.
+///
+/// Empty when there is no such clip, when it draws no picture, or when nothing
+/// on it is masked.
+[[nodiscard]] std::vector<MaskOverlayRef> mask_overlays(const core::Project& project,
+                                                        std::string_view clip_id, double t);
+
+/// Puts a dragged overlay back on the effect it came from.
+///
+/// The inverse of the above, and it takes the same route the numbers in the
+/// panel do, so a drag on the picture and a typed percentage are one edit.
+///
+/// Returns the project unchanged when the clip or the effect is not there, or
+/// when the layer has no size to measure the mask against.
+[[nodiscard]] core::Project apply_mask_overlay(core::Project project,
+                                               std::string_view clip_id, std::size_t effect,
+                                               const ui::MaskOverlay& overlay, double t);
 
 }  // namespace cutline::editor

@@ -14,6 +14,8 @@
 
 #include <gtest/gtest.h>
 
+#include <vector>
+
 namespace cutline::editor {
 namespace {
 
@@ -206,6 +208,141 @@ TEST(MonitorBinding, ADragOnAnAnimatedClipWritesKeyframesRatherThanTheStoredValu
 TEST(MonitorBinding, ABoxForAClipThatIsNotThereChangesNothing) {
   const core::Project p = project_with(1920, 1080);
   EXPECT_EQ(apply_monitor_box(p, "nope", ui::MonitorBox{}, 2.0), p);
+}
+
+
+// -------------------------------------------------------- masks on screen --
+//
+// A mask is stored in fractions of the *layer* and drawn in fractions of the
+// *canvas*, and this is the only layer that knows both. What is worth pinning
+// down is the round trip, and that it survives the layer being moved, scaled
+// and turned — because that is exactly when the two spaces stop agreeing.
+
+[[nodiscard]] core::Project with_mask(int media_w, int media_h, core::Mask mask) {
+  core::Project p = project_with(media_w, media_h);
+  core::ClipEffect blur;
+  blur.type = "blur";
+  blur.params["amount"] = 4.0;
+  blur.mask = mask;
+  p.tracks.front().clips.front().effects = {blur};
+  return p;
+}
+
+TEST(MaskOverlays, AMaskInTheMiddleOfACentredLayerIsInTheMiddleOfTheFrame) {
+  const core::Project p =
+      with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse});
+
+  const std::vector<MaskOverlayRef> masks = mask_overlays(p, "c1", 2.0);
+  ASSERT_EQ(masks.size(), 1u);
+  EXPECT_EQ(masks[0].effect, 0u);
+  EXPECT_NEAR(masks[0].overlay.x, 0.5, 1e-9);
+  EXPECT_NEAR(masks[0].overlay.y, 0.5, 1e-9);
+  EXPECT_NEAR(masks[0].overlay.width, 0.25, 1e-9) << "a quarter of a full-frame layer";
+}
+
+TEST(MaskOverlays, AMaskFollowsTheLayerWhenItMoves) {
+  core::Project p = with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse});
+  p.tracks.front().clips.front().transform.x = 0.25;
+
+  const std::vector<MaskOverlayRef> masks = mask_overlays(p, "c1", 2.0);
+  ASSERT_EQ(masks.size(), 1u);
+  EXPECT_NEAR(masks[0].overlay.x, 0.25, 1e-9);
+}
+
+TEST(MaskOverlays, AMaskShrinksWithTheLayer) {
+  core::Project p = with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse});
+  p.tracks.front().clips.front().transform.scale_x = 0.5;
+  p.tracks.front().clips.front().transform.scale_y = 0.5;
+
+  const std::vector<MaskOverlayRef> masks = mask_overlays(p, "c1", 2.0);
+  ASSERT_EQ(masks.size(), 1u);
+  EXPECT_NEAR(masks[0].overlay.width, 0.125, 1e-9);
+  EXPECT_NEAR(masks[0].overlay.height, 0.125, 1e-9);
+}
+
+TEST(MaskOverlays, AMaskTurnsWithTheLayerAndKeepsItsOwnTurn) {
+  core::Project p =
+      with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Rectangle, .rotation = 20.0});
+  p.tracks.front().clips.front().transform.rotation = 30.0;
+
+  const std::vector<MaskOverlayRef> masks = mask_overlays(p, "c1", 2.0);
+  ASSERT_EQ(masks.size(), 1u);
+  EXPECT_NEAR(masks[0].overlay.rotation, 50.0, 1e-9);
+}
+
+TEST(MaskOverlays, AMaskOffTheLayersCentreSwingsRoundWithIt) {
+  // A quarter turn takes a mask that sat to the right of the layer's middle
+  // round to below it.
+  core::Project p = with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse,
+                                                     .x = 0.75,
+                                                     .y = 0.5});
+  p.tracks.front().clips.front().transform.rotation = 90.0;
+
+  const std::vector<MaskOverlayRef> masks = mask_overlays(p, "c1", 2.0);
+  ASSERT_EQ(masks.size(), 1u);
+  EXPECT_NEAR(masks[0].overlay.x, 0.5, 1e-9);
+  EXPECT_GT(masks[0].overlay.y, 0.5);
+}
+
+TEST(MaskOverlays, AnUnmaskedOrDisabledEffectDrawsNothing) {
+  core::Project plain = with_mask(1920, 1080, core::Mask{});
+  EXPECT_TRUE(mask_overlays(plain, "c1", 2.0).empty()) << "no shape, no overlay";
+
+  core::Project off = with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse});
+  off.tracks.front().clips.front().effects.front().enabled = false;
+  EXPECT_TRUE(mask_overlays(off, "c1", 2.0).empty()) << "a disabled effect masks nothing";
+}
+
+TEST(MaskOverlays, ADraggedOverlayComesBackTheSame) {
+  // The property everything else rests on. Anything the drag can produce has to
+  // survive the trip back into layer space and out again, or a mask would creep
+  // every time it was touched.
+  core::Project p = with_mask(1000, 1000, core::Mask{.shape = core::MaskShape::Ellipse});
+  core::Clip& clip = p.tracks.front().clips.front();
+  clip.transform.x = 0.3;
+  clip.transform.y = 0.7;
+  clip.transform.scale_x = 0.6;
+  clip.transform.scale_y = 1.4;
+  clip.transform.rotation = -35.0;
+
+  const ui::MaskOverlay wanted{
+      .shape = 1, .x = 0.42, .y = 0.61, .width = 0.11, .height = 0.09, .rotation = 12.0};
+
+  const core::Project after = apply_mask_overlay(p, "c1", 0, wanted, 2.0);
+  const std::vector<MaskOverlayRef> masks = mask_overlays(after, "c1", 2.0);
+  ASSERT_EQ(masks.size(), 1u);
+
+  EXPECT_NEAR(masks[0].overlay.x, wanted.x, 1e-9);
+  EXPECT_NEAR(masks[0].overlay.y, wanted.y, 1e-9);
+  EXPECT_NEAR(masks[0].overlay.width, wanted.width, 1e-9);
+  EXPECT_NEAR(masks[0].overlay.height, wanted.height, 1e-9);
+  EXPECT_NEAR(masks[0].overlay.rotation, wanted.rotation, 1e-9);
+}
+
+TEST(MaskOverlays, ADragKeepsWhatItWasNotAsking) {
+  // Feather, opacity and inversion are not on the picture, so a drag must not
+  // quietly reset them to whatever a default-constructed mask holds.
+  core::Project p = with_mask(1920, 1080,
+                              core::Mask{.shape = core::MaskShape::Rectangle,
+                                         .feather = 0.2,
+                                         .opacity = 0.4,
+                                         .inverted = true});
+
+  const ui::MaskOverlay moved{.shape = 2, .x = 0.3, .y = 0.3};
+  const core::Project after = apply_mask_overlay(p, "c1", 0, moved, 2.0);
+
+  const core::Mask& mask = after.tracks.front().clips.front().effects.front().mask;
+  EXPECT_DOUBLE_EQ(mask.feather, 0.2);
+  EXPECT_DOUBLE_EQ(mask.opacity, 0.4);
+  EXPECT_TRUE(mask.inverted);
+  EXPECT_EQ(mask.shape, core::MaskShape::Rectangle);
+}
+
+TEST(MaskOverlays, AnEffectThatIsNotThereChangesNothing) {
+  const core::Project p =
+      with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse});
+  EXPECT_EQ(apply_mask_overlay(p, "c1", 7, ui::MaskOverlay{}, 2.0), p);
+  EXPECT_EQ(apply_mask_overlay(p, "nope", 0, ui::MaskOverlay{}, 2.0), p);
 }
 
 }  // namespace

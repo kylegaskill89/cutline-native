@@ -41,6 +41,25 @@ struct MonitorBox {
   friend bool operator==(const MonitorBox&, const MonitorBox&) = default;
 };
 
+/// One effect's mask, drawn over the picture.
+///
+/// In canvas fractions like everything else here, because a shape on the frame
+/// is a place on the frame — the mask is stored in fractions of the *layer*,
+/// and turning one into the other needs the clip's transform, which is the
+/// editor's business rather than this widget's.
+struct MaskOverlay {
+  /// 1 for an ellipse, 2 for a rectangle, matching `core::MaskShape`.
+  int shape = 1;
+  double x = 0.5;
+  double y = 0.5;
+  /// Half-extents, as fractions of the canvas.
+  double width = 0.25;
+  double height = 0.25;
+  double rotation = 0.0;  ///< degrees, clockwise
+
+  friend bool operator==(const MaskOverlay&, const MaskOverlay&) = default;
+};
+
 /// What a press on the overlay took hold of. The order is the one the hit test
 /// walks, which is why the corners come before the edges: a corner handle sits
 /// inside both edges it belongs to, and testing an edge first would make the
@@ -78,6 +97,13 @@ struct SnapGuide {
 /// corner handles of a full-frame layer could not be grabbed at all — which is
 /// exactly how it behaved the first time it was tried on screen.
 inline constexpr double kMonitorInset = 20.0;
+
+/// The smallest a mask may be dragged to, as a fraction of the canvas.
+///
+/// Not zero: a shape with no size has no grip to take hold of, so it could be
+/// shrunk away and never brought back — the same trap the transform box's own
+/// minimum extent exists for.
+inline constexpr double kMinMaskExtent = 0.01;
 
 class MonitorView : public Widget {
  public:
@@ -152,6 +178,32 @@ class MonitorView : public Widget {
     on_commit_ = std::move(on_commit);
   }
 
+  // --------------------------------------------------------------- masks --
+
+  /// The masks to draw, in the order the effect stack lists them.
+  ///
+  /// Drawn under the transform handles, which are what a press finds first: a
+  /// mask sitting where a corner handle is would otherwise make the layer
+  /// impossible to resize.
+  void set_masks(std::vector<MaskOverlay> masks);
+  [[nodiscard]] const std::vector<MaskOverlay>& masks() const noexcept { return masks_; }
+
+  /// Every pixel of a mask drag, and once on release. The index is into
+  /// `masks`, which is the caller's own order.
+  void set_on_mask_change(std::function<void(std::size_t, const MaskOverlay&)> on_change) {
+    on_mask_change_ = std::move(on_change);
+  }
+  void set_on_mask_commit(std::function<void(std::size_t, const MaskOverlay&)> on_commit) {
+    on_mask_commit_ = std::move(on_commit);
+  }
+
+  /// Which mask a press at this point would take hold of, and whether by its
+  /// body or by a corner. Nothing when the press is on no mask.
+  [[nodiscard]] std::optional<std::size_t> mask_at(double x, double y) const;
+  /// Where a mask's resize grip is, in widget pixels. Empty when there is no
+  /// such mask or no picture to draw it over.
+  [[nodiscard]] Rect mask_grip(std::size_t index) const;
+
   /// What a press at this point would take hold of.
   [[nodiscard]] TransformHandle handle_at(double x, double y) const;
 
@@ -195,11 +247,14 @@ class MonitorView : public Widget {
   [[nodiscard]] std::pair<double, double> centre_px() const;
 
   void drag_to(double x, double y, const Modifiers& modifiers);
+  /// Moves or resizes the mask the drag has hold of.
+  void drag_mask(double x, double y);
   void move_to(double x, double y, const Modifiers& modifiers);
   void resize_to(double x, double y, const Modifiers& modifiers);
   void rotate_to(double x, double y, const Modifiers& modifiers);
 
   void paint_overlay(Painter& painter, const Theme& theme) const;
+  void paint_masks(Painter& painter, const Theme& theme) const;
 
   ImageView frame_;
   TextureView texture_;
@@ -209,8 +264,18 @@ class MonitorView : public Widget {
   std::optional<MonitorBox> box_;
   std::function<void(const MonitorBox&)> on_change_;
   std::function<void(const MonitorBox&)> on_commit_;
+  std::function<void(std::size_t, const MaskOverlay&)> on_mask_change_;
+  std::function<void(std::size_t, const MaskOverlay&)> on_mask_commit_;
 
   bool drop_lit_ = false;
+  std::vector<MaskOverlay> masks_;
+  /// The mask drag in flight: which one, whether by a corner, and where it
+  /// started, so every frame is computed from the press rather than
+  /// accumulated.
+  std::optional<std::size_t> mask_dragging_;
+  bool mask_resizing_ = false;
+  MaskOverlay mask_origin_;
+
   bool snapping_ = true;
   bool aspect_locked_ = false;
   std::vector<SnapGuide> guides_;

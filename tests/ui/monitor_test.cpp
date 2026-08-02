@@ -711,5 +711,183 @@ TEST(MonitorDrop, TurnsBackOffAgain) {
   EXPECT_FALSE(monitor.drop_lit());
 }
 
+
+// ------------------------------------------------------------ mask shapes --
+
+TEST(MonitorMasks, AreDrawnOverThePicture) {
+  MonitorView monitor;
+  monitor.arrange(Rect{0.0, 0.0, 320.0, 200.0}, flat_context());
+
+  RecordingPainter plain;
+  monitor.paint(plain, default_theme());
+
+  monitor.set_masks({MaskOverlay{}});
+  RecordingPainter masked;
+  monitor.paint(masked, default_theme());
+
+  EXPECT_GT(masked.count(DrawCall::Kind::Line), plain.count(DrawCall::Kind::Line));
+  EXPECT_TRUE(masked.clips_balanced());
+}
+
+TEST(MonitorMasks, APressInsideAnEllipseFindsIt) {
+  MonitorView monitor;
+  monitor.arrange(Rect{0.0, 0.0, 320.0, 200.0}, flat_context());
+  monitor.set_masks({MaskOverlay{}});
+
+  const Rect area = monitor.picture();
+  const double cx = area.x + area.width / 2.0;
+  const double cy = area.y + area.height / 2.0;
+
+  EXPECT_TRUE(monitor.mask_at(cx, cy).has_value());
+  // A corner of the shape's box is outside an ellipse of the same extents. The
+  // top left one, because the bottom right carries the resize grip and a press
+  // there is a press on that.
+  EXPECT_FALSE(monitor.mask_at(cx - area.width * 0.22, cy - area.height * 0.22).has_value());
+}
+
+TEST(MonitorMasks, ARectangleHasTheCornersAnEllipseDoesNot) {
+  MonitorView monitor;
+  monitor.arrange(Rect{0.0, 0.0, 320.0, 200.0}, flat_context());
+  monitor.set_masks({MaskOverlay{.shape = 2}});
+
+  const Rect area = monitor.picture();
+  const double cx = area.x + area.width / 2.0;
+  const double cy = area.y + area.height / 2.0;
+  EXPECT_TRUE(monitor.mask_at(cx - area.width * 0.22, cy - area.height * 0.22).has_value());
+}
+
+TEST(MonitorMasks, TheLastOneDrawnIsTheFirstOneFound) {
+  MonitorView monitor;
+  monitor.arrange(Rect{0.0, 0.0, 320.0, 200.0}, flat_context());
+  monitor.set_masks({MaskOverlay{}, MaskOverlay{}});
+
+  const Rect area = monitor.picture();
+  const auto found =
+      monitor.mask_at(area.x + area.width / 2.0, area.y + area.height / 2.0);
+  ASSERT_TRUE(found.has_value());
+  EXPECT_EQ(*found, 1u) << "the one on top";
+}
+
+TEST(MonitorMasks, DraggingOneMovesItAndCommitsOnce) {
+  MonitorView monitor;
+  monitor.arrange(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());
+  monitor.set_masks({MaskOverlay{}});
+
+  int commits = 0;
+  MaskOverlay landed;
+  monitor.set_on_mask_commit([&](std::size_t, const MaskOverlay& shape) {
+    landed = shape;
+    ++commits;
+  });
+
+  const Rect area = monitor.picture();
+  const double cx = area.x + area.width / 2.0;
+  const double cy = area.y + area.height / 2.0;
+
+  monitor.on_mouse_down(MouseEvent{.x = cx, .y = cy, .button = MouseButton::Left});
+  monitor.on_mouse_move(MouseEvent{.x = cx + area.width * 0.1, .y = cy});
+  monitor.on_mouse_up(MouseEvent{.x = cx + area.width * 0.1, .y = cy, .button = MouseButton::Left});
+
+  EXPECT_EQ(commits, 1);
+  EXPECT_NEAR(landed.x, 0.6, 1e-6);
+  EXPECT_NEAR(landed.y, 0.5, 1e-6);
+}
+
+TEST(MonitorMasks, DraggingTheGripResizesRatherThanMoves) {
+  MonitorView monitor;
+  monitor.arrange(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());
+  monitor.set_masks({MaskOverlay{}});
+
+  MaskOverlay landed;
+  monitor.set_on_mask_commit([&](std::size_t, const MaskOverlay& shape) { landed = shape; });
+
+  const Rect grip = monitor.mask_grip(0);
+  ASSERT_FALSE(grip.empty());
+  const double gx = grip.x + grip.width / 2.0;
+  const double gy = grip.y + grip.height / 2.0;
+  const Rect area = monitor.picture();
+
+  monitor.on_mouse_down(MouseEvent{.x = gx, .y = gy, .button = MouseButton::Left});
+  monitor.on_mouse_move(MouseEvent{.x = gx + area.width * 0.1, .y = gy});
+  monitor.on_mouse_up(MouseEvent{.x = gx + area.width * 0.1, .y = gy, .button = MouseButton::Left});
+
+  EXPECT_NEAR(landed.x, 0.5, 1e-6) << "the centre stayed put";
+  EXPECT_NEAR(landed.width, 0.35, 1e-6);
+}
+
+TEST(MonitorMasks, AMaskCannotBeShrunkAwayEntirely) {
+  MonitorView monitor;
+  monitor.arrange(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());
+  monitor.set_masks({MaskOverlay{}});
+
+  MaskOverlay landed;
+  monitor.set_on_mask_commit([&](std::size_t, const MaskOverlay& shape) { landed = shape; });
+
+  const Rect grip = monitor.mask_grip(0);
+  const double gx = grip.x + grip.width / 2.0;
+  const double gy = grip.y + grip.height / 2.0;
+
+  monitor.on_mouse_down(MouseEvent{.x = gx, .y = gy, .button = MouseButton::Left});
+  monitor.on_mouse_move(MouseEvent{.x = gx - 400.0, .y = gy - 400.0});
+  monitor.on_mouse_up(MouseEvent{.x = gx - 400.0, .y = gy - 400.0, .button = MouseButton::Left});
+
+  EXPECT_GE(landed.width, kMinMaskExtent);
+  EXPECT_GE(landed.height, kMinMaskExtent);
+}
+
+TEST(MonitorMasks, AMaskBeatsTheLayersMoveHandle) {
+  // `Move` means anywhere inside the layer, so taking it first would swallow
+  // every mask on the picture — which is what it did the first time this was
+  // tried, and the drag moved the whole clip instead of the shape.
+  MonitorView monitor;
+  monitor.arrange(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());
+  monitor.set_transform(MonitorBox{});
+  monitor.set_masks({MaskOverlay{}});
+
+  int mask_commits = 0;
+  int box_commits = 0;
+  monitor.set_on_mask_commit([&](std::size_t, const MaskOverlay&) { ++mask_commits; });
+  monitor.set_on_transform_commit([&](const MonitorBox&) { ++box_commits; });
+
+  const Rect area = monitor.picture();
+  const double cx = area.x + area.width / 2.0;
+  const double cy = area.y + area.height / 2.0;
+  ASSERT_EQ(monitor.handle_at(cx, cy), TransformHandle::Move);
+
+  monitor.on_mouse_down(MouseEvent{.x = cx, .y = cy, .button = MouseButton::Left});
+  monitor.on_mouse_move(MouseEvent{.x = cx + 20.0, .y = cy});
+  monitor.on_mouse_up(MouseEvent{.x = cx + 20.0, .y = cy, .button = MouseButton::Left});
+
+  EXPECT_EQ(mask_commits, 1);
+  EXPECT_EQ(box_commits, 0);
+}
+
+TEST(MonitorMasks, TheLayersCornerHandlesStillWin) {
+  // A mask covering the whole picture would otherwise swallow the corner
+  // handles and leave the layer impossible to resize.
+  MonitorView monitor;
+  monitor.arrange(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());
+  monitor.set_transform(MonitorBox{});
+  monitor.set_masks({MaskOverlay{.shape = 2, .width = 0.6, .height = 0.6}});
+
+  int mask_commits = 0;
+  int box_commits = 0;
+  monitor.set_on_mask_commit([&](std::size_t, const MaskOverlay&) { ++mask_commits; });
+  monitor.set_on_transform_commit([&](const MonitorBox&) { ++box_commits; });
+
+  const Rect corner = monitor.handle_rect(TransformHandle::TopLeft);
+  ASSERT_FALSE(corner.empty());
+  const double x = corner.x + corner.width / 2.0;
+  const double y = corner.y + corner.height / 2.0;
+
+  ASSERT_EQ(monitor.handle_at(x, y), TransformHandle::TopLeft);
+  monitor.on_mouse_down(MouseEvent{.x = x, .y = y, .button = MouseButton::Left});
+  monitor.on_mouse_move(MouseEvent{.x = x + 20.0, .y = y + 20.0});
+  monitor.on_mouse_up(MouseEvent{.x = x + 20.0, .y = y + 20.0, .button = MouseButton::Left});
+
+  EXPECT_EQ(mask_commits, 0);
+  EXPECT_EQ(box_commits, 1);
+}
+
 }  // namespace
 }  // namespace cutline::ui
