@@ -75,6 +75,19 @@ class EffectsBrowser : public Widget {
   void set_items(std::vector<EffectEntry> items);
   [[nodiscard]] const std::vector<EffectEntry>& items() const noexcept { return items_; }
 
+  /// Folders that exist whether or not anything is in them.
+  ///
+  /// A tree built out of the entries' paths cannot show an empty folder, which
+  /// is right for a catalogue — a category with nothing in it is a mistake — and
+  /// wrong for a folder somebody has just made by hand, which would look as
+  /// though it had failed to be made.
+  ///
+  /// These are drawn first, above the folders the entries imply, and a filter
+  /// still hides one whose name does not match: an empty folder cannot be a
+  /// search result.
+  void set_folders(std::vector<std::string> folders);
+  [[nodiscard]] const std::vector<std::string>& folders() const noexcept { return folders_; }
+
   /// Narrows the tree to what matches, as you type.
   ///
   /// Matched case-insensitively against a row's name, and a folder whose name
@@ -98,7 +111,16 @@ class EffectsBrowser : public Widget {
   [[nodiscard]] const std::string& selected() const noexcept { return selected_; }
   /// By id rather than by row, so rebuilding after a search does not silently
   /// select whatever has moved into the old row.
-  void select(std::string id);
+  ///
+  /// The folder narrows it to one place. The same id can appear twice once a
+  /// bin holds it — that is what gathering by hand means — and one click
+  /// lighting up two rows says something happened in two places. Left empty,
+  /// every row with that id is picked, which is what a caller who names only an
+  /// id has asked for.
+  void select(std::string id, std::string folder = {});
+  [[nodiscard]] const std::string& selected_folder() const noexcept {
+    return selected_folder_;
+  }
 
   /// A double-click, or Enter. What applying means belongs above this.
   void set_on_choose(std::function<void(const std::string& id)> on_choose) {
@@ -135,6 +157,21 @@ class EffectsBrowser : public Widget {
   /// cursor are drawn from.
   [[nodiscard]] const std::string& dragging() const noexcept { return dragging_; }
 
+  /// A folder to outline, because releasing over it would drop something into
+  /// it. Set from outside for the same reason the timeline's highlight is: the
+  /// browser knows where its folders are but not what a drop *means*, and a
+  /// folder that lit up for a drop the release then refused would be a promise
+  /// broken every time.
+  void set_drop_folder(std::string folder);
+  [[nodiscard]] const std::string& drop_folder() const noexcept { return drop_folder_; }
+
+  /// A right-click, at this point in the window. What is under it has already
+  /// been selected, so a menu built from the selection is built from what was
+  /// clicked.
+  void set_on_context_menu(std::function<void(double x, double y)> on_menu) {
+    on_context_menu_ = std::move(on_menu);
+  }
+
   // -------------------------------------------------------------- geometry --
 
   [[nodiscard]] double row_height() const noexcept { return row_height_; }
@@ -143,6 +180,14 @@ class EffectsBrowser : public Widget {
   [[nodiscard]] Rect row_rect(std::size_t index) const;
   /// The row at a point, or past the end when there is none.
   [[nodiscard]] std::size_t row_at(double y) const;
+
+  /// The folder a point is in: a heading's own path, or the folder holding the
+  /// entry under the pointer. Empty when the point is past the last row.
+  ///
+  /// Entries count as being in their folder so that dropping onto the things
+  /// already gathered in one lands in it, rather than only the inch of heading
+  /// above them.
+  [[nodiscard]] std::string folder_at(double y) const;
 
   /// How far down the list has been scrolled, in pixels.
   [[nodiscard]] double scroll() const noexcept { return scroll_; }
@@ -164,12 +209,18 @@ class EffectsBrowser : public Widget {
  private:
   /// Rebuilds `rows_` from the items, the filter and what is open.
   void rebuild();
+  /// The outline round the folder a drop would land in, drawn last so it sits
+  /// over the rows it encloses.
+  void paint_drop_folder(Painter& painter, const Theme& theme) const;
   [[nodiscard]] bool matches(const EffectEntry& entry) const;
 
   std::vector<EffectEntry> items_;
+  std::vector<std::string> folders_;
   std::vector<Row> rows_;
   std::string filter_;
   std::string selected_;
+  std::string selected_folder_;
+  std::string drop_folder_;
 
   /// Folders that have been *opened*, rather than the ones that are shut.
   ///
@@ -196,6 +247,7 @@ class EffectsBrowser : public Widget {
   std::function<void(const std::string&)> on_select_;
   std::function<void(const std::string&, double, double)> on_drag_;
   std::function<void(const std::string&, double, double)> on_drop_;
+  std::function<void(double, double)> on_context_menu_;
 };
 
 }  // namespace cutline::ui

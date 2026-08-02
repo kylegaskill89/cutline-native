@@ -223,7 +223,7 @@ folders and never learns the difference between them.
 | Transitions in the same panel | Video and Audio Transitions are folders in it | **done** — and refused where nothing abuts the clip | — |
 | Drag an effect onto a clip | onto the timeline or the program monitor | **done** for the timeline; not the monitor | control |
 | Nested folders | Video Effects › Blur & Sharpen › Gaussian Blur | one level, with the parent folded into the name | control |
-| User bins | new bin / delete, to gather favourites | no | machinery |
+| User bins | new bin / delete, to gather favourites | **done** — made, renamed, deleted, filled by dragging | — |
 | Named presets | save a configured stack, apply it by name | copy and paste only, one clipboard, not saved | machinery |
 | Capability badges | accelerated / 32-bit / YUV, and filters for them | every effect is a GPU shader, so the distinction does not exist here | not applicable |
 
@@ -253,11 +253,25 @@ reports where the pointer is and stays ignorant of the timeline; the timeline
 answers `block_at` and stays ignorant of the drag; the composition root is the
 only thing that knows about both.
 
-The remaining items are the expensive ones. Presets need a new persisted thing
-with its own file and its own format questions. User bins need the same
-persistence plus a way to reorder. Nested folders are a widget problem only.
-Dropping onto the *program monitor* is the same mechanism as the timeline drop
-with a different hit test, and waits on there being a reason to prefer it.
+**A bin holds ids, not copies.** That is the whole difference between a bin and
+a preset, and it decides everything else: an effect gathered into one is the
+same effect that is still under its category, so a renamed preset is renamed in
+the bin too, and an id that no longer names anything is left out of the list
+rather than deleted from the file — a build that temporarily lacked an effect
+would otherwise quietly empty somebody's bins.
+
+Two consequences worth stating, because both had to be handled rather than
+discovered later. An *empty* bin has no entries and so cannot exist in a tree
+built out of paths, which is right for a catalogue and wrong for a folder
+somebody has just made: the browser is told which folders exist as well as what
+is in them. And the same id can now be on screen twice, so a selection carries
+the folder it was made in — one click lighting up two rows says something
+happened in two places.
+
+Dragging found the third thing. The gesture that applies an effect and the
+gesture that gathers one are the same drag, and only where it *ends* says which:
+released over the timeline it applies, released back over a bin it gathers. The
+bin is outlined while the pointer is over it, exactly as a clip is.
 
 ### 1.4 Masks, 1.5 Catalogue depth, and the thing they share
 
@@ -401,7 +415,6 @@ than four:
 
 | | Where | Size |
 |---|---|---|
-| User bins for media | §1.3 | machinery |
 | A free-draw mask path | §1.4 | machinery |
 | Animating a mask | §1.4 | **model** |
 | A margin round the effect scratch, so a blur spreads past the quad | §1.3 | machinery |
@@ -411,13 +424,18 @@ Everything else that was listed is done: paired X/Y, a visible reset per row,
 resetting a whole effect, greying a governed property, the anchor point, both
 panners, audio-effect keyframes, bezier handles, effects as passes, masks and
 dragging them on the picture, nested folders, dropping an effect on the picture,
-named presets, and Effect Controls naming the clip it is showing — which turned
-out to have been done already and listed anyway.
+named presets, user bins, and Effect Controls naming the clip it is showing —
+which turned out to have been done already and listed anyway.
 
 **The shape of what is left.** The structural work is finished and so is the
-feature list. What remains is bins, two follow-ups the mask turned up, one the
-pass chain turned up, and as much catalogue as anybody wants — which is now a
-branch at a time rather than a budget.
+feature list. What remains is two follow-ups the mask turned up, one the pass
+chain turned up, and as much catalogue as anybody wants — which is now a branch
+at a time rather than a budget.
+
+Bins also turned up a fault nobody had noticed in the tree they live in: a
+folder heading ignored its own depth, so a category inside a category started
+where its parent did. The catalogue had been nested for weeks and read as a flat
+list of headings the whole time.
 
 Everything above has been driven by hand on screen as well as tested. That pass
 found two faults nothing else would have: a keyframe selection thrown away by

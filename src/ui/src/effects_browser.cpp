@@ -40,6 +40,17 @@ void EffectsBrowser::set_items(std::vector<EffectEntry> items) {
   rebuild();
 }
 
+void EffectsBrowser::set_folders(std::vector<std::string> folders) {
+  folders_ = std::move(folders);
+  rebuild();
+}
+
+void EffectsBrowser::set_drop_folder(std::string folder) {
+  if (folder == drop_folder_) return;
+  drop_folder_ = std::move(folder);
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
 void EffectsBrowser::set_filter(std::string filter) {
   if (filter == filter_) return;
   filter_ = std::move(filter);
@@ -108,7 +119,14 @@ void EffectsBrowser::rebuild() {
   // In the order the catalogue gave them, so a folder's position is the
   // registry's decision rather than the alphabet's. Paths rather than names, so
   // two folders called Colour under different parents stay two folders.
+  // Declared folders first, so the ones somebody made by hand sit above the
+  // catalogue rather than wherever their contents happen to fall in it.
   std::vector<std::string> paths;
+  for (const std::string& folder : folders_) {
+    if (!folder.empty() && std::ranges::find(paths, folder) == paths.end()) {
+      paths.push_back(folder);
+    }
+  }
   for (const EffectEntry& entry : items_) {
     if (std::ranges::find(paths, entry.folder) == paths.end()) paths.push_back(entry.folder);
   }
@@ -125,7 +143,15 @@ void EffectsBrowser::rebuild() {
     }
     // A folder with nothing in it after filtering is not drawn at all. A column
     // of empty headings is the least useful possible answer to a search.
-    if (shown.empty()) continue;
+    //
+    // A folder that was *declared* is the exception, because it was made rather
+    // than implied and an invisible one looks like a failure. Only while nothing
+    // is being searched for, though, or by matching the search itself: an empty
+    // folder cannot be a search result.
+    if (shown.empty()) {
+      const bool declared = std::ranges::find(folders_, path) != folders_.end();
+      if (!declared || !(filter_.empty() || contains_fold(path, filter_))) continue;
+    }
 
     const std::vector<std::string_view> steps = steps_of(path);
 
@@ -159,7 +185,10 @@ void EffectsBrowser::rebuild() {
   invalidate_layout();
 }
 
-void EffectsBrowser::select(std::string id) { selected_ = std::move(id); }
+void EffectsBrowser::select(std::string id, std::string folder) {
+  selected_ = std::move(id);
+  selected_folder_ = std::move(folder);
+}
 
 // --------------------------------------------------------------- geometry --
 
@@ -184,6 +213,14 @@ std::size_t EffectsBrowser::row_at(double y) const {
   if (offset < 0.0) return rows_.size();
   const auto index = static_cast<std::size_t>(offset / row_height_);
   return index < rows_.size() ? index : rows_.size();
+}
+
+std::string EffectsBrowser::folder_at(double y) const {
+  const std::size_t index = row_at(y);
+  if (index >= rows_.size()) return {};
+  // An entry's folder, not nothing: dropping onto the things already gathered in
+  // a folder should land in it, rather than only the inch of heading above them.
+  return rows_[index].folder;
 }
 
 void EffectsBrowser::layout(const LayoutContext& context) {
@@ -214,7 +251,11 @@ void EffectsBrowser::paint_content(Painter& painter, const Theme& theme) const {
 
     const Row& entry = rows_[i];
     if (entry.is_folder) {
-      const double cx = row.x + kChevron * 0.5 + 4.0;
+      // Indented by its depth like an entry is. Without this a folder inside a
+      // folder starts where its parent does, and the tree reads as a flat list
+      // of headings — which is exactly what folders are there to avoid.
+      const double step = static_cast<double>(entry.depth) * kIndent;
+      const double cx = row.x + step + kChevron * 0.5 + 4.0;
       const double cy = row.y + row.height * 0.5;
       constexpr double reach = 3.0;
       if (is_open(entry.folder)) {
@@ -224,13 +265,14 @@ void EffectsBrowser::paint_content(Painter& painter, const Theme& theme) const {
         painter.line(cx - reach * 0.5, cy - reach, cx + reach * 0.5, cy, panel.text, 1.0);
         painter.line(cx + reach * 0.5, cy, cx - reach * 0.5, cy + reach, panel.text, 1.0);
       }
-      painter.text(text_run(
-          Rect{row.x + kChevron + 6.0, row.y, row.width - kChevron - 6.0, row.height},
-          entry.name, panel, font_size_, TextAlign::Left, true));
+      painter.text(text_run(Rect{row.x + step + kChevron + 6.0, row.y,
+                                 row.width - step - kChevron - 6.0, row.height},
+                            entry.name, panel, font_size_, TextAlign::Left, true));
       continue;
     }
 
-    const bool picked = !entry.id.empty() && entry.id == selected_;
+    const bool picked = !entry.id.empty() && entry.id == selected_ &&
+                        (selected_folder_.empty() || entry.folder == selected_folder_);
     if (picked) {
       painter.fill(row, 0.0, Fill::solid(theme.accent));
     }
@@ -240,11 +282,49 @@ void EffectsBrowser::paint_content(Painter& painter, const Theme& theme) const {
     painter.text(text_run(Rect{row.x + inset, row.y, row.width - inset - 4.0, row.height},
                           entry.name, style, font_size_));
   }
+
+  paint_drop_folder(painter, theme);
+}
+
+void EffectsBrowser::paint_drop_folder(Painter& painter, const Theme& theme) const {
+  if (drop_folder_.empty()) return;
+
+  // Round the heading *and* what is already in it, because that is the shape of
+  // what the drop means: into this folder, alongside these. An outline round the
+  // heading alone reads as landing on the heading.
+  bool any = false;
+  double top = 0.0;
+  double bottom = 0.0;
+  for (std::size_t i = 0; i < rows_.size(); ++i) {
+    if (rows_[i].folder != drop_folder_) continue;
+    const Rect row = row_rect(i);
+    top = any ? std::min(top, row.y) : row.y;
+    bottom = any ? std::max(bottom, row.bottom()) : row.bottom();
+    any = true;
+  }
+  if (!any) return;
+
+  painter.stroke(Rect{bounds().x, top, bounds().width, bottom - top}.inset(1.0), 3.0,
+                 theme.accent, 1.5);
 }
 
 // ------------------------------------------------------------------ input --
 
 bool EffectsBrowser::on_mouse_down(const MouseEvent& event) {
+  if (event.button == MouseButton::Right) {
+    // Selects what is under it first, so a menu built from the selection is
+    // built from what was clicked — and a right-click on a folder heading leaves
+    // the selection alone rather than clearing it, because the menu for a folder
+    // is about the folder.
+    const std::size_t index = row_at(event.y);
+    if (index < rows_.size() && !rows_[index].is_folder) {
+      select(rows_[index].id, rows_[index].folder);
+      if (on_select_) on_select_(selected_);
+    }
+    if (on_context_menu_) on_context_menu_(event.x, event.y);
+    return true;
+  }
+
   if (event.button != MouseButton::Left) return false;
 
   const std::size_t index = row_at(event.y);
@@ -260,7 +340,7 @@ bool EffectsBrowser::on_mouse_down(const MouseEvent& event) {
     return true;
   }
 
-  select(row.id);
+  select(row.id, row.folder);
   if (on_select_) on_select_(selected_);
 
   // Noted, not started. Whether this press is a click or a drag is decided by
@@ -327,7 +407,7 @@ bool EffectsBrowser::on_key_down(const KeyEvent& event) {
 
   const auto pick = [this](std::size_t index) {
     if (index >= rows_.size() || rows_[index].is_folder) return false;
-    select(rows_[index].id);
+    select(rows_[index].id, rows_[index].folder);
     if (on_select_) on_select_(selected_);
     // Kept in view, or the keyboard walks off the bottom of the panel.
     const Rect row = row_rect(index);

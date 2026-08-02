@@ -33,6 +33,7 @@
 #include "cutline/editor/import.hpp"
 #include "cutline/editor/inspector.hpp"
 #include "cutline/editor/keyframes.hpp"
+#include "cutline/editor/bins.hpp"
 #include "cutline/editor/presets.hpp"
 #include "cutline/editor/monitor_binding.hpp"
 #include "cutline/editor/session.hpp"
@@ -457,6 +458,8 @@ struct App {
 
   /// The effects library, while a window is showing one.
   cutline::ui::EffectsBrowser* library = nullptr;
+  /// The library's bin-name field, held so making a bin can empty it.
+  cutline::ui::TextField* library_name = nullptr;
 
   /// Keyframes copied out of a lane, waiting to go back somewhere.
   ///
@@ -507,6 +510,16 @@ struct App {
   /// What is typed in the preset name field, kept here because the panel it
   /// lives in is rebuilt from nothing on every edit.
   std::string preset_name;
+
+  /// User bins: folders gathered by hand, holding ids rather than copies. Saved
+  /// beside the presets and for the same reason — which effects you keep to hand
+  /// is a fact about you rather than about a project.
+  cutline::editor::Bins bins;
+
+  /// What is typed in the library's name field. It names a new bin, and it is
+  /// what "Rename Bin" renames one to — there is no modal text prompt in this
+  /// application, and a bin name is not the right place to introduce one.
+  std::string bin_name;
 
   /// Which parameters are showing their slider, by the key `ParamRow` carries.
   ///
@@ -1411,9 +1424,19 @@ void build_effect_header(App& app, const cutline::editor::EffectRow& row, std::s
     preset_names.push_back(preset.name);
   }
 
+  const std::vector<cutline::editor::LibraryEntry> catalogue =
+      cutline::editor::effect_library(preset_names);
+
   std::vector<cutline::ui::EffectEntry> entries;
+  // The bins first, so what somebody gathered by hand sits above the catalogue
+  // it was gathered from. Their names come from the catalogue, which is what
+  // holding an id rather than a copy buys: a renamed preset is renamed here too.
   for (const cutline::editor::LibraryEntry& entry :
-       cutline::editor::effect_library(preset_names)) {
+       cutline::editor::bin_entries(app.bins, catalogue)) {
+    entries.push_back(cutline::ui::EffectEntry{
+        .id = entry.id, .name = entry.name, .folder = entry.folder});
+  }
+  for (const cutline::editor::LibraryEntry& entry : catalogue) {
     entries.push_back(cutline::ui::EffectEntry{
         .id = entry.id, .name = entry.name, .folder = entry.folder});
   }
@@ -1427,6 +1450,22 @@ void build_effect_header(App& app, const cutline::editor::EffectRow& row, std::s
 void refresh_library(App& app) {
   if (app.library == nullptr) return;
   app.library->set_items(library_entries(app));
+  // And the bins as *folders*, because an empty one has no entries to imply it
+  // and a bin you have just made and cannot see looks like one that failed.
+  app.library->set_folders(cutline::editor::bin_folders(app.bins));
+}
+
+/// Keeps the bins, and says so if it could not.
+///
+/// Written on every change rather than on exit, like the presets: a folder you
+/// spent a morning filling and lost to a crash is worse than one never offered.
+void keep_bins(App& app) {
+  if (const auto ok =
+          cutline::editor::write_bins(cutline::editor::default_bins_path(), app.bins);
+      !ok) {
+    complain(app.main.window, "Could not save the bins.\n\n" + ok.error());
+  }
+  refresh_library(app);
 }
 
 /// Names what is on a clip and keeps it.
@@ -4797,12 +4836,29 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   return clip_id;
 }
 
+/// The bin a point in the library would drop into, declared here because the
+/// outline below has to know and is written above it.
+[[nodiscard]] std::string library_bin_at(const App& app, double x, double y);
+
 /// Outlines the clip a drop would land on, or clears the outline.
 ///
 /// An empty `id` means the drag is over, which is how a drop that lands on
 /// nothing still tidies up after itself.
 void show_library_drop(App& app, const std::string& id, double x, double y) {
   if (app.timeline == nullptr) return;
+
+  // Back inside the library, over a bin: the drop gathers rather than applies,
+  // so the bin is outlined and nothing on the timeline is.
+  const std::string bin = id.empty() ? std::string{} : library_bin_at(app, x, y);
+  if (app.library != nullptr) {
+    app.library->set_drop_folder(bin.empty() ? std::string{}
+                                             : cutline::editor::bin_folder(bin));
+  }
+  if (!bin.empty()) {
+    app.timeline->set_drop_target(std::nullopt);
+    if (app.monitor != nullptr) app.monitor->set_drop_lit(false);
+    return;
+  }
 
   // Over the monitor, the whole picture is the target, so the timeline's
   // outline comes off and the monitor lights instead. Two outlines at once
@@ -4830,6 +4886,121 @@ void show_library_drop(App& app, const std::string& id, double x, double y) {
   app.timeline->set_drop_target(app.timeline->block_at(x, y));
 }
 
+/// The bin a point in the library would drop into, or empty.
+///
+/// A point over a bin's heading or over anything already gathered in it counts,
+/// which is what makes the whole folder a target rather than one row of it.
+[[nodiscard]] std::string library_bin_at(const App& app, double x, double y) {
+  if (app.library == nullptr || !app.library->bounds().contains(x, y)) return {};
+  return std::string(cutline::editor::bin_of_folder(app.library->folder_at(y)));
+}
+
+/// A name nobody has used yet, for a bin made without one typed.
+///
+/// Premiere makes "Custom Bin 01" and lets you rename it; the same idea, because
+/// a button that refuses to do anything until a field is filled is a button that
+/// looks broken.
+[[nodiscard]] std::string unused_bin_name(const App& app) {
+  for (int n = 1;; ++n) {
+    std::string name = "Bin " + std::to_string(n);
+    if (cutline::editor::find_bin(app.bins, name) == nullptr) return name;
+  }
+}
+
+/// Makes a bin, opens it, and leaves the name field empty for the next one.
+void new_bin(App& app) {
+  const std::string name = app.bin_name.empty() ? unused_bin_name(app) : app.bin_name;
+  if (!cutline::editor::create_bin(app.bins, name)) {
+    complain(app.main.window, "There is already a bin called " + name + ".");
+    return;
+  }
+
+  app.bin_name.clear();
+  if (app.library != nullptr) {
+    // Opened, and its parent with it. A folder made where nothing can see it is
+    // one somebody makes twice.
+    app.library->set_open(std::string(cutline::editor::kBinFolder), true);
+    app.library->set_open(cutline::editor::bin_folder(name), true);
+  }
+  keep_bins(app);
+  if (app.library_name != nullptr) app.library_name->set_text({});
+}
+
+/// The menu a right-click in the library opens.
+///
+/// What it offers depends on what is under the pointer, which is the whole
+/// reason it is a menu rather than a row of buttons: a bin's operations only
+/// mean anything while a bin is in front of you.
+void open_library_menu(App& app, double x, double y) {
+  if (app.main.host == nullptr || app.library == nullptr) return;
+
+  const std::string folder = app.library->folder_at(y);
+  const std::string bin(cutline::editor::bin_of_folder(folder));
+  const std::string id = app.library->selected();
+  // An entry only counts as "in this bin" when the pointer is on it rather than
+  // on the heading, or removing would take whatever happened to be selected.
+  const std::size_t row = app.library->row_at(y);
+  const bool on_entry = !bin.empty() && row < app.library->rows().size() &&
+                        !app.library->rows()[row].id.empty();
+
+  struct Item {
+    std::string label;
+    std::function<void()> act;
+  };
+  std::vector<Item> items;
+
+  items.push_back(Item{"New Bin", [&app] { new_bin(app); }});
+  if (!bin.empty()) {
+    if (!app.bin_name.empty()) {
+      // Renamed to what is typed in the field. There is no modal text prompt in
+      // this application, and a bin name is not the place to introduce one.
+      items.push_back(Item{"Rename Bin to \"" + app.bin_name + "\"", [&app, bin] {
+                             if (!cutline::editor::rename_bin(app.bins, bin, app.bin_name)) {
+                               complain(app.main.window,
+                                        "There is already a bin called " + app.bin_name + ".");
+                               return;
+                             }
+                             // The tree remembers what is open by path, so a
+                             // renamed bin would close itself — carry it over,
+                             // or renaming one you are working in hides it.
+                             if (app.library != nullptr) {
+                               const std::string was = cutline::editor::bin_folder(bin);
+                               const bool open = app.library->is_open(was);
+                               app.library->set_open(was, false);
+                               app.library->set_open(
+                                   cutline::editor::bin_folder(app.bin_name), open);
+                             }
+                             app.bin_name.clear();
+                             if (app.library_name != nullptr) app.library_name->set_text({});
+                             keep_bins(app);
+                           }});
+    }
+    // Quoted, because "Delete Bin Bin 1" is what naming it without them reads
+    // as the first time somebody makes a bin and does not name it.
+    items.push_back(Item{"Delete Bin \"" + bin + "\"", [&app, bin] {
+                           cutline::editor::remove_bin(app.bins, bin);
+                           keep_bins(app);
+                         }});
+    if (on_entry) {
+      items.push_back(Item{"Remove from Bin", [&app, bin, id] {
+                             cutline::editor::remove_from_bin(app.bins, bin, id);
+                             keep_bins(app);
+                           }});
+    }
+  }
+
+  std::vector<std::string> labels;
+  labels.reserve(items.size());
+  for (const Item& item : items) labels.push_back(item.label);
+
+  auto list = std::make_unique<MenuList>(std::move(labels));
+  list->set_on_choose([&app, acts = std::move(items)](std::size_t index) {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    if (index < acts.size()) acts[index].act();
+  });
+  app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
+}
+
 /// The effects library: everything that can be applied, searchable.
 ///
 /// Premiere has a panel for this, and it is the right shape. A menu was the
@@ -4846,6 +5017,7 @@ void show_library_drop(App& app, const std::string& id, double x, double y) {
   search.set_placeholder("Search effects");
 
   auto& browser = panel->emplace<cutline::ui::EffectsBrowser>();
+
   browser.set_items([app] {
     if (app != nullptr) return library_entries(*app);
 
@@ -4864,8 +5036,27 @@ void show_library_drop(App& app, const std::string& id, double x, double y) {
     control->set_filter(text);
   });
 
+  // The bin bar along the bottom, which is where Premiere keeps its New Custom
+  // Bin button. The field names the bin; empty, one is named for you.
+  auto& bins = panel->emplace<Box>(Axis::Horizontal);
+  auto& bin_name = bins.emplace<TextField>();
+  bin_name.set_placeholder("Bin name");
+  auto& new_bin_button = bins.emplace<Button>("New Bin", [app] {
+    if (app != nullptr) new_bin(*app);
+  });
+  if (app == nullptr) new_bin_button.set_enabled(false);
+
   if (app != nullptr) {
     app->library = &browser;
+    app->library_name = &bin_name;
+    refresh_library(*app);
+
+    // Only as it is typed. Committing would also fire when the keyboard left
+    // the field, and a bin made by clicking away from a half-typed name is a
+    // bin nobody asked for — the button is the gesture.
+    bin_name.set_on_change([app](const std::string& text) { app->bin_name = text; });
+
+    browser.set_on_context_menu([app](double x, double y) { open_library_menu(*app, x, y); });
 
     // Every clip named, against one project, applied once.
     //
@@ -4910,8 +5101,22 @@ void show_library_drop(App& app, const std::string& id, double x, double y) {
       show_library_drop(*app, id, x, y);
     });
     browser.set_on_drop([app, apply_to](const std::string& id, double x, double y) {
-      const std::optional<std::string> clip_id = library_drop_target(*app, id, x, y);
+      // Into a bin, when the drop landed back inside the library. Gathering
+      // rather than applying: the same drag, and where it ends says which.
+      const std::string bin = library_bin_at(*app, x, y);
       show_library_drop(*app, {}, 0.0, 0.0);
+      if (!bin.empty()) {
+        if (cutline::editor::add_to_bin(app->bins, bin, id)) {
+          // Opened, so what has just been gathered can be seen. Dropping into a
+          // shut folder and being shown nothing looks exactly like a drop that
+          // was refused.
+          app->library->set_open(cutline::editor::bin_folder(bin), true);
+          keep_bins(*app);
+        }
+        return;
+      }
+
+      const std::optional<std::string> clip_id = library_drop_target(*app, id, x, y);
       if (!clip_id.has_value()) return;
 
       // Dropped onto one of several selected clips, it takes all of them —
@@ -6891,7 +7096,21 @@ template <typename T>
       app.session.apply(cutline::core::add_marker(app.session.project(), 2.5, "cue"));
       app.session.apply(
           cutline::core::add_marker(app.session.project(), 8.0, "end", "#ffa000"));
+      // A bin with something in it, so the library's own folders and the bar
+      // that makes them are laid out rather than only the catalogue's.
+      cutline::editor::create_bin(app.bins, "Favourites");
+      cutline::editor::add_to_bin(app.bins, "Favourites", "video:blur");
+      cutline::editor::create_bin(app.bins, "Nothing In Here Yet");
+
       app.main.host = std::make_unique<WidgetHost>(build_interface(&app));
+
+      // Opened, or the rows the bins add are never laid out — every folder in
+      // the library starts collapsed, which is right on screen and useless here.
+      if (app.library != nullptr) {
+        app.library->set_open(std::string(cutline::editor::kBinFolder), true);
+        app.library->set_open(cutline::editor::bin_folder("Favourites"), true);
+        app.library->set_open(cutline::editor::bin_folder("Nothing In Here Yet"), true);
+      }
 
       // Shown, not merely present. Only the active panel in a group is built,
       // and in the default arrangement the inspector is a tab behind another —
@@ -7153,6 +7372,10 @@ int main(int argc, char** argv) {
   if (auto read = cutline::editor::read_presets(cutline::editor::default_presets_path());
       read.has_value()) {
     app.presets = std::move(*read);
+  }
+  if (auto read = cutline::editor::read_bins(cutline::editor::default_bins_path());
+      read.has_value()) {
+    app.bins = std::move(*read);
   }
 
   app.main.host = std::make_unique<WidgetHost>(build_interface(&app));

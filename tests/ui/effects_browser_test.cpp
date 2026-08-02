@@ -493,5 +493,175 @@ TEST(EffectsBrowserNesting, AStraySeparatorDoesNotMakeANamelessFolder) {
   EXPECT_EQ(rows[1].name, "Colour");
 }
 
+// ---------------------------------------------------- folders made by hand --
+
+TEST(EffectsBrowserFolders, ADeclaredFolderIsDrawnWithNothingInIt) {
+  // A tree built out of the entries' paths cannot show an empty folder, which is
+  // right for a catalogue and wrong for one somebody has just made: invisible,
+  // it looks as though it failed to be made.
+  EffectsBrowser browser;
+  browser.set_items({EffectEntry{.id = "v:one", .name = "One", .folder = "Video Effects"}});
+  browser.set_folders({"Bins/Favourites"});
+  browser.set_open("Bins", true);
+
+  const std::vector<EffectsBrowser::Row>& rows = browser.rows();
+  ASSERT_EQ(rows.size(), 3u) << "Bins, Favourites, and the catalogue's heading";
+  EXPECT_EQ(rows[0].name, "Bins");
+  EXPECT_EQ(rows[1].name, "Favourites");
+  EXPECT_TRUE(rows[1].is_folder);
+}
+
+TEST(EffectsBrowserFolders, DeclaredFoldersComeFirst) {
+  // Above the catalogue rather than wherever their contents happen to fall in
+  // it, which is where Premiere puts a custom bin and where somebody who made
+  // one will look for it.
+  EffectsBrowser browser;
+  browser.set_items({EffectEntry{.id = "v:one", .name = "One", .folder = "Video Effects"},
+                     EffectEntry{.id = "v:one", .name = "One", .folder = "Bins/Mine"}});
+  browser.set_folders({"Bins/Mine"});
+
+  ASSERT_FALSE(browser.rows().empty());
+  EXPECT_EQ(browser.rows()[0].name, "Bins");
+}
+
+TEST(EffectsBrowserFolders, AnEmptyOneIsNotASearchResult) {
+  EffectsBrowser browser;
+  browser.set_items({EffectEntry{.id = "v:blur", .name = "Blur", .folder = "Video Effects"}});
+  browser.set_folders({"Bins/Favourites"});
+
+  browser.set_filter("blur");
+  for (const EffectsBrowser::Row& row : browser.rows()) {
+    EXPECT_NE(row.name, "Favourites") << "an empty folder matched a search it has nothing for";
+  }
+
+  // Unless the search is for the folder itself, which is a result.
+  browser.set_filter("favour");
+  ASSERT_EQ(browser.rows().size(), 2u);
+  EXPECT_EQ(browser.rows()[1].name, "Favourites");
+}
+
+TEST(EffectsBrowserFolders, AFolderCanBeAskedForByPoint) {
+  Listed test;
+  const std::size_t heading = 0;
+  EXPECT_EQ(test.browser->folder_at(test.browser->row_rect(heading).y + 2.0),
+            "Video · Colour");
+
+  // An entry answers with the folder holding it, so dropping onto what is
+  // already gathered in one lands in it rather than nowhere.
+  const std::size_t entry = test.row_of("video:hue");
+  ASSERT_LT(entry, test.browser->rows().size());
+  EXPECT_EQ(test.browser->folder_at(test.browser->row_rect(entry).y + 2.0), "Video · Colour");
+
+  EXPECT_TRUE(test.browser->folder_at(4000.0).empty());
+}
+
+TEST(EffectsBrowserFolders, ARightClickPicksWhatIsUnderItAndReports) {
+  Listed test;
+  std::vector<std::string> menus;
+  test.browser->set_on_context_menu([&menus, &test](double, double) {
+    menus.push_back(test.browser->selected());
+  });
+
+  const std::size_t entry = test.row_of("video:hue");
+  ASSERT_LT(entry, test.browser->rows().size());
+  MouseEvent event = press(test.browser->row_rect(entry).y + 2.0);
+  event.button = MouseButton::Right;
+  EXPECT_TRUE(test.browser->on_mouse_down(event));
+
+  ASSERT_EQ(menus.size(), 1u);
+  EXPECT_EQ(menus[0], "video:hue") << "the menu was built from a stale selection";
+
+  // Past the last row there is nothing to pick, and the menu still opens — it is
+  // where "New Bin" has to be reachable from.
+  MouseEvent empty = press(4000.0);
+  empty.button = MouseButton::Right;
+  EXPECT_TRUE(test.browser->on_mouse_down(empty));
+  EXPECT_EQ(menus.size(), 2u);
+}
+
+TEST(EffectsBrowserFolders, ARightClickOnAFolderDoesNotOpenIt) {
+  // The menu for a folder is about the folder; toggling it as well would mean
+  // every right-click also rearranged the tree under the menu.
+  Listed test;
+  test.browser->set_on_context_menu([](double, double) {});
+  ASSERT_TRUE(test.browser->is_open("Video · Colour"));
+
+  MouseEvent event = press(test.browser->row_rect(0).y + 2.0);
+  event.button = MouseButton::Right;
+  EXPECT_TRUE(test.browser->on_mouse_down(event));
+  EXPECT_TRUE(test.browser->is_open("Video · Colour"));
+}
+
+TEST(EffectsBrowserFolders, TheDropOutlineIsSetFromOutside) {
+  // The browser knows where its folders are but not what a drop means, so it is
+  // told. A folder that lit up for a drop the release then refused would be a
+  // promise broken every time.
+  Listed test;
+  EXPECT_TRUE(test.browser->drop_folder().empty());
+  test.browser->set_drop_folder("Video · Colour");
+  EXPECT_EQ(test.browser->drop_folder(), "Video · Colour");
+  test.browser->set_drop_folder({});
+  EXPECT_TRUE(test.browser->drop_folder().empty());
+}
+
+TEST(EffectsBrowserFolders, ANestedHeadingIsIndentedUnderItsParent) {
+  // Without this a folder inside a folder starts where its parent does, and the
+  // tree reads as a flat list of headings — which is what folders exist to
+  // avoid. Found by making a bin, whose heading sits one level down.
+  EffectsBrowser browser;
+  browser.set_items({EffectEntry{.id = "v:one", .name = "One", .folder = "Outer/Inner"}});
+  browser.set_open("Outer", true);
+  browser.arrange(Rect{0.0, 0.0, 260.0, 500.0}, flat_context());
+
+  RecordingPainter painter;
+  browser.paint(painter, default_theme());
+
+  double outer = -1.0;
+  double inner = -1.0;
+  for (const DrawCall& call : painter.calls()) {
+    if (!call.run.has_value()) continue;
+    if (call.run->text == "Outer") outer = call.run->bounds.x;
+    if (call.run->text == "Inner") inner = call.run->bounds.x;
+  }
+  ASSERT_GE(outer, 0.0);
+  ASSERT_GE(inner, 0.0);
+  EXPECT_GT(inner, outer) << "a nested folder started where its parent did";
+}
+
+TEST(EffectsBrowserFolders, PickingOneCopyDoesNotLightUpTheOther) {
+  // Once a bin holds an effect the same id is on screen twice, and a click that
+  // highlighted both would say something had happened in two places. Found by
+  // gathering an effect and right-clicking it.
+  EffectsBrowser browser;
+  browser.set_items({EffectEntry{.id = "v:tint", .name = "Tint", .folder = "Video Effects"},
+                     EffectEntry{.id = "v:tint", .name = "Tint", .folder = "Bins/Mine"}});
+  browser.set_open("Bins", true);
+  browser.set_open("Bins/Mine", true);
+  browser.set_open("Video Effects", true);
+  browser.arrange(Rect{0.0, 0.0, 260.0, 500.0}, flat_context());
+
+  // Against the panel with nothing picked, because the surface behind the rows
+  // is a fill too and counting it would make the numbers say nothing.
+  const auto fills = [&browser] {
+    RecordingPainter painter;
+    browser.paint(painter, default_theme());
+    std::size_t count = 0;
+    for (const DrawCall& call : painter.calls()) {
+      if (call.kind == DrawCall::Kind::Fill) ++count;
+    }
+    return count;
+  };
+  const std::size_t bare = fills();
+  const auto lit = [&fills, bare] { return fills() - bare; };
+
+  browser.select("v:tint", "Bins/Mine");
+  EXPECT_EQ(lit(), 1u);
+
+  // Named without a folder, every copy is picked — which is what a caller who
+  // said only an id asked for.
+  browser.select("v:tint");
+  EXPECT_EQ(lit(), 2u);
+}
+
 }  // namespace
 }  // namespace cutline::ui
