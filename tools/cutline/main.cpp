@@ -460,6 +460,9 @@ struct App {
   cutline::ui::EffectsBrowser* library = nullptr;
   /// The library's bin-name field, held so making a bin can empty it.
   cutline::ui::TextField* library_name = nullptr;
+  /// The inspector's "which clip is this" line, held so an edit that does not
+  /// rebuild the panel can still keep it honest.
+  Label* clip_heading = nullptr;
 
   /// Keyframes copied out of a lane, waiting to go back somewhere.
   ///
@@ -2307,42 +2310,73 @@ void build_matte_controls(App& app, const std::string& clip_id,
                           const cutline::editor::MatteFill& fill) {
   inspector_heading(app, "Colour Matte");
 
-  const auto write = [&app, clip_id](cutline::editor::MatteFill changed, bool rebuild_panel) {
+  // Every edit starts from what the matte *is now*, read back out of the
+  // project, rather than from the value this panel was built with.
+  //
+  // The swatches deliberately do not rebuild the panel — rebuilding destroys
+  // the swatch, and a destroyed swatch closes the picker hanging open above it
+  // — so a captured copy goes stale the moment anything is changed, and the
+  // next edit writes it back over the top. Setting a colour and then turning on
+  // Gradient put the old colour back; setting the second colour then put the
+  // first one back again.
+  const auto change = [&app, clip_id](const auto& edit, bool rebuild_panel) {
     const cutline::core::Clip* clip =
         cutline::core::find_clip(app.session.project(), clip_id);
     if (clip == nullptr) return;
-    app.session.apply(cutline::editor::set_matte_fill(app.session.project(), clip->media_id,
-                                                      std::move(changed)));
+    std::optional<cutline::editor::MatteFill> now =
+        cutline::editor::clip_matte_fill(app.session.project(), clip_id);
+    if (!now.has_value()) return;
+
+    // Copied, not pointed at. Applying replaces the whole project, and `clip`
+    // points into the one being replaced.
+    const std::string media_id = clip->media_id;
+
+    edit(*now);
+    app.session.apply(
+        cutline::editor::set_matte_fill(app.session.project(), media_id, *std::move(now)));
     refresh_browser(app);
     refresh_timeline(app);
     invalidate_preview(app);
-    // Off for the swatches: rebuilding destroys the swatch, and a destroyed
-    // swatch closes the picker hanging open above it.
-    if (rebuild_panel) app.inspector_stale = true;
+    if (rebuild_panel) {
+      app.inspector_stale = true;
+    } else if (app.clip_heading != nullptr) {
+      // The panel is not being rebuilt, so the heading has to be told: a
+      // matte's name follows its colour, and the pool and the timeline have
+      // both just been given the new one.
+      const auto media = std::ranges::find(app.session.project().media, media_id,
+                                           &cutline::core::Media::id);
+      if (media != app.session.project().media.end()) {
+        app.clip_heading->set_text(media->name);
+      }
+    }
   };
 
   auto& colour_row = app.inspector->emplace<Box>(Axis::Horizontal);
   colour_row.emplace<Label>("Colour").set_small(true);
   auto& colour = colour_row.emplace<ColorSwatch>(parse_color(fill.color));
-  colour.set_on_commit([write, fill](const Color& picked) {
-    cutline::editor::MatteFill changed = fill;
-    changed.color = to_hex(picked);
-    write(std::move(changed), false);
+  colour.set_on_commit([change](const Color& picked) {
+    change([&picked](cutline::editor::MatteFill& fill) { fill.color = to_hex(picked); }, false);
   });
 
   auto& ramp = app.inspector->emplace<Box>(Axis::Horizontal);
   auto& gradient = ramp.emplace<Checkbox>("Gradient", fill.gradient.has_value());
-  gradient.set_on_change([write, fill](bool on) {
-    cutline::editor::MatteFill changed = fill;
-    if (on) {
-      // Black by default, which is the one second colour that reads as a ramp
-      // whatever the first one is.
-      changed.gradient = cutline::core::MatteGradient{.color2 = "#000000", .angle = 0.0};
-    } else {
-      changed.gradient.reset();
-    }
-    // This one does rebuild: turning it on adds two controls below.
-    write(std::move(changed), true);
+  gradient.set_on_change([change](bool on) {
+    change(
+        [on](cutline::editor::MatteFill& fill) {
+          if (!on) {
+            fill.gradient.reset();
+            return;
+          }
+          // Black by default, which is the one second colour that reads as a
+          // ramp whatever the first one is. Turned on twice — which the panel
+          // can do, since a rebuild sets the checkbox from the model — the one
+          // already there is kept rather than reset to black.
+          if (!fill.gradient.has_value()) {
+            fill.gradient = cutline::core::MatteGradient{.color2 = "#000000", .angle = 0.0};
+          }
+        },
+        // This one does rebuild: turning it on adds two controls below.
+        true);
   });
   ramp.emplace<Spacer>();
 
@@ -2351,19 +2385,26 @@ void build_matte_controls(App& app, const std::string& clip_id,
   auto& second_row = app.inspector->emplace<Box>(Axis::Horizontal);
   second_row.emplace<Label>("To").set_small(true);
   auto& second = second_row.emplace<ColorSwatch>(parse_color(fill.gradient->color2));
-  second.set_on_commit([write, fill](const Color& picked) {
-    cutline::editor::MatteFill changed = fill;
-    changed.gradient->color2 = to_hex(picked);
-    write(std::move(changed), false);
+  second.set_on_commit([change](const Color& picked) {
+    change(
+        [&picked](cutline::editor::MatteFill& fill) {
+          // Only when it is still a ramp. The checkbox above could have been
+          // turned off while the picker was open, and a second colour on a flat
+          // fill would turn it back into a gradient nobody asked for.
+          if (fill.gradient.has_value()) fill.gradient->color2 = to_hex(picked);
+        },
+        false);
   });
 
   app.inspector->emplace<Label>("Angle (deg)").set_small(true);
   auto& angle = app.inspector->emplace<Slider>(ValueRange{.minimum = 0.0, .maximum = 360.0},
                                                fill.gradient->angle);
-  angle.set_on_commit([write, fill](double value) {
-    cutline::editor::MatteFill changed = fill;
-    changed.gradient->angle = value;
-    write(std::move(changed), false);
+  angle.set_on_commit([change](double value) {
+    change(
+        [value](cutline::editor::MatteFill& fill) {
+          if (fill.gradient.has_value()) fill.gradient->angle = value;
+        },
+        false);
   });
 }
 
@@ -2548,6 +2589,11 @@ void refresh_inspector(App& app) {
     auto& name = app.inspector->emplace<Label>(
         media == app.session.project().media.end() ? clip_id : media->name);
     name.set_bold(true);
+    // Held, because a matte's name follows its colour and the swatches
+    // deliberately do not rebuild this panel — a rebuild would destroy the
+    // swatch and close the picker hanging open above it. Without this the
+    // heading keeps the colour the clip used to be.
+    app.clip_heading = &name;
   }
 
   // Premiere's own heading for the built-in transform, and the honest one for
