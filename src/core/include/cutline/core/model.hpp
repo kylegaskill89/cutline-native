@@ -335,6 +335,15 @@ struct Track {
   bool locked = false;  ///< clips cannot be selected, moved, or trimmed
   bool hidden = false;  ///< video: excluded from the render (the "eye")
 
+  /// The track's own fader and panner, applied to everything on it after each
+  /// clip's own gain and pan.
+  ///
+  /// A mix has two levels for a reason: a clip's gain is what that take needed,
+  /// and a track's is what the whole stem needs against the others. Riding one
+  /// to fix the other is how a mix stops being reversible.
+  double gain = 1.0;
+  double pan = 0.0;
+
   /// Custom lane height in pixels, overriding the default for its kind.
   std::optional<double> height;
 

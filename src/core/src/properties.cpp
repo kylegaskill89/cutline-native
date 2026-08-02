@@ -75,6 +75,30 @@ Project set_clip_pan(Project p, std::string_view clip_id, double pan) {
   return p;
 }
 
+namespace {
+
+[[nodiscard]] Track* find_audio_track(Project& p, std::string_view track_id) {
+  const auto found = std::ranges::find(p.tracks, track_id, &Track::id);
+  if (found == p.tracks.end() || found->kind != TrackKind::Audio) return nullptr;
+  return &*found;
+}
+
+}  // namespace
+
+Project set_track_gain(Project p, std::string_view track_id, double gain) {
+  Track* track = find_audio_track(p, track_id);
+  if (track == nullptr) return p;
+  track->gain = std::clamp(gain, 0.0, kMaxGain);
+  return p;
+}
+
+Project set_track_pan(Project p, std::string_view track_id, double pan) {
+  Track* track = find_audio_track(p, track_id);
+  if (track == nullptr) return p;
+  track->pan = std::clamp(pan, -1.0, 1.0);
+  return p;
+}
+
 Project set_canvas(Project p, int width, int height) {
   p.canvas_w = std::clamp(width, kMinCanvas, kMaxCanvas);
   p.canvas_h = std::clamp(height, kMinCanvas, kMaxCanvas);

@@ -79,6 +79,13 @@ inline constexpr int kMaxCanvas = 16384;
 
 // ------------------------------------------------------------------ master --
 
+/// Sets a track's own fader, clamped to the allowed range. Audio tracks only:
+/// a video track has nothing to make louder.
+[[nodiscard]] Project set_track_gain(Project p, std::string_view track_id, double gain);
+
+/// Sets a track's panner, clamped to -1..1. Audio tracks only.
+[[nodiscard]] Project set_track_pan(Project p, std::string_view track_id, double pan);
+
 /// Sets the gain applied to the whole mix, clamped to the allowed range.
 [[nodiscard]] Project set_master_gain(Project p, double gain);
 

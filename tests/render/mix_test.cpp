@@ -360,5 +360,72 @@ TEST(AudioSourceTime, StaysInsideTheTrim) {
   EXPECT_DOUBLE_EQ(audio_source_time_at(only(p), 99.0), 25.0);
 }
 
+
+// ----------------------------------------------------------- track mixer --
+//
+// A track's own fader and panner, applied to everything on it after each clip's
+// own. Two levels, because a clip's gain is what that take needed and a track's
+// is what the stem needs against the others.
+
+TEST(TrackMixer, TheTrackFaderMultipliesTheClipsOwn) {
+  Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
+  p.tracks[0].gain = 0.5;
+  p.tracks[0].clips[0].gain = 0.5;
+
+  EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 2.0), 0.25);
+}
+
+TEST(TrackMixer, AUnityTrackChangesNothing) {
+  const Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
+  EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 2.0), 1.0);
+}
+
+TEST(TrackMixer, TheTrackPannerAppliesAfterTheClipsOwn) {
+  Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
+  p.tracks[0].pan = 0.5;  // half right
+
+  const StereoGain gain = audio_pan_at(only(p), 2.0);
+  EXPECT_DOUBLE_EQ(gain.left, 0.5);
+  EXPECT_DOUBLE_EQ(gain.right, 1.0);
+}
+
+TEST(TrackMixer, OppositePansCancelToSilenceRatherThanToCentre) {
+  // The property that decides how the two combine. Multiplied, a clip hard left
+  // on a track panned hard right is silent, which is what two balances in
+  // series do; added, the two pans would cancel and it would play centred,
+  // which is not what either control was asked for.
+  Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
+  p.tracks[0].clips[0].pan = -1.0;
+  p.tracks[0].pan = 1.0;
+
+  const StereoGain gain = audio_pan_at(only(p), 2.0);
+  EXPECT_DOUBLE_EQ(gain.left, 0.0);
+  EXPECT_DOUBLE_EQ(gain.right, 0.0);
+}
+
+TEST(TrackMixer, ATrackPanIsCarriedOnEveryClipThatCameOffIt) {
+  // Copied into the plan rather than looked up, so the mixer never reaches back
+  // into a project that may have moved on.
+  Project p = project({audio_track("a1", {clip("c1", "m", 0.0, 2.0),
+                                          clip("c2", "m", 3.0, 2.0)})});
+  p.tracks[0].pan = -1.0;
+
+  const auto planned = plan_audio(p);
+  ASSERT_EQ(planned.size(), 2u);
+  EXPECT_DOUBLE_EQ(planned[0].track_pan, -1.0);
+  EXPECT_DOUBLE_EQ(planned[1].track_pan, -1.0);
+}
+
+TEST(TrackMixer, ANonsenseTrackMixIsClampedRatherThanTrusted) {
+  Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
+  p.tracks[0].gain = 100.0;
+  p.tracks[0].pan = -8.0;
+
+  const auto planned = plan_audio(p);
+  ASSERT_EQ(planned.size(), 1u);
+  EXPECT_DOUBLE_EQ(planned[0].track_gain, core::kMaxGain);
+  EXPECT_DOUBLE_EQ(planned[0].track_pan, -1.0);
+}
+
 }  // namespace
 }  // namespace cutline::render

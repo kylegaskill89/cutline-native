@@ -49,6 +49,15 @@ struct PlannedAudioClip {
   /// order. Mixing is a sum, so unlike video this does not imply an order —
   /// it is for diagnostics and for the UI.
   int track_index = 0;
+
+  /// The track's own fader and panner, carried on every clip that came off it.
+  ///
+  /// Copied rather than looked up, for the reason everything else here is: the
+  /// plan is what the mixer works from, and a mixer reaching back into the
+  /// project for a number would be a mixer that had to be told when the project
+  /// changed underneath it.
+  double track_gain = 1.0;
+  double track_pan = 0.0;
 };
 
 /// Every audio clip that can be heard, in track order and then by start time.
@@ -60,7 +69,7 @@ struct PlannedAudioClip {
 [[nodiscard]] std::vector<PlannedAudioClip> plan_audio(const core::Project& project);
 
 /// The clip's linear gain at timeline time `t`: its automation or constant
-/// gain, times its fades.
+/// gain, times its fades, times the track's fader.
 ///
 /// Fades multiply the gain rather than adding to it, matching how
 /// `segment_alpha` treats video: a clip that is both faded in and turned down
@@ -75,7 +84,12 @@ struct StereoGain {
   friend bool operator==(const StereoGain&, const StereoGain&) = default;
 };
 
-/// The clip's pan at timeline time `t`, as a gain for each side.
+/// The clip's pan at timeline time `t`, as a gain for each side, with the
+/// track's panner applied after it.
+///
+/// The two combine by multiplying the sides rather than by adding the pans: a
+/// clip hard left on a track panned hard right should be silent, which is what
+/// a pair of balances in series gives and what adding the two would not.
 ///
 /// Balance, not a constant-power pan: one side is let through less and the
 /// other left alone, so a centred clip is untouched. See `set_clip_pan` for

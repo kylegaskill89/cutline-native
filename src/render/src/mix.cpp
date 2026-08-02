@@ -60,6 +60,8 @@ std::vector<PlannedAudioClip> plan_audio(const core::Project& project) {
       entry.speed = core::clip_speed(clip);
       entry.reverse = clip.reverse;
       entry.track_index = index;
+      entry.track_gain = std::clamp(track.gain, 0.0, core::kMaxGain);
+      entry.track_pan = std::clamp(track.pan, -1.0, 1.0);
       planned.push_back(entry);
     }
   }
@@ -94,19 +96,28 @@ double audio_gain_at(const PlannedAudioClip& planned, double t) noexcept {
     gain *= std::max(0.0, tail / clip.fade_out);
   }
 
-  return std::max(gain, 0.0);
+  return std::max(gain * planned.track_gain, 0.0);
 }
 
 StereoGain audio_pan_at(const PlannedAudioClip& planned, double t) noexcept {
   if (planned.clip == nullptr) return {};
 
   const double local = t - planned.start;
-  const double pan = core::pan_at(*planned.clip, local);
 
   // Balance: one side is let through less and the other is left alone. Centre
   // is exactly unity on both, so a project made before there was a panner
   // sounds the same to the sample.
-  return {.left = pan > 0.0 ? 1.0 - pan : 1.0, .right = pan < 0.0 ? 1.0 + pan : 1.0};
+  const auto sides = [](double pan) {
+    return StereoGain{.left = pan > 0.0 ? 1.0 - pan : 1.0,
+                      .right = pan < 0.0 ? 1.0 + pan : 1.0};
+  };
+
+  // The clip's panner and then the track's, multiplied rather than summed: a
+  // clip hard left on a track panned hard right is silent, which is what two
+  // balances in series give and what adding the two pans would not.
+  const StereoGain clip = sides(core::pan_at(*planned.clip, local));
+  const StereoGain track = sides(planned.track_pan);
+  return {.left = clip.left * track.left, .right = clip.right * track.right};
 }
 
 double audio_source_time_at(const PlannedAudioClip& planned, double t) noexcept {

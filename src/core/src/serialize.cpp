@@ -223,6 +223,8 @@ json write(const Clip& c) {
 json write(const Track& t) {
   json j{{"id", t.id},
          {"kind", t.kind},
+         {"gain", t.gain},
+         {"pan", t.pan},
          {"muted", t.muted},
          {"solo", t.solo},
          {"locked", t.locked},
@@ -472,6 +474,10 @@ Track read_track(const json& j) {
   t.id = read_or(j, "id", std::string{});
   t.kind = read_or(j, "kind", TrackKind::Video);
   t.label = read_or(j, "label", std::string{});
+  // Unity and centred in every file written before there was a track mixer,
+  // which is what those files meant.
+  t.gain = read_or(j, "gain", 1.0);
+  t.pan = read_or(j, "pan", 0.0);
   t.muted = read_or(j, "muted", false);
   t.solo = read_or(j, "solo", false);
   t.locked = read_or(j, "locked", false);

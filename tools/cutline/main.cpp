@@ -4730,6 +4730,58 @@ void show_library_drop(App& app, const std::string& id, double x, double y) {
 /// The two belong together: a fader is moved by ear and by eye, and the eye
 /// part is the meter. Splitting them across panels would mean setting a level
 /// while watching something that might be behind another tab.
+/// One audio track's strip in the mixer: a fader and a panner.
+///
+/// A mix has two levels for a reason. A clip's gain is what that take needed;
+/// a track's is what the whole stem needs against the others, and riding one to
+/// fix the other is how a mix stops being reversible.
+///
+/// Numbers rather than a vertical fader per track. The panel is as likely to be
+/// a narrow column as a whole region, and a row of strips needs a width it
+/// cannot count on — the master fader learned that the hard way and is stacked
+/// for the same reason.
+void build_track_strip(App& app, Box& column, const cutline::core::Track& track) {
+  const std::string track_id = track.id;
+
+  // No mute or solo here. They are on the track head in the timeline, which is
+  // where Premiere keeps them too and where they are while you are editing —
+  // a second pair somewhere else is two controls for one flag.
+  column.emplace<Label>(track.label.empty() ? track_id : track.label).set_bold(true);
+
+  auto& fader = column.emplace<Box>(Axis::Horizontal);
+  fader.emplace<Label>("Volume").set_small(true);
+  fader.emplace<Spacer>();
+
+  auto& volume = fader.emplace<cutline::ui::NumericField>(
+      cutline::ui::ValueRange{.minimum = cutline::ui::kGainFloorDb,
+                              .maximum = cutline::ui::gain_to_fader_db(
+                                  cutline::core::kMaxGain)},
+      cutline::ui::gain_to_fader_db(track.gain));
+  volume.set_decimals(1);
+  volume.set_suffix("dB");
+  volume.set_default_value(0.0);
+  volume.set_on_commit([&app, track_id](double db) {
+    app.session.apply(cutline::core::set_track_gain(
+        app.session.project(), track_id,
+        cutline::ui::fader_db_to_gain(db, cutline::core::kMaxGain)));
+    app.inspector_stale = true;
+  });
+
+  auto& panner = column.emplace<Box>(Axis::Horizontal);
+  panner.emplace<Label>("Balance").set_small(true);
+  panner.emplace<Spacer>();
+
+  auto& pan = panner.emplace<cutline::ui::NumericField>(
+      cutline::ui::ValueRange{.minimum = -100.0, .maximum = 100.0}, track.pan * 100.0);
+  pan.set_decimals(1);
+  pan.set_default_value(0.0);
+  pan.set_on_commit([&app, track_id](double value) {
+    app.session.apply(
+        cutline::core::set_track_pan(app.session.project(), track_id, value / 100.0));
+    app.inspector_stale = true;
+  });
+}
+
 [[nodiscard]] std::unique_ptr<Widget> make_audio_panel(App* app) {
   auto panel = std::make_unique<Panel>();
 
@@ -4754,6 +4806,16 @@ void show_library_drop(App& app, const std::string& id, double x, double y) {
 
   auto& bars = column.emplace<cutline::ui::MeterView>();
   if (app != nullptr) app->meter = &bars;
+
+  // A strip per audio track, under the master. Premiere calls this the audio
+  // mixer and puts the master at the right-hand end of it; stacked, the master
+  // going first is what the same arrangement reads as.
+  if (app != nullptr) {
+    for (const cutline::core::Track& track : app->session.project().tracks) {
+      if (track.kind != cutline::core::TrackKind::Audio) continue;
+      build_track_strip(*app, column, track);
+    }
+  }
 
   if (app != nullptr) {
     app->master_fader = &fader;
@@ -6627,6 +6689,10 @@ template <typename T>
       if (DockView* dock = find_dock(app.main.host->root()); dock != nullptr) {
         DockLayout layout = layout_of(app);
         cutline::ui::activate_panel(layout, "effects");
+        // And the mixer, which is a tab behind the monitor and holds a strip
+        // per audio track — an arrangement that grows with the project and so
+        // is worth laying out rather than assuming.
+        cutline::ui::activate_panel(layout, "audio");
         dock->set_node(layout.root);
       }
       app.main.host->resize(client, context);

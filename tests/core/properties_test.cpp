@@ -458,5 +458,40 @@ TEST(Marks, SettingNothingClearsOnlyThatOne) {
   EXPECT_TRUE(p.out_point.has_value()) << "the other one is not collateral";
 }
 
+
+// -------------------------------------------------------------- track mix --
+
+TEST(TrackMix, SetsTheFaderAndThePanner) {
+  Project p = empty_project();
+  p.tracks.push_back(Track{.id = "a1", .kind = TrackKind::Audio});
+
+  p = set_track_gain(std::move(p), "a1", 0.5);
+  p = set_track_pan(std::move(p), "a1", -0.25);
+
+  EXPECT_DOUBLE_EQ(p.tracks.back().gain, 0.5);
+  EXPECT_DOUBLE_EQ(p.tracks.back().pan, -0.25);
+}
+
+TEST(TrackMix, IsClampedToWhatTheMixerWillHold) {
+  Project p = empty_project();
+  p.tracks.push_back(Track{.id = "a1", .kind = TrackKind::Audio});
+
+  EXPECT_DOUBLE_EQ(set_track_gain(p, "a1", 99.0).tracks.back().gain, kMaxGain);
+  EXPECT_DOUBLE_EQ(set_track_pan(p, "a1", 4.0).tracks.back().pan, 1.0);
+  EXPECT_DOUBLE_EQ(set_track_pan(p, "a1", -4.0).tracks.back().pan, -1.0);
+}
+
+TEST(TrackMix, AVideoTrackHasNothingToMix) {
+  const Project p = empty_project();
+  EXPECT_EQ(set_track_gain(p, p.tracks.front().id, 0.5), p);
+  EXPECT_EQ(set_track_pan(p, p.tracks.front().id, 0.5), p);
+}
+
+TEST(TrackMix, ATrackThatIsNotThereChangesNothing) {
+  const Project p = empty_project();
+  EXPECT_EQ(set_track_gain(p, "nope", 0.5), p);
+  EXPECT_EQ(set_track_pan(p, "nope", 0.5), p);
+}
+
 }  // namespace
 }  // namespace cutline::core
