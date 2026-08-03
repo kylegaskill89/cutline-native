@@ -163,6 +163,136 @@ TEST(TimelineMenu, ADisabledClipIsDrawnAsOne) {
   EXPECT_NE(*playing, *silent);
 }
 
+// ------------------------------------------------------------- cursors --
+
+TEST(TimelineCursor, AnEdgeSaysItCanBeDragged) {
+  // The complaint that started this: a clip's trim zone looked exactly like its
+  // middle, so there was no way to know a press would trim rather than move
+  // except by doing it.
+  const Fixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+
+  EXPECT_EQ(fixture.view->cursor_at(box.x + 2.0, box.y + 5.0), Cursor::ResizeWE);
+  EXPECT_EQ(fixture.view->cursor_at(box.right() - 2.0, box.y + 5.0), Cursor::ResizeWE);
+  EXPECT_EQ(fixture.view->cursor_at(box.x + box.width * 0.5, box.y + 5.0), Cursor::Move);
+}
+
+TEST(TimelineCursor, TheToolIsUnderThePointerRatherThanOnlyInThePalette) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+  const double middle = box.x + box.width * 0.5;
+
+  fixture.view->set_tool(Tool::Razor);
+  EXPECT_EQ(fixture.view->cursor_at(middle, box.y + 5.0), Cursor::Razor);
+  fixture.view->set_tool(Tool::Slip);
+  EXPECT_EQ(fixture.view->cursor_at(middle, box.y + 5.0), Cursor::Slip);
+  fixture.view->set_tool(Tool::Slide);
+  EXPECT_EQ(fixture.view->cursor_at(middle, box.y + 5.0), Cursor::Slide);
+  fixture.view->set_tool(Tool::RateStretch);
+  EXPECT_EQ(fixture.view->cursor_at(middle, box.y + 5.0), Cursor::RateStretch);
+  // The two edge tools take hold of an edge, and that is what the pointer says
+  // — which of them it is, is the button that is lit.
+  fixture.view->set_tool(Tool::Ripple);
+  EXPECT_EQ(fixture.view->cursor_at(middle, box.y + 5.0), Cursor::ResizeWE);
+}
+
+TEST(TimelineCursor, TheGripUnderAHeaderSaysWhichWayItGoes) {
+  const Fixture fixture;
+  const Rect grip = fixture.view->resize_rect(0);
+  ASSERT_FALSE(grip.empty());
+  EXPECT_EQ(fixture.view->cursor_at(grip.x + 10.0, grip.y + grip.height * 0.5),
+            Cursor::ResizeNS);
+}
+
+TEST(TimelineCursor, EmptyTrackAndTheRulerSayNothing) {
+  // `Arrow` is "nothing to say" rather than "an arrow", so these let the
+  // question pass to whatever is behind.
+  const Fixture fixture;
+  EXPECT_EQ(fixture.view->cursor_at(fixture.view->ruler_area().x + 40.0,
+                                    fixture.view->ruler_area().y + 4.0),
+            Cursor::Arrow);
+  const Rect tracks = fixture.view->tracks_area();
+  EXPECT_EQ(fixture.view->cursor_at(tracks.right() - 5.0, tracks.bottom() - 5.0),
+            Cursor::Arrow);
+}
+
+TEST(TimelineCursor, ADragKeepsItsOwnCursorWhereverThePointerGoes) {
+  // A trim pulled past the end of its clip is still a trim. A cursor that went
+  // back to an arrow halfway through would be reporting on the pointer rather
+  // than on the gesture.
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.right() - 2.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.right() + 400.0, box.y + 5.0));
+
+  EXPECT_EQ(fixture.view->cursor_at(box.right() + 400.0, box.y + 5.0), Cursor::ResizeWE);
+}
+
+TEST(TimelineHover, TheZoneUnderThePointerIsDrawn) {
+  // Every button, menu row, splitter and tab in the application lights up under
+  // the pointer. The timeline — where one pixel decides between moving a clip
+  // and trimming it — did not.
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+
+  RecordingPainter away;
+  fixture.host->paint(away, default_theme());
+  const std::size_t before = away.count(DrawCall::Kind::Fill);
+
+  // Below the fade handle, which sits on the top corner and is a zone of its
+  // own — and which is already drawn whether or not anything is hovering it.
+  fixture.host->mouse_move(press(box.right() - 2.0, box.bottom() - 5.0));
+  RecordingPainter over;
+  fixture.host->paint(over, default_theme());
+
+  EXPECT_GT(over.count(DrawCall::Kind::Fill), before);
+}
+
+TEST(TimelineHover, TheMiddleOfAClipIsNotHighlighted) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+
+  fixture.host->mouse_move(press(box.x + box.width * 0.5, box.bottom() - 5.0));
+  RecordingPainter middle;
+  fixture.host->paint(middle, default_theme());
+
+  fixture.host->mouse_move(press(box.right() - 2.0, box.bottom() - 5.0));
+  RecordingPainter edge;
+  fixture.host->paint(edge, default_theme());
+
+  EXPECT_GT(edge.count(DrawCall::Kind::Fill), middle.count(DrawCall::Kind::Fill));
+}
+
+TEST(TimelineHover, TheRazorShowsWhereItWouldCut) {
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Razor);
+  const Rect box = fixture.view->block_rect(1, 0);
+
+  RecordingPainter away;
+  fixture.host->paint(away, default_theme());
+  const std::size_t before = away.count(DrawCall::Kind::Line);
+
+  fixture.host->mouse_move(press(box.x + box.width * 0.5, box.y + 5.0));
+  RecordingPainter over;
+  fixture.host->paint(over, default_theme());
+  EXPECT_GT(over.count(DrawCall::Kind::Line), before);
+}
+
+TEST(TimelineHover, ThePointerLeavingTakesTheHighlightWithIt) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_move(press(box.right() - 2.0, box.bottom() - 5.0));
+
+  RecordingPainter over;
+  fixture.host->paint(over, default_theme());
+
+  fixture.host->mouse_exit();
+  RecordingPainter gone;
+  fixture.host->paint(gone, default_theme());
+
+  EXPECT_LT(gone.count(DrawCall::Kind::Fill), over.count(DrawCall::Kind::Fill));
+}
+
 // ------------------------------------------------- the ripple and roll --
 
 TEST(RippleTool, AnEdgeIsWhatItActsOn) {

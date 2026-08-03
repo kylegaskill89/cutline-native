@@ -2,6 +2,7 @@ add_library(cutline_ui
   src/browser.cpp
   src/color_picker.cpp
   src/controls.cpp
+  src/cursor.cpp
   src/dock.cpp
   src/dock_view.cpp
   src/effects_browser.cpp

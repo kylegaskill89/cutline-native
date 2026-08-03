@@ -581,6 +581,44 @@ otherwise moving the original would drag the copy along. And what was pasted
 becomes the selection, so the nudge or the drag that usually follows acts on the
 copies.
 
+### 2.3a What the interface tells you before you press
+
+Not a Premiere feature so much as a class of them, and it went unlisted because
+nothing here was *missing* — every gesture worked. What none of them did was
+say so first.
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| A cursor that changes | tool cursors, trim cursors, resize, I-beam | **done** — the application had exactly one cursor from the first widget until now | — |
+| Hover feedback on a clip's zones | the trim zone lights | **done** — the trim handle under the pointer, and the razor's cut line | — |
+| Hover feedback everywhere else | yes | already had it — buttons, menu rows, splitters, tabs | — |
+| A snap that says it snapped | a line at the edge it stuck to | none — a clip that snapped and one that landed close look the same | control |
+| Tooltips | yes | none anywhere | control |
+
+**The cursor never changed.** `window_class.hCursor` was `IDC_ARROW` and nothing
+ever called `SetCursor`, so a clip's trim edge looked exactly like its middle, a
+splitter looked like the gap between two panels, a field looked like a label,
+and the tool you were holding was visible only in a toolbar a long way from
+where you were working. `ui::Cursor` is an enum a widget answers with, `Arrow`
+meaning "nothing to say" so the question passes to the parent rather than being
+blanked out by whatever happens to be on top.
+
+The six tool cursors are **rendered from the same art as their buttons** — the
+icon drawing came out of `IconButton::paint_content` into a free `draw_icon`,
+and both call it. A razor that looked one way in the palette and another under
+the pointer would be two razors, and the second would drift the first time
+either was touched.
+
+**The timeline was the only interactive surface with no hover feedback at all.**
+Every button, menu row, splitter and dock tab lights up under the pointer; the
+one place where a single pixel decides between moving a clip and trimming it
+said nothing. The trim handle under the pointer is now drawn, and the razor
+shows the line it would cut on — the tool whose whole gesture is one click is
+the one that most needs to say where it would land.
+
+Snapping is still silent, and that is the remaining row: a clip that snapped to
+an edge and one that happened to land near it look identical.
+
 ### 2.4 Reading the timeline
 
 | | Premiere | Here | Size |

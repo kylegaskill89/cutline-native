@@ -283,6 +283,23 @@ void WidgetHost::close_popup() noexcept {
   paint_dirty_ = true;
 }
 
+Cursor Widget::cursor_at(double /*x*/, double /*y*/) const { return Cursor::Arrow; }
+
+Cursor WidgetHost::cursor() const {
+  if (!has_mouse_) return Cursor::Arrow;
+
+  // Upwards until something answers. A widget with nothing to say returns
+  // `Arrow`, which is how a label lying across a timeline lets the timeline's
+  // own answer through instead of covering it with the default.
+  Widget* target = captured_ != nullptr ? captured_ : hovered_;
+  for (Widget* widget = target; widget != nullptr; widget = widget->parent()) {
+    if (const Cursor found = widget->cursor_at(mouse_x_, mouse_y_); found != Cursor::Arrow) {
+      return found;
+    }
+  }
+  return Cursor::Arrow;
+}
+
 Widget* WidgetHost::target_at(double x, double y) {
   if (!popup_open()) return root_->at(x, y);
   // Inside the popup, or nothing. What is underneath is unreachable while one

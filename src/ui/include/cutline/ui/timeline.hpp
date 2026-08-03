@@ -842,7 +842,25 @@ class TimelineView : public Widget {
   void layout(const LayoutContext& context) override;
   void paint_content(Painter& painter, const Theme& theme) const override;
 
+  /// The pointer says what a press would do here, which is the whole of what
+  /// `zone_at` already works out and which nothing was previously showing.
+  ///
+  /// While a drag is running it says what the drag *is* instead: a trim pulled
+  /// past the end of its clip is still a trim, and a cursor that changed under
+  /// a held button would be reporting on the pointer rather than on the
+  /// gesture.
+  [[nodiscard]] Cursor cursor_at(double x, double y) const override;
+
+  /// Where the pointer is, so the zone under it can be drawn as well as
+  /// answered. Off the widget entirely is `std::nullopt`, which is what stops
+  /// a highlight being left behind when the pointer leaves.
+  [[nodiscard]] const std::optional<std::pair<double, double>>& pointer() const noexcept {
+    return pointer_;
+  }
+
   bool on_mouse_down(const MouseEvent& event) override;
+  void on_mouse_enter() override;
+  void on_mouse_leave() override;
   bool on_mouse_move(const MouseEvent& event) override;
   bool on_mouse_up(const MouseEvent& event) override;
   bool on_wheel(const WheelEvent& event) override;
@@ -986,6 +1004,11 @@ class TimelineView : public Widget {
 
   /// Taken from the theme at layout, because input arrives without one.
   Metrics metrics_;
+
+  /// Where the pointer is while it is over the view, for the highlight on the
+  /// zone under it. Empty when it is somewhere else, which is what takes the
+  /// highlight away rather than leaving one stuck at the edge.
+  std::optional<std::pair<double, double>> pointer_;
 
   /// Which lane a height drag is carrying, and what it was when it began —
   /// worked from the press rather than from the last move, like every other

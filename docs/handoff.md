@@ -254,6 +254,13 @@ deciding it is probably fine:
 
 - **Fit to Frame and Fill Frame**, the two rows added to the clip menu. The
   arithmetic is tested; the menu itself was driven when it landed.
+- **The cursors.** `WM_SETCURSOR`, and the six tool cursors rendered with
+  `CreateIconIndirect`. What the marks look like is checked by `--check`, which
+  counts the inked pixels and fails on a cursor that draws nothing or fills its
+  whole square — but whether Windows actually shows them, and whether the hot
+  spot lands where the razor's blade is, needs a screen. The window class is
+  registered with a **null** `hCursor` now, so a mistake here shows as no cursor
+  at all rather than as the wrong one.
 
 Two faults found by driving in this stretch, both invisible to the tests, are
 the reason the list exists at all: a tab press that no longer marked the window

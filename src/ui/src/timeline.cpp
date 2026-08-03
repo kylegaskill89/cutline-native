@@ -1052,6 +1052,38 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
   }
   painter.pop_clip();
 
+  // ---- the zone under the pointer, over the clips and under everything else
+  //
+  // What a press would do, said before it is done. The timeline was the only
+  // interactive surface in the application with no hover feedback at all: every
+  // button, menu row, splitter and tab lights up, and the one place where a
+  // single pixel decides between moving a clip and trimming it said nothing.
+  if (pointer_.has_value() && mode_ == DragMode::None) {
+    // Clipped like the blocks it sits on. A clip scrolled half under the header
+    // column has half a handle, and a highlight drawn over the headers would be
+    // pointing at something that is not there.
+    painter.push_clip(tracks, 0.0);
+    const auto [px, py] = *pointer_;
+    if (const std::optional<BlockRef> hit = block_at(px, py); hit.has_value()) {
+      const Rect box = block_rect(hit->track, hit->block);
+      const DragMode zone = zone_at(px, py);
+      const SurfaceStyle& style = theme.style(Part::Clip, State::Hover);
+
+      if (zone == DragMode::Razor) {
+        // Where the cut would land. A razor is aimed at a *place* rather than
+        // at a clip, and a tool whose whole gesture is one click is the one
+        // that most needs to say where it would take effect.
+        painter.line(px, box.y, px, box.bottom(), style.text, 1.0);
+      } else if (pulls_start(zone) || pulls_end(zone)) {
+        const double handle = trim_handle_width(hit->track, hit->block);
+        const double x = pulls_start(zone) ? box.x : box.right() - handle;
+        painter.fill(Rect{x, box.y + 1.0, handle, std::max(0.0, box.height - 2.0)},
+                     style.corner_radius, Fill::solid(fade(style.text, 0.35f)));
+      }
+    }
+    painter.pop_clip();
+  }
+
   // ---- the ruler
   const SurfaceStyle& ruler_style = theme.style(Part::Ruler, State::Normal);
   paint_surface(painter, ruler, ruler_style);
@@ -1610,6 +1642,65 @@ void TimelineView::drag_to(double x) {
   refresh_bounds();
 }
 
+Cursor TimelineView::cursor_at(double x, double y) const {
+  // While a gesture is running the cursor describes the gesture, not the
+  // pointer. Otherwise a trim dragged past the end of its clip — where there is
+  // no clip under the pointer at all — would go back to an arrow mid-drag.
+  const DragMode mode = mode_ != DragMode::None ? mode_ : zone_at(x, y);
+
+  switch (mode) {
+    case DragMode::TrimStart:
+    case DragMode::TrimEnd:
+    case DragMode::RippleStart:
+    case DragMode::RippleEnd:
+    case DragMode::RollStart:
+    case DragMode::RollEnd:
+      // One cursor for all six. Which of them it is, is the *tool*, and the
+      // tool is what the button in the palette says; what the pointer has to
+      // say here is the thing nothing else was saying at all — that this pixel
+      // takes hold of an edge rather than of the clip.
+      return Cursor::ResizeWE;
+
+    case DragMode::RateStart:
+    case DragMode::RateEnd: return Cursor::RateStretch;
+    case DragMode::Slip: return Cursor::Slip;
+    case DragMode::Slide: return Cursor::Slide;
+    case DragMode::Razor: return Cursor::Razor;
+    case DragMode::Move: return Cursor::Move;
+
+    case DragMode::TrackHeight: return Cursor::ResizeNS;
+    case DragMode::GainLevel:
+    case DragMode::GainSegment:
+    case DragMode::GainPointDrag: return Cursor::ResizeNS;
+    case DragMode::FadeIn:
+    case DragMode::FadeOut: return Cursor::ResizeWE;
+
+    case DragMode::None:
+    case DragMode::Scrub:
+    case DragMode::Marquee:
+    case DragMode::GainPointRemove: break;
+  }
+
+  // The grip under a header, which `zone_at` knows nothing about because it is
+  // not on a clip. Without this the one gesture with no visible affordance at
+  // all — a line between two lanes — stays unguessable.
+  for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
+    if (resize_rect(track).contains(x, y)) return Cursor::ResizeNS;
+  }
+
+  // Over a clip with a tool that means something everywhere on it, the tool's
+  // own cursor. `zone_at` answered `None` only because the point missed every
+  // clip, so this is the empty track, the ruler and the headers.
+  return Cursor::Arrow;
+}
+
+void TimelineView::on_mouse_enter() { }
+
+void TimelineView::on_mouse_leave() {
+  pointer_.reset();
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
 bool TimelineView::on_mouse_down(const MouseEvent& event) {
   if (event.button == MouseButton::Right) {
     // Over a clip that is not already selected, the right-click selects it
@@ -1853,6 +1944,15 @@ void TimelineView::capture_moving() {
 }
 
 bool TimelineView::on_mouse_move(const MouseEvent& event) {
+  // Kept whether or not anything is being dragged: this is what the highlight
+  // on the zone under the pointer is drawn from, and hovering is when it
+  // matters most — the point of it is to say what a press *would* do.
+  const std::optional<std::pair<double, double>> was = pointer_;
+  pointer_ = std::pair{event.x, event.y};
+  if (mode_ == DragMode::None && was != pointer_) {
+    if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+  }
+
   // Capture means these arrive with the pointer far outside the widget, which
   // is where a drag spends most of its time.
   if (mode_ == DragMode::Scrub) {

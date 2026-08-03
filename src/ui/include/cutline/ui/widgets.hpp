@@ -280,6 +280,11 @@ class Splitter : public Widget {
   void layout(const LayoutContext& context) override;
   void paint_overlay(Painter& painter, const Theme& theme) const override;
 
+  /// A resize cursor over a divider, along the axis it actually moves in. The
+  /// dividers already lit up under the pointer; what they did not say is which
+  /// way they go.
+  [[nodiscard]] Cursor cursor_at(double x, double y) const override;
+
   bool on_mouse_down(const MouseEvent& event) override;
   bool on_mouse_move(const MouseEvent& event) override;
   bool on_mouse_up(const MouseEvent& event) override;

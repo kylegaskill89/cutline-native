@@ -634,5 +634,47 @@ TEST(GrabRow, DrawsAnInsertionLineWhenItIsTheTarget) {
   EXPECT_EQ(painter.count(DrawCall::Kind::Line), before + 1);
 }
 
+// -------------------------------------------------------------- cursors --
+
+TEST(Cursor, AWidgetWithNothingToSayLetsTheQuestionThrough) {
+  // `Arrow` means "nothing to say" rather than "an arrow". Without that rule a
+  // label lying across a timeline would blank out the timeline's own answer.
+  auto owned = std::make_unique<Splitter>(Axis::Horizontal);
+  Splitter* splitter = owned.get();
+  splitter->emplace<Panel>();
+  splitter->emplace<Panel>();
+
+  WidgetHost host(std::move(owned));
+  host.resize(Rect{0.0, 0.0, 400.0, 200.0}, flat_context());
+
+  // Over a pane, which has nothing to say — and neither has the splitter away
+  // from its dividers.
+  host.mouse_move(MouseEvent{.x = 40.0, .y = 100.0});
+  EXPECT_EQ(host.cursor(), Cursor::Arrow);
+
+  // Over the divider, where the splitter does.
+  host.mouse_move(MouseEvent{.x = 200.0, .y = 100.0});
+  EXPECT_EQ(host.cursor(), Cursor::ResizeWE);
+}
+
+TEST(Cursor, ASplitterSaysWhichWayItsDividersGo) {
+  auto owned = std::make_unique<Splitter>(Axis::Vertical);
+  Splitter* splitter = owned.get();
+  splitter->emplace<Panel>();
+  splitter->emplace<Panel>();
+
+  WidgetHost host(std::move(owned));
+  host.resize(Rect{0.0, 0.0, 400.0, 200.0}, flat_context());
+
+  host.mouse_move(MouseEvent{.x = 200.0, .y = 100.0});
+  EXPECT_EQ(host.cursor(), Cursor::ResizeNS);
+}
+
+TEST(Cursor, WithThePointerOffTheWindowThereIsNoCursorToAskAbout) {
+  WidgetHost host(std::make_unique<Panel>());
+  host.resize(Rect{0.0, 0.0, 100.0, 100.0}, flat_context());
+  EXPECT_EQ(host.cursor(), Cursor::Arrow);
+}
+
 }  // namespace
 }  // namespace cutline::ui

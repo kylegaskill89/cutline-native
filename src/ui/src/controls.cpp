@@ -938,6 +938,8 @@ std::size_t TextField::line_of(std::size_t index) const noexcept {
   return lines_.empty() ? 0 : lines_.size() - 1;
 }
 
+Cursor TextField::cursor_at(double /*x*/, double /*y*/) const { return Cursor::Text; }
+
 LayoutItem TextField::sizing(Axis axis, const LayoutContext& context) const {
   const Metrics& metrics = context.metrics();
   if (axis == Axis::Horizontal) {
@@ -1278,18 +1280,14 @@ LayoutItem IconButton::sizing(Axis axis, const LayoutContext& context) const {
   return LayoutItem::fixed(std::round(context.metrics().control_height * 0.75));
 }
 
-void IconButton::paint_content(Painter& painter, const Theme& theme) const {
-  const SurfaceStyle& style = theme.style(part(), state());
-  const Rect area = bounds();
+void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const Color& color,
+               double reach, double width, bool on) {
+  using Icon = IconButton::Icon;
+  const SurfaceStyle style{.text = color};
   const double cx = area.x + area.width * 0.5;
   const double cy = area.y + area.height * 0.5;
 
-  // Fixed rather than scaled with the button: these sit in a row with text and
-  // want to match its weight, not the theme's padding.
-  constexpr double reach = 4.0;
-  constexpr double width = 1.5;
-
-  switch (icon_) {
+  switch (icon) {
     case Icon::ArrowUp:
       painter.line(cx - reach, cy + reach * 0.5, cx, cy - reach * 0.5, style.text, width);
       painter.line(cx, cy - reach * 0.5, cx + reach, cy + reach * 0.5, style.text, width);
@@ -1339,7 +1337,7 @@ void IconButton::paint_content(Painter& painter, const Theme& theme) const {
       // of the arrows, so a row of effect controls does not read as three
       // arrows meaning three different things.
       const double small = reach * 0.66;
-      if (selected()) {
+      if (on) {
         painter.line(cx - small, cy - small * 0.5, cx, cy + small * 0.5, style.text, width);
         painter.line(cx, cy + small * 0.5, cx + small, cy - small * 0.5, style.text, width);
       } else {
@@ -1356,7 +1354,7 @@ void IconButton::paint_content(Painter& painter, const Theme& theme) const {
       constexpr int kSides = 8;
       // Three quarters of the way round, leaving the gap an arrow can sit in.
       constexpr int kDrawn = 6;
-      const auto point = [cx, cy](int step) {
+      const auto point = [cx, cy, reach](int step) {
         const double angle = 2.0 * std::numbers::pi * static_cast<double>(step) /
                              static_cast<double>(kSides);
         return std::pair{cx + reach * std::cos(angle), cy + reach * std::sin(angle)};
@@ -1462,12 +1460,26 @@ void IconButton::paint_content(Painter& painter, const Theme& theme) const {
       break;
   }
 
+}
+
+void IconButton::paint_content(Painter& painter, const Theme& theme) const {
+  const SurfaceStyle& style = theme.style(part(), state());
+
+  // Fixed rather than scaled with the button: these sit in a row with text and
+  // want to match its weight, not the theme's padding.
+  constexpr double kReach = 4.0;
+  constexpr double kWidth = 1.5;
+  draw_icon(painter, icon_, bounds(), style.text, kReach, kWidth, selected());
+
   // Whether the toggle is on is drawn into the mark as well as left to the
   // surface beneath it. The themes do define a selected state now, but a lit
   // background is a weaker signal than a filled centre at this size, and a
   // stopwatch that looks the same running as stopped is worse than none.
   if (selected() && (icon_ == Icon::Stopwatch || icon_ == Icon::Diamond)) {
-    const double dot = reach * 0.5;
+    const Rect area = bounds();
+    const double cx = area.x + area.width * 0.5;
+    const double cy = area.y + area.height * 0.5;
+    const double dot = kReach * 0.5;
     painter.fill(Rect{cx - dot, cy - dot, dot * 2.0, dot * 2.0}, dot, Fill::solid(style.text));
   }
 }

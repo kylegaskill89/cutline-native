@@ -19,6 +19,7 @@
 /// None of this needs a window. Events are values, so routing is driven from
 /// tests directly and the platform layer only has to translate `WM_*`.
 
+#include "cutline/ui/cursor.hpp"
 #include "cutline/ui/event.hpp"
 #include "cutline/ui/layout.hpp"
 #include "cutline/ui/painter.hpp"
@@ -196,6 +197,14 @@ class Widget {
   virtual void on_mouse_leave();
   virtual void on_focus_changed(bool focused);
 
+  /// What the pointer should look like at this point, in this widget's own
+  /// coordinates.
+  ///
+  /// `Arrow` means "nothing to say", not "an arrow": the host asks the deepest
+  /// widget first and then its parents, so a widget that does not care lets the
+  /// question through rather than blanking out an answer from underneath it.
+  [[nodiscard]] virtual Cursor cursor_at(double x, double y) const;
+
   /// Whether a point counts as inside. The default is the bounding rectangle;
   /// a widget with a non-rectangular shape overrides it.
   [[nodiscard]] virtual bool hit(double x, double y) const;
@@ -299,6 +308,13 @@ class WidgetHost {
   // ----------------------------------------------------------------- state --
 
   [[nodiscard]] Widget* hovered() const noexcept { return hovered_; }
+
+  /// What the pointer should look like where it currently is.
+  ///
+  /// The widget holding the capture when there is one, so a cursor does not
+  /// change halfway through the drag it belongs to — a trim dragged past the
+  /// end of its clip is still a trim.
+  [[nodiscard]] Cursor cursor() const;
   [[nodiscard]] Widget* focused() const noexcept { return focused_; }
   [[nodiscard]] Widget* captured() const noexcept { return captured_; }
 

@@ -769,6 +769,13 @@ TEST(Checkbox, TakesTheKeyboardButNotEveryShortcut) {
   EXPECT_FALSE(test.box->checked());
 }
 
+TEST(TextField, SaysItIsOneByBeingHovered) {
+  // A field and a label are the same thing to look at until you have clicked
+  // one, which is a poor way to find out.
+  const TextField field("00:00:00:00");
+  EXPECT_EQ(field.cursor_at(5.0, 5.0), Cursor::Text);
+}
+
 TEST(TextField, AColumnCountAsksForExactlyThatMuchWidth) {
   // A field in a toolbar has to leave room for the buttons beside it, and a
   // flexible one takes everything going.

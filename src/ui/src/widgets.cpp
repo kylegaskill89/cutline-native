@@ -362,6 +362,18 @@ void Splitter::paint_overlay(Painter& painter, const Theme& theme) const {
   }
 }
 
+Cursor Splitter::cursor_at(double x, double y) const {
+  // While one is being dragged it keeps its cursor wherever the pointer has
+  // got to, for the same reason a trim does: the gesture is what is being
+  // described, not the pixel.
+  const bool over = dragging_ != SplitLayout::kNoDivider ||
+                    split_.divider_at(bounds(), x, y) != SplitLayout::kNoDivider;
+  if (!over) return Cursor::Arrow;
+  // A horizontal splitter stacks its panes side by side, so its dividers move
+  // left and right.
+  return axis_ == Axis::Horizontal ? Cursor::ResizeWE : Cursor::ResizeNS;
+}
+
 bool Splitter::on_mouse_down(const MouseEvent& event) {
   if (event.button != MouseButton::Left) return false;
   const std::size_t found = split_.divider_at(bounds(), event.x, event.y);

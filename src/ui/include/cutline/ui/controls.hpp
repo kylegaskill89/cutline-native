@@ -161,6 +161,10 @@ class TextField : public Widget {
   void set_placeholder(std::string text) { placeholder_ = std::move(text); }
   [[nodiscard]] const std::string& placeholder() const noexcept { return placeholder_; }
 
+  /// An I-beam, which is how a field says it is one. Without it a field and a
+  /// label are the same thing to look at until you have clicked one.
+  [[nodiscard]] Cursor cursor_at(double x, double y) const override;
+
   /// Whether Enter inserts a line break instead of committing.
   void set_multiline(bool multiline) noexcept;
   [[nodiscard]] bool multiline() const noexcept { return multiline_; }
@@ -619,6 +623,21 @@ class IconButton : public Button {
   Icon icon_;
   bool narrow_ = false;
 };
+
+/// One of the icon marks, drawn into `area` about its centre.
+///
+/// A free function because the marks have a second home: the tool cursors are
+/// these same drawings rendered into a small bitmap, and a razor that looked
+/// one way in the palette and another under the pointer would be two razors.
+///
+/// `reach` is the mark's half-size in pixels and `width` its stroke, both given
+/// rather than derived from `area` — a cursor is drawn several times the size
+/// of a button's mark and wants a stroke to match, not a scaled-up version of a
+/// one-and-a-half-pixel line.
+/// `on` is the toggled state, which one mark depends on: the disclosure
+/// triangle points down when what it governs is open and right when it is not.
+void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const Color& color,
+               double reach, double width, bool on = false);
 
 /// A bar that fills as something finishes.
 ///

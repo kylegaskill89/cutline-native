@@ -104,6 +104,7 @@
 #include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <thread>
 #include <optional>
@@ -6844,6 +6845,143 @@ void set_theme(App& app, std::size_t index) {
   }
 }
 
+// ----------------------------------------------------------------- cursors --
+
+/// A tool cursor, drawn from the same art as the tool's button.
+///
+/// Rendered rather than shipped as a resource, and rendered from
+/// `ui::draw_icon` rather than from a second drawing of the same shape: a razor
+/// that looked one way in the palette and another under the pointer would be
+/// two razors, and the second one would drift the first time either was
+/// touched.
+///
+/// Thirty-two pixels, which is what Windows expects and what a hot spot in the
+/// middle of leaves room around. The mark is drawn white with a black halo
+/// under it, because a cursor has to be visible over a dark timeline and over a
+/// light one, and the alternative — a cursor that takes the theme's colours —
+/// is invisible over its own panel half the time.
+constexpr int kCursorSize = 32;
+
+/// The mark a tool cursor is made of, drawn onto a transparent surface.
+///
+/// Split from making the cursor itself so `--check` can look at the pixels. A
+/// mark that comes out empty is a cursor that vanishes over the timeline, and
+/// nothing else in the application would notice.
+[[nodiscard]] sk_sp<SkSurface> draw_cursor_art(cutline::ui::IconButton::Icon icon) {
+  constexpr double kReach = 9.0;
+
+  const sk_sp<SkSurface> surface =
+      SkSurfaces::Raster(SkImageInfo::MakeN32Premul(kCursorSize, kCursorSize));
+  if (surface == nullptr) return nullptr;
+  surface->getCanvas()->clear(SK_ColorTRANSPARENT);
+
+  const std::unique_ptr<cutline::ui::SkiaPainter> painter =
+      cutline::ui::SkiaPainter::create(surface->getCanvas());
+  if (painter == nullptr) return nullptr;
+
+  const Rect area{0.0, 0.0, static_cast<double>(kCursorSize),
+                  static_cast<double>(kCursorSize)};
+  // The halo first, as the same mark drawn fatter underneath. Cheaper than an
+  // outline and it cannot come apart at a corner the way a traced one does.
+  cutline::ui::draw_icon(*painter, icon, area, cutline::ui::Color{0.0F, 0.0F, 0.0F, 0.85F},
+                         kReach, 5.0);
+  cutline::ui::draw_icon(*painter, icon, area, cutline::ui::Color{1.0F, 1.0F, 1.0F, 1.0F},
+                         kReach, 2.0);
+  return surface;
+}
+
+[[nodiscard]] HCURSOR render_tool_cursor(cutline::ui::IconButton::Icon icon) {
+  constexpr int kSize = kCursorSize;
+  const sk_sp<SkSurface> surface = draw_cursor_art(icon);
+  if (surface == nullptr) return nullptr;
+
+  // Into a DIB, because that is what an icon is made of. Top-down, so the rows
+  // are in the order Skia wrote them rather than upside down.
+  BITMAPV5HEADER header{};
+  header.bV5Size = sizeof(BITMAPV5HEADER);
+  header.bV5Width = kSize;
+  header.bV5Height = -kSize;
+  header.bV5Planes = 1;
+  header.bV5BitCount = 32;
+  header.bV5Compression = BI_BITFIELDS;
+  header.bV5RedMask = 0x00FF0000;
+  header.bV5GreenMask = 0x0000FF00;
+  header.bV5BlueMask = 0x000000FF;
+  header.bV5AlphaMask = 0xFF000000;
+
+  void* bits = nullptr;
+  const HDC screen = GetDC(nullptr);
+  const HBITMAP colour = CreateDIBSection(screen, reinterpret_cast<BITMAPINFO*>(&header),
+                                          DIB_RGB_COLORS, &bits, nullptr, 0);
+  ReleaseDC(nullptr, screen);
+  if (colour == nullptr || bits == nullptr) return nullptr;
+
+  const SkImageInfo info = SkImageInfo::Make(kSize, kSize, kBGRA_8888_SkColorType,
+                                             kUnpremul_SkAlphaType);
+  if (!surface->readPixels(info, bits, kSize * 4, 0, 0)) {
+    DeleteObject(colour);
+    return nullptr;
+  }
+
+  // The mask is ignored for a 32-bit icon with an alpha channel, but one has to
+  // be there or `CreateIconIndirect` refuses.
+  const HBITMAP mask = CreateBitmap(kSize, kSize, 1, 1, nullptr);
+  ICONINFO icon_info{};
+  icon_info.fIcon = FALSE;
+  // The middle. Every one of these marks is symmetrical about its own centre,
+  // and a hot spot anywhere else would mean the razor cut somewhere other than
+  // where its blade was drawn.
+  icon_info.xHotspot = kSize / 2;
+  icon_info.yHotspot = kSize / 2;
+  icon_info.hbmMask = mask;
+  icon_info.hbmColor = colour;
+
+  const HCURSOR made = reinterpret_cast<HCURSOR>(CreateIconIndirect(&icon_info));
+  DeleteObject(colour);
+  DeleteObject(mask);
+  return made;
+}
+
+/// What each cursor is on this platform.
+///
+/// The tool ones are made once and kept: rendering thirty-two pixels is cheap,
+/// and doing it on every mouse move over a timeline is thirty-two pixels sixty
+/// times a second for no reason.
+[[nodiscard]] HCURSOR system_cursor(cutline::ui::Cursor cursor) {
+  using cutline::ui::Cursor;
+  using Icon = cutline::ui::IconButton::Icon;
+
+  switch (cursor) {
+    case Cursor::Text: return LoadCursorW(nullptr, IDC_IBEAM);
+    case Cursor::ResizeWE: return LoadCursorW(nullptr, IDC_SIZEWE);
+    case Cursor::ResizeNS: return LoadCursorW(nullptr, IDC_SIZENS);
+    case Cursor::Move: return LoadCursorW(nullptr, IDC_SIZEALL);
+    case Cursor::Arrow: return LoadCursorW(nullptr, IDC_ARROW);
+
+    case Cursor::Razor:
+    case Cursor::RateStretch:
+    case Cursor::Slip:
+    case Cursor::Slide:
+    case Cursor::Ripple:
+    case Cursor::Roll: break;
+  }
+
+  static std::map<cutline::ui::Cursor, HCURSOR> made;
+  if (const auto found = made.find(cursor); found != made.end()) {
+    return found->second != nullptr ? found->second : LoadCursorW(nullptr, IDC_ARROW);
+  }
+
+  const Icon icon = cursor == Cursor::Razor         ? Icon::Razor
+                    : cursor == Cursor::RateStretch ? Icon::RateStretch
+                    : cursor == Cursor::Slip        ? Icon::Slip
+                    : cursor == Cursor::Slide       ? Icon::Slide
+                    : cursor == Cursor::Ripple      ? Icon::Ripple
+                                                    : Icon::Roll;
+  const HCURSOR drawn = render_tool_cursor(icon);
+  made.emplace(cursor, drawn);
+  return drawn != nullptr ? drawn : LoadCursorW(nullptr, IDC_ARROW);
+}
+
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
   auto* shell = reinterpret_cast<Shell*>(GetWindowLongPtrW(window, GWLP_USERDATA));
   if (shell == nullptr || shell->app == nullptr || shell->host == nullptr) {
@@ -6942,6 +7080,15 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       if (shell->host->needs_paint()) shell->dirty = true;
       return 0;
     }
+    case WM_SETCURSOR: {
+      // Only over the client area. The frame's own edges and buttons are the
+      // system's to draw a cursor for, and taking those would leave a window
+      // that cannot be resized by its border without guessing where it is.
+      if (LOWORD(lparam) != HTCLIENT) break;
+      SetCursor(system_cursor(shell->host->cursor()));
+      return TRUE;
+    }
+
     case WM_MOUSELEAVE:
       shell->host->mouse_exit();
       if (shell->host->needs_paint()) shell->dirty = true;
@@ -7819,6 +7966,40 @@ template <typename T>
     if (empty > 0 || escaped > 0 || clipped > 0 || squeezed > 0) ++failures;
   }
 
+  // The tool cursors, which are drawings rather than system handles and so can
+  // come out empty without anything else noticing — a cursor that vanishes over
+  // the timeline looks like the pointer has been lost rather than like a bug.
+  // Counted rather than eyeballed: what matters is that the mark reached the
+  // pixels and that it did not fill the whole square, which would be a solid
+  // block following the pointer around.
+  for (const cutline::ui::IconButton::Icon icon :
+       {cutline::ui::IconButton::Icon::Razor, cutline::ui::IconButton::Icon::RateStretch,
+        cutline::ui::IconButton::Icon::Slip, cutline::ui::IconButton::Icon::Slide,
+        cutline::ui::IconButton::Icon::Ripple, cutline::ui::IconButton::Icon::Roll}) {
+    const sk_sp<SkSurface> art = draw_cursor_art(icon);
+    SkPixmap marks;
+    if (art == nullptr || !art->peekPixels(&marks)) {
+      std::println("a tool cursor could not be drawn at all");
+      ++failures;
+      continue;
+    }
+
+    int inked = 0;
+    for (int y = 0; y < marks.height(); ++y) {
+      for (int x = 0; x < marks.width(); ++x) {
+        if (SkColorGetA(marks.getColor(x, y)) > 0) ++inked;
+      }
+    }
+    const int total = marks.width() * marks.height();
+    if (inked == 0) {
+      std::println("a tool cursor drew nothing");
+      ++failures;
+    } else if (inked > total / 2) {
+      std::println("a tool cursor covered {} of {} pixels", inked, total);
+      ++failures;
+    }
+  }
+
   for (std::size_t i = 0; i < fingerprints.size(); ++i) {
     for (std::size_t j = i + 1; j < fingerprints.size(); ++j) {
       if (fingerprints[i] == fingerprints[j]) {
@@ -7846,7 +8027,10 @@ int main(int argc, char** argv) {
   window_class.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
   window_class.lpfnWndProc = window_proc;
   window_class.hInstance = GetModuleHandleW(nullptr);
-  window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+  // Deliberately null. With a class cursor Windows resets the pointer to it on
+  // every move over the client area, and `WM_SETCURSOR` is where the interface
+  // gets to say what it should be instead.
+  window_class.hCursor = nullptr;
   window_class.lpszClassName = kWindowClass;
   RegisterClassExW(&window_class);
 
