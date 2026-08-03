@@ -149,6 +149,14 @@ class TextField : public Widget {
   /// the end of it.
   void set_text(std::string text);
 
+  /// Ask for room for this many characters instead of taking whatever width is
+  /// going. Zero, the default, is the flexible behaviour a field in a form
+  /// wants; a number is for a field whose content has a known size and which
+  /// would otherwise swallow a toolbar — a timecode is eleven characters and is
+  /// never any other length.
+  void set_columns(int columns) noexcept { columns_ = std::max(0, columns); }
+  [[nodiscard]] int columns() const noexcept { return columns_; }
+
   /// Shown, dimmed, when the field is empty.
   void set_placeholder(std::string text) { placeholder_ = std::move(text); }
   [[nodiscard]] const std::string& placeholder() const noexcept { return placeholder_; }
@@ -228,6 +236,7 @@ class TextField : public Widget {
 
   std::string text_;
   std::string placeholder_;
+  int columns_ = 0;
   /// What the text was when the keyboard arrived, so Escape can put it back.
   std::string committed_;
 

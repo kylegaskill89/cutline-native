@@ -769,6 +769,32 @@ TEST(Checkbox, TakesTheKeyboardButNotEveryShortcut) {
   EXPECT_FALSE(test.box->checked());
 }
 
+TEST(TextField, AColumnCountAsksForExactlyThatMuchWidth) {
+  // A field in a toolbar has to leave room for the buttons beside it, and a
+  // flexible one takes everything going.
+  TextField wide("00:00:00:00");
+  TextField narrow("00:00:00:00");
+  narrow.set_columns(11);
+
+  const LayoutContext context = flat_context();
+  const LayoutItem loose = wide.sizing(Axis::Horizontal, context);
+  const LayoutItem fixed = narrow.sizing(Axis::Horizontal, context);
+
+  EXPECT_GT(loose.grow, 0.0) << "a plain field still takes what it is given";
+  EXPECT_DOUBLE_EQ(fixed.grow, 0.0);
+  EXPECT_GT(fixed.basis, 0.0);
+}
+
+TEST(TextField, AColumnedFieldDoesNotChangeWidthAsItIsTyped) {
+  TextField field("00:00:00:00");
+  field.set_columns(11);
+  const LayoutContext context = flat_context();
+  const double before = field.sizing(Axis::Horizontal, context).basis;
+
+  field.set_text("1");
+  EXPECT_DOUBLE_EQ(field.sizing(Axis::Horizontal, context).basis, before);
+}
+
 // ------------------------------------------------------------- menu lists --
 
 /// A list on its own, arranged where it was asked for.

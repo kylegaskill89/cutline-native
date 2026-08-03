@@ -398,7 +398,10 @@ struct App {
   /// are simply unset and clips are drawn plain, and the self-check points them
   /// at fabricated ones so every theme paints both.
   cutline::editor::TimelineMedia timeline_media;
-  Label* readout = nullptr;
+  /// The playhead's timecode, and a field rather than a label: Premiere's is
+  /// typed into to go somewhere, which is the fastest way there is to reach an
+  /// exact time and the only way to reach one that is off screen.
+  TextField* readout = nullptr;
   /// The media pool down the left, and the button that cycles its order.
   MediaBrowser* browser = nullptr;
   Button* sort_button = nullptr;
@@ -966,6 +969,18 @@ void scroll_to_playhead(App& app) {
 /// reads its value at the playhead and a static one does not care where it is.
 /// Guarded rather than unconditional because a rebuild is dozens of widgets and
 /// playback moves the playhead thirty times a second.
+/// Puts the playhead's time in the readout.
+///
+/// Not while it has the keyboard: it is a field now, and overwriting what
+/// somebody is halfway through typing — which playback would do thirty times a
+/// second — is the one thing a field must never do to them.
+void show_playhead(App& app) {
+  if (app.readout == nullptr) return;
+  if (app.main.host != nullptr && app.main.host->focused() == app.readout) return;
+  app.readout->set_text(
+      cutline::core::seconds_to_timecode(app.session.playhead(), app.session.project().fps));
+}
+
 void follow_playhead(App& app) {
   const auto selection = app.session.selection();
   if (selection.empty()) return;
@@ -3637,10 +3652,7 @@ void advance_shuttle(App& app) {
   }
   app.shown_frame = frame;
 
-  if (app.readout != nullptr) {
-    app.readout->set_text(cutline::core::seconds_to_timecode(app.session.playhead(),
-                                                             app.session.project().fps));
-  }
+  show_playhead(app);
   follow_playhead(app);
   refresh_timeline(app);
   scroll_to_playhead(app);
@@ -3802,9 +3814,7 @@ void advance_playback(App& app) {
   app.shown_frame = frame;
 
   app.session.set_playhead(at);
-  if (app.readout != nullptr) {
-    app.readout->set_text(cutline::core::seconds_to_timecode(at, app.session.project().fps));
-  }
+  show_playhead(app);
   follow_playhead(app);
   refresh_timeline(app);
   // After the refresh, which is what puts the new time on the view.
@@ -4371,12 +4381,32 @@ void run_command(App& app, cutline::editor::Command command) {
     // the jumps to the next and previous marker. Here rather than in each of
     // them — which is also why the timecode used to sit still while the arrow
     // keys walked the playhead along.
-    if (app.readout != nullptr) {
-      app.readout->set_text(cutline::core::seconds_to_timecode(
-          app.session.playhead(), app.session.project().fps));
-    }
+    show_playhead(app);
     follow_playhead(app);
   }
+  mark_dirty(app);
+}
+
+/// Moves the playhead somewhere and brings everything that follows it along.
+///
+/// What the scrub handler does, in a function, because the timecode field
+/// needs the same thing and a second copy of it is how the two come to disagree
+/// about whether a jump takes the sound with it.
+void go_to_time(App& app, double at) {
+  app.session.set_playhead(at);
+  show_playhead(app);
+  follow_playhead(app);
+  refresh_timeline(app);
+#if CUTLINE_HAVE_PREVIEW
+  // A jump while it is playing takes the sound with it. Without this the audio
+  // carries on from where it was and the picture is somewhere else, which is
+  // worse than either.
+  if (app.playing()) {
+    app.player->seek(app.session.playhead());
+    app.shown_frame = -1;
+  }
+#endif
+  invalidate_preview(app);
   mark_dirty(app);
 }
 
@@ -4725,8 +4755,29 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   });
 
   tools.emplace<Spacer>();
-  auto& readout = tools.emplace<Label>("00:00:00:00");
-  readout.set_align(cutline::ui::TextAlign::Right);
+  // Eleven columns: "00:00:00:00" is what a timecode is and it is never any
+  // other length, so the field asks for exactly that and leaves the rest of the
+  // row to the buttons.
+  auto& readout = tools.emplace<TextField>("00:00:00:00");
+  readout.set_columns(11);
+  readout.set_on_commit([app](const std::string& typed) {
+    if (app == nullptr) return;
+    const std::optional<double> at =
+        cutline::core::timecode_to_seconds(typed, app->session.project().fps);
+    // Nothing that parses leaves the playhead where it is rather than sending
+    // it to zero, which is what a mistyped character would otherwise do.
+    if (!at.has_value()) {
+      show_playhead(*app);
+      return;
+    }
+    go_to_time(*app, *at);
+  });
+  // However the edit ends, the field goes back to saying where the playhead
+  // actually is — including after an escape, and after a half-typed time the
+  // keyboard simply left.
+  readout.set_on_finish([app] {
+    if (app != nullptr) show_playhead(*app);
+  });
   if (app != nullptr) app->readout = &readout;
 
   auto& tracks = panel->emplace<TimelineView>();
@@ -4743,10 +4794,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   tracks.set_on_scrub([app](double at) {
     if (app == nullptr) return;
     app->session.set_playhead(at);
-    if (app->readout != nullptr) {
-      app->readout->set_text(
-          cutline::core::seconds_to_timecode(app->session.playhead(), app->session.project().fps));
-    }
+    show_playhead(*app);
     follow_playhead(*app);
 #if CUTLINE_HAVE_PREVIEW
     // Dragging the playhead while it is playing takes the sound with it.

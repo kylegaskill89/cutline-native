@@ -105,5 +105,56 @@ TEST(ReadableFileSize, RejectsNegativeAndNonFiniteInput) {
   EXPECT_EQ(readable_file_size(std::numeric_limits<double>::quiet_NaN()), "Unknown Size");
 }
 
+// -------------------------------------------------- timecode, read back --
+
+TEST(TimecodeToSeconds, IsTheInverseOfWritingOne) {
+  for (const double seconds : {0.0, 1.0, 12.5, 61.0, 3723.0}) {
+    const std::string written = seconds_to_timecode(seconds, 30.0);
+    const std::optional<double> read = timecode_to_seconds(written, 30.0);
+    ASSERT_TRUE(read.has_value()) << written;
+    EXPECT_NEAR(*read, seconds, 1e-9) << written;
+  }
+}
+
+TEST(TimecodeToSeconds, TheLastFieldIsFramesRatherThanHundredths) {
+  // The whole reason this is not `time_to_seconds`: at 30 fps, reading
+  // "00:00:01:15" as a second and fifteen hundredths is half a second out.
+  const std::optional<double> read = timecode_to_seconds("00:00:01:15", 30.0);
+  ASSERT_TRUE(read.has_value());
+  EXPECT_NEAR(*read, 1.5, 1e-9);
+}
+
+TEST(TimecodeToSeconds, FewerFieldsCountFromTheRight) {
+  // How anybody types into one of these in a hurry.
+  EXPECT_NEAR(*timecode_to_seconds("15", 30.0), 0.5, 1e-9);
+  EXPECT_NEAR(*timecode_to_seconds("2:15", 30.0), 2.5, 1e-9);
+  EXPECT_NEAR(*timecode_to_seconds("1:00:00", 30.0), 60.0, 1e-9);
+}
+
+TEST(TimecodeToSeconds, AFullStopMeansSecondsWereMeant) {
+  EXPECT_NEAR(*timecode_to_seconds("1.5", 30.0), 1.5, 1e-9);
+}
+
+TEST(TimecodeToSeconds, TheResultLandsOnAFrame) {
+  // A hundredth past a second is still frame 30 at thirty a second.
+  const std::optional<double> read = timecode_to_seconds("1.01", 30.0);
+  ASSERT_TRUE(read.has_value());
+  EXPECT_NEAR(*read, 1.0, 1e-9);
+}
+
+TEST(TimecodeToSeconds, NonsenseIsNothingRatherThanZero) {
+  // Zero would send the playhead to the start of the sequence on a typing
+  // mistake, which is a long way from where somebody was.
+  EXPECT_FALSE(timecode_to_seconds("", 30.0).has_value());
+  EXPECT_FALSE(timecode_to_seconds("half past", 30.0).has_value());
+  EXPECT_FALSE(timecode_to_seconds("1:2:3:4:5", 30.0).has_value());
+  EXPECT_FALSE(timecode_to_seconds("-5", 30.0).has_value());
+}
+
+TEST(TimecodeToSeconds, TheFrameRateIsWhatTheLastFieldMeans) {
+  EXPECT_NEAR(*timecode_to_seconds("00:00:00:12", 24.0), 0.5, 1e-9);
+  EXPECT_NEAR(*timecode_to_seconds("00:00:00:12", 48.0), 0.25, 1e-9);
+}
+
 }  // namespace
 }  // namespace cutline::core

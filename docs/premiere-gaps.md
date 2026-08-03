@@ -577,12 +577,22 @@ copies.
 | Zoom, and zoom to fit | yes | **done** | — |
 | Track height, per track | dragged, and expand/collapse all | **done** — dragged on the line under a header, double-click puts it back | — |
 | Markers with duration and comment | yes | a name and a colour, no duration | model + control |
-| Scroll to follow playback | smooth or page | none — the playhead runs off the edge | wiring |
-| Timecode field to type into | yes | a readout only | control |
+| Scroll to follow playback | smooth or page | **done** — pages, so the picture is not always moving | — |
+| Timecode field to type into | yes | **done** — typed into to go there, forgiving about what is typed | — |
 
-The last two are small and both are felt every session. A playhead that leaves
-the view during playback is the one on this page most likely to be noticed
-within a minute of using it.
+Both of the last two are done. The row claiming the playhead ran off the edge
+during playback was **stale** — `follow_playhead` has been wired since the
+preview landed, and it pages rather than creeping, so the picture is not always
+moving. Checking a row against the source rather than against the page is the
+second time that has been worth doing.
+
+The timecode is a field now rather than a label, and the parser is the part
+worth stating: the last field of a timecode is *frames*, so reading it with
+`time_to_seconds` is half a second out at 30 fps. It is forgiving about what is
+typed, because that is what these are for — fewer fields count from the right,
+so "15" is fifteen frames and "2:15" is two seconds and fifteen — and anything
+that does not parse leaves the playhead where it was rather than sending it to
+zero on a typing mistake.
 
 ---
 

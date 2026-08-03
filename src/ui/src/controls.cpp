@@ -941,6 +941,13 @@ std::size_t TextField::line_of(std::size_t index) const noexcept {
 LayoutItem TextField::sizing(Axis axis, const LayoutContext& context) const {
   const Metrics& metrics = context.metrics();
   if (axis == Axis::Horizontal) {
+    if (columns_ > 0) {
+      // Measured from a digit rather than from the text in it, so the field
+      // does not change width as it is typed into — and "0" is the widest
+      // character a timecode can hold.
+      const double glyph = context.text.measure("0", metrics.font_size, false);
+      return LayoutItem::fixed(glyph * columns_ + 2.0 * metrics.padding_x);
+    }
     // Flexible: a field takes the width it is given. Its content decides
     // nothing about how wide it should be, which is what keeps a row of them
     // aligned.

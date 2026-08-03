@@ -1,6 +1,7 @@
 #include "cutline/core/time.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -103,6 +104,43 @@ std::string seconds_to_timecode(double seconds, double fps) {
   const std::int64_t total_seconds = total_frames / per_second;
   return std::format("{:02}:{:02}:{:02}:{:02}", total_seconds / 3600,
                      (total_seconds % 3600) / 60, total_seconds % 60, frames);
+}
+
+std::optional<double> timecode_to_seconds(std::string_view text, double fps) noexcept {
+  const std::string_view s = trim(text);
+  if (s.empty()) return std::nullopt;
+
+  // A full stop anywhere means somebody wrote seconds rather than a timecode:
+  // there is no decimal point in HH:MM:SS:FF, and "1.5" is unambiguous.
+  if (s.find('.') != std::string_view::npos) {
+    double seconds = 0.0;
+    if (!js_number(s, seconds)) return std::nullopt;
+    return snap_to_frame(std::max(0.0, seconds), fps);
+  }
+
+  std::vector<double> fields;
+  std::size_t pos = 0;
+  while (true) {
+    const auto colon = s.find(':', pos);
+    const std::string_view part =
+        colon == std::string_view::npos ? s.substr(pos) : s.substr(pos, colon - pos);
+    double value = 0.0;
+    if (!js_number(part, value) || value < 0.0) return std::nullopt;
+    fields.push_back(value);
+    if (colon == std::string_view::npos) break;
+    pos = colon + 1;
+  }
+  if (fields.size() > 4) return std::nullopt;
+
+  // Counted from the right, so a partial timecode means the small end of one:
+  // "12" is twelve frames and "2:12" is two seconds and twelve frames, which is
+  // how anybody types into one of these in a hurry.
+  const std::array<double, 4> weight{3600.0, 60.0, 1.0, 1.0 / std::max(1.0, js_round(fps))};
+  const std::size_t first = weight.size() - fields.size();
+
+  double seconds = 0.0;
+  for (std::size_t i = 0; i < fields.size(); ++i) seconds += fields[i] * weight[first + i];
+  return snap_to_frame(seconds, fps);
 }
 
 std::string readable_file_size(double bytes) {
