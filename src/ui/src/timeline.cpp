@@ -50,6 +50,10 @@ constexpr double kTrackResizeReach = 4.0;
 /// scroll by on a sequence that is mostly on screen already.
 constexpr double kZoomGrip = 7.0;
 
+/// How tall the "fx" badge is. Small enough to sit inside a clip at the
+/// shortest track height without covering the label beside it.
+constexpr double kEffectBadge = 11.0;
+
 [[nodiscard]] Color fade(const Color& color, float amount) noexcept {
   return Color{color.r, color.g, color.b, color.a * amount};
 }
@@ -243,6 +247,20 @@ void TimelineView::set_scale(const TimeScale& scale) {
 
 void TimelineView::zoom_to_fit() {
   scale_.fit(model_.content_duration(), time_area().width);
+}
+
+void TimelineView::zoom_about_playhead(bool closer) {
+  const Rect area = time_area();
+  if (area.width <= 0.0) return;
+
+  // Where on screen to hold still: the playhead, or the middle of the view when
+  // it is not on screen to hold.
+  const double at = scale_.to_x(playhead_);
+  const double anchor = at >= 0.0 && at <= area.width ? at : area.width * 0.5;
+
+  scale_.zoom_about(anchor, closer ? kZoomStep : 1.0 / kZoomStep);
+  scale_.clamp_start(model_.content_duration());
+  refresh_bounds();
 }
 
 void TimelineView::set_playhead(double seconds) {
@@ -1038,6 +1056,23 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
         painter.pop_clip();
       }
 
+      // The effects badge, at the top left where Premiere puts it. Two letters
+      // rather than a mark: "fx" is what the panel is called and what everybody
+      // already reads it as, and no drawing at eight pixels says "there is a
+      // stack on this" as plainly as the word does.
+      if (clip.has_effects) {
+        const double badge = std::min(kEffectBadge, box.height - 2.0);
+        const Rect at{box.x + 2.0, box.y + 2.0, badge * 1.4, badge};
+        // Only where it fits beside the label rather than over it. A clip too
+        // short to hold both keeps the badge, which is the smaller of the two
+        // and the one that cannot be worked out from anything else on screen.
+        if (at.right() < box.right() - 1.0 && badge > 4.0) {
+          painter.fill(at, 2.0, Fill::solid(fade(style.text, 0.22f)));
+          painter.text(text_run(at, "fx", style, metrics_.small_font_size,
+                                TextAlign::Center, false));
+        }
+      }
+
       // The fades, as a ramp down to the corner the clip arrives or leaves at.
       //
       // Drawn even when the fade is zero, because the handle is what says the
@@ -1339,6 +1374,25 @@ void TimelineView::capture_neighbours() {
   }
 }
 
+void TimelineView::sync_group(double start_delta, double end_delta) {
+  if (!drag_.has_value() || origin_.group.empty()) return;
+
+  // From the arrangement at the press rather than from where the blocks are
+  // now, so a long drag cannot accumulate — the rule every other drag here
+  // follows, applied to the clips travelling with the one being held.
+  for (std::size_t track = 0; track < model_.tracks.size() && track < press_model_.tracks.size();
+       ++track) {
+    std::vector<TimelineBlock>& row = model_.tracks[track].blocks;
+    const std::vector<TimelineBlock>& was = press_model_.tracks[track].blocks;
+    for (std::size_t i = 0; i < row.size() && i < was.size(); ++i) {
+      if (track == drag_->track && i == drag_->block) continue;
+      if (was[i].group != origin_.group) continue;
+      row[i].start = was[i].start + start_delta;
+      row[i].end = was[i].end + end_delta;
+    }
+  }
+}
+
 void TimelineView::capture_downstream(double from) {
   moving_.clear();
   if (!drag_.has_value()) return;
@@ -1353,6 +1407,10 @@ void TimelineView::capture_downstream(double from) {
     const std::vector<TimelineBlock>& row = model_.tracks[track].blocks;
     for (std::size_t i = 0; i < row.size(); ++i) {
       if (track == drag_->track && i == drag_->block) continue;
+      // The linked group is not traffic to be pushed along: it is being
+      // trimmed too, and `sync_group` is what moves it. Carrying it here as
+      // well would move it twice.
+      if (!origin_.group.empty() && row[i].group == origin_.group) continue;
       if (row[i].start < from - kAbutEps) continue;
       moving_.push_back(Moving{.ref = BlockRef{.track = track, .block = i}, .origin = row[i]});
     }
@@ -1877,6 +1935,10 @@ void TimelineView::drag_to(double x, double y) {
 
   blocks[drag_->block].start = next.start;
   blocks[drag_->block].end = next.end;
+  // And whatever is linked to it, by the same amounts. Every edge gesture that
+  // reaches here goes through an operation that acts on the whole group, so a
+  // preview of one block was showing something the release did not do.
+  sync_group(next.start - origin_.start, next.end - origin_.end);
   refresh_bounds();
 }
 
@@ -2210,13 +2272,13 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
       gain_anchors_.clear();
     }
 
+    // The arrangement as it stands. A move needs it because it can change which
+    // track a block is on; every other drag needs it because the clips linked
+    // to the one being held are moved from where *they* were at the press.
+    press_model_ = model_;
+    press_track_ = hit->track;
     if (mode_ == DragMode::Move) {
       capture_moving();
-      // The arrangement as it stands, because a move can change which track a
-      // block is on and every frame of the drag is worked out from here rather
-      // than from the frame before.
-      press_model_ = model_;
-      press_track_ = hit->track;
       carried_lanes_ = 0;
     }
     if (mode_ == DragMode::Slide) capture_neighbours();

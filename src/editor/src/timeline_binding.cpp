@@ -179,11 +179,15 @@ ui::TimelineModel timeline_model(const core::Project& project,
 
       row.blocks.push_back(ui::TimelineBlock{
           .id = clip.id,
+          .group = clip.group_id.value_or(std::string{}),
           .start = clip.start,
           .end = core::clip_end(clip),
           .label = label_for(project, clip),
           .selected = std::ranges::find(selection, clip.id) != selection.end(),
           .disabled = clip.disabled,
+          // Either stack: an audio clip's filters are as much a reason to mark
+          // it as a video clip's are.
+          .has_effects = !clip.effects.empty() || !clip.audio_effects.empty(),
           .keyframes = keyframe_times(clip, audio),
           .transition = std::move(transition),
           .gain = std::move(band),

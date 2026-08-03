@@ -186,6 +186,15 @@ struct TimelineBlock {
   /// knowing a project exists.
   std::string id;
 
+  /// Which clips this one is tied to, opaque like `id`. Empty means none.
+  ///
+  /// The timeline never looks inside it; what it is for is knowing that these
+  /// blocks move together, so a trim on a picture can show the sound being
+  /// trimmed with it. Every edit that crosses a link is the model's business —
+  /// the view only has to *draw* the answer before the model gives it, which is
+  /// what a drag is.
+  std::string group;
+
   double start = 0.0;
   double end = 0.0;
   std::string label;
@@ -193,6 +202,12 @@ struct TimelineBlock {
   /// Kept on the timeline but not rendered. Drawn faded, because a clip that
   /// is not playing and looks exactly like one that is, is a bug report.
   bool disabled = false;
+  /// Whether anything is in this clip's effect stack.
+  ///
+  /// Drawn as a badge, which is Premiere's. Otherwise a graded shot and an
+  /// untouched one are the same rectangle, and the only way to find the one
+  /// carrying a look is to click every clip in turn and read the panel.
+  bool has_effects = false;
 
   /// Where this clip is animated, in seconds from its own start.
   ///
@@ -600,6 +615,15 @@ class TimelineView : public Widget {
   /// Zooms so the whole project fills the time area.
   void zoom_to_fit();
 
+  /// One step in or out, keeping the playhead where it is on screen.
+  ///
+  /// About the playhead rather than the middle of the view, because the
+  /// playhead is what somebody zooming in is looking at — the wheel zooms about
+  /// the pointer for the same reason, and a key has no pointer to use.
+  /// A playhead off screen falls back to the middle, which is the only honest
+  /// answer when the thing to keep still is not visible.
+  void zoom_about_playhead(bool closer);
+
   [[nodiscard]] double playhead() const noexcept { return playhead_; }
   /// Snapped to a frame, and never negative.
   void set_playhead(double seconds);
@@ -965,6 +989,17 @@ class TimelineView : public Widget {
 
   /// What a move should carry, taken at the press.
   void capture_moving();
+
+  /// Moves the rest of the dragged block's linked group by the same amounts.
+  ///
+  /// Every edge gesture here goes through an operation that acts on the whole
+  /// group — a trim, a rate stretch, a ripple and a roll all do — so a preview
+  /// that moved one block was showing something the release did not do. The
+  /// sound jumped into place a moment after the picture, which reads as the
+  /// application correcting a mistake.
+  ///
+  /// Worked from the arrangement at the press, like everything else here.
+  void sync_group(double start_delta, double end_delta);
 
   /// The arrangement as it was when a move began, so each frame of the drag is
   /// computed from it rather than from the frame before.

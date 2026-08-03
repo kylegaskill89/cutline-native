@@ -6659,6 +6659,11 @@ void refresh_float_titles(App& app) {
     case VK_END: return Key::End;
     case VK_PRIOR: return Key::PageUp;
     case VK_NEXT: return Key::PageDown;
+    // The zoom keys. `VK_OEM_PLUS` is the unshifted key, so this is the one
+    // labelled `=` on a keyboard and `+` in every editor's menu.
+    case VK_OEM_PLUS: return Key::Equal;
+    case VK_OEM_MINUS: return Key::Minus;
+    case VK_OEM_5: return Key::Backslash;
     default: return Key::None;
   }
 }
@@ -7201,6 +7206,20 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
           choose_tool(*app, tool->tool);
           return 0;
         }
+        // The zoom, with the tools and for the same reason: it changes the
+        // view rather than the document. Premiere's keys — `=` and `-` about
+        // the playhead, and `\` for the whole sequence.
+        if (app->timeline != nullptr &&
+            (pressed == Key::Equal || pressed == Key::Minus || pressed == Key::Backslash)) {
+          if (pressed == Key::Backslash) {
+            app->timeline->zoom_to_fit();
+          } else {
+            app->timeline->zoom_about_playhead(pressed == Key::Equal);
+          }
+          mark_dirty(*app);
+          return 0;
+        }
+
         // Premiere's S. Here with the tools rather than in the command table
         // because it changes the view and not the document, so there is nothing
         // for `run` to report and nothing for undo to put back.

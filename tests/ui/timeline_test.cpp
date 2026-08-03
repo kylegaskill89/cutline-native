@@ -293,6 +293,167 @@ TEST(TimelineHover, ThePointerLeavingTakesTheHighlightWithIt) {
   EXPECT_LT(gone.count(DrawCall::Kind::Fill), over.count(DrawCall::Kind::Fill));
 }
 
+// ------------------------------------------------- linked clips, previewed --
+
+/// The sample model with the lower video clip and the audio clip tied together,
+/// which is what a placed shot looks like: one picture, one sound, one group.
+[[nodiscard]] TimelineModel linked_model() {
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].group = "pair";
+  model.tracks[2].blocks[0].group = "pair";
+  // The same span, so a trim on one is a trim on the other.
+  model.tracks[2].blocks[0].start = model.tracks[1].blocks[0].start;
+  model.tracks[2].blocks[0].end = model.tracks[1].blocks[0].end;
+  return model;
+}
+
+TEST(LinkedPreview, TrimmingAPictureTrimsItsSoundAsTheDragGoes) {
+  // It did not: only the block under the pointer moved, and the sound jumped
+  // into place a moment later when the button came up — which reads as the
+  // application correcting a mistake rather than doing what was asked.
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  fixture.view->set_model(linked_model());
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.right() - 2.0, box.bottom() - 5.0));
+  fixture.host->mouse_move(press(box.right() - 102.0, box.bottom() - 5.0));
+
+  const TimelineBlock& picture = fixture.view->model().tracks[1].blocks[0];
+  const TimelineBlock& sound = fixture.view->model().tracks[2].blocks[0];
+  EXPECT_NEAR(picture.end, 4.0, 0.01);
+  EXPECT_NEAR(sound.end, picture.end, 0.01) << "the sound followed the picture";
+}
+
+TEST(LinkedPreview, TrimmingAHeadTakesTheSoundsHeadWithIt) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  fixture.view->set_model(linked_model());
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.x + 2.0, box.bottom() - 5.0));
+  fixture.host->mouse_move(press(box.x + 102.0, box.bottom() - 5.0));
+
+  const TimelineBlock& sound = fixture.view->model().tracks[2].blocks[0];
+  EXPECT_NEAR(sound.start, 1.0, 0.01);
+  EXPECT_NEAR(sound.end, 5.0, 0.01) << "its tail stayed";
+}
+
+TEST(LinkedPreview, AClipWithNoLinkTakesNothingWithIt) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const TimelineBlock before = fixture.view->model().tracks[2].blocks[0];
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.right() - 2.0, box.bottom() - 5.0));
+  fixture.host->mouse_move(press(box.right() - 102.0, box.bottom() - 5.0));
+
+  EXPECT_EQ(fixture.view->model().tracks[2].blocks[0], before);
+}
+
+TEST(LinkedPreview, ALongDragDoesNotAccumulateOnThePartner) {
+  // Worked from the arrangement at the press, like everything else here.
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  fixture.view->set_model(linked_model());
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.right() - 2.0, box.bottom() - 5.0));
+  for (const double dx : {-20.0, -40.0, -60.0, -80.0, -100.0}) {
+    fixture.host->mouse_move(press(box.right() - 2.0 + dx, box.bottom() - 5.0));
+  }
+
+  EXPECT_NEAR(fixture.view->model().tracks[2].blocks[0].end, 4.0, 0.01);
+}
+
+TEST(LinkedPreview, ARippleDoesNotMoveThePartnerTwice) {
+  // The linked sound is being trimmed, not pushed along downstream of the
+  // trim. Carrying it as both would move it twice.
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  fixture.view->set_tool(Tool::Ripple);
+  fixture.view->set_model(linked_model());
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.right() - 2.0, box.bottom() - 5.0));
+  fixture.host->mouse_move(press(box.right() - 102.0, box.bottom() - 5.0));
+
+  const TimelineBlock& sound = fixture.view->model().tracks[2].blocks[0];
+  EXPECT_NEAR(sound.end, 4.0, 0.01);
+  EXPECT_NEAR(sound.start, 0.0, 0.01);
+}
+
+// ------------------------------------------------------ zoom, and badges --
+
+TEST(Zoom, AStepInKeepsThePlayheadWhereItIsOnScreen) {
+  // The playhead is what somebody zooming in is looking at. The wheel zooms
+  // about the pointer for the same reason, and a key has no pointer to use.
+  Fixture fixture;
+  fixture.view->set_playhead(6.0);
+  const double at = fixture.view->playhead_x();
+
+  fixture.view->zoom_about_playhead(true);
+
+  EXPECT_GT(fixture.view->scale().pixels_per_second, 100.0);
+  EXPECT_NEAR(fixture.view->playhead_x(), at, 1.0);
+}
+
+TEST(Zoom, AStepOutShowsMoreOfTheSequence) {
+  Fixture fixture;
+  fixture.view->set_playhead(6.0);
+  const double before =
+      fixture.view->scale().visible_duration(fixture.view->time_area().width);
+
+  fixture.view->zoom_about_playhead(false);
+  EXPECT_GT(fixture.view->scale().visible_duration(fixture.view->time_area().width),
+            before);
+}
+
+TEST(Zoom, WithThePlayheadOffScreenItHoldsTheMiddleInstead) {
+  // The only honest answer when the thing to keep still is not visible.
+  Fixture fixture;
+  fixture.view->set_playhead(0.0);
+  fixture.view->set_scale(TimeScale{.pixels_per_second = 100.0, .start = 8.0});
+
+  const Rect area = fixture.view->time_area();
+  const double middle =
+      fixture.view->scale().start + fixture.view->scale().visible_duration(area.width) * 0.5;
+
+  fixture.view->zoom_about_playhead(true);
+  const double now =
+      fixture.view->scale().start + fixture.view->scale().visible_duration(area.width) * 0.5;
+  EXPECT_NEAR(now, middle, 0.05);
+}
+
+TEST(EffectBadge, AClipCarryingAStackIsMarked) {
+  // Otherwise a graded shot and an untouched one are the same rectangle, and
+  // finding the one with a look on it means clicking every clip in turn.
+  Fixture plain;
+  RecordingPainter before;
+  plain.host->paint(before, default_theme());
+
+  Fixture marked;
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].has_effects = true;
+  marked.view->set_model(model);
+  RecordingPainter after;
+  marked.host->paint(after, default_theme());
+
+  EXPECT_GT(after.count(DrawCall::Kind::Text), before.count(DrawCall::Kind::Text));
+}
+
+TEST(EffectBadge, ThereIsNoneOnAClipWithAnEmptyStack) {
+  Fixture fixture;
+  RecordingPainter painter;
+  fixture.host->paint(painter, default_theme());
+
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::Text && call.run.has_value()) {
+      EXPECT_NE(call.run->text, "fx");
+    }
+  }
+}
+
 // ---------------------------------------------------------- scrollbars --
 
 TEST(Scrollbars, TheThumbSaysHowMuchOfTheSequenceIsOnScreen) {
