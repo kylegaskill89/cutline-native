@@ -404,6 +404,20 @@ struct Track {
   /// to edit; targeting a track says where the next one goes.
   bool targeted = false;
 
+  /// Whether this track moves when something *else* is rippled.
+  ///
+  /// Premiere's sync lock, and on by default there and here: the ordinary case
+  /// is that an insert opens the whole sequence up and nothing goes out of step
+  /// with anything. Turning it off is what pins a track down — a music bed, a
+  /// title card at a fixed time, a bar of tone at the head — so an edit
+  /// elsewhere leaves it exactly where it is.
+  ///
+  /// Different from `locked`, which stops the track being *edited* at all. A
+  /// track can be freely editable and pinned, or locked and still rippled by
+  /// its neighbours, and conflating the two is how a lock nobody set appears to
+  /// move things.
+  bool sync_locked = true;
+
   /// The track's own fader and panner, applied to everything on it after each
   /// clip's own gain and pan.
   ///

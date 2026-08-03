@@ -130,6 +130,7 @@ struct TrackPropsPatch {
   std::optional<bool> locked;
   std::optional<bool> hidden;
   std::optional<bool> targeted;
+  std::optional<bool> sync_locked;
   std::optional<double> height;
 };
 

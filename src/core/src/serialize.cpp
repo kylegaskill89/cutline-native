@@ -244,7 +244,8 @@ json write(const Track& t) {
          {"solo", t.solo},
          {"locked", t.locked},
          {"hidden", t.hidden},
-         {"targeted", t.targeted}};
+         {"targeted", t.targeted},
+         {"sync_locked", t.sync_locked}};
   if (!t.label.empty()) j["label"] = t.label;
   put_if_set(j, "height", t.height);
 
@@ -509,7 +510,10 @@ Track read_track(const json& j) {
   t.solo = read_or(j, "solo", false);
   t.locked = read_or(j, "locked", false);
   t.hidden = read_or(j, "hidden", false);
+  // On by default, which is what a file written before this existed means and
+  // what Premiere does with a fresh track.
   t.targeted = read_or(j, "targeted", false);
+  t.sync_locked = read_or(j, "sync_locked", true);
   t.height = read_optional<double>(j, "height");
 
   const auto clips = j.find("clips");

@@ -4712,6 +4712,145 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   return panel;
 }
 
+/// Renaming a track: a popup with a field in it, hung under the header.
+///
+/// A popup rather than a field the timeline holds: the view draws its headers
+/// and builds no widgets in them, and giving it one for this alone would mean
+/// it owning focus, a caret and a commit rule it has no other use for.
+void rename_track(App& app, std::size_t track) {
+  if (app.timeline == nullptr || app.main.host == nullptr) return;
+  const auto& rows = app.timeline->model().tracks;
+  if (track >= rows.size()) return;
+
+  const std::string id = rows[track].id;
+  auto popup = std::make_unique<Panel>();
+  auto& row = popup->emplace<Box>(Axis::Horizontal);
+  auto& field = row.emplace<TextField>(rows[track].name);
+
+  const auto commit = [&app, id, control = &field] {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    app.session.apply(
+        cutline::core::set_track_label(app.session.project(), id, control->text()));
+    refresh_timeline(app);
+  };
+  // Both, because a field is finished either by pressing the button or by
+  // pressing return, and somebody who typed a name expects both to work.
+  field.set_on_commit([commit](const std::string&) { commit(); });
+  row.emplace<Button>("Rename", commit);
+
+  app.main.host->open_popup(std::move(popup), app.timeline->header_rect(track));
+  app.main.host->set_focus(&field);
+}
+
+/// A track's own menu, from a right-click on its header.
+///
+/// Premiere has one and this had none: a right-click on a header opened the
+/// clip menu, which offered Cut and Copy over a place where there is no clip.
+///
+/// Every row that is a *state* is ticked rather than named for what it would
+/// become, so the menu reads as what is true rather than as a list of verbs —
+/// which is also the only way sync lock, the one switch with no letter in the
+/// header, is reachable at all.
+void open_track_menu(App& app, std::size_t track, double x, double y) {
+  if (app.main.host == nullptr || app.timeline == nullptr) return;
+  const std::vector<cutline::ui::TimelineTrack>& rows = app.timeline->model().tracks;
+  if (track >= rows.size()) return;
+
+  const std::string id = rows[track].id;
+  const cutline::core::Track* held =
+      std::ranges::find(app.session.project().tracks, id, &cutline::core::Track::id) !=
+              app.session.project().tracks.end()
+          ? &*std::ranges::find(app.session.project().tracks, id, &cutline::core::Track::id)
+          : nullptr;
+  if (held == nullptr) return;
+
+  const bool audio = held->kind == cutline::core::TrackKind::Audio;
+
+  /// One row: what it says, whether it is ticked, and what taking it does.
+  struct Row {
+    std::string label;
+    bool ticked = false;
+    std::function<void()> act;
+  };
+
+  const auto patched = [&app, id](const cutline::core::TrackPropsPatch& patch) {
+    app.session.apply(cutline::core::update_track(app.session.project(), id, patch));
+    refresh_timeline(app);
+    invalidate_preview(app);
+    stop_playback(app);
+    mark_dirty(app);
+  };
+
+  std::vector<Row> rows_out;
+  rows_out.push_back(Row{.label = "Rename...", .act = [&app, track] {
+                           if (app.timeline != nullptr) rename_track(app, track);
+                         }});
+  rows_out.push_back(Row{.label = "Target",
+                         .ticked = held->targeted,
+                         .act = [patched, was = held->targeted] {
+                           patched({.targeted = !was});
+                         }});
+  rows_out.push_back(Row{.label = "Sync Lock",
+                         .ticked = held->sync_locked,
+                         .act = [patched, was = held->sync_locked] {
+                           patched({.sync_locked = !was});
+                         }});
+  rows_out.push_back(Row{.label = "Lock",
+                         .ticked = held->locked,
+                         .act = [patched, was = held->locked] { patched({.locked = !was}); }});
+
+  if (audio) {
+    rows_out.push_back(Row{.label = "Mute",
+                           .ticked = held->muted,
+                           .act = [patched, was = held->muted] { patched({.muted = !was}); }});
+    rows_out.push_back(Row{.label = "Solo",
+                           .ticked = held->solo,
+                           .act = [patched, was = held->solo] { patched({.solo = !was}); }});
+  } else {
+    rows_out.push_back(Row{.label = "Hide",
+                           .ticked = held->hidden,
+                           .act = [patched, was = held->hidden] { patched({.hidden = !was}); }});
+  }
+
+  rows_out.push_back(Row{.label = "Reset Height", .act = [&app, id] {
+                           app.session.apply(cutline::core::set_track_height(
+                               app.session.project(), id, std::nullopt));
+                           refresh_timeline(app);
+                           mark_dirty(app);
+                         }});
+  rows_out.push_back(Row{.label = "Add Video Track", .act = [&app] {
+                           run_command(app, cutline::editor::Command::AddVideoTrack);
+                         }});
+  rows_out.push_back(Row{.label = "Add Audio Track", .act = [&app] {
+                           run_command(app, cutline::editor::Command::AddAudioTrack);
+                         }});
+  rows_out.push_back(Row{.label = "Delete Track", .act = [&app, id] {
+                           app.session.apply(
+                               cutline::core::remove_track(app.session.project(), id));
+                           refresh_timeline(app);
+                           invalidate_preview(app);
+                           stop_playback(app);
+                           mark_dirty(app);
+                         }});
+
+  std::vector<std::string> labels;
+  std::vector<bool> ticks;
+  std::vector<std::function<void()>> acts;
+  for (Row& row : rows_out) {
+    labels.push_back(std::move(row.label));
+    ticks.push_back(row.ticked);
+    acts.push_back(std::move(row.act));
+  }
+
+  auto list = std::make_unique<MenuList>(std::move(labels));
+  list->set_checked(std::move(ticks));
+  list->set_on_choose([&app, acts](std::size_t index) {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    if (index < acts.size() && acts[index]) acts[index]();
+  });
+  app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
+}
+
 [[nodiscard]] std::unique_ptr<Widget> make_timeline_panel(App* app) {
   auto panel = std::make_unique<Panel>();
 
@@ -4929,6 +5068,14 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     if (app == nullptr || app->main.host == nullptr || app->timeline == nullptr) return;
     using cutline::editor::Command;
 
+    // A right-click on a header is about the *track*, not about a clip. It used
+    // to open the clip menu, which offered Cut and Copy over a place where
+    // there is no clip to cut.
+    if (const auto header = app->timeline->header_at(x, y); header.has_value()) {
+      open_track_menu(*app, *header, x, y);
+      return;
+    }
+
     struct Entry {
       const char* label;
       Command command;
@@ -5045,28 +5192,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   // builds no widgets in them, and giving it one for this alone would mean it
   // owning focus, a caret and a commit rule it has no other use for.
   tracks.set_on_track_rename([app](std::size_t track) {
-    if (app == nullptr || app->timeline == nullptr || app->main.host == nullptr) return;
-    const auto& tracks_now = app->timeline->model().tracks;
-    if (track >= tracks_now.size()) return;
-
-    const std::string id = tracks_now[track].id;
-    auto popup = std::make_unique<Panel>();
-    auto& row = popup->emplace<Box>(Axis::Horizontal);
-    auto& field = row.emplace<TextField>(tracks_now[track].name);
-
-    const auto commit = [app, id, control = &field] {
-      if (app->main.host != nullptr) app->main.host->close_popup();
-      app->session.apply(
-          cutline::core::set_track_label(app->session.project(), id, control->text()));
-      refresh_timeline(*app);
-    };
-    // Both, because a field is finished either by pressing the button or by
-    // pressing return, and somebody who typed a name expects both to work.
-    field.set_on_commit([commit](const std::string&) { commit(); });
-    row.emplace<Button>("Rename", commit);
-
-    app->main.host->open_popup(std::move(popup), app->timeline->header_rect(track));
-    app->main.host->set_focus(&field);
+    if (app != nullptr) rename_track(*app, track);
   });
 
   tracks.set_on_edit([app](const cutline::ui::TimelineEdit& edit) {

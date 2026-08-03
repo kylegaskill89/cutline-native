@@ -504,6 +504,19 @@ offered when there is nothing to place or nothing targeted — a sequence with n
 target has no answer to *where*, and guessing is how an edit lands on a track
 nobody was looking at.
 
+Sync lock came with it, on by default as Premiere has it: an insert opens the
+whole sequence up and nothing goes out of step, and turning it off pins a track
+down — a music bed, a title at a fixed time, a bar of tone at the head. It is
+deliberately not the same thing as Lock, which stops a track being edited at
+all; a track can be freely editable and pinned, or locked and still rippled by
+its neighbours.
+
+It is reached from a **track header's right-click menu**, which is Premiere's
+and which this had none of: a right-click on a header opened the *clip* menu,
+offering Cut and Copy over a place where there is no clip. Rename, the four
+switches, the height and the track commands are all there, and the rows that are
+states are ticked rather than named for what they would become.
+
 What stands in for the source monitor is the **pool's selection**, which is
 already what a double-click places. That is also why source patching does not
 exist separately: with one source, targeting answers both questions at once.
@@ -525,7 +538,7 @@ it.
 | Track targeting for keyboard edits | per track, toggled | **done** — a T in every header, and what insert and overwrite aim at | — |
 | Insert (`,`) and Overwrite (`.`) | from the source monitor at the playhead | **done** — from the pool's selection, on Premiere's own keys | — |
 | Three- and four-point editing | in/out on source and sequence | the sequence half only; there is no source monitor to mark | machinery |
-| Sync lock | which tracks ripple together | none — an insert ripples every track | model + control |
+| Sync lock | which tracks ripple together | **done** — on by default, on the header's own menu | — |
 | Mute / solo / lock / hide | yes | **done** | — |
 
 ### 2.2 Trimming

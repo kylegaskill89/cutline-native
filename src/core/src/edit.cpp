@@ -497,8 +497,13 @@ Project ripple_trim_edge(Project p, std::string_view clip_id, ClipEdge edge,
   // front of the very clip that was trimmed.
   const double shift = edge == ClipEdge::In ? -delta : delta;
   for (Track& track : p.tracks) {
+    // Pinned tracks hold, except for the group being trimmed: that clip is
+    // what the gesture is *on*, and refusing to move it would mean the trim
+    // silently did half of itself.
+    const bool pinned = !track.sync_locked;
     for (Clip& c : track.clips) {
       const bool member = members.contains(c.id);
+      if (pinned && !member) continue;
       if (edge == ClipEdge::In) {
         if (member || c.start >= edge_was - kTouchEps) c.start += shift;
       } else {
@@ -662,6 +667,10 @@ Project ripple_insert(Project p, double at_time, double amount) {
   p = split_at(std::move(p), at_time, spanning);
 
   for (Track& t : p.tracks) {
+    // A track that is not sync locked stays where it is. That is the whole of
+    // what sync lock means: an edit elsewhere opens the sequence up, and this
+    // one is pinned — a music bed, a title at a fixed time, a bar of tone.
+    if (!t.sync_locked) continue;
     for (Clip& c : t.clips) {
       if (c.start >= at_time - 1e-6) c.start += amount;
     }
@@ -986,7 +995,11 @@ Project ripple_delete(Project p, std::span<const std::string> clip_ids) {
 
   const double ripple = max_end - min_start;
   for (Track& t : p.tracks) {
+    // The clips named are removed wherever they are — deleting something is
+    // not an edit *elsewhere*, and a pinned track's own clip still goes. What
+    // sync lock decides is only whether the rest of the track closes up.
     std::erase_if(t.clips, [&](const Clip& c) { return ids.contains(c.id); });
+    if (!t.sync_locked) continue;
     for (Clip& c : t.clips) {
       if (c.start >= max_end - 1e-6) c.start -= ripple;
     }

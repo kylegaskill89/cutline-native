@@ -72,6 +72,13 @@ const Track& track_by_id(const Project& p, std::string_view id) {
   throw std::runtime_error("no such track");
 }
 
+Track& track_by_id_mut(Project& p, std::string_view id) {
+  for (Track& t : p.tracks) {
+    if (t.id == id) return t;
+  }
+  throw std::runtime_error("no such track");
+}
+
 // ------------------------------------------------------------------ media --
 
 TEST(AddMedia, AppendsToThePool) {
@@ -601,6 +608,61 @@ TEST(NewId, IsMonotonicAndResettable) {
   EXPECT_EQ(new_id("grp"), "grp_3");
   reset_ids();
   EXPECT_EQ(new_id("clip"), "clip_1");
+}
+
+// ---------------------------------------------------------- sync lock --
+
+TEST(SyncLock, APinnedTrackDoesNotMoveWhenSomethingElseRipples) {
+  // What sync lock is for: a music bed, a title at a fixed time, a bar of tone
+  // at the head — an edit elsewhere opens the sequence up and these hold.
+  Project p = add_media(empty_project(), footage());
+  p = place_media(std::move(p), "m1", 0.0);
+  track_by_id_mut(p, "a2").sync_locked = false;
+
+  const double pinned = track_by_id(p, "a2").clips[0].start;
+  p = ripple_insert(std::move(p), 0.0, 5.0);
+
+  EXPECT_DOUBLE_EQ(track_by_id(p, "v1").clips[0].start, 5.0);
+  EXPECT_DOUBLE_EQ(track_by_id(p, "a1").clips[0].start, 5.0);
+  EXPECT_DOUBLE_EQ(track_by_id(p, "a2").clips[0].start, pinned);
+}
+
+TEST(SyncLock, IsOnByDefault) {
+  // The ordinary case is that an insert opens the whole sequence and nothing
+  // goes out of step with anything.
+  const Track fresh;
+  EXPECT_TRUE(fresh.sync_locked);
+}
+
+TEST(SyncLock, APinnedTracksOwnClipIsStillDeleted) {
+  // Deleting something is not an edit *elsewhere*. What sync lock decides is
+  // whether the rest of the track closes up behind it.
+  Project p = add_media(empty_project(), footage());
+  p = place_media(std::move(p), "m1", 0.0);
+  p = place_media(std::move(p), "m1", 20.0);
+  track_by_id_mut(p, "a2").sync_locked = false;
+
+  const std::string doomed = track_by_id(p, "a2").clips[0].id;
+  const double later = track_by_id(p, "a2").clips[1].start;
+  p = ripple_delete(std::move(p), Ids{doomed});
+
+  ASSERT_EQ(track_by_id(p, "a2").clips.size(), 1u);
+  EXPECT_DOUBLE_EQ(track_by_id(p, "a2").clips[0].start, later) << "and did not close up";
+}
+
+TEST(SyncLock, ARippleTrimStillTrimsThePinnedTracksOwnGroup) {
+  // The clip being trimmed is what the gesture is on. Refusing to move it
+  // would mean the trim silently did half of itself.
+  Project p = add_media(empty_project(), footage());
+  p = place_media(std::move(p), "m1", 0.0);
+  track_by_id_mut(p, "a1").sync_locked = false;
+
+  const std::string video_id = track_by_id(p, "v1").clips[0].id;
+  p = ripple_trim_edge(std::move(p), video_id, ClipEdge::Out, 4.0);
+
+  EXPECT_DOUBLE_EQ(clip_end(track_by_id(p, "v1").clips[0]), 4.0);
+  EXPECT_DOUBLE_EQ(clip_end(track_by_id(p, "a1").clips[0]), 4.0)
+      << "its linked sound was trimmed with it";
 }
 
 }  // namespace
