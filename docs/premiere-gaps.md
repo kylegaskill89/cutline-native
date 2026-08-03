@@ -62,7 +62,7 @@ still opens the field rather than nudging the value somewhere nobody asked for.
 | Per-row reset button | a visible circular arrow | **done**, and hidden on an animated row where it would write a keyframe holding the default | — |
 | Per-section reset | one per `fx` group | **done** — per effect, keyframes cleared with it | — |
 | Greying a property another one governs | Uniform Scale greys Scale Width | **done** — Lock aspect greys Scale Y and leaves it readable | — |
-| **Balance / pan** | a panner on every audio clip *and* every audio track | **done for the clip** — see §1.6; the track panner is not | model + control |
+| **Balance / pan** | a panner on every audio clip *and* every audio track | **done**, on the clip and on the track — see §1.6 | — |
 | Live update while scrubbing | the picture follows the drag | **done** — one undo entry for the whole gesture | — |
 
 Two things fell out of building it and are worth keeping written down.
@@ -222,9 +222,9 @@ folders and never learns the difference between them.
 | Double-click to apply to the selection | yes | **done** — but only to the *first* clip selected, not all of them | wiring |
 | Transitions in the same panel | Video and Audio Transitions are folders in it | **done** — and refused where nothing abuts the clip | — |
 | Drag an effect onto a clip | onto the timeline or the program monitor | **done** for the timeline; not the monitor | control |
-| Nested folders | Video Effects › Blur & Sharpen › Gaussian Blur | one level, with the parent folded into the name | control |
+| Nested folders | Video Effects › Blur & Sharpen › Gaussian Blur | **done** — a folder is a path, and the tree is made out of the paths | — |
 | User bins | new bin / delete, to gather favourites | **done** — made, renamed, deleted, filled by dragging | — |
-| Named presets | save a configured stack, apply it by name | copy and paste only, one clipboard, not saved | machinery |
+| Named presets | save a configured stack, apply it by name | **done** — saved beside the settings, offered in the tree, dragged like an effect | — |
 | Capability badges | accelerated / 32-bit / YUV, and filters for them | every effect is a GPU shader, so the distinction does not exist here | not applicable |
 
 Two rules the panel enforces that a menu never could.
@@ -319,7 +319,7 @@ not match one made after:
 - **Flip is a pass**, so it sits somewhere in the stack rather than being
   applied to the quad before everything else.
 
-#### 1.4 Masks — **done, except the pen and the animation**
+#### 1.4 Masks — **done**
 
 Premiere puts three mask tools on **every** effect — ellipse, rectangle, pen —
 with path, feather, opacity, expansion, inversion, and per-frame tracking. It is
@@ -342,7 +342,7 @@ masking for nothing.
 | Feather, opacity, inversion | yes | **done** — opacity is the *effect's* strength, not the layer's transparency | — |
 | Rotation | yes | **done** | — |
 | A mask per effect | yes | **done** | — |
-| Pen / free-draw path | yes | none — a path needs a buffer rather than root constants, and a winding rule | machinery |
+| Pen / free-draw path | yes | **done** — corners in a buffer, even-odd fill, a handle on each | — |
 | Dragging the shape on the monitor | yes | **done**, and it writes a keyframe when the number is animated | — |
 | Animating a mask | keyframed path, and tracking | **done** for every number it has; a path is the part that is missing | — |
 | Tracking | per-frame analysis | none, and belongs with neither of the above | machinery |
@@ -439,9 +439,11 @@ And dragging the shape goes through the same setter a number does, so it writes
 a keyframe when the property is animated — found on screen, where a drag moved
 the outline and the render ignored it.
 
-**The shape of what is left.** Nothing, for section 1. The structural work is
-finished, the feature list is finished, and the catalogue is a branch at a time
-rather than a budget whenever anybody wants more of it.
+**The shape of what is left.** Two rows in §1.1, and they are the two that were
+there from the first pass: **time remapping** — Premiere keyframes Speed itself,
+and ours is explicitly a constant — and the **anti-flicker filter**. Neither has
+been touched. Everything else in section 1 is done, and the catalogue is a
+branch at a time rather than a budget whenever anybody wants more of it.
 
 The path was the last piece of machinery here, and the one that finally needed
 something the root constants could not hold: sixty-four DWORDs will carry a
@@ -546,6 +548,41 @@ place a clip anywhere, and `Session` already records one entry per gesture.
 The last two are small and both are felt every session. A playhead that leaves
 the view during playback is the one on this page most likely to be noticed
 within a minute of using it.
+
+---
+
+## Found by audit, listed nowhere else
+
+Walking the spec's own parity checklist and Premiere's menus against the source,
+rather than against this page. Everything the checklist names is present — every
+effect, every audio effect, all four transitions, all four scopes, all five
+tools, both panners, the whole data model — with these exceptions, none of which
+had been written down anywhere:
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| **Separate audio on export** | one stream per track, or a mix | mix only, stereo or mono | wiring |
+| Scale to frame size | right-click a clip, and an import default | none; a mismatched clip is scaled by hand | wiring |
+| Frame hold / freeze frame | a still from one frame, in place | none | model |
+| Interpret footage | override a source's frame rate, alpha, channels | none — a source is what it says it is | model |
+| Paste attributes | pick which properties travel | the effect stack only, whole | control |
+| Preview render bar | red/yellow over the ruler, Enter renders it | none, and nothing caches a rendered span | machinery |
+| Safe margins | title-safe and action-safe overlays | none | control |
+| Monitor zoom level | Fit, 10%…400%, and scroll | letterboxed fit only | control |
+| Maximise a panel | `~` over any panel | none | control |
+
+The first is the only one the *spec* asks for: §18's export dialog says
+"Audio (mix/separate)", and §11 defines separate as one stream per track. The
+rest are Premiere's rather than the spec's, which is why they are listed here
+rather than counted against parity.
+
+Two are worth more than their row. **Scale to frame size** is the one people
+reach for within a minute of importing anything that is not exactly the
+sequence's size, and it is wiring: the transform already scales, and this is
+arithmetic on the media's dimensions. **The render bar** is the opposite —
+nothing in the application caches a rendered span, so it is a subsystem rather
+than a control, and it is only worth building if scrubbing a heavy stack ever
+becomes too slow to work with.
 
 ---
 
