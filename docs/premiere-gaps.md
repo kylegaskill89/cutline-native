@@ -585,7 +585,7 @@ say where the trim went.
 | Drag a clip to move it | along the track **and between tracks** | **done** — the second half was missing and the row said otherwise | — |
 | Copy and paste clips | Ctrl+C / Ctrl+V, and paste-insert | **done** — copy, cut, paste and paste-insert | — |
 | Duplicate (alt-drag a copy) | yes | none | wiring |
-| Label colours | eight, set per clip and per bin | none | model + control |
+| Label colours | eight, set per clip and per bin | **done** per clip, by name, from the clip menu | — |
 | Enable / disable a clip | yes | **done** — on the clip menu, ticked, and a switched-off clip is drawn as one | — |
 | Speed / duration dialogue | a box with both and a ripple option | Speed and Reverse in the inspector | control |
 | Right-click a clip | the menu most edits are actually reached from | **done** — and it offers only what would do something | — |

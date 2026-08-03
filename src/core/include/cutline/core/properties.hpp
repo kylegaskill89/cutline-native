@@ -27,6 +27,13 @@ namespace cutline::core {
 
 [[nodiscard]] Project set_clip_blend(Project p, std::string_view clip_id, BlendMode mode);
 
+/// Colours the named clips on the timeline. An empty colour puts them back to
+/// the theme's. Takes a span because labelling is something done to a selection
+/// — a shot is usually several clips, and colouring the picture and leaving the
+/// sound is not what anybody means by it.
+[[nodiscard]] Project set_clips_label(Project p, std::span<const std::string> clip_ids,
+                                      std::string color);
+
 /// Sets or clears the out-edge transition. A transition of zero duration clears
 /// it, since a zero-length transition is just a cut.
 [[nodiscard]] Project set_clip_transition(Project p, std::string_view clip_id,

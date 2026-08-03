@@ -202,6 +202,11 @@ struct TimelineBlock {
   /// Kept on the timeline but not rendered. Drawn faded, because a clip that
   /// is not playing and looks exactly like one that is, is a bug report.
   bool disabled = false;
+  /// What colour to draw it, or empty for the theme's. See `Clip::label_color`:
+  /// it is for the person reading the timeline and changes nothing about what
+  /// is rendered.
+  std::string color;
+
   /// Whether anything is in this clip's effect stack.
   ///
   /// Drawn as a badge, which is Premiere's. Otherwise a graded shot and an

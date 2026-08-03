@@ -105,6 +105,20 @@ struct TimelineMedia {
                                                 std::string_view track_id,
                                                 ui::TrackControl control);
 
+/// One of the colours a clip can be labelled with.
+struct ClipLabel {
+  std::string_view name;
+  std::string_view color;
+};
+
+/// The labels offered, in the order a menu should list them.
+///
+/// Premiere's eight, by their names, because a label is something people say
+/// out loud — "the violet ones are the interview" — and a hex nobody can
+/// pronounce is a label that never gets used. The colours are the model's; the
+/// names live here because `core` has no menus and no opinion about them.
+[[nodiscard]] std::span<const ClipLabel> clip_labels();
+
 /// The clip a block refers to, or nothing when the model has moved on.
 [[nodiscard]] std::optional<std::string> block_clip_id(const ui::TimelineModel& model,
                                                        ui::BlockRef ref);

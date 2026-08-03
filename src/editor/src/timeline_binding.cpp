@@ -186,6 +186,7 @@ ui::TimelineModel timeline_model(const core::Project& project,
           .label = label_for(project, clip),
           .selected = std::ranges::find(selection, clip.id) != selection.end(),
           .disabled = clip.disabled,
+          .color = clip.label_color,
           // Either stack: an audio clip's filters are as much a reason to mark
           // it as a video clip's are.
           .has_effects = !clip.effects.empty() || !clip.audio_effects.empty(),
@@ -354,6 +355,23 @@ core::Project toggle_track_switch(core::Project project, std::string_view track_
     case ui::TrackControl::Hide: patch.hidden = !found->hidden; break;
   }
   return core::update_track(std::move(project), track_id, patch);
+}
+
+std::span<const ClipLabel> clip_labels() {
+  // Premiere's eight, and its names for them. Muted rather than saturated: a
+  // label sits behind a filmstrip and a waveform, and a colour loud enough to
+  // win that fight is one that makes the picture unreadable.
+  static constexpr std::array<ClipLabel, 8> kLabels{{
+      {"Violet", "#8f7bb8"},
+      {"Iris", "#6f8fc4"},
+      {"Caribbean", "#4f9e9e"},
+      {"Lavender", "#a887bd"},
+      {"Cerulean", "#4a86b8"},
+      {"Forest", "#5f8f5f"},
+      {"Rose", "#c07a92"},
+      {"Mango", "#c39a5a"},
+  }};
+  return kLabels;
 }
 
 std::optional<std::string> block_clip_id(const ui::TimelineModel& model, ui::BlockRef ref) {

@@ -383,6 +383,45 @@ TEST(LinkedPreview, ARippleDoesNotMoveThePartnerTwice) {
   EXPECT_NEAR(sound.start, 0.0, 0.01);
 }
 
+TEST(ClipLabel, ALabelReplacesTheFillAndNothingElse) {
+  // A labelled clip still has to read as selected or disabled. Taking the
+  // border and the text too would make it a flat rectangle that has lost every
+  // other thing it was saying.
+  const auto clip_fill = [](const Fixture& fixture) -> std::optional<Fill> {
+    const Rect box = fixture.view->block_rect(1, 0).inset(1.0);
+    RecordingPainter painter;
+    fixture.host->paint(painter, default_theme());
+    for (const DrawCall& call : painter.calls()) {
+      if (call.kind == DrawCall::Kind::Fill && std::abs(call.bounds.x - box.x) < 0.01 &&
+          std::abs(call.bounds.width - box.width) < 0.01) {
+        return call.fill;
+      }
+    }
+    return std::nullopt;
+  };
+
+  const Fixture plain;
+  Fixture labelled;
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].color = "#8f7bb8";
+  labelled.view->set_model(model);
+
+  const std::optional<Fill> before = clip_fill(plain);
+  const std::optional<Fill> after = clip_fill(labelled);
+  ASSERT_TRUE(before.has_value());
+  ASSERT_TRUE(after.has_value());
+  EXPECT_NE(*before, *after);
+}
+
+TEST(ClipLabel, NoLabelLeavesTheThemesFillAlone) {
+  Fixture fixture;
+  RecordingPainter painter;
+  fixture.host->paint(painter, default_theme());
+  // Nothing to assert beyond it painting at all: the point is that an empty
+  // colour takes the ordinary path rather than parsing "" into black.
+  EXPECT_GT(painter.count(DrawCall::Kind::Fill), 0u);
+}
+
 // ------------------------------------------------------ zoom, and badges --
 
 TEST(Zoom, AStepInKeepsThePlayheadWhereItIsOnScreen) {

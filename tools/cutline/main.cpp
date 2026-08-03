@@ -4712,6 +4712,52 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   return panel;
 }
 
+/// The colours a clip can be labelled with, as a menu.
+///
+/// Its own popup rather than eight more rows on the clip menu, which is long
+/// enough already. Ticked where the selection already carries one, and "None"
+/// first because getting a label off is as ordinary as putting one on.
+void open_label_menu(App& app, std::span<const std::string> clips, double x, double y) {
+  if (app.main.host == nullptr || clips.empty()) return;
+
+  // What they are now. A mixed selection ticks nothing, which is honest: there
+  // is no one answer to what colour these are.
+  std::string current;
+  bool agreed = true;
+  for (const std::string& id : clips) {
+    const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), id);
+    if (clip == nullptr) continue;
+    if (current.empty() && agreed) {
+      current = clip->label_color;
+    } else if (clip->label_color != current) {
+      agreed = false;
+    }
+  }
+
+  std::vector<std::string> labels{"None"};
+  std::vector<bool> ticks{agreed && current.empty()};
+  std::vector<std::string> colors{std::string{}};
+  for (const cutline::editor::ClipLabel& label : cutline::editor::clip_labels()) {
+    labels.emplace_back(label.name);
+    colors.emplace_back(label.color);
+    ticks.push_back(agreed && current == label.color);
+  }
+
+  auto list = std::make_unique<MenuList>(std::move(labels));
+  list->set_checked(std::move(ticks));
+  list->set_on_choose([&app, colors, chosen = std::vector<std::string>(clips.begin(),
+                                                                      clips.end())](
+                          std::size_t index) {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    if (index >= colors.size()) return;
+    app.session.apply(
+        cutline::core::set_clips_label(app.session.project(), chosen, colors[index]));
+    refresh_timeline(app);
+    mark_dirty(app);
+  });
+  app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
+}
+
 /// Renaming a track: a popup with a field in it, hung under the header.
 ///
 /// A popup rather than a field the timeline holds: the view draws its headers
@@ -5109,6 +5155,8 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
     const std::vector<std::string> selected = app->session.selected_group();
     std::vector<bool> ticks(labels.size(), false);
     if (!selected.empty()) {
+      labels.emplace_back("Label...");
+      ticks.push_back(false);
       labels.emplace_back("Fit to Frame");
       ticks.push_back(false);
       labels.emplace_back("Fill Frame");
@@ -5131,7 +5179,7 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
     // indent rather than gaining a gutter it never uses.
     if (!selected.empty()) list->set_checked(std::move(ticks));
 
-    list->set_on_choose([app, commands, selected](std::size_t index) {
+    list->set_on_choose([app, commands, selected, x, y](std::size_t index) {
       if (app->main.host != nullptr) app->main.host->close_popup();
       if (index < commands.size()) {
         run_command(*app, commands[index]);
@@ -5139,11 +5187,15 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
       }
       if (selected.empty()) return;
 
-      // The two framing rows come first among the trailing ones, in the order
-      // they were added.
-      if (index == commands.size() || index == commands.size() + 1) {
-        const auto fit = index == commands.size() ? cutline::editor::FrameFit::Fit
-                                                  : cutline::editor::FrameFit::Fill;
+      // The trailing rows, in the order they were added: the label menu, the
+      // two framing rows, then Enable.
+      if (index == commands.size()) {
+        open_label_menu(*app, selected, x, y);
+        return;
+      }
+      if (index == commands.size() + 1 || index == commands.size() + 2) {
+        const auto fit = index == commands.size() + 1 ? cutline::editor::FrameFit::Fit
+                                                      : cutline::editor::FrameFit::Fill;
         app->session.apply(cutline::editor::scale_to_frame(
             app->session.project(), selected, fit, app->session.playhead()));
         refresh_timeline(*app);

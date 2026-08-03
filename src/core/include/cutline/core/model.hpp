@@ -372,6 +372,18 @@ struct Clip {
   /// Disabled clips keep their place on the timeline but are not rendered.
   bool disabled = false;
 
+  /// What colour this clip is drawn, as a hex string. Empty is the theme's.
+  ///
+  /// A colour rather than a name, the way a marker's is, so the two things that
+  /// carry a colour in this model carry it the same way and neither needs a
+  /// table to be read. Which *names* are offered is a question for the layer
+  /// that puts up the menu.
+  ///
+  /// It changes nothing about what is rendered. A label is for the person
+  /// reading the timeline — this is the interview, that is the b-roll — and a
+  /// colour that also did something would be a colour nobody dared use.
+  std::string label_color;
+
   /// Per-property animation, indexed by `anim_prop_index`. Empty means static.
   std::array<std::vector<Keyframe>, kAnimPropCount> keyframes;
 

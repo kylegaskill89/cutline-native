@@ -42,6 +42,17 @@ Project set_clips_enabled(Project p, std::span<const std::string> clip_ids, bool
   return p;
 }
 
+Project set_clips_label(Project p, std::span<const std::string> clip_ids,
+                        std::string color) {
+  const std::unordered_set<std::string> ids(clip_ids.begin(), clip_ids.end());
+  for (Track& t : p.tracks) {
+    for (Clip& c : t.clips) {
+      if (ids.contains(c.id)) c.label_color = color;
+    }
+  }
+  return p;
+}
+
 Project set_clip_blend(Project p, std::string_view clip_id, BlendMode mode) {
   Clip* c = find_clip(p, clip_id);
   if (c == nullptr) return p;

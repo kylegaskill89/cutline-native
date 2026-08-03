@@ -54,6 +54,10 @@ constexpr double kZoomGrip = 7.0;
 /// shortest track height without covering the label beside it.
 constexpr double kEffectBadge = 11.0;
 
+/// How tall the stripe along a labelled clip is. Thin: it is a mark saying
+/// which shot this is, not a second border.
+constexpr double kLabelStripe = 4.0;
+
 [[nodiscard]] Color fade(const Color& color, float amount) noexcept {
   return Color{color.r, color.g, color.b, color.a * amount};
 }
@@ -919,7 +923,18 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
                           : clip.selected ? State::Selected
                                           : State::Normal;
       const SurfaceStyle& style = theme.style(Part::Clip, state);
-      paint_surface(painter, box.inset(1.0), style);
+
+      // A label replaces the fill and nothing else — the border, the bevel and
+      // the text stay the theme's, so a labelled clip still reads as selected
+      // or disabled rather than becoming a flat rectangle that has lost every
+      // other thing it was saying.
+      if (clip.color.empty()) {
+        paint_surface(painter, box.inset(1.0), style);
+      } else {
+        SurfaceStyle labelled = style;
+        labelled.fill = Fill::solid(parse_color(clip.color, style.text));
+        paint_surface(painter, box.inset(1.0), labelled);
+      }
 
       // The clip a drop is about to land on. Outlined rather than filled: the
       // point is to say *which* one receives it, and repainting the block would
@@ -1060,6 +1075,17 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
           }
         }
         painter.pop_clip();
+      }
+
+      // A stripe along the top for a labelled clip, over the filmstrip rather
+      // than under it. The fill alone is invisible on a video clip: the
+      // filmstrip tiles the whole body and covers it, so a label put on to find
+      // a shot again could not be seen on exactly the clips most worth
+      // labelling.
+      if (!clip.color.empty()) {
+        const double stripe = std::min(kLabelStripe, box.height * 0.25);
+        painter.fill(Rect{box.x + 1.0, box.y + 1.0, std::max(0.0, box.width - 2.0), stripe},
+                     0.0, Fill::solid(parse_color(clip.color, style.text)));
       }
 
       // The effects badge, at the top left where Premiere puts it. Two letters

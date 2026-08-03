@@ -518,5 +518,43 @@ TEST(TrackMix, ATrackThatIsNotThereChangesNothing) {
   EXPECT_EQ(set_track_pan(p, "nope", 0.5), p);
 }
 
+// -------------------------------------------------------------- labels --
+
+TEST(ClipLabel, ColoursEveryClipNamed) {
+  // Labelling is done to a selection: a shot is usually several clips, and
+  // colouring the picture and leaving the sound is not what anybody means.
+  Project p = one_clip_project();
+  Clip second = p.tracks[0].clips[0];
+  second.id = "c2";
+  second.start = 20.0;
+  p.tracks[0].clips.push_back(second);
+
+  p = set_clips_label(std::move(p), std::vector<std::string>{"c1", "c2"}, "#8f7bb8");
+
+  EXPECT_EQ(find_clip(p, "c1")->label_color, "#8f7bb8");
+  EXPECT_EQ(find_clip(p, "c2")->label_color, "#8f7bb8");
+}
+
+TEST(ClipLabel, AnEmptyColourPutsItBack) {
+  Project p = one_clip_project();
+  p = set_clips_label(std::move(p), std::vector<std::string>{"c1"}, "#8f7bb8");
+  p = set_clips_label(std::move(p), std::vector<std::string>{"c1"}, "");
+  EXPECT_TRUE(find_clip(p, "c1")->label_color.empty());
+}
+
+TEST(ClipLabel, ChangesNothingAboutWhatIsRendered) {
+  // A label is for the person reading the timeline. A colour that also did
+  // something would be a colour nobody dared use.
+  const Project before = one_clip_project();
+  Project after = set_clips_label(before, std::vector<std::string>{"c1"}, "#8f7bb8");
+
+  const Clip& was = *find_clip(before, "c1");
+  const Clip& now = *find_clip(after, "c1");
+  EXPECT_DOUBLE_EQ(was.start, now.start);
+  EXPECT_DOUBLE_EQ(was.opacity, now.opacity);
+  EXPECT_EQ(was.disabled, now.disabled);
+  EXPECT_EQ(was.effects.size(), now.effects.size());
+}
+
 }  // namespace
 }  // namespace cutline::core
