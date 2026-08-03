@@ -245,6 +245,21 @@ trusting a click, and check `WindowFromPoint` is the app before pressing — the
 desktop steals the foreground and you will otherwise be typing into somebody's
 terminal.
 
+### Waiting to be driven
+
+Driving needs the foreground, so it cannot happen while the machine is busy with
+something else. What has shipped on tests and `--check` alone is listed here
+rather than left implicit, and the list is emptied by driving it, not by
+deciding it is probably fine:
+
+- **Fit to Frame and Fill Frame**, the two rows added to the clip menu. The
+  arithmetic is tested; the menu itself was driven when it landed.
+
+Two faults found by driving in this stretch, both invisible to the tests, are
+the reason the list exists at all: a tab press that no longer marked the window
+dirty, and a timecode field that kept the keyboard after Enter and swallowed
+every single-letter shortcut.
+
 ---
 
 ## 6. Status
