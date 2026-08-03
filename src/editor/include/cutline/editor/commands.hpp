@@ -29,6 +29,18 @@ enum class Command {
   NudgeLeft,
   NudgeRight,
 
+  // -- the clipboard
+  /// Takes a copy of the selection, whole clips and all.
+  Copy,
+  /// Copies, then lifts: the clips go and the gap stays, which is what Cut
+  /// means everywhere and what keeps everything else where it was.
+  Cut,
+  /// Puts the clipboard down at the playhead, **overwriting** whatever is
+  /// there — the same thing dropping a clip on top of another does.
+  Paste,
+  /// Opens a gap the length of the clipboard and puts it in there instead.
+  PasteInsert,
+
   // -- the marked span
   /// Marks the in point at the playhead — or clears it, when it is already
   /// there. The same key undoing itself is how a mark is removed without a

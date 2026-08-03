@@ -354,5 +354,135 @@ TEST(Slide, UnknownClipIsANoOp) {
   EXPECT_EQ(slide_clip(before, "nope", 1.0), before);
 }
 
+// ------------------------------------------------------------ copy / paste --
+
+TEST(CopyClips, TakesTheWholeClipAndTheLaneItWasOn) {
+  Project p = three_clip_project();
+  p.tracks[0].clips[1].gain = 0.5;
+
+  const std::vector<ClipCopy> copies = copy_clips(p, Ids{"b"});
+  ASSERT_EQ(copies.size(), 1u);
+  EXPECT_EQ(copies[0].track_id, "v1");
+  EXPECT_EQ(copies[0].clip.id, "b");
+  EXPECT_DOUBLE_EQ(copies[0].clip.gain, 0.5);
+  EXPECT_DOUBLE_EQ(copies[0].clip.source_in, 5.0);
+}
+
+TEST(PasteClips, LandsTheEarliestAtThePastePointAndKeepsTheShape) {
+  Project p = three_clip_project();
+  const std::vector<ClipCopy> copies = copy_clips(p, Ids{"a", "c"});
+  ASSERT_EQ(copies.size(), 2u);
+
+  p = paste_clips(std::move(p), copies, 20.0);
+
+  // a at 20 and c ten seconds after it, which is the gap they had.
+  ASSERT_EQ(video(p).clips.size(), 5u);
+  EXPECT_DOUBLE_EQ(video(p).clips[3].start, 20.0);
+  EXPECT_DOUBLE_EQ(video(p).clips[4].start, 30.0);
+}
+
+TEST(PasteClips, GivesEveryPastedClipAnIdOfItsOwn) {
+  Project p = three_clip_project();
+  const std::vector<ClipCopy> copies = copy_clips(p, Ids{"a"});
+  p = paste_clips(std::move(p), copies, 20.0);
+
+  ASSERT_EQ(video(p).clips.size(), 4u);
+  EXPECT_NE(video(p).clips[3].id, "a");
+  EXPECT_EQ(video(p).clips[3].media_id, video(p).clips[0].media_id);
+}
+
+TEST(PasteClips, OverwritesWhatItLandsOn) {
+  Project p = three_clip_project();
+  const std::vector<ClipCopy> copies = copy_clips(p, Ids{"a"});
+
+  // Five seconds of clip pasted over the middle of b, which is [5,10).
+  p = paste_clips(std::move(p), copies, 6.0);
+
+  // a untouched, b cut back to [5,6), the paste over [6,11), and c starting a
+  // second later than it did.
+  ASSERT_EQ(video(p).clips.size(), 4u);
+  EXPECT_DOUBLE_EQ(clip_end(video(p).clips[1]), 6.0);
+  EXPECT_DOUBLE_EQ(video(p).clips[2].start, 6.0);
+  EXPECT_DOUBLE_EQ(clip_end(video(p).clips[2]), 11.0);
+  EXPECT_DOUBLE_EQ(video(p).clips[3].start, 11.0);
+  EXPECT_EQ(video(p).clips[3].id, "c");
+}
+
+TEST(PasteClips, LinksThePastedPairToEachOtherRatherThanToTheOriginal) {
+  Project p = layered_project();
+  p = place_media(std::move(p), "m1", 0.0);
+
+  Ids placed;
+  for (const Track& t : p.tracks) {
+    for (const Clip& c : t.clips) placed.push_back(c.id);
+  }
+  ASSERT_GE(placed.size(), 2u);
+  const std::vector<ClipCopy> copies = copy_clips(p, placed);
+  const std::string original = copies.front().clip.group_id.value_or("");
+  ASSERT_FALSE(original.empty());
+
+  p = paste_clips(std::move(p), copies, 20.0);
+
+  std::vector<std::string> pasted_groups;
+  for (const Track& t : p.tracks) {
+    for (const Clip& c : t.clips) {
+      if (c.start >= 20.0 && c.group_id.has_value()) pasted_groups.push_back(*c.group_id);
+    }
+  }
+  ASSERT_GE(pasted_groups.size(), 2u);
+  for (const std::string& group : pasted_groups) {
+    EXPECT_NE(group, original) << "the copies are still tied to what they came from";
+    EXPECT_EQ(group, pasted_groups.front()) << "and no longer tied to each other";
+  }
+}
+
+TEST(PasteClips, AnEmptyClipboardChangesNothing) {
+  const Project before = three_clip_project();
+  EXPECT_EQ(paste_clips(before, {}, 5.0), before);
+}
+
+TEST(PasteClips, FallsBackToTheFirstLaneOfItsKindWhenTheOriginalHasGone) {
+  Project p = three_clip_project();
+  const std::vector<ClipCopy> copies = copy_clips(p, Ids{"a"});
+
+  Project other;
+  other.media = p.media;
+  Track v;
+  v.id = "elsewhere";
+  v.kind = TrackKind::Video;
+  other.tracks = {v};
+
+  other = paste_clips(std::move(other), copies, 3.0);
+  ASSERT_EQ(other.tracks[0].clips.size(), 1u);
+  EXPECT_DOUBLE_EQ(other.tracks[0].clips[0].start, 3.0);
+}
+
+TEST(PasteClips, WithNoLaneOfThatKindNothingHappens) {
+  Project p = three_clip_project();
+  const std::vector<ClipCopy> copies = copy_clips(p, Ids{"a"});
+
+  Project audio_only;
+  Track a;
+  a.id = "a1";
+  a.kind = TrackKind::Audio;
+  audio_only.tracks = {a};
+
+  EXPECT_EQ(paste_clips(audio_only, copies, 0.0), audio_only);
+}
+
+TEST(PasteClipsInsert, OpensAGapRatherThanOverwriting) {
+  Project p = three_clip_project();
+  const std::vector<ClipCopy> copies = copy_clips(p, Ids{"a"});
+
+  p = paste_clips_insert(std::move(p), copies, 5.0);
+
+  // a stays, the paste takes [5,10), and b and c are five seconds later.
+  ASSERT_EQ(video(p).clips.size(), 4u);
+  EXPECT_DOUBLE_EQ(clip_end(video(p).clips[0]), 5.0);
+  EXPECT_DOUBLE_EQ(video(p).clips[1].start, 5.0);
+  EXPECT_DOUBLE_EQ(video(p).clips[2].start, 10.0);
+  EXPECT_DOUBLE_EQ(video(p).clips[3].start, 15.0);
+}
+
 }  // namespace
 }  // namespace cutline::core

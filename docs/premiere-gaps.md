@@ -537,7 +537,7 @@ gesture reaching them.
 |---|---|---|---|
 | Drag from the pool onto a track | yes | **done**, at the point of release | — |
 | Drag a clip to move it | yes | **done** | — |
-| Copy and paste clips | Ctrl+C / Ctrl+V, and paste-insert | **none at all** | wiring |
+| Copy and paste clips | Ctrl+C / Ctrl+V, and paste-insert | **done** — copy, cut, paste and paste-insert | — |
 | Duplicate (alt-drag a copy) | yes | none | wiring |
 | Label colours | eight, set per clip and per bin | none | model + control |
 | Enable / disable a clip | yes | in the model, no control on the timeline | wiring |
@@ -545,10 +545,25 @@ gesture reaching them.
 | Nesting | a sequence inside a sequence | none | machinery |
 | Multi-camera | none | none | machinery |
 
-**Copy and paste is the surprise.** There is a clipboard for effects and a
-clipboard for keyframes, and none for clips — the single most-used pair of keys
-in any editor does nothing on the timeline. It is wiring: `core` can already
-place a clip anywhere, and `Session` already records one entry per gesture.
+**Copy and paste was the surprise**, and it is done. There was a clipboard for
+effects and one for keyframes and none for clips — the single most-used pair of
+keys in any editor did nothing on the timeline.
+
+The clipboard lives on `Session` rather than on the application, which is what
+makes Copy and Paste ordinary commands: bound like every other key, greyed by
+`can_run` when there is nothing to paste, and reachable from the Edit menu and a
+keystroke through one path. It holds whole clips by value — source range,
+transform, keyframes, effects, fades — because a clipboard of ids goes stale the
+moment what it names is trimmed.
+
+Four decisions worth keeping. A paste **overwrites**, which is what dropping a
+clip on another already does, and paste-insert (Ctrl+Shift+V) is the one that
+ripples. **Cut lifts** rather than extracts: the gap stays, and closing it is
+Ripple Delete, which has its own key. Groups are **remapped** on the way in, so
+a pasted A/V pair is linked to itself and not to the pair it came from —
+otherwise moving the original would drag the copy along. And what was pasted
+becomes the selection, so the nudge or the drag that usually follows acts on the
+copies.
 
 ### 2.4 Reading the timeline
 

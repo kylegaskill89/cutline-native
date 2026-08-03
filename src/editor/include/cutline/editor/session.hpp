@@ -9,6 +9,7 @@
 ///
 /// Pure, and tested without a window.
 
+#include "cutline/core/edit.hpp"
 #include "cutline/core/history.hpp"
 #include "cutline/core/model.hpp"
 
@@ -92,6 +93,22 @@ class Session {
   /// should act on: dragging a video clip has to bring its audio.
   [[nodiscard]] std::vector<std::string> selected_group() const;
 
+  // ------------------------------------------------------------ clipboard --
+
+  /// The clips last copied or cut, held as values.
+  ///
+  /// Here rather than in the application because a paste is an *edit*, and
+  /// `run` is where edits live: with the clipboard anywhere else, Copy and
+  /// Paste could not be commands, could not be bound like every other key, and
+  /// `can_run` could not tell a menu whether Paste is worth offering.
+  ///
+  /// Not part of the project, and deliberately: saving one would put a copy of
+  /// whatever somebody last selected into every file they pressed Copy in, and
+  /// it survives opening a different document, which is what makes copying
+  /// between two of them work.
+  [[nodiscard]] std::span<const core::ClipCopy> clipboard() const noexcept { return clipboard_; }
+  void set_clipboard(std::vector<core::ClipCopy> clips) { clipboard_ = std::move(clips); }
+
   // ------------------------------------------------------------- playhead --
 
   [[nodiscard]] double playhead() const noexcept { return playhead_; }
@@ -113,6 +130,7 @@ class Session {
 
   core::History history_;
   std::vector<std::string> selection_;
+  std::vector<core::ClipCopy> clipboard_;
   double playhead_ = 0.0;
   std::uint64_t revision_ = 0;
 };

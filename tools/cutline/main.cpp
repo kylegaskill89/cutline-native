@@ -4295,6 +4295,14 @@ constexpr std::array kTransportKeys{
     // somebody meant to gather up.
     Binding{Key::L, true, false, cutline::editor::Command::LinkClips},
     Binding{Key::L, true, true, cutline::editor::Command::UnlinkClips},
+    // The clipboard. Here rather than among the application keys on purpose:
+    // the keyframe lanes have their own Ctrl+C and Ctrl+V for the keyframes in
+    // them, and taking these first would mean the panel you are working in
+    // could never have a clipboard of its own.
+    Binding{Key::C, true, false, cutline::editor::Command::Copy},
+    Binding{Key::X, true, false, cutline::editor::Command::Cut},
+    Binding{Key::V, true, false, cutline::editor::Command::Paste},
+    Binding{Key::V, true, true, cutline::editor::Command::PasteInsert},
 };
 
 /// The tool palette, in the order it is drawn and offered.
@@ -5838,6 +5846,11 @@ void refresh_dock(App& app) {
   menu("Edit", {
       {"Undo", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Undo); }},
       {"Redo", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Redo); }},
+      {"Cut", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Cut); }},
+      {"Copy", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Copy); }},
+      {"Paste", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Paste); }},
+      {"Paste Insert",
+       [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::PasteInsert); }},
   });
 
   menu("Project", {

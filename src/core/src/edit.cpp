@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <iterator>
 #include <limits>
+#include <optional>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -594,6 +596,102 @@ Project overwrite_media_at(Project p, std::string_view media_id, double at_time,
   }
 
   return place_media(std::move(p), media_id, at_time, target_video_id, range);
+}
+
+// ------------------------------------------------------------ copy / paste --
+
+std::vector<ClipCopy> copy_clips(const Project& p, std::span<const std::string> clip_ids) {
+  const std::unordered_set<std::string> ids = id_set(clip_ids);
+
+  std::vector<ClipCopy> copies;
+  for (const Track& t : p.tracks) {
+    for (const Clip& c : t.clips) {
+      if (ids.contains(c.id)) copies.push_back(ClipCopy{.clip = c, .track_id = t.id});
+    }
+  }
+  // Tracks are walked in order and each track is kept sorted, so this is
+  // already in track-then-start order for everything except across tracks. The
+  // paste only needs the earliest start, which a scan finds either way.
+  return copies;
+}
+
+namespace {
+
+/// Where a copy would land, or nothing when this project has no lane for it.
+///
+/// The lane it came from when that still exists, and the first of its kind
+/// otherwise — which is what happens when a clip is copied out of one project
+/// and pasted into another, or after the track it lived on has been removed.
+[[nodiscard]] std::optional<std::size_t> paste_track(const Project& p, const ClipCopy& copy) {
+  for (std::size_t i = 0; i < p.tracks.size(); ++i) {
+    if (p.tracks[i].id == copy.track_id && p.tracks[i].kind == copy.clip.kind) return i;
+  }
+  const std::vector<std::size_t> same = track_indices_of_kind(p, copy.clip.kind);
+  if (same.empty()) return std::nullopt;
+  return same.front();
+}
+
+}  // namespace
+
+Project paste_clips(Project p, std::span<const ClipCopy> clips, double at_time,
+                    std::vector<std::string>* pasted) {
+  if (clips.empty()) return p;
+
+  double origin = kInfinity;
+  for (const ClipCopy& copy : clips) origin = std::min(origin, copy.clip.start);
+
+  // Resolved first, and the whole paste abandoned if nothing can land. A paste
+  // that silently drops half of what was copied is worse than one that does
+  // nothing: the second is obvious.
+  std::vector<std::pair<std::size_t, const ClipCopy*>> landing;
+  for (const ClipCopy& copy : clips) {
+    if (const std::optional<std::size_t> track = paste_track(p, copy); track.has_value()) {
+      landing.emplace_back(*track, &copy);
+    }
+  }
+  if (landing.empty()) return p;
+
+  // Every span carved before anything is placed. Carving as we go would let the
+  // second clip of a paste cut a hole in the first one.
+  for (const auto& [track, copy] : landing) {
+    const double start = at_time + (copy->clip.start - origin);
+    clear_range(p.tracks[track], start, start + clip_duration(copy->clip));
+  }
+
+  // Groups are remapped rather than kept: a pasted pair stays linked to each
+  // other and not to the pair it was copied from, which would otherwise drag
+  // the original along on every move.
+  std::unordered_map<std::string, std::string> groups;
+  for (const auto& [track, copy] : landing) {
+    Clip clip = copy->clip;
+    clip.id = new_id("clip");
+    clip.start = at_time + (copy->clip.start - origin);
+    if (clip.group_id.has_value()) {
+      auto [entry, fresh] = groups.try_emplace(*clip.group_id);
+      if (fresh) entry->second = new_id("grp");
+      clip.group_id = entry->second;
+    }
+    if (pasted != nullptr) pasted->push_back(clip.id);
+    p.tracks[track].clips.push_back(std::move(clip));
+  }
+  for (const auto& [track, copy] : landing) sort_track(p.tracks[track]);
+
+  return p;
+}
+
+Project paste_clips_insert(Project p, std::span<const ClipCopy> clips, double at_time,
+                           std::vector<std::string>* pasted) {
+  if (clips.empty()) return p;
+
+  double origin = kInfinity;
+  double finish = -kInfinity;
+  for (const ClipCopy& copy : clips) {
+    origin = std::min(origin, copy.clip.start);
+    finish = std::max(finish, clip_end(copy.clip));
+  }
+
+  p = ripple_insert(std::move(p), at_time, finish - origin);
+  return paste_clips(std::move(p), clips, at_time, pasted);
 }
 
 Project rate_stretch_edge(Project p, std::string_view clip_id, ClipEdge edge, double new_time) {

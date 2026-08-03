@@ -114,6 +114,10 @@ std::string_view to_string(Command command) noexcept {
     case Command::RippleDelete: return "ripple_delete";
     case Command::NudgeLeft: return "nudge_left";
     case Command::NudgeRight: return "nudge_right";
+    case Command::Copy: return "copy";
+    case Command::Cut: return "cut";
+    case Command::Paste: return "paste";
+    case Command::PasteInsert: return "paste_insert";
     case Command::MarkIn: return "mark_in";
     case Command::MarkOut: return "mark_out";
     case Command::ClearMarks: return "clear_marks";
@@ -148,7 +152,13 @@ bool can_run(const Session& session, Command command) {
     case Command::NudgeLeft:
     case Command::NudgeRight:
     case Command::SelectNone:
+    case Command::Copy:
+    case Command::Cut:
       return !session.selection().empty();
+
+    case Command::Paste:
+    case Command::PasteInsert:
+      return !session.clipboard().empty();
 
     case Command::MarkIn:
       return can_mark(session.project(), session.project().in_point);
@@ -225,6 +235,42 @@ bool run(Session& session, Command command) {
       return session.apply(core::move_clips(project, session.selected_group(), -frame));
     case Command::NudgeRight:
       return session.apply(core::move_clips(project, session.selected_group(), frame));
+
+    case Command::Copy: {
+      // The whole linked group, like every other edit: copying a shot has to
+      // bring the sound that came in with it, or a paste is silent.
+      std::vector<core::ClipCopy> copied =
+          core::copy_clips(project, session.selected_group());
+      if (copied.empty()) return false;
+      session.set_clipboard(std::move(copied));
+      return true;
+    }
+
+    case Command::Cut: {
+      const std::vector<std::string> targets = session.selected_group();
+      std::vector<core::ClipCopy> copied = core::copy_clips(project, targets);
+      if (copied.empty()) return false;
+      session.set_clipboard(std::move(copied));
+      // Lifted rather than extracted, which is what Cut means: the gap stays
+      // and nothing downstream moves. Extracting is Ripple Delete and has its
+      // own key.
+      return session.apply(core::remove_clips(project, targets));
+    }
+
+    case Command::Paste:
+    case Command::PasteInsert: {
+      // What was put down becomes the selection, which is what every editor
+      // does and what makes a paste followed by a nudge or a drag act on the
+      // copies rather than on whatever was highlighted before.
+      std::vector<std::string> pasted;
+      const bool changed = session.apply(
+          command == Command::Paste
+              ? core::paste_clips(project, session.clipboard(), session.playhead(), &pasted)
+              : core::paste_clips_insert(project, session.clipboard(), session.playhead(),
+                                         &pasted));
+      if (changed) session.select(std::move(pasted));
+      return changed;
+    }
 
     case Command::MarkIn: {
       if (!can_mark(project, project.in_point)) return false;

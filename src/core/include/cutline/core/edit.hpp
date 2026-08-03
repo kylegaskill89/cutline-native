@@ -17,6 +17,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace cutline::core {
 
@@ -132,6 +133,58 @@ struct PlacementRange {
 /// shrinking the next so the surrounding clips keep their positions and the
 /// sequence length is unchanged. The slid clip's own source is untouched.
 [[nodiscard]] Project slide_clip(Project p, std::string_view clip_id, double delta_time);
+
+// ------------------------------------------------------------ copy / paste --
+
+/// One clip lifted off the timeline, and the lane it came from.
+///
+/// A copy by value, and the whole clip: its source range, its transform, its
+/// keyframes, its effects, its fades. A clipboard holding ids would go stale the
+/// moment what it named was trimmed, and undo would leave it pointing at
+/// nothing.
+///
+/// The track is remembered by id rather than by index because a paste may
+/// happen after tracks have been added or taken away, and "the second video
+/// track" is a different lane by then. When the lane it names has gone, a paste
+/// falls back to the first of its kind.
+struct ClipCopy {
+  Clip clip;
+  std::string track_id;
+};
+
+/// Copies of the named clips, in track then start order.
+///
+/// The order matters: a paste puts the earliest of them at the paste point and
+/// keeps the rest at their offsets from it, so what is copied keeps its shape.
+[[nodiscard]] std::vector<ClipCopy> copy_clips(const Project& p,
+                                               std::span<const std::string> clip_ids);
+
+/// Puts copies back on the timeline, the earliest of them starting at
+/// `at_time`.
+///
+/// **Overwrite**, which is what a paste is in every editor: whatever occupies
+/// the span on each receiving lane is trimmed or dropped, exactly as dropping a
+/// clip on top of another does. `paste_clips_insert` is the other one, which
+/// ripples the sequence open instead.
+///
+/// Every clip gets a fresh id, and groups are remapped together — two linked
+/// clips pasted stay linked to *each other* and not to the pair they came from.
+/// Otherwise a pasted A/V pair would move whenever its original did.
+///
+/// Returns the project unchanged when nothing can land: an empty clipboard, or
+/// one whose clips are all of a kind this project has no track for.
+///
+/// `pasted` collects the ids the copies were given, so a caller can select what
+/// it has just put down — which is what makes a paste followed by a nudge or a
+/// drag work on the new clips rather than on whatever was selected before.
+[[nodiscard]] Project paste_clips(Project p, std::span<const ClipCopy> clips, double at_time,
+                                  std::vector<std::string>* pasted = nullptr);
+
+/// Paste-insert: opens a gap the length of what is being pasted, on every
+/// track, and puts the copies in it. Premiere's Ctrl+Shift+V.
+[[nodiscard]] Project paste_clips_insert(Project p, std::span<const ClipCopy> clips,
+                                         double at_time,
+                                         std::vector<std::string>* pasted = nullptr);
 
 // ---------------------------------------------------------------- deleting --
 

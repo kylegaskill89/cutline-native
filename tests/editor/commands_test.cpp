@@ -58,6 +58,8 @@ constexpr std::array kAllCommands{
     Command::GoToEnd,       Command::PreviousFrame, Command::NextFrame,
     Command::LinkClips,     Command::UnlinkClips,   Command::AddVideoTrack,
     Command::AddAudioTrack, Command::RemoveTrack,
+    Command::Copy,          Command::Cut,           Command::Paste,
+    Command::PasteInsert,
     Command::Undo,          Command::Redo,
 };
 
@@ -591,6 +593,110 @@ TEST(Commands, RemovingATrackDropsTheSelectionThatNamedIt) {
   session.select({"c1"});
   ASSERT_TRUE(run(session, Command::RemoveTrack));
   EXPECT_TRUE(session.selection().empty());
+}
+
+// ------------------------------------------------------------- the clipboard --
+
+TEST(Commands, NothingIsOfferedToCopyUntilSomethingIsSelected) {
+  Session session(sample_project());
+  EXPECT_FALSE(can_run(session, Command::Copy));
+  EXPECT_FALSE(can_run(session, Command::Cut));
+  session.select({"c1"});
+  EXPECT_TRUE(can_run(session, Command::Copy));
+}
+
+TEST(Commands, PasteIsOfferedOnlyOnceSomethingHasBeenCopied) {
+  Session session(sample_project());
+  session.select({"c1"});
+  EXPECT_FALSE(can_run(session, Command::Paste));
+  EXPECT_FALSE(can_run(session, Command::PasteInsert));
+
+  ASSERT_TRUE(run(session, Command::Copy));
+  EXPECT_TRUE(can_run(session, Command::Paste));
+  EXPECT_TRUE(can_run(session, Command::PasteInsert));
+}
+
+TEST(Commands, CopyingLeavesTheProjectAlone) {
+  Session session(sample_project());
+  session.select({"c1"});
+  const Project before = session.project();
+
+  ASSERT_TRUE(run(session, Command::Copy));
+  EXPECT_EQ(session.project(), before);
+  EXPECT_FALSE(session.can_undo()) << "copying is not an edit and has nothing to undo";
+}
+
+TEST(Commands, PastingPutsTheCopyAtThePlayhead) {
+  Session session(sample_project());
+  session.select({"c1"});
+  ASSERT_TRUE(run(session, Command::Copy));
+
+  session.set_playhead(20.0);
+  ASSERT_TRUE(run(session, Command::Paste));
+
+  EXPECT_EQ(clip_count(session.project()), 3u);
+  const Track& video = session.project().tracks[0];
+  EXPECT_DOUBLE_EQ(video.clips.back().start, 20.0);
+}
+
+TEST(Commands, CutTakesTheClipAndLeavesTheGap) {
+  Session session(sample_project());
+  session.select({"c1"});
+  ASSERT_TRUE(run(session, Command::Cut));
+
+  EXPECT_EQ(clip_count(session.project()), 1u);
+  // c2 has not moved: cutting lifts, and closing the gap is Ripple Delete.
+  EXPECT_DOUBLE_EQ(session.project().tracks[0].clips[0].start, 5.0);
+  EXPECT_FALSE(session.clipboard().empty());
+}
+
+TEST(Commands, WhatWasCutCanBePastedBack) {
+  Session session(sample_project());
+  session.select({"c1"});
+  ASSERT_TRUE(run(session, Command::Cut));
+
+  session.set_playhead(0.0);
+  ASSERT_TRUE(run(session, Command::Paste));
+  EXPECT_EQ(clip_count(session.project()), 2u);
+  EXPECT_DOUBLE_EQ(session.project().tracks[0].clips[0].start, 0.0);
+}
+
+TEST(Commands, WhatWasPastedIsWhatIsSelectedAfterwards) {
+  Session session(sample_project());
+  session.select({"c1"});
+  ASSERT_TRUE(run(session, Command::Copy));
+
+  session.set_playhead(20.0);
+  ASSERT_TRUE(run(session, Command::Paste));
+
+  ASSERT_EQ(session.selection().size(), 1u);
+  EXPECT_NE(session.selection()[0], "c1");
+  EXPECT_DOUBLE_EQ(core::find_clip(session.project(), session.selection()[0])->start, 20.0);
+}
+
+TEST(Commands, PasteInsertMovesWhatWasAlreadyThere) {
+  Session session(sample_project());
+  session.select({"c1"});  // five seconds long
+  ASSERT_TRUE(run(session, Command::Copy));
+
+  session.set_playhead(5.0);
+  ASSERT_TRUE(run(session, Command::PasteInsert));
+
+  const Track& video = session.project().tracks[0];
+  ASSERT_EQ(video.clips.size(), 3u);
+  EXPECT_DOUBLE_EQ(video.clips[1].start, 5.0);
+  EXPECT_DOUBLE_EQ(video.clips[2].start, 10.0) << "c2 was pushed along";
+}
+
+TEST(Commands, TheClipboardSurvivesOpeningAnotherDocument) {
+  // What makes copying between two projects work, and the reason the clipboard
+  // is not part of the document.
+  Session session(sample_project());
+  session.select({"c1"});
+  ASSERT_TRUE(run(session, Command::Copy));
+
+  session.reset(sample_project());
+  EXPECT_TRUE(can_run(session, Command::Paste));
 }
 
 }  // namespace
