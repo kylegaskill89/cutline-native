@@ -21,6 +21,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include <string>
 #include <string_view>
 #include <vector>
@@ -217,6 +219,32 @@ TEST(Binding, SoloingOneAudioTrackMutesTheOthers) {
       ui::TimelineEdit{.mode = ui::DragMode::Move,
                        .result = ui::TimelineBlock{.start = start, .end = end}},
       selection);
+}
+
+TEST(Binding, AMoveThatChangedLaneMovesTheClipBetweenTracks) {
+  core::Project p = sample_project();
+  const core::Project after = apply_timeline_edit(
+      p, "c1",
+      ui::TimelineEdit{.mode = ui::DragMode::Move,
+                       .result = ui::TimelineBlock{.start = 0.0, .end = 5.0},
+                       .lanes = -1});
+
+  // v2 is the track above v1 in storage order, so one lane up is -1.
+  EXPECT_TRUE(std::ranges::none_of(after.tracks[1].clips,
+                                   [](const core::Clip& c) { return c.id == "c1"; }));
+  EXPECT_TRUE(std::ranges::any_of(after.tracks[0].clips,
+                                  [](const core::Clip& c) { return c.id == "c1"; }));
+}
+
+TEST(Binding, AMoveAlongTheTrackLeavesTheLaneAlone) {
+  const core::Project after = apply_timeline_edit(
+      sample_project(), "c1",
+      ui::TimelineEdit{.mode = ui::DragMode::Move,
+                       .result = ui::TimelineBlock{.start = 8.0, .end = 13.0}});
+
+  EXPECT_TRUE(std::ranges::any_of(after.tracks[1].clips,
+                                  [](const core::Clip& c) { return c.id == "c1"; }));
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "c1")->start, 8.0);
 }
 
 TEST(Binding, ARippledEdgeUsesTheEdgeItWasDraggedTo) {

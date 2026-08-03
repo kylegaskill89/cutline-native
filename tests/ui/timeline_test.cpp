@@ -293,6 +293,112 @@ TEST(TimelineHover, ThePointerLeavingTakesTheHighlightWithIt) {
   EXPECT_LT(gone.count(DrawCall::Kind::Fill), over.count(DrawCall::Kind::Fill));
 }
 
+// -------------------------------------------------- moving between lanes --
+
+TEST(TrackMove, AClipFollowsThePointerOntoAnotherTrack) {
+  // It could not before: the drag was handed the pointer's x and nothing else,
+  // so a clip could only ever slide along the track it was already on.
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  const Rect above = fixture.view->track_rect(0);
+  fixture.host->mouse_down(press(box.x + 40.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.x + 40.0, above.y + above.height * 0.5));
+
+  EXPECT_EQ(fixture.view->model().tracks[1].blocks.size(), 1u) << "it left the lane it was on";
+  EXPECT_EQ(fixture.view->model().tracks[0].blocks.size(), 2u);
+}
+
+TEST(TrackMove, TheLanesTravelledAreReported) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  std::optional<TimelineEdit> edit;
+  fixture.view->set_on_edit([&](const TimelineEdit& done) { edit = done; });
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  const Rect above = fixture.view->track_rect(0);
+  fixture.host->mouse_down(press(box.x + 40.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.x + 40.0, above.y + above.height * 0.5));
+  fixture.host->mouse_up(press(box.x + 40.0, above.y + above.height * 0.5));
+
+  ASSERT_TRUE(edit.has_value());
+  EXPECT_EQ(edit->mode, DragMode::Move);
+  EXPECT_EQ(edit->lanes, -1) << "one lane up, in the order the tracks are stored";
+}
+
+TEST(TrackMove, APictureCannotBeDraggedIntoTheAudio) {
+  // Video and audio lanes are different kinds of place. A clip dragged past the
+  // last lane of its own kind holds there.
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+
+  const Rect box = fixture.view->block_rect(0, 0);
+  const Rect audio = fixture.view->track_rect(2);
+  fixture.host->mouse_down(press(box.x + 20.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.x + 20.0, audio.y + audio.height * 0.5));
+
+  EXPECT_TRUE(fixture.view->model().tracks[2].blocks.size() == 1u)
+      << "the audio lane took a picture";
+  EXPECT_EQ(fixture.view->model().tracks[1].blocks.size(), 3u)
+      << "it stopped on the last video lane instead";
+}
+
+TEST(TrackMove, MovingSidewaysStillReportsNoLaneChange) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  std::optional<TimelineEdit> edit;
+  fixture.view->set_on_edit([&](const TimelineEdit& done) { edit = done; });
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.x + 40.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.x + 140.0, box.y + 5.0));
+  fixture.host->mouse_up(press(box.x + 140.0, box.y + 5.0));
+
+  ASSERT_TRUE(edit.has_value());
+  EXPECT_EQ(edit->lanes, 0);
+}
+
+TEST(TrackMove, ComingBackToTheLaneItStartedOnLeavesTheArrangementAsItWas) {
+  // Every frame of the drag is computed from the arrangement at the press, so
+  // wandering across three tracks and back is not three moves.
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const TimelineModel before = fixture.view->model();
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  const Rect above = fixture.view->track_rect(0);
+  fixture.host->mouse_down(press(box.x + 40.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.x + 40.0, above.y + above.height * 0.5));
+  fixture.host->mouse_move(press(box.x + 40.0, box.y + 5.0));
+
+  EXPECT_EQ(fixture.view->model().tracks[0].blocks.size(),
+            before.tracks[0].blocks.size());
+  EXPECT_EQ(fixture.view->model().tracks[1].blocks.size(),
+            before.tracks[1].blocks.size());
+}
+
+TEST(TrackMove, TheDraggedBlockIsStillTheOneReportedAfterItChangesIndex) {
+  // Landing on another track very likely changes its index, and the release
+  // reports whatever the drag is holding.
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  std::optional<TimelineEdit> edit;
+  fixture.view->set_on_edit([&](const TimelineEdit& done) { edit = done; });
+
+  // The second clip on the lower track, dragged up to the start of the upper
+  // one, where it lands before the block already there.
+  const Rect box = fixture.view->block_rect(1, 1);
+  const Rect above = fixture.view->track_rect(0);
+  fixture.host->mouse_down(press(box.x + 10.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.x - 190.0, above.y + above.height * 0.5));
+  fixture.host->mouse_up(press(box.x - 190.0, above.y + above.height * 0.5));
+
+  ASSERT_TRUE(edit.has_value());
+  EXPECT_EQ(edit->block.track, 0u);
+  EXPECT_NEAR(edit->result.duration(), 7.0, 0.01) << "it is the clip that was picked up";
+}
+
 // ------------------------------------------------------------ snapping --
 
 TEST(SnapFeedback, ADragThatSticksSaysWhatItStuckTo) {

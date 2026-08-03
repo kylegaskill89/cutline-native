@@ -515,6 +515,14 @@ struct TimelineEdit {
   /// which changes where the clip is.
   TimelineBlock result;
 
+  /// `Move` only: how many lanes of its own kind the clip travelled, positive
+  /// downwards in the order the tracks are stored.
+  ///
+  /// Its own number rather than something read off `result`, because a block
+  /// carries no idea of which track it is on — `block` says where it *ended*,
+  /// and the project needs to be told the difference.
+  int lanes = 0;
+
   /// How far the gesture travelled, in seconds. `Slip` has nothing else to say:
   /// what moved is the source, which the timeline does not model.
   double delta = 0.0;
@@ -877,7 +885,24 @@ class TimelineView : public Widget {
   [[nodiscard]] double track_height(std::size_t track) const noexcept;
   [[nodiscard]] double trim_handle_width(std::size_t track, std::size_t block) const;
   void scrub_to(double x);
-  void drag_to(double x);
+  void drag_to(double x, double y);
+
+  /// The track a point is over, or nothing when it is over none.
+  ///
+  /// Unlike `drop_at` this does not care about the ruler or the empty space
+  /// under the last lane: a move that wanders off the bottom should hold at the
+  /// last track rather than losing its grip.
+  [[nodiscard]] std::optional<std::size_t> track_at(double y) const;
+
+  /// Moves the carried blocks `lanes` tracks of their own kind and `shift`
+  /// seconds, rebuilding the arrangement from what it was when the drag began.
+  ///
+  /// Rebuilt rather than nudged because a block that changes track changes
+  /// *index*, and every index after it in both tracks changes with it. Working
+  /// from the arrangement at the press is the only version of this that does
+  /// not accumulate — the same rule every other drag here follows, applied to
+  /// the structure rather than to a number.
+  void relocate_carried(int lanes, double shift);
   void refresh_bounds();
 
   /// One block a move is carrying, as it was when the drag began.
@@ -907,6 +932,15 @@ class TimelineView : public Widget {
 
   /// What a move should carry, taken at the press.
   void capture_moving();
+
+  /// The arrangement as it was when a move began, so each frame of the drag is
+  /// computed from it rather than from the frame before.
+  TimelineModel press_model_;
+  /// How many lanes of its own kind the move has travelled.
+  int carried_lanes_ = 0;
+  /// The track the press landed on. `drag_` follows the block as it moves
+  /// between lanes, so it cannot answer where the gesture started from.
+  std::size_t press_track_ = 0;
 
   /// What a ripple should carry: every block that starts at or after the edge
   /// being dragged, on every track, so the whole sequence downstream follows

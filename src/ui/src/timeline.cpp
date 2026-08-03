@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <utility>
 
 namespace cutline::ui {
@@ -1460,7 +1461,101 @@ void TimelineView::gain_to(double x, double y) {
   }
 }
 
-void TimelineView::drag_to(double x) {
+std::optional<std::size_t> TimelineView::track_at(double y) const {
+  for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
+    const Rect row = track_rect(track);
+    if (!row.empty() && y >= row.y && y < row.bottom()) return track;
+  }
+  return std::nullopt;
+}
+
+void TimelineView::relocate_carried(int lanes, double shift) {
+  model_ = press_model_;
+  if (moving_.empty() || !drag_.has_value()) return;
+
+  // By position rather than by id. A block's id is opaque to the timeline and
+  // may be anything at all — the sample models in the tests leave it empty —
+  // so identifying the carried blocks by it removed every block that shared a
+  // blank id, which was all of them.
+  std::vector<Moving> carried = moving_;
+  std::ranges::stable_sort(carried, [](const Moving& a, const Moving& b) {
+    return a.ref.track != b.ref.track ? a.ref.track < b.ref.track
+                                      : a.ref.block > b.ref.block;
+  });
+
+  // Taken out from the back of each track forwards, so an index still names
+  // what it named before the one after it was removed. And out of all of them
+  // before any goes back in, or the second would land in a track the first has
+  // already changed the shape of.
+  for (const Moving& one : carried) {
+    if (one.ref.track >= model_.tracks.size()) continue;
+    std::vector<TimelineBlock>& row = model_.tracks[one.ref.track].blocks;
+    if (one.ref.block >= row.size()) continue;
+    row.erase(row.begin() + static_cast<std::ptrdiff_t>(one.ref.block));
+  }
+
+  /// The tracks of one kind, in the order they are stored.
+  const auto lanes_of = [this](bool audio) {
+    std::vector<std::size_t> found;
+    for (std::size_t i = 0; i < model_.tracks.size(); ++i) {
+      if (model_.tracks[i].audio == audio) found.push_back(i);
+    }
+    return found;
+  };
+
+  // Where the dragged one lands, so it can be found again afterwards: it very
+  // likely changed index, and the release reports whatever `drag_` names.
+  std::size_t landed_track = drag_->track;
+  std::size_t landed_at = 0;
+
+  for (const Moving& one : carried) {
+    if (one.ref.track >= model_.tracks.size()) continue;
+    const bool audio = model_.tracks[one.ref.track].audio;
+    const std::vector<std::size_t> same = lanes_of(audio);
+    const auto here = std::ranges::find(same, one.ref.track);
+    if (here == same.end()) continue;
+
+    // A video clip dragged past the last video track stops there rather than
+    // landing in the audio, which is not somewhere a picture can go.
+    const auto index = static_cast<int>(std::distance(same.begin(), here));
+    const auto wanted = static_cast<std::size_t>(
+        std::clamp(index + lanes, 0, static_cast<int>(same.size()) - 1));
+
+    TimelineBlock block = one.origin;
+    block.start += shift;
+    block.end += shift;
+
+    std::vector<TimelineBlock>& row = model_.tracks[same[wanted]].blocks;
+    if (one.ref == *drag_) {
+      landed_track = same[wanted];
+      landed_at = row.size();
+    }
+    row.push_back(std::move(block));
+  }
+
+  // Sorted by an index permutation rather than in place, so the dragged block
+  // can be followed through the sort. Nothing else here can identify it: two
+  // blocks may share a start, a label and an empty id.
+  for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
+    std::vector<TimelineBlock>& row = model_.tracks[track].blocks;
+    std::vector<std::size_t> order(row.size());
+    std::iota(order.begin(), order.end(), std::size_t{0});
+    std::ranges::stable_sort(order, {}, [&row](std::size_t i) { return row[i].start; });
+
+    std::vector<TimelineBlock> sorted;
+    sorted.reserve(row.size());
+    for (std::size_t i = 0; i < order.size(); ++i) {
+      if (track == landed_track && order[i] == landed_at) {
+        drag_ = BlockRef{.track = track, .block = i};
+      }
+      sorted.push_back(std::move(row[order[i]]));
+    }
+    row = std::move(sorted);
+  }
+  refresh_bounds();
+}
+
+void TimelineView::drag_to(double x, double y) {
   if (!drag_.has_value()) return;
   std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
   if (drag_->block >= blocks.size()) return;
@@ -1529,14 +1624,37 @@ void TimelineView::drag_to(double x) {
       for (const Moving& carried : moving_) earliest = std::min(earliest, carried.origin.start);
       shift = std::max(shift, -earliest);
 
-      for (const Moving& carried : moving_) {
-        if (carried.ref.track >= model_.tracks.size()) continue;
-        std::vector<TimelineBlock>& row = model_.tracks[carried.ref.track].blocks;
-        if (carried.ref.block >= row.size()) continue;
-        row[carried.ref.block].start = carried.origin.start + shift;
-        row[carried.ref.block].end = carried.origin.end + shift;
+      // And how many lanes of its own kind it has travelled, from where the
+      // pointer is now.
+      //
+      // The nearest lane of its own kind *in the direction it went*, rather
+      // than only counting a pointer that is exactly over one. Video and audio
+      // are different kinds of place, so a picture dragged down towards the
+      // sound has to stop on the lowest video lane — stopping it where it
+      // started instead would mean the drag simply failed once the pointer got
+      // that far, which is not what it looks like it is doing.
+      int lanes = 0;
+      if (const std::optional<std::size_t> over = track_at(y);
+          over.has_value() && press_track_ < model_.tracks.size()) {
+        const bool audio = model_.tracks[press_track_].audio;
+        std::vector<std::size_t> same;
+        for (std::size_t i = 0; i < model_.tracks.size(); ++i) {
+          if (model_.tracks[i].audio == audio) same.push_back(i);
+        }
+
+        int from = 0;
+        int to = 0;
+        for (std::size_t k = 0; k < same.size(); ++k) {
+          if (same[k] == press_track_) from = static_cast<int>(k);
+          // The last one at or above the pointer. Left at zero when the pointer
+          // is above every lane of this kind, which is the right answer there.
+          if (same[k] <= *over) to = static_cast<int>(k);
+        }
+        lanes = to - from;
       }
-      refresh_bounds();
+
+      carried_lanes_ = lanes;
+      relocate_carried(lanes, shift);
       return;
     }
 
@@ -1938,7 +2056,15 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
       gain_anchors_.clear();
     }
 
-    if (mode_ == DragMode::Move) capture_moving();
+    if (mode_ == DragMode::Move) {
+      capture_moving();
+      // The arrangement as it stands, because a move can change which track a
+      // block is on and every frame of the drag is worked out from here rather
+      // than from the frame before.
+      press_model_ = model_;
+      press_track_ = hit->track;
+      carried_lanes_ = 0;
+    }
     if (mode_ == DragMode::Slide) capture_neighbours();
     if (mode_ == DragMode::RippleStart || mode_ == DragMode::RippleEnd) {
       capture_downstream(mode_ == DragMode::RippleStart ? origin_.start : origin_.end);
@@ -2024,11 +2150,15 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
   // A press that has not travelled yet is still a click. Without this,
   // selecting a clip nudges it by however much the hand wobbled.
   //
-  // The volume gestures are measured across both axes: a band pulled straight
-  // down covers no distance in x at all, and a threshold on x alone would sit
-  // there refusing to start.
-  const double travelled = volume ? std::hypot(event.x - press_x_, event.y - press_y_)
-                                  : std::abs(event.x - press_x_);
+  // Measured across both axes for anything that can move in both. The volume
+  // gestures always could — a band pulled straight down covers no distance in
+  // x at all — and a **move** can now that a clip can change track, which is
+  // the reason dragging one straight up did nothing at all: the threshold sat
+  // there refusing to start a gesture that had travelled the whole height of
+  // the panel.
+  const bool two_axis = volume || mode_ == DragMode::Move;
+  const double travelled = two_axis ? std::hypot(event.x - press_x_, event.y - press_y_)
+                                    : std::abs(event.x - press_x_);
   if (!moved_ && travelled < kDragThreshold) return true;
   moved_ = true;
 
@@ -2069,7 +2199,7 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
     return true;
   }
 
-  drag_to(event.x);
+  drag_to(event.x, event.y);
   return true;
 }
 
@@ -2188,6 +2318,7 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
           // Frame-snapped, so a slip moves the source by whole frames like
           // every other edit rather than by however many pixels the hand
           // travelled.
+          .lanes = mode_ == DragMode::Move ? carried_lanes_ : 0,
           .delta = core::snap_to_frame((event.x - press_x_) / scale_.pixels_per_second,
                                        model_.fps),
           .at = edge});

@@ -226,7 +226,18 @@ core::Project apply_timeline_edit(core::Project project, std::string_view clip_i
           std::ranges::find(selection, clip_id) != selection.end();
       const std::span<const std::string> moving =
           carries_selection ? selection : std::span<const std::string>{ids};
-      return core::move_clips(std::move(project), moving, edit.result.start - clip->start);
+      const double shift = edit.result.start - clip->start;
+
+      // Straight along the track, which is most moves, and the one that must
+      // not disturb which lane anything is on.
+      if (edit.lanes == 0) return core::move_clips(std::move(project), moving, shift);
+
+      // Up or down as well. `move_clips_layered` rather than `move_clips`
+      // because a video clip changing lane is setting up an overlay, and its
+      // sound has to go somewhere that is not already somebody else's — which
+      // is a question only the layered version answers.
+      return core::move_clips_layered(std::move(project), moving, shift, edit.lanes,
+                                      clip->kind);
     }
 
     case ui::DragMode::TrimStart:

@@ -551,7 +551,7 @@ say where the trim went.
 | | Premiere | Here | Size |
 |---|---|---|---|
 | Drag from the pool onto a track | yes | **done**, at the point of release | — |
-| Drag a clip to move it | yes | **done** | — |
+| Drag a clip to move it | along the track **and between tracks** | **done** — the second half was missing and the row said otherwise | — |
 | Copy and paste clips | Ctrl+C / Ctrl+V, and paste-insert | **done** — copy, cut, paste and paste-insert | — |
 | Duplicate (alt-drag a copy) | yes | none | wiring |
 | Label colours | eight, set per clip and per bin | none | model + control |

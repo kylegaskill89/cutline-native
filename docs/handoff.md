@@ -250,20 +250,17 @@ terminal.
 Driving needs the foreground, so it cannot happen while the machine is busy with
 something else. What has shipped on tests and `--check` alone is listed here
 rather than left implicit, and the list is emptied by driving it, not by
-deciding it is probably fine:
+deciding it is probably fine.
 
-- **Fit to Frame and Fill Frame**, the two rows added to the clip menu. The
-  arithmetic is tested; the menu itself was driven when it landed.
-- **The cursors.** `WM_SETCURSOR`, and the six tool cursors rendered with
-  `CreateIconIndirect`. What the marks look like is checked by `--check`, which
-  counts the inked pixels and fails on a cursor that draws nothing or fills its
-  whole square — but whether Windows actually shows them, and whether the hot
-  spot lands where the razor's blade is, needs a screen. The window class is
-  registered with a **null** `hCursor` now, so a mistake here shows as no cursor
-  at all rather than as the wrong one.
-- **The snap line**, drawn while a drag is stuck to something. Tested through
-  `snapped()` and through the draw calls; what it looks like against a clip
-  needs a screen.
+**Nothing is waiting.** The last of it — the cursors, the snap line, and the two
+clip-menu framing rows — was driven and is recorded below.
+
+The cursors needed a way to check them that a screenshot cannot give: neither
+`PrintWindow` nor `CopyFromScreen` captures the pointer. `GetCursorInfo` returns
+the handle Windows is showing, and comparing it against `LoadCursor(IDC_*)`
+names it — which is how "the trim zone is eight pixels wide and reads `size-we`
+inside it and `arrow` past the end of the clip" was established rather than
+assumed.
 
 Two faults found by driving in this stretch, both invisible to the tests, are
 the reason the list exists at all: a tab press that no longer marked the window
