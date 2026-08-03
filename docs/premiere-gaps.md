@@ -448,8 +448,8 @@ was almost nothing: Speed became an animatable property like any other, so the
 stopwatch, the navigator, the curve editor and the file format all carried it
 without changing. The one new idea is that a rate is not a value — which source
 frame shows at a moment is the *integral* of the speed up to it, and that
-integral is taken through  so the curve it follows is the curve
-the graph draws.
+integral is taken through `eval_keyframes`, so the curve it follows is the
+curve the graph draws.
 
 Audio deliberately does not follow the ramp, which is what Premiere does too: a
 speed ramp on the picture would be a slide in pitch on the sound, and avoiding
