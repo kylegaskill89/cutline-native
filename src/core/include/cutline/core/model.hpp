@@ -396,6 +396,14 @@ struct Track {
   bool locked = false;  ///< clips cannot be selected, moved, or trimmed
   bool hidden = false;  ///< video: excluded from the render (the "eye")
 
+  /// Whether a keyboard edit lands here.
+  ///
+  /// Premiere's track targeting, and the thing insert and overwrite are aimed
+  /// with: they take a source and put it at the playhead, and *where* is not a
+  /// question the keyboard can answer any other way. Selecting a clip says what
+  /// to edit; targeting a track says where the next one goes.
+  bool targeted = false;
+
   /// The track's own fader and panner, applied to everything on it after each
   /// clip's own gain and pan.
   ///

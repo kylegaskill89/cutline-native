@@ -131,7 +131,8 @@ ui::TimelineModel timeline_model(const core::Project& project,
     row.switches = ui::TrackSwitches{.mute = track.muted,
                                      .solo = track.solo,
                                      .lock = track.locked,
-                                     .hide = track.hidden};
+                                     .hide = track.hidden,
+                                     .target = track.targeted};
 
     row.blocks.reserve(track.clips.size());
     for (const core::Clip& clip : track.clips) {
@@ -346,6 +347,7 @@ core::Project toggle_track_switch(core::Project project, std::string_view track_
   // cannot get out of step with the document by holding a stale one.
   core::TrackPropsPatch patch;
   switch (control) {
+    case ui::TrackControl::Target: patch.targeted = !found->targeted; break;
     case ui::TrackControl::Mute: patch.muted = !found->muted; break;
     case ui::TrackControl::Solo: patch.solo = !found->solo; break;
     case ui::TrackControl::Lock: patch.locked = !found->locked; break;

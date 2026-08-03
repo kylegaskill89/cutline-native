@@ -88,6 +88,34 @@ namespace {
   return found;
 }
 
+/// The track a keyboard edit lands on: the one targeted, or nothing.
+///
+/// The first targeted video track, because that is what carries a picture and
+/// what the audio lanes are matched against. A project with only audio tracks
+/// targeted answers with the first of those instead, which is how a source with
+/// no picture is aimed.
+[[nodiscard]] std::string edit_target(const core::Project& project) {
+  for (const core::Track& track : project.tracks) {
+    if (track.targeted && track.kind == core::TrackKind::Video) return track.id;
+  }
+  for (const core::Track& track : project.tracks) {
+    if (track.targeted) return track.id;
+  }
+  return {};
+}
+
+/// Whether there is something to place and somewhere to put it.
+[[nodiscard]] bool can_place(const Session& session) {
+  if (session.source_media().empty()) return false;
+  const std::vector<core::Media>& pool = session.project().media;
+  if (std::ranges::find(pool, session.source_media(), &core::Media::id) == pool.end()) {
+    return false;
+  }
+  // A sequence with nothing targeted has no answer to *where*, and guessing is
+  // how an edit lands on a track nobody was looking at.
+  return !edit_target(session.project()).empty();
+}
+
 /// Whether any of the selected clips belongs to a linked group. What decides
 /// there is something to unlink.
 [[nodiscard]] bool any_linked(const Session& session) {
@@ -114,6 +142,8 @@ std::string_view to_string(Command command) noexcept {
     case Command::RippleDelete: return "ripple_delete";
     case Command::NudgeLeft: return "nudge_left";
     case Command::NudgeRight: return "nudge_right";
+    case Command::Insert: return "insert";
+    case Command::Overwrite: return "overwrite";
     case Command::Copy: return "copy";
     case Command::Cut: return "cut";
     case Command::Paste: return "paste";
@@ -164,6 +194,10 @@ bool can_run(const Session& session, Command command) {
       return can_mark(session.project(), session.project().in_point);
     case Command::MarkOut:
       return can_mark(session.project(), session.project().out_point);
+
+    case Command::Insert:
+    case Command::Overwrite:
+      return can_place(session);
 
     case Command::ClearMarks:
       return core::has_marks(session.project());
@@ -286,6 +320,18 @@ bool run(Session& session, Command command) {
       return session.apply(core::set_out_point(
           project, here ? std::nullopt : std::optional<double>(session.playhead())));
     }
+
+    case Command::Insert:
+      if (!can_place(session)) return false;
+      return session.apply(core::insert_media_at(project, session.source_media(),
+                                                 session.playhead(),
+                                                 edit_target(project)));
+
+    case Command::Overwrite:
+      if (!can_place(session)) return false;
+      return session.apply(core::overwrite_media_at(project, session.source_media(),
+                                                    session.playhead(),
+                                                    edit_target(project)));
 
     case Command::ClearMarks:
       return session.apply(core::clear_marks(project));

@@ -85,9 +85,13 @@ constexpr double kGainPointReach = 6.0;
 constexpr double kGainBandReach = 5.0;
 
 /// The switches each kind of track shows, in the order they are drawn.
-constexpr std::array<TrackControl, 3> kAudioControls{TrackControl::Mute, TrackControl::Solo,
+// Targeting first on both, because it is the one that says where the next edit
+// goes rather than what this track is doing, and because a row that begins with
+// the same switch on every track reads as a column.
+constexpr std::array<TrackControl, 4> kAudioControls{TrackControl::Target, TrackControl::Mute,
+                                                     TrackControl::Solo, TrackControl::Lock};
+constexpr std::array<TrackControl, 3> kVideoControls{TrackControl::Target, TrackControl::Hide,
                                                      TrackControl::Lock};
-constexpr std::array<TrackControl, 2> kVideoControls{TrackControl::Hide, TrackControl::Lock};
 
 }  // namespace
 
@@ -106,6 +110,7 @@ std::string_view to_string(Tool tool) noexcept {
 
 std::string_view to_string(TrackControl control) noexcept {
   switch (control) {
+    case TrackControl::Target: return "T";
     case TrackControl::Mute: return "M";
     case TrackControl::Solo: return "S";
     case TrackControl::Lock: return "L";
@@ -467,8 +472,9 @@ std::optional<TrackControlRef> TimelineView::control_at(double x, double y) cons
   if (!header_area().contains(x, y)) return std::nullopt;
 
   for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
-    for (const TrackControl control :
-         {TrackControl::Mute, TrackControl::Solo, TrackControl::Lock, TrackControl::Hide}) {
+    for (const TrackControl control : {TrackControl::Target, TrackControl::Mute,
+                                      TrackControl::Solo, TrackControl::Lock,
+                                      TrackControl::Hide}) {
       if (control_rect(track, control).contains(x, y)) {
         return TrackControlRef{.track = track, .control = control};
       }
@@ -1257,15 +1263,17 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
                           TextAlign::Left, true));
 
     const TrackSwitches& on = model_.tracks[track].switches;
-    for (const TrackControl control :
-         {TrackControl::Mute, TrackControl::Solo, TrackControl::Lock, TrackControl::Hide}) {
+    for (const TrackControl control : {TrackControl::Target, TrackControl::Mute,
+                                      TrackControl::Solo, TrackControl::Lock,
+                                      TrackControl::Hide}) {
       const Rect box_of = control_rect(track, control);
       if (box_of.empty()) continue;
 
-      const bool lit = control == TrackControl::Mute   ? on.mute
-                       : control == TrackControl::Solo ? on.solo
-                       : control == TrackControl::Lock ? on.lock
-                                                      : on.hide;
+      const bool lit = control == TrackControl::Target ? on.target
+                       : control == TrackControl::Mute  ? on.mute
+                       : control == TrackControl::Solo  ? on.solo
+                       : control == TrackControl::Lock  ? on.lock
+                                                        : on.hide;
       const SurfaceStyle& switch_style =
           theme.style(Part::ToolButton, lit ? State::Selected : State::Normal);
       paint_surface(painter, box_of, switch_style);
@@ -2109,6 +2117,7 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
   if (const auto hit = control_at(event.x, event.y)) {
     TrackSwitches& on = model_.tracks[hit->track].switches;
     switch (hit->control) {
+      case TrackControl::Target: on.target = !on.target; break;
       case TrackControl::Mute: on.mute = !on.mute; break;
       case TrackControl::Solo: on.solo = !on.solo; break;
       case TrackControl::Lock: on.lock = !on.lock; break;

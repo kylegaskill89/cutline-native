@@ -121,73 +121,67 @@ double placed_length(const Media& media, std::optional<PlacementRange> range) no
   return media.duration;
 }
 
-Project place_media(Project p, std::string_view media_id, double start,
-                    std::string_view video_track_id, std::optional<PlacementRange> range) {
-  const auto media_it = std::ranges::find(p.media, media_id, &Media::id);
-  if (media_it == p.media.end()) return p;
-  const Media media = *media_it;  // copied: p.media may not reallocate, but tracks change
+namespace {
 
-  const std::string group_id = new_id("grp");
+/// Which lanes a placement will use, creating audio lanes when there are too
+/// few — so asking twice gives the same answer.
+///
+/// Extracted because the overwrite has to carve exactly the lanes the placement
+/// is about to fill. It used to clear lanes 0..N and let the placement choose
+/// its own, which was the same bug in a second place the moment the two
+/// disagreed about where the sound goes.
+struct PlacementLanes {
+  std::optional<std::size_t> video;
+  std::vector<std::size_t> audio;
+};
 
-  // Still-like media have no inherent time, so they ignore any source range.
-  const bool honour_range = range.has_value() && !is_still_like(media);
-  const double source_in = honour_range ? std::max(0.0, range->in) : 0.0;
-  const double source_out = honour_range ? std::min(media.duration, range->out) : media.duration;
+[[nodiscard]] PlacementLanes reserve_lanes(Project& p, const Media& media,
+                                           std::string_view track_id) {
+  PlacementLanes lanes;
 
-  // Which video track this went on, kept because the audio lanes are chosen to
-  // match it. Set even for a media with no picture of its own, where it stays
-  // empty and the sound starts at A1.
-  std::optional<std::size_t> video_lane;
+  // A named track that turns out to be an audio one is a target for the sound
+  // rather than for the picture — that is what targeting an audio lane means,
+  // and the only way an audio-only source can be aimed anywhere but A1.
+  std::optional<std::size_t> audio_target;
+  if (!track_id.empty()) {
+    for (std::size_t i = 0; i < p.tracks.size(); ++i) {
+      if (p.tracks[i].id == track_id && p.tracks[i].kind == TrackKind::Audio) {
+        audio_target = i;
+        break;
+      }
+    }
+  }
 
   const std::vector<std::size_t> video_tracks = track_indices_of_kind(p, TrackKind::Video);
   if (media.has_video && !video_tracks.empty()) {
     std::size_t target = video_tracks.front();
-    if (!video_track_id.empty()) {
+    if (!track_id.empty()) {
       for (const std::size_t i : video_tracks) {
-        if (p.tracks[i].id == video_track_id) {
+        if (p.tracks[i].id == track_id) {
           target = i;
           break;
         }
       }
     }
-    video_lane = target;
-    Clip clip;
-    clip.id = new_id("clip");
-    clip.media_id = media.id;
-    clip.kind = TrackKind::Video;
-    clip.source_in = source_in;
-    clip.source_out = source_out;
-    clip.start = start;
-    clip.group_id = group_id;
-    p.tracks[target].clips.push_back(std::move(clip));
-    sort_track(p.tracks[target]);
+    lanes.video = target;
   }
 
-  // Each audio stream goes to the lane that *matches* the video's, and the
-  // next lanes down for the streams after it. Fresh lanes are made at the
-  // bottom when the project does not have enough.
-  //
-  // Matching rather than searching for a free lane, which is what this did and
-  // which put a clip's picture and its sound on lanes that had nothing to do
-  // with each other: video is pushed onto its track whatever is already there,
-  // so a second placement over the first left two overlapping clips on V1 and
-  // their sound spread across A1 and A2. Two rules for one placement is one
-  // rule too many, and the one to keep is the one the video uses.
-  //
-  // Streams still get a lane each — piling a stereo pair's two streams onto one
-  // lane was the original bug and that part of the rule stands.
   std::vector<std::size_t> audio_tracks = track_indices_of_kind(p, TrackKind::Audio);
 
   // Which lane the video landed on, counted from the bottom, because that is
   // how video lanes are numbered: V1 is the base layer and the topmost track
-  // has the highest number, while A1 is the *first* audio lane. Pairing them
-  // is what makes V1's sound land on A1.
+  // has the highest number, while A1 is the *first* audio lane. Pairing them is
+  // what makes V1's sound land on A1.
   std::size_t first_lane = 0;
-  if (video_lane.has_value()) {
-    const std::vector<std::size_t> video_now = track_indices_of_kind(p, TrackKind::Video);
-    const auto found = std::ranges::find(video_now, *video_lane);
-    if (found != video_now.end()) {
-      first_lane = static_cast<std::size_t>(std::distance(found, video_now.end())) - 1;
+  if (audio_target.has_value()) {
+    const auto found = std::ranges::find(audio_tracks, *audio_target);
+    if (found != audio_tracks.end()) {
+      first_lane = static_cast<std::size_t>(std::distance(audio_tracks.begin(), found));
+    }
+  } else if (lanes.video.has_value()) {
+    const auto found = std::ranges::find(video_tracks, *lanes.video);
+    if (found != video_tracks.end()) {
+      first_lane = static_cast<std::size_t>(std::distance(found, video_tracks.end())) - 1;
     }
   }
 
@@ -200,19 +194,58 @@ Project place_media(Project p, std::string_view media_id, double start,
       p.tracks.push_back(std::move(fresh));
       audio_tracks.push_back(p.tracks.size() - 1);
     }
-    const std::size_t target = audio_tracks[lane];
+    lanes.audio.push_back(audio_tracks[lane]);
+  }
+  return lanes;
+}
 
+}  // namespace
+
+Project place_media(Project p, std::string_view media_id, double start,
+                    std::string_view track_id, std::optional<PlacementRange> range) {
+  const auto media_it = std::ranges::find(p.media, media_id, &Media::id);
+  if (media_it == p.media.end()) return p;
+  const Media media = *media_it;  // copied: p.media may not reallocate, but tracks change
+
+  const std::string group_id = new_id("grp");
+
+  // Still-like media have no inherent time, so they ignore any source range.
+  const bool honour_range = range.has_value() && !is_still_like(media);
+  const double source_in = honour_range ? std::max(0.0, range->in) : 0.0;
+  const double source_out = honour_range ? std::min(media.duration, range->out) : media.duration;
+
+  const PlacementLanes lanes = reserve_lanes(p, media, track_id);
+
+  if (lanes.video.has_value()) {
     Clip clip;
     clip.id = new_id("clip");
     clip.media_id = media.id;
-    clip.kind = TrackKind::Audio;
-    clip.audio_stream = stream;
+    clip.kind = TrackKind::Video;
     clip.source_in = source_in;
     clip.source_out = source_out;
     clip.start = start;
     clip.group_id = group_id;
-    p.tracks[target].clips.push_back(std::move(clip));
-    sort_track(p.tracks[target]);
+    p.tracks[*lanes.video].clips.push_back(std::move(clip));
+    sort_track(p.tracks[*lanes.video]);
+  }
+
+  // Each audio stream on the lane that matches the video's, and the ones below
+  // it for the streams after the first. Streams take a lane each — piling a
+  // stereo pair's two onto one was the original bug — but a second placement
+  // over the first lands on the same lanes rather than running off to find a
+  // free one, because that is what the video does with its own track.
+  for (std::size_t stream = 0; stream < lanes.audio.size(); ++stream) {
+    Clip clip;
+    clip.id = new_id("clip");
+    clip.media_id = media.id;
+    clip.kind = TrackKind::Audio;
+    clip.audio_stream = static_cast<int>(stream);
+    clip.source_in = source_in;
+    clip.source_out = source_out;
+    clip.start = start;
+    clip.group_id = group_id;
+    p.tracks[lanes.audio[stream]].clips.push_back(std::move(clip));
+    sort_track(p.tracks[lanes.audio[stream]]);
   }
 
   return p;
@@ -692,45 +725,35 @@ void clear_range(Track& track, double start, double end) {
 }  // namespace
 
 Project insert_media_at(Project p, std::string_view media_id, double at_time,
-                        std::string_view video_track_id, std::optional<PlacementRange> range) {
+                        std::string_view track_id, std::optional<PlacementRange> range) {
   const auto media = std::ranges::find(p.media, media_id, &Media::id);
   if (media == p.media.end()) return p;
 
   p = ripple_insert(std::move(p), at_time, placed_length(*media, range));
-  return place_media(std::move(p), media_id, at_time, video_track_id, range);
+  return place_media(std::move(p), media_id, at_time, track_id, range);
 }
 
 Project overwrite_media_at(Project p, std::string_view media_id, double at_time,
-                           std::string_view video_track_id, std::optional<PlacementRange> range) {
+                           std::string_view track_id, std::optional<PlacementRange> range) {
   const auto media_it = std::ranges::find(p.media, media_id, &Media::id);
   if (media_it == p.media.end()) return p;
   const Media media = *media_it;
 
   const double end = at_time + placed_length(media, range);
-  const std::vector<std::size_t> video_tracks = track_indices_of_kind(p, TrackKind::Video);
-  const std::vector<std::size_t> audio_tracks = track_indices_of_kind(p, TrackKind::Audio);
 
-  std::string target_video_id;
-  if (!video_tracks.empty()) {
-    std::size_t target = video_tracks.front();
-    if (!video_track_id.empty()) {
-      for (const std::size_t i : video_tracks) {
-        if (p.tracks[i].id == video_track_id) {
-          target = i;
-          break;
-        }
-      }
-    }
-    target_video_id = p.tracks[target].id;
-    if (media.has_video) clear_range(p.tracks[target], at_time, end);
-  }
+  // Exactly the lanes the placement is about to fill, worked out by the same
+  // function it uses. This used to clear lanes zero upwards and let the
+  // placement choose its own, which carved holes in one place and put the sound
+  // in another the moment the two disagreed.
+  const PlacementLanes lanes = reserve_lanes(p, media, track_id);
+  if (lanes.video.has_value()) clear_range(p.tracks[*lanes.video], at_time, end);
+  for (const std::size_t lane : lanes.audio) clear_range(p.tracks[lane], at_time, end);
 
-  for (int stream = 0; stream < media.audio_stream_count; ++stream) {
-    const auto lane = static_cast<std::size_t>(stream);
-    if (lane < audio_tracks.size()) clear_range(p.tracks[audio_tracks[lane]], at_time, end);
-  }
-
-  return place_media(std::move(p), media_id, at_time, target_video_id, range);
+  // By id rather than index: `clear_range` sorts, and nothing here adds tracks
+  // after the reservation, but naming the track is what makes that irrelevant.
+  const std::string resolved =
+      lanes.video.has_value() ? p.tracks[*lanes.video].id : std::string(track_id);
+  return place_media(std::move(p), media_id, at_time, resolved, range);
 }
 
 // ------------------------------------------------------------ copy / paste --

@@ -59,7 +59,7 @@ constexpr std::array kAllCommands{
     Command::LinkClips,     Command::UnlinkClips,   Command::AddVideoTrack,
     Command::AddAudioTrack, Command::RemoveTrack,
     Command::Copy,          Command::Cut,           Command::Paste,
-    Command::PasteInsert,
+    Command::PasteInsert,   Command::Insert,        Command::Overwrite,
     Command::Undo,          Command::Redo,
 };
 
@@ -697,6 +697,90 @@ TEST(Commands, TheClipboardSurvivesOpeningAnotherDocument) {
 
   session.reset(sample_project());
   EXPECT_TRUE(can_run(session, Command::Paste));
+}
+
+// ------------------------------------------------- targeting and placing --
+
+/// The sample project with a second video lane, an audio lane, and a media in
+/// the pool that has not been placed.
+[[nodiscard]] Project targetable_project() {
+  Project project = sample_project();
+  project.media.push_back(
+      Media{.id = "m2", .name = "insert.mp4", .duration = 8.0, .has_video = true});
+  project.tracks.insert(project.tracks.begin(), Track{.id = "v2", .kind = TrackKind::Video});
+  project.tracks.push_back(Track{.id = "a1", .kind = TrackKind::Audio});
+  return project;
+}
+
+TEST(Commands, PlacingNeedsSomethingToPlace) {
+  Session session(targetable_project());
+  EXPECT_FALSE(can_run(session, Command::Insert));
+  EXPECT_FALSE(can_run(session, Command::Overwrite));
+}
+
+TEST(Commands, PlacingNeedsATargetedTrack) {
+  // A sequence with nothing targeted has no answer to *where*, and guessing is
+  // how an edit lands on a track nobody was looking at.
+  Session session(targetable_project());
+  session.set_source_media("m2");
+  EXPECT_FALSE(can_run(session, Command::Insert));
+
+  Project project = session.project();
+  project.tracks[0].targeted = true;
+  session.reset(std::move(project));
+  session.set_source_media("m2");
+  EXPECT_TRUE(can_run(session, Command::Insert));
+}
+
+TEST(Commands, AnOverwriteLandsOnTheTargetedTrack) {
+  Project project = targetable_project();
+  project.tracks[0].targeted = true;  // v2, above the one holding the clips
+  Session session(std::move(project));
+  session.set_source_media("m2");
+  session.set_playhead(2.0);
+
+  ASSERT_TRUE(run(session, Command::Overwrite));
+  EXPECT_EQ(session.project().tracks[0].clips.size(), 1u);
+  EXPECT_DOUBLE_EQ(session.project().tracks[0].clips[0].start, 2.0);
+  // v1's clips are untouched: the overwrite carved the track it was aimed at.
+  EXPECT_EQ(session.project().tracks[1].clips.size(), 2u);
+}
+
+TEST(Commands, AnInsertRipplesWhatWasAlreadyThere) {
+  Project project = targetable_project();
+  project.tracks[1].targeted = true;  // v1, which holds c1 and c2
+  Session session(std::move(project));
+  session.set_source_media("m2");
+  session.set_playhead(5.0);
+
+  ASSERT_TRUE(run(session, Command::Insert));
+
+  const Track& lane = session.project().tracks[1];
+  ASSERT_EQ(lane.clips.size(), 3u);
+  EXPECT_DOUBLE_EQ(lane.clips[1].start, 5.0);
+  EXPECT_EQ(lane.clips[1].media_id, "m2");
+  EXPECT_DOUBLE_EQ(lane.clips[2].start, 13.0) << "c2 was pushed along by eight seconds";
+}
+
+TEST(Commands, AnOverwriteLeavesTheSequenceTheLengthItWas) {
+  Project project = targetable_project();
+  project.tracks[1].targeted = true;
+  Session session(std::move(project));
+  session.set_source_media("m2");
+  session.set_playhead(0.0);
+
+  const double was = core::timeline_duration(session.project());
+  ASSERT_TRUE(run(session, Command::Overwrite));
+  EXPECT_DOUBLE_EQ(core::timeline_duration(session.project()), was);
+}
+
+TEST(Commands, SourceThatIsNoLongerInThePoolIsNotOffered) {
+  Project project = targetable_project();
+  project.tracks[0].targeted = true;
+  Session session(std::move(project));
+  session.set_source_media("gone");
+  EXPECT_FALSE(can_run(session, Command::Insert));
+  EXPECT_FALSE(run(session, Command::Insert));
 }
 
 }  // namespace

@@ -280,6 +280,9 @@ struct TrackSwitches {
   bool solo = false;
   bool lock = false;
   bool hide = false;
+  /// Whether a keyboard edit lands on this track. Premiere's targeting, and
+  /// the only thing that says *where* an insert or an overwrite goes.
+  bool target = false;
 
   friend bool operator==(const TrackSwitches&, const TrackSwitches&) = default;
 };
@@ -311,7 +314,7 @@ struct TimelineTrack {
 ///
 /// Audio tracks show mute, solo and lock; video tracks show hide and lock. A
 /// solo on a video track would mean nothing, and a mute on one even less.
-enum class TrackControl { Mute, Solo, Lock, Hide };
+enum class TrackControl { Target, Mute, Solo, Lock, Hide };
 
 /// The letter a switch is drawn with.
 ///

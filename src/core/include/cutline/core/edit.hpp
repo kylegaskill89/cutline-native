@@ -49,9 +49,13 @@ struct PlacementRange {
 /// Streams still take a lane each. Piling a stereo pair's two streams onto one
 /// lane was the original bug and that half of the rule stands.
 ///
-/// An empty `video_track_id` targets the topmost video track.
+/// `track_id` is where to aim it. A video track takes the picture and the sound
+/// follows onto the matching lanes; an **audio** track takes the sound, which is
+/// the only way a source with no picture can be aimed anywhere but A1. Empty
+/// means the topmost video track, which is what a placement with nothing to say
+/// about where has always meant.
 [[nodiscard]] Project place_media(Project p, std::string_view media_id, double start,
-                                  std::string_view video_track_id = {},
+                                  std::string_view track_id = {},
                                   std::optional<PlacementRange> range = std::nullopt);
 
 /// Timeline length a media occupies when placed with an optional source range.
@@ -106,13 +110,14 @@ struct PlacementRange {
 
 /// Insert-edit: ripples the sequence open and places the media in the gap.
 [[nodiscard]] Project insert_media_at(Project p, std::string_view media_id, double at_time,
-                                      std::string_view video_track_id = {},
+                                      std::string_view track_id = {},
                                       std::optional<PlacementRange> range = std::nullopt);
 
 /// Overwrite-edit: carves out whatever occupies the span, then places the media
 /// over it. Clips partly covered are trimmed; clips fully covered are dropped.
+/// The lanes it carves are exactly the ones the placement will fill.
 [[nodiscard]] Project overwrite_media_at(Project p, std::string_view media_id, double at_time,
-                                         std::string_view video_track_id = {},
+                                         std::string_view track_id = {},
                                          std::optional<PlacementRange> range = std::nullopt);
 
 /// Trims a clip's in or out edge to a new timeline time, moving the whole linked

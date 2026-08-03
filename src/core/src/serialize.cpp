@@ -243,7 +243,8 @@ json write(const Track& t) {
          {"muted", t.muted},
          {"solo", t.solo},
          {"locked", t.locked},
-         {"hidden", t.hidden}};
+         {"hidden", t.hidden},
+         {"targeted", t.targeted}};
   if (!t.label.empty()) j["label"] = t.label;
   put_if_set(j, "height", t.height);
 
@@ -508,6 +509,7 @@ Track read_track(const json& j) {
   t.solo = read_or(j, "solo", false);
   t.locked = read_or(j, "locked", false);
   t.hidden = read_or(j, "hidden", false);
+  t.targeted = read_or(j, "targeted", false);
   t.height = read_optional<double>(j, "height");
 
   const auto clips = j.find("clips");

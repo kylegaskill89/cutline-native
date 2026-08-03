@@ -4304,8 +4304,14 @@ constexpr std::array kTransportKeys{
     Binding{Key::Right, false, false, cutline::editor::Command::NextFrame},
     Binding{Key::Home, false, false, cutline::editor::Command::GoToStart},
     Binding{Key::End, false, false, cutline::editor::Command::GoToEnd},
-    Binding{Key::Comma, false, false, cutline::editor::Command::NudgeLeft},
-    Binding{Key::Period, false, false, cutline::editor::Command::NudgeRight},
+    // Premiere's comma and full stop, which are insert and overwrite there and
+    // were nudge here. Nudge moves to alt and the arrows, which is where
+    // Premiere keeps it — the two keys next to each other on the bottom row are
+    // worth more to the edit that needs a hand on the keyboard.
+    Binding{Key::Comma, false, false, cutline::editor::Command::Insert},
+    Binding{Key::Period, false, false, cutline::editor::Command::Overwrite},
+    Binding{Key::Left, false, false, cutline::editor::Command::NudgeLeft, true},
+    Binding{Key::Right, false, false, cutline::editor::Command::NudgeRight, true},
     Binding{Key::Delete, false, false, cutline::editor::Command::Delete},
     Binding{Key::Delete, false, true, cutline::editor::Command::RippleDelete},
     Binding{Key::Escape, false, false, cutline::editor::Command::SelectNone},
@@ -4508,6 +4514,17 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   // arrives the same way however it was asked for.
   pool.set_on_activate([app](std::size_t index) {
     if (app != nullptr) place_from_pool(*app, index);
+  });
+  // What an insert or an overwrite would place. Premiere's source monitor holds
+  // this; there is none here yet, so the pool's selection is the source, which
+  // is also what a double-click already places.
+  pool.set_on_select([app](std::optional<std::size_t> index) {
+    if (app == nullptr || app->browser == nullptr) return;
+    const std::vector<cutline::ui::MediaItem>& items = app->browser->items();
+    app->session.set_source_media(index.has_value() && *index < items.size()
+                                      ? items[*index].id
+                                      : std::string{});
+    mark_dirty(*app);
   });
   pool.set_on_drop([app](std::size_t index, double x, double y) {
     if (app == nullptr) return;
@@ -4782,7 +4799,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     if (app == nullptr || app->timeline == nullptr) return;
     app->timeline->zoom_to_fit();
     mark_dirty(*app);
-  }).set_tooltip("Zoom to the whole sequence (\)");
+  }).set_tooltip("Zoom to the whole sequence (\\)");
 
   tools.emplace<Spacer>();
   // Eleven columns: "00:00:00:00" is what a timecode is and it is never any
@@ -6059,6 +6076,12 @@ void refresh_dock(App& app) {
       {"Paste", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Paste); }},
       {"Paste Insert",
        [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::PasteInsert); }},
+      // Premiere keeps these on the Clip menu, which this has no equivalent of;
+      // the timeline's right-click is where a clip's own commands live, and
+      // these act on the *source* rather than on a clip.
+      {"Insert", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Insert); }},
+      {"Overwrite",
+       [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Overwrite); }},
   });
 
   menu("Project", {
@@ -6689,6 +6712,12 @@ void refresh_float_titles(App& app) {
     case VK_OEM_PLUS: return Key::Equal;
     case VK_OEM_MINUS: return Key::Minus;
     case VK_OEM_5: return Key::Backslash;
+    // Insert and overwrite. `Key::Comma` and `Key::Period` have been bound
+    // since the nudge was written and have never once arrived: the virtual key
+    // for a comma is `VK_OEM_COMMA`, not the character, so the translation
+    // dropped it and the binding sat there doing nothing.
+    case VK_OEM_COMMA: return Key::Comma;
+    case VK_OEM_PERIOD: return Key::Period;
     default: return Key::None;
   }
 }

@@ -223,6 +223,7 @@ Project update_track(Project p, std::string_view track_id, const TrackPropsPatch
   if (patch.solo.has_value()) t->solo = *patch.solo;
   if (patch.locked.has_value()) t->locked = *patch.locked;
   if (patch.hidden.has_value()) t->hidden = *patch.hidden;
+  if (patch.targeted.has_value()) t->targeted = *patch.targeted;
   if (patch.height.has_value()) t->height = *patch.height;
   return p;
 }

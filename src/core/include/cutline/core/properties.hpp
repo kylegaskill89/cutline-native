@@ -129,6 +129,7 @@ struct TrackPropsPatch {
   std::optional<bool> solo;
   std::optional<bool> locked;
   std::optional<bool> hidden;
+  std::optional<bool> targeted;
   std::optional<double> height;
 };
 

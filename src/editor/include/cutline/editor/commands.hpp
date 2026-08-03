@@ -41,6 +41,15 @@ enum class Command {
   /// Opens a gap the length of the clipboard and puts it in there instead.
   PasteInsert,
 
+  // -- three-point editing
+  /// Puts the source at the playhead, rippling everything after it along to
+  /// make room. Premiere's comma.
+  Insert,
+  /// Puts the source at the playhead over whatever is there. Premiere's full
+  /// stop, and the one that leaves the sequence exactly as long as it was
+  /// unless the source runs off the end of it.
+  Overwrite,
+
   // -- the marked span
   /// Marks the in point at the playhead — or clears it, when it is already
   /// there. The same key undoing itself is how a mark is removed without a

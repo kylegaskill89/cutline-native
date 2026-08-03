@@ -497,17 +497,35 @@ the next edit lands on — and **targeting**, which decides what a keyboard edit
 applies to. Neither exists here. Ours have mute, solo, lock and hide, which is
 the *state* half of a header and none of the routing half.
 
-This is not a small omission dressed up. It is the thing the next section is
-built on: without a target, "insert" and "overwrite" have nowhere to go, and
-without those two there is no three-point editing at all.
+Targeting is done, and insert and overwrite with it. A **T** in every track
+header says where the next keyboard edit lands; `,` inserts the source at the
+playhead and ripples everything after it along, `.` overwrites. Neither is
+offered when there is nothing to place or nothing targeted — a sequence with no
+target has no answer to *where*, and guessing is how an edit lands on a track
+nobody was looking at.
+
+What stands in for the source monitor is the **pool's selection**, which is
+already what a double-click places. That is also why source patching does not
+exist separately: with one source, targeting answers both questions at once.
+The half that is genuinely missing is marking in and out *on the source*, which
+needs a monitor to mark them in.
+
+Two things were found by doing it. `place_media` chose the audio lanes and the
+overwrite carved lanes zero upwards, so the two disagreed about where the sound
+went the moment either moved — they share one function now. And `Key::Comma`
+and `Key::Period` had been bound since the nudge was written and had **never
+once arrived**: the virtual key for a comma is `VK_OEM_COMMA` rather than the
+character, so the translation dropped it and the binding sat there doing
+nothing. Nudge has moved to alt and the arrows, which is where Premiere keeps
+it.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| Source patch (V1/A1 indicators) | drag to choose which track receives | none | control |
-| Track targeting for keyboard edits | per track, toggled | none | control |
-| Insert (`,`) and Overwrite (`.`) | from the source monitor at the playhead | none | machinery |
-| Three- and four-point editing | in/out on source and sequence | none | machinery |
-| Sync lock | which tracks ripple together | none | model + control |
+| Source patch (V1/A1 indicators) | drag to choose which track receives | not separately — targeting does both jobs while there is one source | control |
+| Track targeting for keyboard edits | per track, toggled | **done** — a T in every header, and what insert and overwrite aim at | — |
+| Insert (`,`) and Overwrite (`.`) | from the source monitor at the playhead | **done** — from the pool's selection, on Premiere's own keys | — |
+| Three- and four-point editing | in/out on source and sequence | the sequence half only; there is no source monitor to mark | machinery |
+| Sync lock | which tracks ripple together | none — an insert ripples every track | model + control |
 | Mute / solo / lock / hide | yes | **done** | — |
 
 ### 2.2 Trimming

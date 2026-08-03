@@ -109,6 +109,18 @@ class Session {
   [[nodiscard]] std::span<const core::ClipCopy> clipboard() const noexcept { return clipboard_; }
   void set_clipboard(std::vector<core::ClipCopy> clips) { clipboard_ = std::move(clips); }
 
+  // ---------------------------------------------------------------- source --
+
+  /// The media an insert or an overwrite would place.
+  ///
+  /// Premiere's source monitor holds this; there is none here yet, so it is
+  /// whatever the pool has selected, and the application sets it as that
+  /// changes. Here for the same reason the clipboard is: `run` is where edits
+  /// live, and a command that cannot see what it is placing cannot be a
+  /// command — nor can `can_run` grey it honestly.
+  [[nodiscard]] const std::string& source_media() const noexcept { return source_media_; }
+  void set_source_media(std::string media_id) { source_media_ = std::move(media_id); }
+
   // ------------------------------------------------------------- playhead --
 
   [[nodiscard]] double playhead() const noexcept { return playhead_; }
@@ -131,6 +143,7 @@ class Session {
   core::History history_;
   std::vector<std::string> selection_;
   std::vector<core::ClipCopy> clipboard_;
+  std::string source_media_;
   double playhead_ = 0.0;
   std::uint64_t revision_ = 0;
 };
