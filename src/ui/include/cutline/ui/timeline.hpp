@@ -275,6 +275,14 @@ struct TimelineTrack {
   std::string name;
   /// Audio tracks are shorter, because the theme says so.
   bool audio = false;
+  /// A height somebody dragged this lane to, overriding the theme's. Empty
+  /// means the theme decides, which is what every track starts as.
+  ///
+  /// Per track rather than per kind because that is the whole point of the
+  /// gesture: the one lane being worked on gets the room, and the rest stay out
+  /// of the way. Premiere's tall video track over a row of short audio ones is
+  /// the arrangement anybody grading or keyframing ends up in.
+  std::optional<double> height;
   /// Whether the track contributes nothing right now, however that came about.
   /// Drawn as a disabled header. See `TrackSwitches` for the difference.
   bool muted = false;
@@ -419,6 +427,10 @@ enum class DragMode {
   /// gesture readable: the thing being dragged is where the fade finishes.
   FadeIn,
   FadeOut,
+  /// Dragging the line under a track header, which makes that lane taller or
+  /// shorter. In the header column only: over the tracks the same downward drag
+  /// is a marquee, and there is no room for both.
+  TrackHeight,
   /// Sweeping a rectangle over empty track to gather up everything it touches.
   ///
   /// It starts on a press that hit no clip, which was previously the gesture
@@ -457,6 +469,15 @@ enum class DragMode {
   /// takes it away. Nothing then exists only to undo something else.
   GainPointRemove,
 };
+
+/// How short and how tall a lane may be dragged.
+///
+/// The floor is where a clip stops being a clip: below about a dozen pixels
+/// there is no room for a label, a waveform or a fade handle, and a lane
+/// dragged to nothing is one that cannot be dragged back because there is
+/// nothing left to grab. The ceiling stops one lane from swallowing the panel.
+inline constexpr double kMinTrackHeight = 18.0;
+inline constexpr double kMaxTrackHeight = 400.0;
 
 /// Which edge a mode pulls, whichever tool is pulling it. Trim and rate stretch
 /// differ in what they do to the clip, not in which end is being held.
@@ -619,6 +640,19 @@ class TimelineView : public Widget {
   void set_on_context_menu(std::function<void(double, double)> on_context_menu) {
     on_context_menu_ = std::move(on_context_menu);
   }
+
+  /// Called when a lane has been dragged to a new height, once, at the end.
+  ///
+  /// The view resizes its own model as the drag goes, so the lane follows the
+  /// pointer; this is what writes it down. Nothing means the lane was put back
+  /// to the theme's height, which is what a double-click on the line does.
+  void set_on_track_resize(std::function<void(std::size_t, std::optional<double>)> on_resize) {
+    on_track_resize_ = std::move(on_resize);
+  }
+
+  /// The strip along the bottom of a header that resizes the lane, or empty
+  /// when the header is not on screen.
+  [[nodiscard]] Rect resize_rect(std::size_t track) const;
 
   /// Called when a header is double-clicked anywhere but on a switch, which is
   /// how a track gets renamed.
@@ -923,6 +957,12 @@ class TimelineView : public Widget {
   /// Taken from the theme at layout, because input arrives without one.
   Metrics metrics_;
 
+  /// Which lane a height drag is carrying, and what it was when it began —
+  /// worked from the press rather than from the last move, like every other
+  /// drag here, so a long one cannot accumulate rounding.
+  std::size_t sizing_ = 0;
+  double sizing_origin_ = 0.0;
+
   /// Where a marquee is being swept from and to, in the view's own
   /// coordinates. Only meaningful while the mode is `Marquee`.
   double marquee_x_ = 0.0;
@@ -936,6 +976,7 @@ class TimelineView : public Widget {
   std::function<void(std::span<const BlockRef>)> on_select_;
   std::function<void(const TimelineEdit&)> on_edit_;
   std::function<void(TrackControlRef)> on_track_toggle_;
+  std::function<void(std::size_t, std::optional<double>)> on_track_resize_;
   std::function<void(double, double)> on_context_menu_;
   std::function<void(std::size_t)> on_track_rename_;
 };

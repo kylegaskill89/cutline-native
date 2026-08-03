@@ -227,6 +227,13 @@ Project update_track(Project p, std::string_view track_id, const TrackPropsPatch
   return p;
 }
 
+Project set_track_height(Project p, std::string_view track_id, std::optional<double> height) {
+  Track* t = find_track(p, track_id);
+  if (t == nullptr) return p;
+  t->height = height;
+  return p;
+}
+
 Project remove_track(Project p, std::string_view track_id) {
   std::erase_if(p.tracks, [&](const Track& t) { return t.id == track_id; });
   return p;

@@ -4903,6 +4903,21 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     app->main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
   });
 
+  // A lane dragged taller or shorter. The view has already resized itself so
+  // the drag could be aimed; this writes it down, once, at the end.
+  tracks.set_on_track_resize([app](std::size_t track, std::optional<double> height) {
+    if (app == nullptr || app->timeline == nullptr) return;
+    const auto& rows = app->timeline->model().tracks;
+    if (track >= rows.size()) return;
+
+    app->session.apply(
+        cutline::core::set_track_height(app->session.project(), rows[track].id, height));
+    // Not rebuilt: the view is already showing the height that was dragged to,
+    // and rebuilding would take the same numbers back out of the project it
+    // has just put them into.
+    mark_dirty(*app);
+  });
+
   // Renaming, from a double-click on a header. A popup with a field in it,
   // rather than a field the timeline holds: the view draws its headers and
   // builds no widgets in them, and giving it one for this alone would mean it

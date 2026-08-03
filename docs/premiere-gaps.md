@@ -575,7 +575,7 @@ copies.
 | Keyframe marks on a clip | yes | **done** | — |
 | Snapping | yes | **done** | — |
 | Zoom, and zoom to fit | yes | **done** | — |
-| Track height, per track | dragged, and expand/collapse all | fixed per kind — one height for video, one for audio | control |
+| Track height, per track | dragged, and expand/collapse all | **done** — dragged on the line under a header, double-click puts it back | — |
 | Markers with duration and comment | yes | a name and a colour, no duration | model + control |
 | Scroll to follow playback | smooth or page | none — the playhead runs off the edge | wiring |
 | Timecode field to type into | yes | a readout only | control |

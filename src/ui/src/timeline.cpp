@@ -39,6 +39,11 @@ constexpr double kFadeHandle = 9.0;
 /// so a short clip can still be moved rather than being all handle.
 constexpr double kTrimHandle = 8.0;
 
+/// How far either side of the line under a header counts as grabbing it.
+/// Four is the smallest reach anybody can hit reliably with a mouse, and the
+/// strip is the full width of the header so there is plenty of it to aim at.
+constexpr double kTrackResizeReach = 4.0;
+
 [[nodiscard]] Color fade(const Color& color, float amount) noexcept {
   return Color{color.r, color.g, color.b, color.a * amount};
 }
@@ -270,7 +275,11 @@ void TimelineView::refresh_bounds() {
 
 double TimelineView::track_height(std::size_t track) const noexcept {
   if (track >= model_.tracks.size()) return 0.0;
-  return model_.tracks[track].audio ? metrics_.audio_track_height : metrics_.track_height;
+  const TimelineTrack& row = model_.tracks[track];
+  if (row.height.has_value()) {
+    return std::clamp(*row.height, kMinTrackHeight, kMaxTrackHeight);
+  }
+  return row.audio ? metrics_.audio_track_height : metrics_.track_height;
 }
 
 // -------------------------------------------------------------- geometry --
@@ -314,6 +323,15 @@ Rect TimelineView::header_rect(std::size_t track) const {
   return Rect{headers.x, row.y, headers.width, row.height};
 }
 
+Rect TimelineView::resize_rect(std::size_t track) const {
+  const Rect header = header_rect(track);
+  if (header.empty()) return {};
+  // Straddling the line rather than sitting above it, so the reach is the same
+  // whichever side of the boundary the pointer approaches from.
+  const double reach = kTrackResizeReach;
+  return Rect{header.x, header.bottom() - reach, header.width, reach * 2.0};
+}
+
 bool TimelineView::has_control(std::size_t track, TrackControl control) const {
   if (track >= model_.tracks.size()) return false;
   if (model_.tracks[track].audio) {
@@ -334,11 +352,19 @@ Rect TimelineView::control_rect(std::size_t track, TrackControl control) const {
   const auto found = std::ranges::find(controls, control);
   const auto index = static_cast<double>(std::distance(controls.begin(), found));
 
-  // A second row under the name, aligned to the bottom of the header. Under
-  // rather than beside, because a hundred and forty pixels is not enough for a
-  // readable label and three switches on one line.
+  // A second row under the name. Under rather than beside, because a hundred
+  // and forty pixels is not enough for a readable label and three switches on
+  // one line.
+  //
+  // Under the *name* rather than at the foot of the header, which is what it
+  // was: on a lane dragged twice as tall the switches were stranded at the
+  // bottom, a long way from the track they belong to. On a lane at its usual
+  // height the two are the same place, so nothing moved for anybody who has not
+  // resized one.
   const double x = header.x + metrics_.padding_x + index * (kSwitchSize + kSwitchGap);
-  const double y = header.bottom() - kSwitchSize - metrics_.padding_y;
+  const double under_name = header.y + metrics_.padding_y +
+                            metrics_.font_size * metrics_.line_height + kSwitchGap;
+  const double y = std::min(under_name, header.bottom() - kSwitchSize - metrics_.padding_y);
   const Rect box{x, y, kSwitchSize, kSwitchSize};
 
   // Refused rather than clipped. A switch drawn half outside its own header, or
@@ -1496,6 +1522,29 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
 
   if (event.button != MouseButton::Left) return false;
 
+  // The line under a header, before the switches: it is at the bottom edge and
+  // they are in the middle, so the two never overlap, and taking this first
+  // means the boundary between two lanes belongs to the one above it rather
+  // than to whichever happens to be tested first.
+  for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
+    if (!resize_rect(track).contains(event.x, event.y)) continue;
+
+    // A double-click gives the lane back to the theme, which is the only way
+    // back to the default height once one has been dragged.
+    if (event.click_count >= 2) {
+      model_.tracks[track].height.reset();
+      refresh_bounds();
+      if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+      if (on_track_resize_) on_track_resize_(track, std::nullopt);
+      return true;
+    }
+    mode_ = DragMode::TrackHeight;
+    sizing_ = track;
+    sizing_origin_ = track_height(track);
+    press_y_ = event.y;
+    return true;
+  }
+
   // A header switch, before anything else. Flipped here as well as reported, so
   // the press is visible on the frame it happened rather than only once the
   // document has come back round — the same reason a dragged clip moves in the
@@ -1697,6 +1746,18 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
     scrub_to(event.x);
     return true;
   }
+  if (mode_ == DragMode::TrackHeight) {
+    // Live, because a lane that only resized on release would be a drag with
+    // nothing to aim by.
+    if (sizing_ < model_.tracks.size()) {
+      model_.tracks[sizing_].height =
+          std::clamp(sizing_origin_ + (event.y - press_y_), kMinTrackHeight, kMaxTrackHeight);
+      refresh_bounds();
+      if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+    }
+    return true;
+  }
+
   if (mode_ == DragMode::Marquee) {
     marquee_x_ = event.x;
     marquee_y_ = event.y;
@@ -1791,6 +1852,14 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
       const std::vector<BlockRef> chosen{*drag_};
       on_select_(chosen);
     }
+  }
+
+  if (mode_ == DragMode::TrackHeight) {
+    mode_ = DragMode::None;
+    if (on_track_resize_ && sizing_ < model_.tracks.size()) {
+      on_track_resize_(sizing_, model_.tracks[sizing_].height);
+    }
+    return true;
   }
 
   // A sweep has already reported everything it gathered, on every move. There

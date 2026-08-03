@@ -163,6 +163,91 @@ TEST(TimelineMenu, ADisabledClipIsDrawnAsOne) {
   EXPECT_NE(*playing, *silent);
 }
 
+// -------------------------------------------------------- track heights --
+
+TEST(TrackHeight, ALaneWithNoHeightOfItsOwnTakesTheThemes) {
+  const Fixture fixture;
+  const Rect video = fixture.view->track_rect(0);
+  const Rect audio = fixture.view->track_rect(2);
+  EXPECT_GT(video.height, 0.0);
+  EXPECT_NE(video.height, audio.height) << "audio lanes are shorter, per the theme";
+}
+
+TEST(TrackHeight, AHeightOnTheLaneOverridesIt) {
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.tracks[0].height = 120.0;
+  fixture.view->set_model(model);
+
+  EXPECT_DOUBLE_EQ(fixture.view->track_rect(0).height, 120.0);
+  // And everything under it has moved down by the difference.
+  EXPECT_DOUBLE_EQ(fixture.view->track_rect(1).y, fixture.view->track_rect(0).bottom());
+}
+
+TEST(TrackHeight, DraggingTheLineUnderAHeaderResizesThatLane) {
+  Fixture fixture;
+  std::optional<std::pair<std::size_t, std::optional<double>>> reported;
+  fixture.view->set_on_track_resize([&](std::size_t track, std::optional<double> height) {
+    reported = {track, height};
+  });
+
+  const double was = fixture.view->track_rect(0).height;
+  const Rect grip = fixture.view->resize_rect(0);
+  ASSERT_FALSE(grip.empty());
+
+  fixture.host->mouse_down(press(grip.x + 10.0, grip.y + grip.height * 0.5));
+  fixture.host->mouse_move(press(grip.x + 10.0, grip.y + grip.height * 0.5 + 40.0));
+  fixture.host->mouse_up(press(grip.x + 10.0, grip.y + grip.height * 0.5 + 40.0));
+
+  EXPECT_NEAR(fixture.view->track_rect(0).height, was + 40.0, 0.01);
+  ASSERT_TRUE(reported.has_value());
+  EXPECT_EQ(reported->first, 0u);
+  ASSERT_TRUE(reported->second.has_value());
+  EXPECT_NEAR(*reported->second, was + 40.0, 0.01);
+}
+
+TEST(TrackHeight, ALaneCannotBeDraggedAwayToNothing) {
+  // Below a certain height there is no room for a label, a waveform or a fade
+  // handle — and nothing left to grab to drag it back.
+  Fixture fixture;
+  fixture.view->set_on_track_resize([](std::size_t, std::optional<double>) {});
+
+  const Rect grip = fixture.view->resize_rect(0);
+  fixture.host->mouse_down(press(grip.x + 10.0, grip.y));
+  fixture.host->mouse_move(press(grip.x + 10.0, grip.y - 5000.0));
+  fixture.host->mouse_up(press(grip.x + 10.0, grip.y - 5000.0));
+
+  EXPECT_GE(fixture.view->track_rect(0).height, kMinTrackHeight);
+}
+
+TEST(TrackHeight, DoubleClickingTheLineGivesTheLaneBack) {
+  Fixture fixture;
+  std::optional<std::optional<double>> reported;
+  fixture.view->set_on_track_resize(
+      [&](std::size_t, std::optional<double> height) { reported = height; });
+
+  TimelineModel model = sample_model();
+  model.tracks[0].height = 200.0;
+  fixture.view->set_model(model);
+
+  const Rect grip = fixture.view->resize_rect(0);
+  MouseEvent again = press(grip.x + 10.0, grip.y + grip.height * 0.5);
+  again.click_count = 2;
+  fixture.host->mouse_down(again);
+
+  ASSERT_TRUE(reported.has_value());
+  EXPECT_FALSE(reported->has_value()) << "it was put back to the theme's height";
+  EXPECT_NE(fixture.view->track_rect(0).height, 200.0);
+}
+
+TEST(TrackHeight, TheGripIsInTheHeaderColumnOnly) {
+  // Over the tracks the same downward drag is a marquee, and there is no room
+  // for both.
+  const Fixture fixture;
+  const Rect grip = fixture.view->resize_rect(0);
+  EXPECT_LE(grip.right(), fixture.view->header_area().right() + 0.01);
+}
+
 // -------------------------------------------------------------- geometry --
 
 TEST(Timeline, HeadersAndTimeDivideTheWidth) {

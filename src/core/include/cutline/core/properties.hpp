@@ -135,6 +135,20 @@ struct TrackPropsPatch {
 [[nodiscard]] Project update_track(Project p, std::string_view track_id,
                                    const TrackPropsPatch& patch);
 
+/// Sets the lane's height, or gives it back to whatever the interface's default
+/// is when given nothing.
+///
+/// Its own function rather than a field of the patch, because clearing it is
+/// half of what it is for and an optional inside an optional patch cannot say
+/// "put this back" — only "leave it alone".
+///
+/// Stored as given. What is usable is a question about the interface drawing
+/// it, and `ui::kMinTrackHeight` is where that is answered; a file written by a
+/// build with different limits stays readable rather than being silently
+/// rewritten on the way in.
+[[nodiscard]] Project set_track_height(Project p, std::string_view track_id,
+                                       std::optional<double> height);
+
 /// Removes a track and every clip on it.
 [[nodiscard]] Project remove_track(Project p, std::string_view track_id);
 

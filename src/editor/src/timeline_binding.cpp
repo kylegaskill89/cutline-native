@@ -119,6 +119,7 @@ ui::TimelineModel timeline_model(const core::Project& project,
     row.id = track.id;
     row.name = default_track_label(project, i);
     row.audio = audio;
+    row.height = track.height;
     // Two different flags, one appearance: a hidden video track and an
     // inaudible audio one are both "this contributes nothing right now".
     // Solo elsewhere in the project is what makes the audio case not simply
