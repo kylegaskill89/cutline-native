@@ -792,7 +792,11 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
       // far more clips out of view than in it.
       if (box.right() < tracks.x || box.x > tracks.right()) continue;
 
-      const State state = clip.selected ? State::Selected : State::Normal;
+      // Disabled wins over selected: a clip can be both, and which of the two
+      // is worth saying is the one that changes what comes out of the render.
+      const State state = clip.disabled  ? State::Disabled
+                          : clip.selected ? State::Selected
+                                          : State::Normal;
       const SurfaceStyle& style = theme.style(Part::Clip, state);
       paint_surface(painter, box.inset(1.0), style);
 
@@ -1473,6 +1477,23 @@ void TimelineView::drag_to(double x) {
 }
 
 bool TimelineView::on_mouse_down(const MouseEvent& event) {
+  if (event.button == MouseButton::Right) {
+    // Over a clip that is not already selected, the right-click selects it
+    // first: a menu that acted on something other than what was clicked would
+    // be a trap. One that *is* selected is left alone, so right-clicking one of
+    // several keeps all of them.
+    if (const std::optional<BlockRef> hit = block_at(event.x, event.y);
+        hit.has_value() && !model_.tracks[hit->track].blocks[hit->block].selected) {
+      select(hit);
+      if (on_select_) {
+        const std::vector<BlockRef> chosen = selection();
+        on_select_(chosen);
+      }
+    }
+    if (on_context_menu_) on_context_menu_(event.x, event.y);
+    return true;
+  }
+
   if (event.button != MouseButton::Left) return false;
 
   // A header switch, before anything else. Flipped here as well as reported, so

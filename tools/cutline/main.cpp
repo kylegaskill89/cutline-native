@@ -4815,6 +4815,94 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     stop_playback(*app);
   });
 
+  // The right-click. Premiere's clip menu, which is where most of what can be
+  // done to a clip is actually reached from — the toolbar holds the handful of
+  // things that are worth a permanent button and nothing else fits there.
+  //
+  // Nothing is offered that would do nothing: every entry answers `can_run`
+  // first, so the menu over a clip and the menu over empty track differ by
+  // themselves rather than by a switch here deciding which menu to build. The
+  // one exception is Enable, which is a state rather than an action and so is
+  // ticked rather than hidden.
+  tracks.set_on_context_menu([app](double x, double y) {
+    if (app == nullptr || app->main.host == nullptr || app->timeline == nullptr) return;
+    using cutline::editor::Command;
+
+    struct Entry {
+      const char* label;
+      Command command;
+    };
+    constexpr std::array kEntries{
+        Entry{"Cut", Command::Cut},
+        Entry{"Copy", Command::Copy},
+        Entry{"Paste", Command::Paste},
+        Entry{"Paste Insert", Command::PasteInsert},
+        Entry{"Clear", Command::Delete},
+        Entry{"Ripple Delete", Command::RippleDelete},
+        Entry{"Split at Playhead", Command::Split},
+        Entry{"Link", Command::LinkClips},
+        Entry{"Unlink", Command::UnlinkClips},
+        Entry{"Add Video Track", Command::AddVideoTrack},
+        Entry{"Add Audio Track", Command::AddAudioTrack},
+        Entry{"Remove Track", Command::RemoveTrack},
+    };
+
+    std::vector<std::string> labels;
+    std::vector<Command> commands;
+    for (const Entry& entry : kEntries) {
+      if (!cutline::editor::can_run(app->session, entry.command)) continue;
+      labels.emplace_back(entry.label);
+      commands.push_back(entry.command);
+    }
+
+    // Enable, which is the clip's own state and the one row that is a switch
+    // rather than a command. Ticked when what is selected is playing, exactly
+    // as Premiere shows it, and offered only when there is a clip to speak of.
+    const std::vector<std::string> selected = app->session.selected_group();
+    std::vector<bool> ticks(labels.size(), false);
+    if (!selected.empty()) {
+      const bool enabled = std::ranges::all_of(selected, [&](const std::string& id) {
+        const cutline::core::Clip* clip = cutline::core::find_clip(app->session.project(), id);
+        return clip != nullptr && !clip->disabled;
+      });
+      labels.emplace_back("Enable");
+      ticks.push_back(enabled);
+    }
+    if (labels.empty()) return;
+
+    // Last, and past the end of the commands, which is how it is recognised
+    // without a sentinel command standing in for something that is not one.
+    auto list = std::make_unique<MenuList>(std::move(labels));
+    // Only when there is a tick to draw, so every other menu keeps its own
+    // indent rather than gaining a gutter it never uses.
+    if (!selected.empty()) list->set_checked(std::move(ticks));
+
+    list->set_on_choose([app, commands, selected](std::size_t index) {
+      if (app->main.host != nullptr) app->main.host->close_popup();
+      if (index < commands.size()) {
+        run_command(*app, commands[index]);
+        return;
+      }
+      if (!selected.empty()) {
+        const bool enabled = std::ranges::all_of(selected, [&](const std::string& id) {
+          const cutline::core::Clip* clip = cutline::core::find_clip(app->session.project(), id);
+          return clip != nullptr && !clip->disabled;
+        });
+        app->session.apply(
+            cutline::core::set_clips_enabled(app->session.project(), selected, !enabled));
+        refresh_timeline(*app);
+        invalidate_preview(*app);
+        app->inspector_stale = true;
+        stop_playback(*app);
+        mark_dirty(*app);
+      }
+    });
+
+    // At the pointer: there is no widget under a right-click to hang a menu
+    // from, only a place.
+    app->main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
+  });
+
   // Renaming, from a double-click on a header. A popup with a field in it,
   // rather than a field the timeline holds: the view draws its headers and
   // builds no widgets in them, and giving it one for this alone would mean it

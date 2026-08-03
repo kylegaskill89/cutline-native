@@ -540,8 +540,9 @@ gesture reaching them.
 | Copy and paste clips | Ctrl+C / Ctrl+V, and paste-insert | **done** — copy, cut, paste and paste-insert | — |
 | Duplicate (alt-drag a copy) | yes | none | wiring |
 | Label colours | eight, set per clip and per bin | none | model + control |
-| Enable / disable a clip | yes | in the model, no control on the timeline | wiring |
+| Enable / disable a clip | yes | **done** — on the clip menu, ticked, and a switched-off clip is drawn as one | — |
 | Speed / duration dialogue | a box with both and a ripple option | Speed and Reverse in the inspector | control |
+| Right-click a clip | the menu most edits are actually reached from | **done** — and it offers only what would do something | — |
 | Nesting | a sequence inside a sequence | none | machinery |
 | Multi-camera | none | none | machinery |
 

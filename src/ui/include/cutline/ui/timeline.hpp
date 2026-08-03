@@ -190,6 +190,9 @@ struct TimelineBlock {
   double end = 0.0;
   std::string label;
   bool selected = false;
+  /// Kept on the timeline but not rendered. Drawn faded, because a clip that
+  /// is not playing and looks exactly like one that is, is a bug report.
+  bool disabled = false;
 
   /// Where this clip is animated, in seconds from its own start.
   ///
@@ -604,6 +607,19 @@ class TimelineView : public Widget {
     on_track_toggle_ = std::move(on_toggle);
   }
 
+  /// Called on a right-click, with where it landed.
+  ///
+  /// The view selects whatever was under it first, so a menu built from the
+  /// selection is built from what was clicked — and a right-click on a clip
+  /// already in a multiple selection leaves that selection alone, because a
+  /// menu about six clips is what right-clicking one of six means.
+  ///
+  /// Reported rather than handled: the timeline knows blocks and the menu is
+  /// about clips, which is a word from a layer above this one.
+  void set_on_context_menu(std::function<void(double, double)> on_context_menu) {
+    on_context_menu_ = std::move(on_context_menu);
+  }
+
   /// Called when a header is double-clicked anywhere but on a switch, which is
   /// how a track gets renamed.
   ///
@@ -920,6 +936,7 @@ class TimelineView : public Widget {
   std::function<void(std::span<const BlockRef>)> on_select_;
   std::function<void(const TimelineEdit&)> on_edit_;
   std::function<void(TrackControlRef)> on_track_toggle_;
+  std::function<void(double, double)> on_context_menu_;
   std::function<void(std::size_t)> on_track_rename_;
 };
 

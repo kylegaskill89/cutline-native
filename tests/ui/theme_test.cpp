@@ -185,6 +185,17 @@ TEST(BuiltInThemes, EveryPartIsStyledEverywhere) {
   }
 }
 
+TEST(BuiltInThemes, ADisabledClipLooksDisabledInEveryTheme) {
+  // A clip switched off is kept on the timeline and left out of the render.
+  // One that looks exactly like a clip that plays is how somebody spends
+  // twenty minutes wondering why a shot is missing from an export.
+  for (const Theme& theme : built_in_themes()) {
+    EXPECT_TRUE(theme.defines(Part::Clip, State::Disabled)) << theme.id;
+    EXPECT_NE(theme.style(Part::Clip, State::Disabled), theme.style(Part::Clip, State::Normal))
+        << theme.id << " draws a switched-off clip like a playing one";
+  }
+}
+
 TEST(BuiltInThemes, AButtonThatIsOnLooksLikeIt) {
   // Which theme is showing, which tool is chosen, which parameter is animated:
   // every one of those is a button drawn selected, and a selected style that

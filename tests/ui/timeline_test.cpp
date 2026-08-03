@@ -71,6 +71,98 @@ struct Fixture {
   TimelineView* view = nullptr;
 };
 
+[[nodiscard]] MouseEvent right_press(double x, double y) {
+  return MouseEvent{.x = x, .y = y, .button = MouseButton::Right};
+}
+
+// ------------------------------------------------------- the context menu --
+
+TEST(TimelineMenu, ARightClickAsksForAMenuWhereItLanded) {
+  Fixture fixture;
+  std::optional<std::pair<double, double>> asked;
+  fixture.view->set_on_context_menu([&](double x, double y) { asked = {x, y}; });
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(right_press(box.x + 10.0, box.y + 10.0));
+
+  ASSERT_TRUE(asked.has_value());
+  EXPECT_DOUBLE_EQ(asked->first, box.x + 10.0);
+  EXPECT_DOUBLE_EQ(asked->second, box.y + 10.0);
+}
+
+TEST(TimelineMenu, ARightClickSelectsWhatItLandedOnFirst) {
+  // Or the menu would be about something other than the clip that was clicked,
+  // which is the one thing a context menu must never be.
+  Fixture fixture;
+  fixture.view->set_on_context_menu([](double, double) {});
+
+  const Rect box = fixture.view->block_rect(1, 1);
+  fixture.host->mouse_down(right_press(box.x + 10.0, box.y + 10.0));
+
+  ASSERT_TRUE(fixture.view->first_selected().has_value());
+  EXPECT_EQ(*fixture.view->first_selected(), (BlockRef{.track = 1, .block = 1}));
+}
+
+TEST(TimelineMenu, ARightClickInsideASelectionKeepsIt) {
+  // Right-clicking one of six selected clips means a menu about the six.
+  Fixture fixture;
+  fixture.view->set_on_context_menu([](double, double) {});
+  const std::vector<BlockRef> chosen{BlockRef{.track = 1, .block = 0},
+                                     BlockRef{.track = 1, .block = 1}};
+  fixture.view->select(chosen);
+
+  const Rect box = fixture.view->block_rect(1, 1);
+  fixture.host->mouse_down(right_press(box.x + 10.0, box.y + 10.0));
+
+  EXPECT_EQ(fixture.view->selection().size(), 2u);
+}
+
+TEST(TimelineMenu, ARightClickStartsNoDrag) {
+  Fixture fixture;
+  fixture.view->set_on_context_menu([](double, double) {});
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(right_press(box.x + 10.0, box.y + 10.0));
+  EXPECT_EQ(fixture.view->drag_mode(), DragMode::None);
+}
+
+TEST(TimelineMenu, WithNothingWiredUpARightClickIsStillTaken) {
+  // Taken rather than passed on: a right-click that fell through to whatever
+  // is behind the timeline would open somebody else's menu over it.
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+  EXPECT_TRUE(fixture.host->mouse_down(right_press(box.x + 10.0, box.y + 10.0)));
+}
+
+TEST(TimelineMenu, ADisabledClipIsDrawnAsOne) {
+  // A clip that is not being rendered and looks exactly like one that is, is
+  // a bug report — and disabling one is otherwise invisible on the timeline.
+  const auto block_fill = [](const Fixture& fixture) -> std::optional<Fill> {
+    const Rect box = fixture.view->block_rect(1, 0).inset(1.0);
+    RecordingPainter painter;
+    fixture.host->paint(painter, default_theme());
+    for (const DrawCall& call : painter.calls()) {
+      if (call.kind == DrawCall::Kind::Fill && std::abs(call.bounds.x - box.x) < 0.01 &&
+          std::abs(call.bounds.width - box.width) < 0.01) {
+        return call.fill;
+      }
+    }
+    return std::nullopt;
+  };
+
+  const Fixture plain;
+  Fixture off;
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].disabled = true;
+  off.view->set_model(model);
+
+  const std::optional<Fill> playing = block_fill(plain);
+  const std::optional<Fill> silent = block_fill(off);
+  ASSERT_TRUE(playing.has_value());
+  ASSERT_TRUE(silent.has_value());
+  EXPECT_NE(*playing, *silent);
+}
+
 // -------------------------------------------------------------- geometry --
 
 TEST(Timeline, HeadersAndTimeDivideTheWidth) {

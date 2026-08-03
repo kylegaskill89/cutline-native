@@ -266,6 +266,19 @@ namespace {
             .corner_radius = 3.0,
             .text = hex("#0a246a"),
         });
+  // A clip that is not being rendered. Drained of colour rather than dimmed to
+  // nothing: it still has to be readable, findable and clickable — it is a clip
+  // somebody switched off, not a hole in the sequence.
+  t.set(Part::Clip, State::Disabled,
+        SurfaceStyle{
+            .fill = Fill::gradient({{0.0f, hex("#d8d8d8")}, {0.5f, hex("#c0c0c0")},
+                                    {1.0f, hex("#aaaaaa")}}),
+            .bevel = raised("#ffffff", "#909090"),
+            .border = hex("#8a8a8a"),
+            .border_width = 1.0,
+            .corner_radius = 3.0,
+            .text = hex("#606060"),
+        });
   t.set(Part::Clip, State::Selected,
         SurfaceStyle{
             .fill = Fill::gradient({{0.0f, hex("#ffe9a8")}, {0.5f, hex("#ffd76b")},
@@ -563,6 +576,15 @@ namespace {
             .text = hex("#08202e"),
             .text_glow = 2.0,
         });
+  t.set(Part::Clip, State::Disabled,
+        SurfaceStyle{
+            .fill = Fill::gradient({{0.0f, hex("#c8ccd0aa")}, {1.0f, hex("#8f9498aa")}}),
+            .border = hex("#ffffff40"),
+            .border_width = 1.0,
+            .corner_radius = 5.0,
+            .text = hex("#3a4046"),
+            .text_glow = 2.0,
+        });
   t.set(Part::Clip, State::Selected,
         SurfaceStyle{
             .fill = Fill::gradient({{0.0f, hex("#ffe8a0ee")}, {1.0f, hex("#ffc850ee")}}),
@@ -797,6 +819,12 @@ namespace {
                      .border_width = 1.0,
                      .corner_radius = 4.0,
                      .text = hex("#e6f0fa")});
+  t.set(Part::Clip, State::Disabled,
+        SurfaceStyle{.fill = Fill::solid(hex("#33383f")),
+                     .border = hex("#454b53"),
+                     .border_width = 1.0,
+                     .corner_radius = 4.0,
+                     .text = hex("#7e858d")});
   t.set(Part::Clip, State::Selected,
         SurfaceStyle{.fill = Fill::solid(hex("#3d74b4")),
                      .border = hex("#4c9aff"),
@@ -1049,6 +1077,11 @@ namespace {
                      .border_width = 1.0,
                      .text = amber,
                      .text_glow = 3.0});
+  t.set(Part::Clip, State::Disabled,
+        SurfaceStyle{.fill = Fill::solid(hex("#141414")),
+                     .border = hex("#3a3a3a"),
+                     .border_width = 1.0,
+                     .text = hex("#6a6a6a")});
   t.set(Part::Clip, State::Selected,
         SurfaceStyle{.fill = Fill::solid(hex("#4a3400")),
                      .shadow = Shadow{.offset_x = 0.0, .offset_y = 0.0, .blur = 12.0,
