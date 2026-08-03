@@ -285,4 +285,36 @@ core::Project apply_monitor_box(core::Project project, std::string_view clip_id,
   return project;
 }
 
+core::Project scale_to_frame(core::Project project, std::span<const std::string> clip_ids,
+                             FrameFit fit, double t) {
+  constexpr double kPercent = 100.0;
+
+  for (const std::string& id : clip_ids) {
+    const core::Clip* clip = core::find_clip(project, id);
+    if (clip == nullptr || clip->kind != core::TrackKind::Video) continue;
+
+    // As a fraction of the canvas, which is what a scale of 1 covers. A clip
+    // with nothing to measure is passed over rather than scaled by a guess.
+    const core::Size natural = natural_fraction(project, *clip);
+    if (natural.width <= 0.0 || natural.height <= 0.0) continue;
+
+    // Fit is scale 1 by construction: the model stores scale relative to the
+    // aspect-fit size, so 1 is exactly "as large as it goes without
+    // distortion". Fill is however much more it takes for the shorter axis to
+    // reach the edge — the same number on both axes, or the picture would be
+    // stretched rather than cropped.
+    const double factor =
+        fit == FrameFit::Fit
+            ? 1.0
+            : std::max(1.0 / natural.width, 1.0 / natural.height);
+
+    const double local_t = t - clip->start;
+    project = set_clip_parameter(std::move(project), id, ClipParam::ScaleX,
+                                 factor * kPercent, local_t);
+    project = set_clip_parameter(std::move(project), id, ClipParam::ScaleY,
+                                 factor * kPercent, local_t);
+  }
+  return project;
+}
+
 }  // namespace cutline::editor

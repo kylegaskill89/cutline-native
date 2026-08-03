@@ -4913,11 +4913,17 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
       commands.push_back(entry.command);
     }
 
-    // Enable, which is the clip's own state and the one row that is a switch
-    // rather than a command. Ticked when what is selected is playing, exactly
-    // as Premiere shows it, and offered only when there is a clip to speak of.
+    // The framing pair and Enable, which are about the clips rather than about
+    // the sequence and so are not commands. Offered only when something is
+    // selected, since all three act on it.
     const std::vector<std::string> selected = app->session.selected_group();
     std::vector<bool> ticks(labels.size(), false);
+    if (!selected.empty()) {
+      labels.emplace_back("Fit to Frame");
+      ticks.push_back(false);
+      labels.emplace_back("Fill Frame");
+      ticks.push_back(false);
+    }
     if (!selected.empty()) {
       const bool enabled = std::ranges::all_of(selected, [&](const std::string& id) {
         const cutline::core::Clip* clip = cutline::core::find_clip(app->session.project(), id);
@@ -4941,7 +4947,22 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
         run_command(*app, commands[index]);
         return;
       }
-      if (!selected.empty()) {
+      if (selected.empty()) return;
+
+      // The two framing rows come first among the trailing ones, in the order
+      // they were added.
+      if (index == commands.size() || index == commands.size() + 1) {
+        const auto fit = index == commands.size() ? cutline::editor::FrameFit::Fit
+                                                  : cutline::editor::FrameFit::Fill;
+        app->session.apply(cutline::editor::scale_to_frame(
+            app->session.project(), selected, fit, app->session.playhead()));
+        refresh_timeline(*app);
+        invalidate_preview(*app);
+        app->inspector_stale = true;
+        mark_dirty(*app);
+        return;
+      }
+      {
         const bool enabled = std::ranges::all_of(selected, [&](const std::string& id) {
           const cutline::core::Clip* clip = cutline::core::find_clip(app->session.project(), id);
           return clip != nullptr && !clip->disabled;

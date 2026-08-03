@@ -402,5 +402,71 @@ TEST(MaskOverlays, DraggingAMaskThatIsNotAnimatedStillJustMovesIt) {
   EXPECT_NEAR(effect.mask.x, 0.8, 1e-9);
 }
 
+// ------------------------------------------------------------- framing --
+
+TEST(ScaleToFrame, FittingIsWhereAPlacedClipAlreadyIs) {
+  // Worth pinning down, because a note in the gap map claimed the opposite for
+  // weeks: scale is stored relative to the aspect-fit size, so a clip arrives
+  // fitted and this command is how one that has been scaled by hand gets back.
+  core::Project p = project_with(3840, 2160);
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::ScaleX, 250.0, 0.0);
+
+  const std::vector<std::string> ids{"c1"};
+  p = scale_to_frame(std::move(p), ids, FrameFit::Fit, 2.0);
+
+  EXPECT_DOUBLE_EQ(only_clip(p).transform.scale_x, 1.0);
+  EXPECT_DOUBLE_EQ(only_clip(p).transform.scale_y, 1.0);
+}
+
+TEST(ScaleToFrame, FillingCoversTheFrameOnBothAxes) {
+  // Four by three in a sixteen by nine frame: fitted it is 1440 wide with bars
+  // either side, and filling means growing until 1440 reaches 1920.
+  core::Project p = project_with(1440, 1080);
+  const std::vector<std::string> ids{"c1"};
+  p = scale_to_frame(std::move(p), ids, FrameFit::Fill, 2.0);
+
+  EXPECT_NEAR(only_clip(p).transform.scale_x, 1920.0 / 1440.0, 1e-9);
+  EXPECT_DOUBLE_EQ(only_clip(p).transform.scale_x, only_clip(p).transform.scale_y)
+      << "filling crops rather than stretching";
+}
+
+TEST(ScaleToFrame, FillingFootageTheShapeOfTheFrameChangesNothing) {
+  core::Project p = project_with(1920, 1080);
+  const std::vector<std::string> ids{"c1"};
+  p = scale_to_frame(std::move(p), ids, FrameFit::Fill, 2.0);
+
+  EXPECT_DOUBLE_EQ(only_clip(p).transform.scale_x, 1.0);
+}
+
+TEST(ScaleToFrame, AnAnimatedScaleTakesAKeyframeRatherThanLosingItsAnimation) {
+  core::Project p = project_with(1440, 1080);
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::ScaleX, 50.0, 0.0);
+  p = core::set_keyframe(std::move(p), "c1", core::AnimProp::ScaleX, 0.0, 0.5);
+
+  const std::vector<std::string> ids{"c1"};
+  p = scale_to_frame(std::move(p), ids, FrameFit::Fill, 4.0);
+
+  const core::Clip& clip = only_clip(p);
+  const std::vector<core::Keyframe>& keys =
+      clip.keyframes[core::anim_prop_index(core::AnimProp::ScaleX)];
+  EXPECT_GE(keys.size(), 2u) << "the animation was overwritten rather than added to";
+}
+
+TEST(ScaleToFrame, AudioIsPassedOver) {
+  core::Project p = project_with(1440, 1080);
+  core::Track audio{.id = "a1", .kind = core::TrackKind::Audio};
+  audio.clips.push_back(core::Clip{.id = "s1",
+                                   .media_id = "m1",
+                                   .kind = core::TrackKind::Audio,
+                                   .source_in = 0.0,
+                                   .source_out = 4.0,
+                                   .start = 2.0});
+  p.tracks.push_back(std::move(audio));
+
+  const std::vector<std::string> ids{"s1"};
+  const core::Project before = p;
+  EXPECT_EQ(scale_to_frame(p, ids, FrameFit::Fill, 2.0), before);
+}
+
 }  // namespace
 }  // namespace cutline::editor

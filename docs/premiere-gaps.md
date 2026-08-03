@@ -622,7 +622,7 @@ had been written down anywhere:
 | | Premiere | Here | Size |
 |---|---|---|---|
 | ~~Separate audio on export~~ | one stream per track, or a mix | **done** — a third choice beside Stereo and Mono | — |
-| Scale to frame size | right-click a clip, and an import default | none; a mismatched clip is scaled by hand | wiring |
+| ~~Scale to frame size~~ | right-click a clip, and an import default | **the row was wrong** — see below. Fit and Fill are both on the clip menu now | — |
 | Frame hold / freeze frame | a still from one frame, in place | none | model |
 | Interpret footage | override a source's frame rate, alpha, channels | none — a source is what it says it is | model |
 | Paste attributes | pick which properties travel | the effect stack only, whole | control |
@@ -636,10 +636,21 @@ The first is the only one the *spec* asks for: §18's export dialog says
 rest are Premiere's rather than the spec's, which is why they are listed here
 rather than counted against parity.
 
-Two are worth more than their row. **Scale to frame size** is the one people
-reach for within a minute of importing anything that is not exactly the
-sequence's size, and it is wiring: the transform already scales, and this is
-arithmetic on the media's dimensions. **The render bar** is the opposite —
+**Scale to frame size was already the behaviour**, and this page said otherwise
+for weeks. Scale here is stored *relative to the aspect-fit size*, so 1 means
+"as large as it goes without distortion" and a 4K clip in a 1080p sequence
+arrives fitted rather than cropped. Premiere's command exists because Premiere's
+default is native pixels. Reading the row rather than the code is what kept it
+open; `core::natural_size` says so in its first sentence.
+
+What was genuinely missing is the other half — **filling** a frame the footage
+is the wrong shape for, which is what anybody with black bars actually wants —
+and both are on the clip menu now, because neither is much use without the other
+to get back to. Filling scales both axes by the same factor, so it crops rather
+than stretches, and it goes through the same setter the inspector's rows use, so
+an animated scale takes a keyframe instead of quietly losing its animation.
+
+**The render bar** is the opposite —
 nothing in the application caches a rendered span, so it is a subsystem rather
 than a control, and it is only worth building if scrubbing a heavy stack ever
 becomes too slow to work with.

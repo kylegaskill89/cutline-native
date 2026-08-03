@@ -18,6 +18,8 @@
 
 #include <cstddef>
 #include <optional>
+#include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -43,6 +45,40 @@ namespace cutline::editor {
 /// Returns the project unchanged when it cannot apply, like every other edit.
 [[nodiscard]] core::Project apply_monitor_box(core::Project project, std::string_view clip_id,
                                               const ui::MonitorBox& box, double t);
+
+// ------------------------------------------------------------- framing --
+
+/// What a clip should do with a frame it does not match the shape of.
+enum class FrameFit {
+  /// The whole picture on screen, with bars where the shapes differ. This is
+  /// what a placed clip already does — scale 1 *is* the aspect fit — so it is
+  /// also how a clip that has been scaled by hand gets back to sensible.
+  Fit,
+  /// The frame filled, with whatever does not fit falling outside it. The one
+  /// people reach for on footage that is nearly the right shape and has bars
+  /// nobody wants.
+  Fill,
+};
+
+/// Scales every named clip to fit or fill the sequence.
+///
+/// Worth stating plainly, because a note in the gap map had it wrong for weeks:
+/// **"scale to frame size" is already what placing a clip does here.** The model
+/// stores scale relative to the aspect-fit size, so a 4K clip in a 1080p
+/// sequence arrives fitted rather than cropped, and Premiere's command exists
+/// because Premiere's default is native pixels. What is genuinely missing is
+/// the other half — filling a frame the footage is the wrong shape for — and
+/// both are offered together, since neither is any use without the other to get
+/// back to.
+///
+/// Through the same setter the inspector's rows use, so an animated scale takes
+/// keyframes at `t` rather than quietly losing its animation.
+///
+/// Clips with nothing to measure — audio, and anything with no stored size —
+/// are passed over rather than scaled by a guess.
+[[nodiscard]] core::Project scale_to_frame(core::Project project,
+                                           std::span<const std::string> clip_ids, FrameFit fit,
+                                           double t);
 
 // ------------------------------------------------------------------ masks --
 
