@@ -632,7 +632,9 @@ application, and several controls are icons with no words at all.
 | Volume rubber band | yes | **done**, with keyframes | — |
 | Keyframe marks on a clip | yes | **done** | — |
 | Snapping | yes | **done** | — |
-| Zoom, and zoom to fit | yes | **done** | — |
+| Zoom, and zoom to fit | wheel, keys, and the scrollbar | **done** — wheel about the pointer, `=`/`-` about the playhead, `\` to fit, and either end of the scrollbar | — |
+| Scrollbars | horizontal (which also zooms) and vertical | **done** — neither appears when it would have nothing to say | — |
+| An fx badge on a clip with effects | yes | **done** | — |
 | Track height, per track | dragged, and expand/collapse all | **done** — dragged on the line under a header, double-click puts it back | — |
 | Markers with duration and comment | yes | a name and a colour, no duration | model + control |
 | Scroll to follow playback | smooth or page | **done** — pages, so the picture is not always moving | — |
