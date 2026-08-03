@@ -163,6 +163,144 @@ TEST(TimelineMenu, ADisabledClipIsDrawnAsOne) {
   EXPECT_NE(*playing, *silent);
 }
 
+// ------------------------------------------------- the ripple and roll --
+
+TEST(RippleTool, AnEdgeIsWhatItActsOn) {
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Ripple);
+  const Rect box = fixture.view->block_rect(1, 0);
+
+  EXPECT_EQ(fixture.view->zone_at(box.x + 4.0, box.y + 5.0), DragMode::RippleStart);
+  EXPECT_EQ(fixture.view->zone_at(box.right() - 4.0, box.y + 5.0), DragMode::RippleEnd);
+  // Whichever end is nearer, everywhere on the clip: the tool means one thing,
+  // and a dead zone in the middle would be a tool that ignores what it is
+  // pointed at.
+  EXPECT_EQ(fixture.view->zone_at(box.x + box.width * 0.3, box.y + 5.0),
+            DragMode::RippleStart);
+}
+
+TEST(RippleTool, DraggingATailTakesWhatFollowsWithIt) {
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Ripple);
+  fixture.view->set_snapping(false);
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  const double was = fixture.view->model().tracks[1].blocks[1].start;
+  fixture.host->mouse_down(press(box.right() - 3.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.right() - 103.0, box.y + 5.0));
+
+  // A hundred pixels at a hundred a second is a second shorter, and the clip
+  // after it has come back by the same second.
+  EXPECT_NEAR(fixture.view->model().tracks[1].blocks[0].end, 4.0, 0.01);
+  EXPECT_NEAR(fixture.view->model().tracks[1].blocks[1].start, was - 1.0, 0.01);
+}
+
+TEST(RippleTool, EveryTrackFollows) {
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Ripple);
+  fixture.view->set_snapping(false);
+
+  // The audio clip on track 2 starts at zero, so it is not downstream of a
+  // trim at five seconds; the one on track 0 starts at two, which is.
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.right() - 3.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.right() + 97.0, box.y + 5.0));
+
+  EXPECT_NEAR(fixture.view->model().tracks[0].blocks[0].start, 2.0, 0.01)
+      << "it started before the edge, so it stays";
+}
+
+TEST(RippleTool, ARippledHeadKeepsTheClipWhereItIs) {
+  // The net of trimming a head and closing the gap in front of it, which is
+  // what the release will do — so it is what the drag shows.
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Ripple);
+  fixture.view->set_snapping(false);
+
+  const Rect box = fixture.view->block_rect(1, 1);
+  const double start = fixture.view->model().tracks[1].blocks[1].start;
+  fixture.host->mouse_down(press(box.x + 3.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.x + 103.0, box.y + 5.0));
+
+  const TimelineBlock& shown = fixture.view->model().tracks[1].blocks[1];
+  EXPECT_NEAR(shown.start, start, 0.01) << "it did not move";
+  EXPECT_NEAR(shown.duration(), 6.0, 0.01) << "and is a second shorter";
+}
+
+TEST(RippleTool, TheEdgeItEndedOnIsReported) {
+  // `result` cannot say where a rippled head went — the clip's start is exactly
+  // where it was — so the edit carries the edge separately.
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Ripple);
+  fixture.view->set_snapping(false);
+
+  std::optional<TimelineEdit> edit;
+  fixture.view->set_on_edit([&](const TimelineEdit& done) { edit = done; });
+
+  const Rect box = fixture.view->block_rect(1, 1);
+  fixture.host->mouse_down(press(box.x + 3.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.x + 103.0, box.y + 5.0));
+  fixture.host->mouse_up(press(box.x + 103.0, box.y + 5.0));
+
+  ASSERT_TRUE(edit.has_value());
+  EXPECT_EQ(edit->mode, DragMode::RippleStart);
+  EXPECT_NEAR(edit->at, 6.0, 0.01) << "the head was dragged from five to six";
+}
+
+TEST(RollTool, MovesTheJoinAndLeavesTheLengthAlone) {
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Roll);
+  fixture.view->set_snapping(false);
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  const double after_was = fixture.view->model().tracks[1].blocks[1].end;
+  fixture.host->mouse_down(press(box.right() - 3.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.right() + 97.0, box.y + 5.0));
+
+  const auto& blocks = fixture.view->model().tracks[1].blocks;
+  EXPECT_NEAR(blocks[0].end, 6.0, 0.01);
+  EXPECT_NEAR(blocks[1].start, 6.0, 0.01) << "the join moved as one";
+  EXPECT_NEAR(blocks[1].end, after_was, 0.01) << "and the far end did not";
+}
+
+TEST(RollTool, SurvivesTheModelBeingRebuiltByTheSelectionItCauses) {
+  // What the application does on every press: the selection changes, and the
+  // handler rebuilds the whole model from the project. Anything the press
+  // captured has to still be valid afterwards.
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Roll);
+  fixture.view->set_snapping(false);
+  fixture.view->set_on_select([&](std::span<const BlockRef> chosen) {
+    TimelineModel rebuilt = sample_model();
+    for (const BlockRef& ref : chosen) {
+      rebuilt.tracks[ref.track].blocks[ref.block].selected = true;
+    }
+    fixture.view->set_model(std::move(rebuilt));
+  });
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.right() - 8.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.right() + 92.0, box.y + 5.0));
+
+  const auto& blocks = fixture.view->model().tracks[1].blocks;
+  EXPECT_NEAR(blocks[0].end, 6.0, 0.01);
+  EXPECT_NEAR(blocks[1].start, 6.0, 0.01);
+}
+
+TEST(RollTool, AnEdgeThatIsNotAJoinDoesNothing) {
+  // The last clip on the track has nothing after it to roll into.
+  Fixture fixture;
+  fixture.view->set_tool(Tool::Roll);
+  fixture.view->set_snapping(false);
+
+  const Rect box = fixture.view->block_rect(1, 1);
+  const TimelineBlock before = fixture.view->model().tracks[1].blocks[1];
+  fixture.host->mouse_down(press(box.right() - 3.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.right() - 103.0, box.y + 5.0));
+
+  EXPECT_EQ(fixture.view->model().tracks[1].blocks[1], before);
+}
+
 // -------------------------------------------------------- track heights --
 
 TEST(TrackHeight, ALaneWithNoHeightOfItsOwnTakesTheThemes) {

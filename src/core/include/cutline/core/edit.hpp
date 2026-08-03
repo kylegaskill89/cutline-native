@@ -115,6 +115,33 @@ struct PlacementRange {
 [[nodiscard]] Project set_clip_edge(Project p, std::string_view clip_id, ClipEdge edge,
                                     double timeline_time);
 
+/// Ripple trim: the same edge move, with everything downstream following.
+///
+/// The difference from `set_clip_edge` is what stops it. An ordinary trim is
+/// bounded by the clip beside it and leaves a gap when it pulls away; a ripple
+/// pushes that clip along instead, so the only limits left are the source
+/// available and the shortest a clip may be — and the sequence gets shorter or
+/// longer by exactly what was trimmed.
+///
+/// Everything on **every** track moves, so nothing that was in sync stops
+/// being. Trimming a head keeps the clip where it is and pulls what follows
+/// along; without that a ripple on the in-edge would leave a hole in front of
+/// the very clip that was trimmed.
+[[nodiscard]] Project ripple_trim_edge(Project p, std::string_view clip_id, ClipEdge edge,
+                                       double timeline_time);
+
+/// Rolling edit: moves a *join* — one clip's out-edge and its neighbour's
+/// in-edge together — so the cut lands somewhere else and nothing else moves.
+///
+/// The one edit where the sequence's length is guaranteed unchanged: what one
+/// clip gains the other loses. Bounded by the source available on both sides at
+/// once, since either running out is what stops the join travelling.
+///
+/// Does nothing at an edge that is not a join: a gap or the end of the track is
+/// not a cut, and there is nothing on the other side of it to roll into.
+[[nodiscard]] Project roll_edit(Project p, std::string_view clip_id, ClipEdge edge,
+                                double timeline_time);
+
 /// Rate stretch: dragging an edge changes the clip's *speed* rather than
 /// trimming its source. The source in and out stay fixed and the speed becomes
 /// `source_span / new_length`. Applied across the linked group.

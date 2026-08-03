@@ -354,6 +354,128 @@ TEST(Slide, UnknownClipIsANoOp) {
   EXPECT_EQ(slide_clip(before, "nope", 1.0), before);
 }
 
+// ------------------------------------------------- ripple trim and roll --
+
+TEST(RippleTrim, ShorteningATailPullsEverythingAfterItAlong) {
+  Project p = three_clip_project();
+  p = ripple_trim_edge(std::move(p), "a", ClipEdge::Out, 3.0);
+
+  ASSERT_EQ(video(p).clips.size(), 3u);
+  EXPECT_DOUBLE_EQ(clip_end(video(p).clips[0]), 3.0);
+  EXPECT_DOUBLE_EQ(video(p).clips[1].start, 3.0) << "b closed the gap";
+  EXPECT_DOUBLE_EQ(video(p).clips[2].start, 8.0);
+}
+
+TEST(RippleTrim, LengtheningATailPushesEverythingAfterItAlong) {
+  Project p = three_clip_project();
+  p = ripple_trim_edge(std::move(p), "a", ClipEdge::Out, 7.0);
+
+  EXPECT_DOUBLE_EQ(clip_end(video(p).clips[0]), 7.0);
+  EXPECT_DOUBLE_EQ(video(p).clips[1].start, 7.0);
+  EXPECT_DOUBLE_EQ(video(p).clips[2].start, 12.0);
+}
+
+TEST(RippleTrim, IsNotStoppedByTheClipBesideIt) {
+  // The whole difference from an ordinary trim: that clip is what moves.
+  Project trimmed = three_clip_project();
+  trimmed = set_clip_edge(std::move(trimmed), "a", ClipEdge::Out, 7.0);
+  EXPECT_DOUBLE_EQ(clip_end(video(trimmed).clips[0]), 5.0) << "an ordinary trim stops at b";
+}
+
+TEST(RippleTrim, TrimmingAHeadLeavesTheClipWhereItIs) {
+  // And pulls what follows along. Without that a ripple on the in-edge would
+  // leave a hole in front of the very clip that was trimmed.
+  Project p = three_clip_project();
+  p = ripple_trim_edge(std::move(p), "b", ClipEdge::In, 7.0);
+
+  ASSERT_EQ(video(p).clips.size(), 3u);
+  EXPECT_DOUBLE_EQ(video(p).clips[0].start, 0.0);
+  EXPECT_DOUBLE_EQ(clip_end(video(p).clips[0]), 5.0) << "a is untouched";
+  EXPECT_DOUBLE_EQ(video(p).clips[1].start, 5.0) << "b still starts where it did";
+  EXPECT_DOUBLE_EQ(clip_end(video(p).clips[1]), 8.0) << "and is two seconds shorter";
+  EXPECT_DOUBLE_EQ(video(p).clips[2].start, 8.0);
+}
+
+TEST(RippleTrim, EveryTrackFollows) {
+  // Or a ripple on the picture would slide the sound out of sync with it.
+  Project p = three_clip_project();
+  Track audio;
+  audio.id = "a1";
+  audio.kind = TrackKind::Audio;
+  audio.clips = {clip_of("s1", 0.0, 0.0, 5.0), clip_of("s2", 5.0, 5.0, 10.0)};
+  p.tracks.push_back(audio);
+
+  p = ripple_trim_edge(std::move(p), "a", ClipEdge::Out, 3.0);
+  EXPECT_DOUBLE_EQ(p.tracks[1].clips[1].start, 3.0);
+}
+
+TEST(RippleTrim, StillStopsWhenTheSourceRunsOut) {
+  Project p = three_clip_project();
+  // c is [10,15) drawn from 10 to 15 of a twenty-second media: five to spare.
+  p = ripple_trim_edge(std::move(p), "c", ClipEdge::Out, 40.0);
+  EXPECT_DOUBLE_EQ(clip_end(video(p).clips[2]), 20.0);
+}
+
+TEST(RollEdit, MovesTheJoinAndNothingElse) {
+  Project p = three_clip_project();
+  const double was = timeline_duration(p);
+
+  p = roll_edit(std::move(p), "a", ClipEdge::Out, 7.0);
+
+  ASSERT_EQ(video(p).clips.size(), 3u);
+  EXPECT_DOUBLE_EQ(clip_end(video(p).clips[0]), 7.0);
+  EXPECT_DOUBLE_EQ(video(p).clips[1].start, 7.0);
+  EXPECT_DOUBLE_EQ(clip_end(video(p).clips[1]), 10.0) << "b lost what a gained";
+  EXPECT_DOUBLE_EQ(video(p).clips[2].start, 10.0) << "c has not moved";
+  EXPECT_DOUBLE_EQ(timeline_duration(p), was);
+}
+
+TEST(RollEdit, TheJoinCanBeRolledEitherWay) {
+  Project p = three_clip_project();
+  p = roll_edit(std::move(p), "b", ClipEdge::In, 3.0);
+
+  EXPECT_DOUBLE_EQ(clip_end(video(p).clips[0]), 3.0);
+  EXPECT_DOUBLE_EQ(video(p).clips[1].start, 3.0);
+  EXPECT_DOUBLE_EQ(clip_end(video(p).clips[1]), 10.0);
+}
+
+TEST(RollEdit, TheSourceTravelsWithTheJoin) {
+  // What a roll is for: the same instant of the sequence shows a later part of
+  // one clip and an earlier part of the other.
+  Project p = three_clip_project();
+  p = roll_edit(std::move(p), "a", ClipEdge::Out, 7.0);
+
+  EXPECT_DOUBLE_EQ(video(p).clips[0].source_out, 7.0);
+  EXPECT_DOUBLE_EQ(video(p).clips[1].source_in, 7.0);
+}
+
+TEST(RollEdit, AnEdgeThatIsNotAJoinIsLeftAlone) {
+  Project p = three_clip_project();
+  const Project before = p;
+  // Nothing after c, and nothing before a.
+  EXPECT_EQ(roll_edit(before, "c", ClipEdge::Out, 12.0), before);
+  EXPECT_EQ(roll_edit(before, "a", ClipEdge::In, 1.0), before);
+}
+
+TEST(RollEdit, StopsWhereEitherSideRunsOutOfSource) {
+  Project p;
+  p.media = {media_of("m1", 20.0)};
+  Track v;
+  v.id = "v1";
+  v.kind = TrackKind::Video;
+  // b has only a second of source past its out point.
+  v.clips = {clip_of("a", 0.0, 0.0, 5.0), clip_of("b", 5.0, 5.0, 10.0)};
+  v.clips[1].source_in = 5.0;
+  v.clips[1].source_out = 10.0;
+  p.tracks = {v};
+
+  // a has fifteen seconds of handle to give, so what stops this is b's head
+  // running out — it can only give up five before it is at its own source in.
+  p = roll_edit(std::move(p), "a", ClipEdge::Out, 40.0);
+  EXPECT_LE(clip_end(p.tracks[0].clips[0]), 10.0 + 1e-9);
+  EXPECT_GE(clip_duration(p.tracks[0].clips[1]), kMinClip - 1e-9);
+}
+
 // ------------------------------------------------------------ copy / paste --
 
 TEST(CopyClips, TakesTheWholeClipAndTheLaneItWasOn) {

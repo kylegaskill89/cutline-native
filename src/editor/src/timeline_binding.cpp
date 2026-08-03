@@ -237,6 +237,21 @@ core::Project apply_timeline_edit(core::Project project, std::string_view clip_i
       return core::set_clip_edge(std::move(project), clip_id, core::ClipEdge::Out,
                                  edit.result.end);
 
+    // The edge these ended on is `at` rather than something read off `result`:
+    // a rippled head leaves the clip's start where it was, because the gap
+    // behind it closed, so the result cannot say where the trim went.
+    case ui::DragMode::RippleStart:
+      return core::ripple_trim_edge(std::move(project), clip_id, core::ClipEdge::In, edit.at);
+
+    case ui::DragMode::RippleEnd:
+      return core::ripple_trim_edge(std::move(project), clip_id, core::ClipEdge::Out, edit.at);
+
+    case ui::DragMode::RollStart:
+      return core::roll_edit(std::move(project), clip_id, core::ClipEdge::In, edit.at);
+
+    case ui::DragMode::RollEnd:
+      return core::roll_edit(std::move(project), clip_id, core::ClipEdge::Out, edit.at);
+
     case ui::DragMode::RateStart:
       return core::rate_stretch_edge(std::move(project), clip_id, core::ClipEdge::In,
                                      edit.result.start);

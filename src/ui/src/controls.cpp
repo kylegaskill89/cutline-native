@@ -1431,6 +1431,35 @@ void IconButton::paint_content(Painter& painter, const Theme& theme) const {
       painter.fill(Rect{cx - reach * 0.45, cy - reach * 0.6, reach * 0.9, reach * 1.2}, 1.0,
                    Fill::solid(style.text));
       break;
+
+    case Icon::Ripple:
+      // One edge, and what is behind it going the same way. The single bar is
+      // what separates this from the roll beside it, which has two.
+      painter.line(cx - reach * 0.4, cy - reach * 0.8, cx - reach * 0.4, cy + reach * 0.8,
+                   style.text, width);
+      painter.line(cx - reach * 0.1, cy, cx + reach, cy, style.text, width);
+      painter.line(cx + reach, cy, cx + reach * 0.45, cy - reach * 0.5, style.text, width);
+      painter.line(cx + reach, cy, cx + reach * 0.45, cy + reach * 0.5, style.text, width);
+      break;
+
+    case Icon::Roll:
+      // The join itself, with the arrows on it going both ways: what moves is
+      // the line between two clips, and neither end of the pair does.
+      painter.line(cx - reach, cy - reach * 0.8, cx - reach, cy + reach * 0.8, style.text,
+                   width);
+      painter.line(cx + reach, cy - reach * 0.8, cx + reach, cy + reach * 0.8, style.text,
+                   width);
+      painter.line(cx, cy - reach * 0.8, cx, cy + reach * 0.8, style.text, width);
+      painter.line(cx - reach * 0.55, cy, cx + reach * 0.55, cy, style.text, width);
+      painter.line(cx - reach * 0.55, cy, cx - reach * 0.2, cy - reach * 0.35, style.text,
+                   width);
+      painter.line(cx - reach * 0.55, cy, cx - reach * 0.2, cy + reach * 0.35, style.text,
+                   width);
+      painter.line(cx + reach * 0.55, cy, cx + reach * 0.2, cy - reach * 0.35, style.text,
+                   width);
+      painter.line(cx + reach * 0.55, cy, cx + reach * 0.2, cy + reach * 0.35, style.text,
+                   width);
+      break;
   }
 
   // Whether the toggle is on is drawn into the mark as well as left to the

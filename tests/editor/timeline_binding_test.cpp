@@ -219,6 +219,32 @@ TEST(Binding, SoloingOneAudioTrackMutesTheOthers) {
       selection);
 }
 
+TEST(Binding, ARippledEdgeUsesTheEdgeItWasDraggedTo) {
+  // `result` cannot say where a rippled head went, so the edit carries it in
+  // `at` and this is what reads it.
+  const Project after = apply_timeline_edit(
+      sample_project(), "c1",
+      ui::TimelineEdit{.mode = ui::DragMode::RippleEnd,
+                       .result = ui::TimelineBlock{.start = 0.0, .end = 3.0},
+                       .at = 3.0});
+
+  EXPECT_DOUBLE_EQ(core::clip_end(*core::find_clip(after, "c1")), 3.0);
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "c2")->start, 3.0) << "c2 closed the gap";
+}
+
+TEST(Binding, ARolledJoinMovesBothSidesOfIt) {
+  const Project after = apply_timeline_edit(
+      sample_project(), "c1",
+      ui::TimelineEdit{.mode = ui::DragMode::RollEnd,
+                       .result = ui::TimelineBlock{.start = 0.0, .end = 7.0},
+                       .at = 7.0});
+
+  EXPECT_DOUBLE_EQ(core::clip_end(*core::find_clip(after, "c1")), 7.0);
+  EXPECT_DOUBLE_EQ(core::find_clip(after, "c2")->start, 7.0);
+  EXPECT_DOUBLE_EQ(core::clip_end(*core::find_clip(after, "c2")), 12.0)
+      << "the far end of the pair did not move";
+}
+
 TEST(Binding, MovingABlockMovesTheClip) {
   const Project before = sample_project();
   const Project after = drag(before, "title", ui::DragMode::Move, 9.0, 12.0);

@@ -85,6 +85,8 @@ std::string_view to_string(Tool tool) noexcept {
   switch (tool) {
     case Tool::Selection: return "selection";
     case Tool::Razor: return "razor";
+    case Tool::Ripple: return "ripple";
+    case Tool::Roll: return "roll";
     case Tool::RateStretch: return "rate";
     case Tool::Slip: return "slip";
     case Tool::Slide: return "slide";
@@ -103,11 +105,13 @@ std::string_view to_string(TrackControl control) noexcept {
 }
 
 bool pulls_start(DragMode mode) noexcept {
-  return mode == DragMode::TrimStart || mode == DragMode::RateStart;
+  return mode == DragMode::TrimStart || mode == DragMode::RateStart ||
+         mode == DragMode::RippleStart || mode == DragMode::RollStart;
 }
 
 bool pulls_end(DragMode mode) noexcept {
-  return mode == DragMode::TrimEnd || mode == DragMode::RateEnd;
+  return mode == DragMode::TrimEnd || mode == DragMode::RateEnd ||
+         mode == DragMode::RippleEnd || mode == DragMode::RollEnd;
 }
 
 std::vector<double> snap_points(const TimelineModel& model, double playhead,
@@ -700,9 +704,16 @@ DragMode TimelineView::zone_at(double x, double y) const {
     // Halves rather than the trim handles. A rate stretch has nothing to do in
     // the middle of a clip, so leaving a dead zone there would mean a tool that
     // ignores most of what it is pointed at; whichever end is nearer is what
-    // was meant anyway.
+    // was meant anyway. The same for the two edge tools below, which also mean
+    // one thing and only ever act on an end.
     case Tool::RateStretch:
       return x < box.x + box.width * 0.5 ? DragMode::RateStart : DragMode::RateEnd;
+
+    case Tool::Ripple:
+      return x < box.x + box.width * 0.5 ? DragMode::RippleStart : DragMode::RippleEnd;
+
+    case Tool::Roll:
+      return x < box.x + box.width * 0.5 ? DragMode::RollStart : DragMode::RollEnd;
 
     case Tool::Selection:
       break;
@@ -1187,6 +1198,44 @@ void TimelineView::capture_neighbours() {
   }
 }
 
+void TimelineView::capture_downstream(double from) {
+  moving_.clear();
+  if (!drag_.has_value()) return;
+
+  // Every track, not only the one being dragged: a ripple that moved the
+  // picture and left the sound where it was would put the whole sequence out
+  // of sync from that point on, which is the fault the core avoids too.
+  //
+  // The dragged clip itself is left out. What happens to it is the trim, and
+  // the ripple is what happens to everything else.
+  for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
+    const std::vector<TimelineBlock>& row = model_.tracks[track].blocks;
+    for (std::size_t i = 0; i < row.size(); ++i) {
+      if (track == drag_->track && i == drag_->block) continue;
+      if (row[i].start < from - kAbutEps) continue;
+      moving_.push_back(Moving{.ref = BlockRef{.track = track, .block = i}, .origin = row[i]});
+    }
+  }
+}
+
+std::optional<TimelineView::Neighbour> TimelineView::capture_join(bool at_start) {
+  if (!drag_.has_value()) return std::nullopt;
+
+  const std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
+  for (std::size_t i = 0; i < blocks.size(); ++i) {
+    if (i == drag_->block) continue;
+    // Abutting only. An edge with a gap beside it, or the end of the track, is
+    // not a join and there is nothing on the other side of it to roll into —
+    // which is what the core says as well.
+    const double meets = at_start ? blocks[i].end : blocks[i].start;
+    const double edge = at_start ? origin_.start : origin_.end;
+    if (std::abs(meets - edge) < kAbutEps) {
+      return Neighbour{.index = i, .origin = blocks[i]};
+    }
+  }
+  return std::nullopt;
+}
+
 void TimelineView::slide_to(double moved, double frame) {
   // Nothing abutting means nothing to slide against, which is what the core
   // says too. Moving the clip anyway would preview an edit the project then
@@ -1381,6 +1430,19 @@ void TimelineView::drag_to(double x) {
 
   TimelineBlock next = origin_;
 
+  /// Puts everything the ripple is carrying at its own start plus `delta`.
+  /// From the captured origins rather than from where the blocks are now, for
+  /// the same reason the dragged clip is: a long drag must not accumulate.
+  const auto shift_downstream = [&](double delta) {
+    for (const Moving& carried : moving_) {
+      if (carried.ref.track >= model_.tracks.size()) continue;
+      std::vector<TimelineBlock>& row = model_.tracks[carried.ref.track].blocks;
+      if (carried.ref.block >= row.size()) continue;
+      row[carried.ref.block].start = carried.origin.start + delta;
+      row[carried.ref.block].end = carried.origin.end + delta;
+    }
+  };
+
   switch (mode_) {
     case DragMode::Move: {
       double start = std::max(0.0, origin_.start + moved);
@@ -1436,6 +1498,52 @@ void TimelineView::drag_to(double x) {
       double end = origin_.end + moved;
       if (const auto snapped = nearest_snap(points, end, tolerance)) end = *snapped;
       next.end = std::max(origin_.start + frame, core::snap_to_frame(end, model_.fps));
+      break;
+    }
+
+    // A ripple shows what the sequence will look like once it has closed up,
+    // rather than showing the trim and then rearranging on release. Dragging a
+    // head therefore leaves the clip where it is and takes the length off the
+    // front, because that is the net of trimming it and closing the gap.
+    case DragMode::RippleStart: {
+      double start = origin_.start + moved;
+      if (const auto snapped = nearest_snap(points, start, tolerance)) start = *snapped;
+      start = std::clamp(core::snap_to_frame(start, model_.fps), 0.0, origin_.end - frame);
+
+      const double delta = start - origin_.start;
+      next.end = origin_.end - delta;
+      shift_downstream(-delta);
+      break;
+    }
+
+    case DragMode::RippleEnd: {
+      double end = origin_.end + moved;
+      if (const auto snapped = nearest_snap(points, end, tolerance)) end = *snapped;
+      next.end = std::max(origin_.start + frame, core::snap_to_frame(end, model_.fps));
+      shift_downstream(next.end - origin_.end);
+      break;
+    }
+
+    // A roll moves two edges and nothing else, so the neighbour is written here
+    // and the sequence keeps its length. Bounded by both clips keeping a frame:
+    // either of them disappearing would leave a join with one side.
+    case DragMode::RollStart: {
+      if (!before_.has_value()) return;
+      double start = origin_.start + moved;
+      if (const auto snapped = nearest_snap(points, start, tolerance)) start = *snapped;
+      next.start = std::clamp(core::snap_to_frame(start, model_.fps),
+                              before_->origin.start + frame, origin_.end - frame);
+      model_.tracks[drag_->track].blocks[before_->index].end = next.start;
+      break;
+    }
+
+    case DragMode::RollEnd: {
+      if (!after_.has_value()) return;
+      double end = origin_.end + moved;
+      if (const auto snapped = nearest_snap(points, end, tolerance)) end = *snapped;
+      next.end = std::clamp(core::snap_to_frame(end, model_.fps), origin_.start + frame,
+                            after_->origin.end - frame);
+      model_.tracks[drag_->track].blocks[after_->index].start = next.end;
       break;
     }
 
@@ -1717,6 +1825,11 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
 
     if (mode_ == DragMode::Move) capture_moving();
     if (mode_ == DragMode::Slide) capture_neighbours();
+    if (mode_ == DragMode::RippleStart || mode_ == DragMode::RippleEnd) {
+      capture_downstream(mode_ == DragMode::RippleStart ? origin_.start : origin_.end);
+    }
+    if (mode_ == DragMode::RollStart) before_ = capture_join(true);
+    if (mode_ == DragMode::RollEnd) after_ = capture_join(false);
   }
   return true;
 }
@@ -1926,6 +2039,24 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
   if (moved_ && drag_.has_value() && on_edit_) {
     const std::vector<TimelineBlock>& blocks = model_.tracks[drag_->track].blocks;
     if (drag_->block < blocks.size()) {
+      // Where the edge ended up, for the modes whose `result` cannot say. A
+      // rippled head leaves the clip's start exactly where it was — the gap
+      // closed behind it — so the trimmed edge has to be reported separately or
+      // the edit would look like nothing happened.
+      const TimelineBlock& shown = blocks[drag_->block];
+      double edge = 0.0;
+      switch (mode_) {
+        case DragMode::RippleStart:
+          // The head, in the clip's own terms: it lost `duration` from the
+          // front, and the edge it was dragged to is that far past its start.
+          edge = shown.start + (origin_.duration() - shown.duration());
+          break;
+        case DragMode::RippleEnd:
+        case DragMode::RollEnd: edge = shown.end; break;
+        case DragMode::RollStart: edge = shown.start; break;
+        default: break;
+      }
+
       on_edit_(TimelineEdit{
           .block = *drag_,
           .mode = mode_,
@@ -1934,7 +2065,8 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
           // every other edit rather than by however many pixels the hand
           // travelled.
           .delta = core::snap_to_frame((event.x - press_x_) / scale_.pixels_per_second,
-                                       model_.fps)});
+                                       model_.fps),
+          .at = edge});
     }
   }
 

@@ -521,15 +521,30 @@ you want the mode to stay.
 |---|---|---|---|
 | Drag an edge to trim | yes | **done** | — |
 | Slip, slide, rate stretch | tool **and** modifier gesture | tool only | wiring |
-| Ripple trim (edge drag that closes the gap) | yes | none — a trim leaves a gap | wiring |
-| Rolling edit (both sides of a cut at once) | yes | none | wiring |
+| Ripple trim (edge drag that closes the gap) | yes | **done** — a tool, on Premiere's B | — |
+| Rolling edit (both sides of a cut at once) | yes | **done** — a tool, on Premiere's N | — |
 | Trim to playhead (`Q` / `W`) | yes | none | wiring |
 | The trim monitor (two-up while trimming) | yes | none | machinery |
 | Nudge by frame | yes | **done** | — |
 
-Ripple and roll are the two that matter. Both are edits the core can already
-express — they are `set_clip_edge` plus an arrangement pass — and neither has a
-gesture reaching them.
+Ripple and roll were the two that mattered, and both are done — as tools, on
+Premiere's own B and N, sitting between the pointer and the razor where
+Premiere puts them.
+
+They are not `set_clip_edge` plus an arrangement pass, which is what an earlier
+draft of this page assumed. What separates a trim from a ripple is **what stops
+it**: an ordinary trim is bounded by the clip beside it, and a ripple pushes
+that clip along instead, so the neighbour cannot be both. The clamp is now a
+shared `edge_room` with that one difference as a flag, which is also what makes
+a roll expressible — a roll is the same clamp taken on both sides of a join at
+once, since either side running out of source is what stops it travelling.
+
+Two things fell out of it. A ripple on a *head* leaves the clip where it is and
+takes the length off the front, because that is the net of trimming it and
+closing the gap; the drag shows that rather than showing a trim and rearranging
+on release. And because of it the edit has to report the edge it ended on
+separately — `result` says the clip starts exactly where it did, so it cannot
+say where the trim went.
 
 ### 2.3 Clips on the timeline
 

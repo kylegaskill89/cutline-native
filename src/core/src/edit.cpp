@@ -19,6 +19,13 @@ namespace {
 
 constexpr double kInfinity = std::numeric_limits<double>::infinity();
 
+/// How close two times have to be to count as the same instant — as the edge a
+/// ripple pushes from, or the join a roll edits. A millisecond, which is the
+/// same tolerance the slide already uses for whether two clips abut: a cut the
+/// interface drew as a join and the model treated as a gap would be an edit
+/// that silently did nothing.
+constexpr double kTouchEps = 1e-3;
+
 /// Clips within a track are kept sorted by start time.
 void sort_track(Track& track) {
   std::ranges::stable_sort(track.clips, {}, &Clip::start);
@@ -304,19 +311,27 @@ Project move_clips(Project p, std::span<const std::string> clip_ids, double delt
   return p;
 }
 
-Project set_clip_edge(Project p, std::string_view clip_id, ClipEdge edge, double timeline_time) {
-  const Clip* target = find_clip(p, clip_id);
-  if (target == nullptr) return p;
+namespace {
 
-  const double desired =
-      edge == ClipEdge::In ? timeline_time - target->start : timeline_time - clip_end(*target);
-
-  const std::vector<std::string> member_ids = group_members(p, clip_id);
-  const std::unordered_set<std::string> members = id_set(member_ids);
-
-  // Intersect the allowable delta across every group member.
+/// How far an edge may move, in timeline seconds, before something stops it.
+///
+/// Intersected across every member of the linked group, so a video clip and its
+/// audio are trimmed by the same amount or not at all.
+///
+/// `neighbours` is what separates a trim from a ripple trim. An ordinary trim
+/// stops where the clip beside it begins; a ripple pushes that clip along
+/// instead, so the only limits left are the source available and the shortest a
+/// clip is allowed to be.
+struct EdgeRoom {
   double lo = -kInfinity;
   double hi = kInfinity;
+
+  [[nodiscard]] bool empty() const noexcept { return lo > hi; }
+};
+
+[[nodiscard]] EdgeRoom edge_room(const Project& p, const std::unordered_set<std::string>& members,
+                                 ClipEdge edge, bool neighbours) {
+  EdgeRoom room;
 
   for (const Track& track : p.tracks) {
     // Neighbours are determined in timeline order, which is how the track is
@@ -340,26 +355,31 @@ Project set_clip_edge(Project p, std::string_view clip_id, ClipEdge edge, double
         // Pulling the head earlier is bounded by the timeline start, the
         // previous clip, and the source available on that side. Reverse swaps
         // which source edge the head is anchored to.
-        double member_lo = std::max(-c.start, previous != nullptr
+        double member_lo = std::max(-c.start, neighbours && previous != nullptr
                                                   ? clip_end(*previous) - c.start
                                                   : -kInfinity);
         member_lo = std::max(member_lo, c.reverse ? -(media_duration - c.source_out) / speed
                                                   : -c.source_in / speed);
-        lo = std::max(lo, member_lo);
-        hi = std::min(hi, duration - kMinClip);
+        room.lo = std::max(room.lo, member_lo);
+        room.hi = std::min(room.hi, duration - kMinClip);
       } else {
-        double member_hi = next != nullptr ? next->start - clip_end(c) : kInfinity;
+        double member_hi =
+            neighbours && next != nullptr ? next->start - clip_end(c) : kInfinity;
         member_hi = std::min(member_hi, c.reverse ? c.source_in / speed
                                                   : (media_duration - c.source_out) / speed);
-        lo = std::max(lo, kMinClip - duration);
-        hi = std::min(hi, member_hi);
+        room.lo = std::max(room.lo, kMinClip - duration);
+        room.hi = std::min(room.hi, member_hi);
       }
     }
   }
+  return room;
+}
 
-  if (lo > hi) return p;  // over-constrained: no room to trim
-  const double delta = std::clamp(desired, lo, hi);
-
+/// Moves an edge of every member of a group by `delta` timeline seconds,
+/// taking the source with it. The caller has already decided the delta is
+/// allowed.
+void move_edge(Project& p, const std::unordered_set<std::string>& members, ClipEdge edge,
+               double delta) {
   for (Track& track : p.tracks) {
     for (Clip& c : track.clips) {
       if (!members.contains(c.id)) continue;
@@ -382,6 +402,106 @@ Project set_clip_edge(Project p, std::string_view clip_id, ClipEdge edge, double
   }
 
   sort_all_tracks(p);
+}
+
+}  // namespace
+
+Project set_clip_edge(Project p, std::string_view clip_id, ClipEdge edge, double timeline_time) {
+  const Clip* target = find_clip(p, clip_id);
+  if (target == nullptr) return p;
+
+  const double desired =
+      edge == ClipEdge::In ? timeline_time - target->start : timeline_time - clip_end(*target);
+  const std::unordered_set<std::string> members = id_set(group_members(p, clip_id));
+
+  const EdgeRoom room = edge_room(p, members, edge, true);
+  if (room.empty()) return p;  // over-constrained: no room to trim
+
+  move_edge(p, members, edge, std::clamp(desired, room.lo, room.hi));
+  return p;
+}
+
+Project ripple_trim_edge(Project p, std::string_view clip_id, ClipEdge edge,
+                         double timeline_time) {
+  const Clip* target = find_clip(p, clip_id);
+  if (target == nullptr) return p;
+
+  const double edge_was = edge == ClipEdge::In ? target->start : clip_end(*target);
+  const double desired = timeline_time - edge_was;
+  const std::unordered_set<std::string> members = id_set(group_members(p, clip_id));
+
+  // Without the neighbours: they are what moves, so they cannot also be what
+  // stops it.
+  const EdgeRoom room = edge_room(p, members, edge, false);
+  if (room.empty()) return p;
+
+  const double delta = std::clamp(desired, room.lo, room.hi);
+  if (delta == 0.0) return p;
+  move_edge(p, members, edge, delta);
+
+  // Everything downstream follows, on every track, so nothing that was in sync
+  // stops being. Compared against where the edge *was*, since the clips that
+  // move are the ones that were after it before the trim.
+  //
+  // The in-edge case includes the group itself: trimming a head and then
+  // pulling everything from there along means the clip keeps its place and the
+  // gap never opens. Without that a ripple on the head would leave a hole in
+  // front of the very clip that was trimmed.
+  const double shift = edge == ClipEdge::In ? -delta : delta;
+  for (Track& track : p.tracks) {
+    for (Clip& c : track.clips) {
+      const bool member = members.contains(c.id);
+      if (edge == ClipEdge::In) {
+        if (member || c.start >= edge_was - kTouchEps) c.start += shift;
+      } else {
+        if (!member && c.start >= edge_was - kTouchEps) c.start += shift;
+      }
+    }
+    sort_track(track);
+  }
+  return p;
+}
+
+Project roll_edit(Project p, std::string_view clip_id, ClipEdge edge, double timeline_time) {
+  const Clip* target = find_clip(p, clip_id);
+  if (target == nullptr) return p;
+
+  // The clip on the other side of the cut, which must actually meet this one:
+  // a roll is an edit to a *join*, and there is nothing to roll at an edge with
+  // a gap or the end of the track beyond it.
+  const double at = edge == ClipEdge::In ? target->start : clip_end(*target);
+  const Clip* other = nullptr;
+  for (const Track& track : p.tracks) {
+    for (const Clip& c : track.clips) {
+      if (c.id == target->id) continue;
+      const double meets = edge == ClipEdge::In ? clip_end(c) : c.start;
+      if (std::abs(meets - at) <= kTouchEps &&
+          std::ranges::any_of(track.clips, [&](const Clip& t) { return t.id == target->id; })) {
+        other = &c;
+      }
+    }
+  }
+  if (other == nullptr) return p;
+
+  const std::unordered_set<std::string> mine = id_set(group_members(p, clip_id));
+  const std::unordered_set<std::string> theirs = id_set(group_members(p, other->id));
+  const ClipEdge far = edge == ClipEdge::In ? ClipEdge::Out : ClipEdge::In;
+
+  // Both sides, without neighbours — each one's neighbour is the other, and the
+  // whole point is that they move together.
+  const EdgeRoom near_room = edge_room(p, mine, edge, false);
+  const EdgeRoom far_room = edge_room(p, theirs, far, false);
+  const EdgeRoom both{.lo = std::max(near_room.lo, far_room.lo),
+                      .hi = std::min(near_room.hi, far_room.hi)};
+  if (both.empty()) return p;
+
+  const double delta = std::clamp(timeline_time - at, both.lo, both.hi);
+  if (delta == 0.0) return p;
+
+  // The shrinking side first, so the join is briefly open rather than briefly
+  // overlapping — the growing one then has somewhere to go.
+  move_edge(p, mine, edge, delta);
+  move_edge(p, theirs, far, delta);
   return p;
 }
 

@@ -4328,6 +4328,11 @@ struct ToolEntry {
 
 constexpr std::array kTools{
     ToolEntry{cutline::ui::Tool::Selection, IconButton::Icon::Pointer, Key::V},
+    // Premiere's B and N, in Premiere's order: the two edge tools sit together
+    // between the pointer and the razor, because they are variations on the
+    // trim the pointer already does.
+    ToolEntry{cutline::ui::Tool::Ripple, IconButton::Icon::Ripple, Key::B},
+    ToolEntry{cutline::ui::Tool::Roll, IconButton::Icon::Roll, Key::N},
     ToolEntry{cutline::ui::Tool::Razor, IconButton::Icon::Razor, Key::C},
     ToolEntry{cutline::ui::Tool::RateStretch, IconButton::Icon::RateStretch, Key::R},
     ToolEntry{cutline::ui::Tool::Slip, IconButton::Icon::Slip, Key::Y},
@@ -4771,6 +4776,11 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
       return;
     }
     go_to_time(*app, *at);
+    // The keyboard goes back to the editor. A field that keeps it after Enter
+    // swallows every single-letter shortcut there is — pressing N for the roll
+    // tool types an N into the timecode instead, which is a confusing way to
+    // find out where the focus went.
+    if (app->main.host != nullptr) app->main.host->set_focus(nullptr);
   });
   // However the edit ends, the field goes back to saying where the playhead
   // actually is — including after an escape, and after a half-typed time the

@@ -385,6 +385,11 @@ enum class Tool {
   Selection,
   /// A click cuts. The one tool whose gesture is not a drag.
   Razor,
+  /// An edge trims and everything after it follows, so no gap opens.
+  Ripple,
+  /// A join moves: one clip's out-edge and its neighbour's in-edge together,
+  /// leaving the sequence exactly as long as it was.
+  Roll,
   /// An edge changes the clip's speed instead of its source.
   RateStretch,
   /// The body moves the source without moving the clip.
@@ -409,6 +414,17 @@ enum class DragMode {
   /// the clip can be dragged longer than the footage it came from.
   RateStart,
   RateEnd,
+  /// Trimming an edge with everything downstream following it, so the sequence
+  /// grows or shrinks by what was trimmed and nothing goes out of sync.
+  ///
+  /// The head case is the one worth stating: the clip keeps its *place* and
+  /// loses length from the front, because the ripple closes the gap the trim
+  /// would have opened in front of it.
+  RippleStart,
+  RippleEnd,
+  /// Moving a join. Two edges travel together and everything else stays put.
+  RollStart,
+  RollEnd,
   /// Moving which part of the source the clip shows. The clip itself does not
   /// move, which makes this the one mode with nothing to watch on the timeline:
   /// the change is inside the block, and staying put is what it means.
@@ -479,8 +495,9 @@ enum class DragMode {
 inline constexpr double kMinTrackHeight = 18.0;
 inline constexpr double kMaxTrackHeight = 400.0;
 
-/// Which edge a mode pulls, whichever tool is pulling it. Trim and rate stretch
-/// differ in what they do to the clip, not in which end is being held.
+/// Which edge a mode pulls, whichever tool is pulling it. Trim, ripple, roll
+/// and rate stretch differ in what they do to the clip, not in which end is
+/// being held.
 [[nodiscard]] bool pulls_start(DragMode mode) noexcept;
 [[nodiscard]] bool pulls_end(DragMode mode) noexcept;
 
@@ -502,7 +519,10 @@ struct TimelineEdit {
   /// what moved is the source, which the timeline does not model.
   double delta = 0.0;
 
-  /// `Razor` only: where the cut goes.
+  /// Where a gesture landed, in timeline seconds. `Razor` puts the cut here;
+  /// the ripples and rolls put the edge they ended on here, because `result`
+  /// shows the clip after the ripple closed up behind it and no longer says
+  /// where the edge was dragged to.
   double at = 0.0;
   /// `Razor` only: cut every track at `at` rather than only the clip clicked.
   bool all_tracks = false;
@@ -861,6 +881,16 @@ class TimelineView : public Widget {
 
   /// What a move should carry, taken at the press.
   void capture_moving();
+
+  /// What a ripple should carry: every block that starts at or after the edge
+  /// being dragged, on every track, so the whole sequence downstream follows
+  /// and nothing goes out of sync. Held in `moving_`, like a move's set.
+  void capture_downstream(double from);
+
+  /// The block on the other side of a join, and what it was when the roll
+  /// began. Absent when the edge is not a join, which is what makes a roll
+  /// there do nothing.
+  std::optional<Neighbour> capture_join(bool at_start);
 
   /// Where a slide's neighbours are, and the room they leave.
   void capture_neighbours();

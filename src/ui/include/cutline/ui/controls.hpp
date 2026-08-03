@@ -589,6 +589,12 @@ class IconButton : public Button {
     RateStretch,
     Slip,
     Slide,
+    /// An edge with everything behind it following: one bar, and arrows leaving
+    /// it in the same direction.
+    Ripple,
+    /// A join moving: two blocks that meet, with the line between them carrying
+    /// arrows both ways.
+    Roll,
   };
 
   explicit IconButton(Icon icon, std::function<void()> on_click = {});
