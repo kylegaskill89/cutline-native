@@ -294,9 +294,13 @@ TEST(Inspector, TheTransformAndOpacityCanBeAnimatedAndTheFadesCannot) {
   EXPECT_TRUE(find(specs, ClipParam::Rotation)->animatable);
 
   // A fade whose length changed over its own duration is not something the
-  // model can express, and neither is a speed that varies within a clip.
+  // model can express.
   EXPECT_FALSE(find(specs, ClipParam::FadeIn)->animatable);
-  EXPECT_FALSE(find(specs, ClipParam::Speed)->animatable);
+
+  // Speed is, and it is the odd one: every other animatable property here is a
+  // value at a moment, and this one is a rate whose effect accumulates. That is
+  // Premiere's Time Remapping.
+  EXPECT_TRUE(find(specs, ClipParam::Speed)->animatable);
 }
 
 TEST(Inspector, VolumeCanBeAnimated) {
@@ -574,8 +578,40 @@ TEST(Inspector, AKeyframeMarkerDoesNothingUntilTheStopwatchIsOn) {
 
 TEST(Inspector, AParameterThatCannotBeAnimatedRefusesToBe) {
   const Project before = sample_project();
-  EXPECT_EQ(set_clip_parameter_animated(before, "c1", ClipParam::Speed, true, 0.0), before);
   EXPECT_EQ(set_clip_parameter_animated(before, "c1", ClipParam::FadeIn, true, 0.0), before);
+  EXPECT_EQ(set_clip_parameter_animated(before, "c1", ClipParam::FadeOut, true, 0.0), before);
+}
+
+TEST(Inspector, EditingAnAnimatedSpeedWritesAKeyframeAtThePlayhead) {
+  // The whole of time remapping from the panel's side: with the stopwatch on,
+  // the number is the rate *here* rather than the rate throughout.
+  Project p = sample_project();
+  p = set_clip_parameter_animated(std::move(p), "c1", ClipParam::Speed, true, 0.0);
+  p = set_clip_parameter(std::move(p), "c1", ClipParam::Speed, 3.0, 2.0);
+
+  const core::Clip* clip = core::find_clip(p, "c1");
+  ASSERT_NE(clip, nullptr);
+  EXPECT_DOUBLE_EQ(clip->speed, 1.0) << "the stored speed should be left alone";
+  EXPECT_NEAR(core::speed_at(*clip, 0.0), 1.0, 1e-9);
+  EXPECT_NEAR(core::speed_at(*clip, 2.0), 3.0, 1e-9);
+  EXPECT_NEAR(core::speed_at(*clip, 1.0), 2.0, 1e-9) << "halfway up the ramp";
+
+  // And the row reports the rate at the moment it is asked about.
+  const std::vector<ParamSpec> here = clip_parameters(p, "c1", 1.0);
+  EXPECT_NEAR(find(here, ClipParam::Speed)->value, 2.0, 1e-9);
+}
+
+TEST(Inspector, TurningOnTheSpeedStopwatchKeepsTheSpeedItHad) {
+  Project before = sample_project();
+  before = set_clip_parameter(std::move(before), "c1", ClipParam::Speed, 2.0);
+
+  const Project after = set_clip_parameter_animated(before, "c1", ClipParam::Speed, true, 0.0);
+  ASSERT_NE(after, before) << "the stopwatch did nothing";
+
+  const core::Clip* clip = core::find_clip(after, "c1");
+  ASSERT_NE(clip, nullptr);
+  EXPECT_TRUE(core::is_time_remapped(*clip));
+  EXPECT_DOUBLE_EQ(core::speed_at(*clip, 0.0), 2.0);
 }
 
 TEST(Inspector, EveryParameterHasAName) {

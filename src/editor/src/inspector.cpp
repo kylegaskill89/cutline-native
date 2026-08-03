@@ -49,6 +49,7 @@ constexpr double kSliderMaxSpeed = 4.0;
     case ClipParam::AnchorX: return core::AnimProp::AnchorX;
     case ClipParam::AnchorY: return core::AnimProp::AnchorY;
     case ClipParam::Pan: return core::AnimProp::Pan;
+    case ClipParam::Speed: return core::AnimProp::Speed;
     default: return std::nullopt;
   }
 }
@@ -368,10 +369,12 @@ std::vector<ParamSpec> clip_parameters(const core::Project& project, std::string
                             .fallback = 0.0});
   }
 
+  // Animated, this is Premiere's Time Remapping: the number is the rate at this
+  // moment, and which source frame is shown is the area under it up to here.
   out.push_back(ParamSpec{.param = ClipParam::Speed,
                           .name = std::string(param_name(ClipParam::Speed)),
                           .range = {.minimum = kSliderMinSpeed, .maximum = kSliderMaxSpeed},
-                          .value = core::clip_speed(*clip),
+                          .value = core::speed_at(*clip, local_t),
                           .fallback = 1.0,
                           .suffix = "x"});
 

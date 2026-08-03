@@ -57,7 +57,7 @@ still opens the field rather than nudging the value somewhere nobody asked for.
 | Slider | behind a disclosure triangle | **done** | — |
 | Paired X/Y on one row | Position and Anchor Point are one row of two numbers | **done** — both, one stopwatch each | — |
 | **Anchor Point** | a property of its own; scale and rotation happen about it | **done** — in pixels of the layer, keyframeable, and it needed no shader change | — |
-| Time remapping | Speed keyframed, in Effect Controls | Speed is explicitly not animatable | model |
+| Time remapping | Speed keyframed, in Effect Controls | **done** — Speed is an animatable property, and which frame shows is the integral of it | — |
 | Anti-flicker filter | a slider under Motion | none | model + shader |
 | Per-row reset button | a visible circular arrow | **done**, and hidden on an animated row where it would write a keyframe holding the default | — |
 | Per-section reset | one per `fx` group | **done** — per effect, keyframes cleared with it | — |
@@ -439,11 +439,22 @@ And dragging the shape goes through the same setter a number does, so it writes
 a keyframe when the property is animated — found on screen, where a drag moved
 the outline and the render ignored it.
 
-**The shape of what is left.** Two rows in §1.1, and they are the two that were
-there from the first pass: **time remapping** — Premiere keyframes Speed itself,
-and ours is explicitly a constant — and the **anti-flicker filter**. Neither has
-been touched. Everything else in section 1 is done, and the catalogue is a
-branch at a time rather than a budget whenever anybody wants more of it.
+**The shape of what is left.** One row in §1.1: the **anti-flicker filter**, a
+slider under Motion that softens the shimmer a scaled-down still gets. It is the
+last thing in this section.
+
+Time remapping is done, and it is worth saying what it cost, because the answer
+was almost nothing: Speed became an animatable property like any other, so the
+stopwatch, the navigator, the curve editor and the file format all carried it
+without changing. The one new idea is that a rate is not a value — which source
+frame shows at a moment is the *integral* of the speed up to it, and that
+integral is taken through  so the curve it follows is the curve
+the graph draws.
+
+Audio deliberately does not follow the ramp, which is what Premiere does too: a
+speed ramp on the picture would be a slide in pitch on the sound, and avoiding
+that needs a continuously varying retime rather than the fixed stretch a
+constant speed uses.
 
 The path was the last piece of machinery here, and the one that finally needed
 something the root constants could not hold: sixty-four DWORDs will carry a
@@ -561,7 +572,7 @@ had been written down anywhere:
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| **Separate audio on export** | one stream per track, or a mix | mix only, stereo or mono | wiring |
+| ~~Separate audio on export~~ | one stream per track, or a mix | **done** — a third choice beside Stereo and Mono | — |
 | Scale to frame size | right-click a clip, and an import default | none; a mismatched clip is scaled by hand | wiring |
 | Frame hold / freeze frame | a still from one frame, in place | none | model |
 | Interpret footage | override a source's frame rate, alpha, channels | none — a source is what it says it is | model |

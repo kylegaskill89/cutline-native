@@ -60,6 +60,31 @@ struct Handles {
 /// the clip. Accounts for speed and reverse.
 [[nodiscard]] double source_time_at(const Clip& c, double t) noexcept;
 
+/// The clip's playback rate at clip-local time `local_t`.
+///
+/// The stored `speed` unless it is animated, in which case the keyframes decide.
+/// Clamped to the same bounds a typed speed is, so a curve that overshoots
+/// cannot ask for a rate the rest of the machinery would not accept.
+[[nodiscard]] double speed_at(const Clip& c, double local_t) noexcept;
+
+/// How far into the source the clip has travelled after `local_t` seconds of
+/// timeline, before the direction is applied.
+///
+/// The *integral* of the speed, which is what makes an animated one mean
+/// anything: at a constant rate this is `local_t * speed`, and on a ramp it is
+/// the area under the curve up to that moment. A clip that starts at rest and
+/// accelerates has consumed almost no source at the beginning, however fast it
+/// is going by the end.
+///
+/// Integrated through `eval_keyframes` rather than in closed form, so the curve
+/// this follows is the curve the graph in the panel draws. There is no second
+/// implementation to drift.
+[[nodiscard]] double source_offset_at(const Clip& c, double local_t) noexcept;
+
+/// Whether the clip's speed is animated, which is what makes it time-remapped
+/// rather than merely fast or slow.
+[[nodiscard]] bool is_time_remapped(const Clip& c) noexcept;
+
 /// The source range that plays during the clip's timeline sub-window [a, b].
 /// Reverse-aware, so splitting or carving a retimed or reversed clip keeps each
 /// piece's frames correct.

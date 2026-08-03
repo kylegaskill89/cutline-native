@@ -62,8 +62,12 @@ namespace {
 /// Keyframe lists are stored under property names rather than array positions,
 /// so reordering the AnimProp enumerators cannot silently reinterpret a file.
 constexpr std::array<const char*, kAnimPropCount> kAnimPropNames{
-    "x", "y", "scale_x", "scale_y", "rotation", "opacity", "anchor_x", "anchor_y", "pan",
+    "x",        "y",        "scale_x", "scale_y", "rotation",
+    "opacity",  "anchor_x", "anchor_y", "pan",     "speed",
 };
+static_assert(kAnimPropNames.back() != nullptr,
+              "every animatable property needs a name in the file, or the last one is read "
+              "through an uninitialised pointer");
 
 // ------------------------------------------------------------------ writing --
 

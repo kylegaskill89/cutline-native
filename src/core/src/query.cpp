@@ -1,5 +1,7 @@
 #include "cutline/core/query.hpp"
 
+#include "cutline/core/keyframe.hpp"
+
 #include <algorithm>
 #include <limits>
 #include <utility>
@@ -43,8 +45,41 @@ Handles source_handles(const Project& p, const Clip& c) noexcept {
   return source_handles(c, media->duration);
 }
 
+bool is_time_remapped(const Clip& c) noexcept {
+  return !c.keyframes[anim_prop_index(AnimProp::Speed)].empty();
+}
+
+double speed_at(const Clip& c, double local_t) noexcept {
+  const std::vector<Keyframe>& curve = c.keyframes[anim_prop_index(AnimProp::Speed)];
+  if (curve.empty()) return clip_speed(c);
+  return std::clamp(eval_keyframes(curve, local_t), kMinSpeed, kMaxSpeed);
+}
+
+double source_offset_at(const Clip& c, double local_t) noexcept {
+  if (!is_time_remapped(c)) return local_t * clip_speed(c);
+  if (local_t <= 0.0) return 0.0;
+
+  // Simpson's rule over a fixed number of slices. The curve is smooth between
+  // keyframes and flat outside them, so this is exact for a constant or a
+  // straight ramp and close enough to exact for the eased ones that a frame
+  // number never lands on the wrong side of a boundary.
+  //
+  // Sliced by time rather than by keyframe so the cost does not depend on how
+  // many there are, and so a clip with a hundred of them still integrates in a
+  // bounded number of evaluations.
+  constexpr int kSlices = 128;
+  const double step = local_t / kSlices;
+
+  double total = speed_at(c, 0.0) + speed_at(c, local_t);
+  for (int i = 1; i < kSlices; ++i) {
+    const double at = step * i;
+    total += speed_at(c, at) * (i % 2 == 0 ? 2.0 : 4.0);
+  }
+  return total * step / 3.0;
+}
+
 double source_time_at(const Clip& c, double t) noexcept {
-  const double local = (t - c.start) * clip_speed(c);
+  const double local = source_offset_at(c, t - c.start);
   return c.reverse ? c.source_out - local : c.source_in + local;
 }
 
@@ -99,6 +134,9 @@ double animated_value(const Clip& c, AnimProp prop, double local_t) noexcept {
   // about sound rather than picture. Handled here rather than being smuggled
   // into `Transform` as a field the compositor would then have to ignore.
   if (prop == AnimProp::Pan) return pan_at(c, local_t);
+  // Nor is speed, for the same reason: it is a property of playback rather than
+  // of the picture's geometry.
+  if (prop == AnimProp::Speed) return speed_at(c, local_t);
   const Transform tr = animated_transform(c, local_t);
   switch (prop) {
     case AnimProp::X:
@@ -117,9 +155,10 @@ double animated_value(const Clip& c, AnimProp prop, double local_t) noexcept {
       return tr.anchor_y;
     case AnimProp::Opacity:
     case AnimProp::Pan:
+    case AnimProp::Speed:
       break;
   }
-  return tr.x;  // unreachable; Opacity and Pan are handled above
+  return tr.x;  // unreachable; the three above are handled before the switch
 }
 
 double pan_at(const Clip& c, double local_t) noexcept {

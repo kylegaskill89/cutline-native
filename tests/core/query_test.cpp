@@ -294,5 +294,112 @@ TEST(MediaKinds, GeneratedMediaHaveNoSourceFile) {
   EXPECT_FALSE(is_still_like(video));
 }
 
+// ------------------------------------------------------------ time remap --
+
+/// A five-second clip of a ten-second source, starting on the timeline at two.
+[[nodiscard]] Clip remappable() {
+  Clip c;
+  c.id = "c";
+  c.media_id = "m";
+  c.start = 2.0;
+  c.source_in = 0.0;
+  c.source_out = 5.0;
+  return c;
+}
+
+[[nodiscard]] std::vector<Keyframe>& speed_curve(Clip& c) {
+  return c.keyframes[anim_prop_index(AnimProp::Speed)];
+}
+
+TEST(TimeRemap, AClipWithNoCurveIsNotRemapped) {
+  Clip c = remappable();
+  EXPECT_FALSE(is_time_remapped(c));
+  c.speed = 2.0;
+  EXPECT_FALSE(is_time_remapped(c)) << "fast is not the same as remapped";
+  EXPECT_DOUBLE_EQ(speed_at(c, 1.0), 2.0);
+  EXPECT_DOUBLE_EQ(source_offset_at(c, 1.0), 2.0);
+}
+
+TEST(TimeRemap, AFlatCurveMatchesAConstantSpeed) {
+  // The integral of a constant is the constant times the time, and this is the
+  // case that has to be exact rather than close: it is what every unremapped
+  // clip in every project goes through.
+  Clip c = remappable();
+  speed_curve(c) = {{.t = 0.0, .v = 2.0}, {.t = 4.0, .v = 2.0}};
+
+  EXPECT_TRUE(is_time_remapped(c));
+  EXPECT_DOUBLE_EQ(speed_at(c, 1.5), 2.0);
+  EXPECT_NEAR(source_offset_at(c, 1.0), 2.0, 1e-9);
+  EXPECT_NEAR(source_offset_at(c, 2.5), 5.0, 1e-9);
+}
+
+TEST(TimeRemap, ARampConsumesTheAreaUnderIt) {
+  // One to three over two seconds is a trapezoid: the average of the ends times
+  // the width, which is four seconds of source in two of timeline.
+  Clip c = remappable();
+  speed_curve(c) = {{.t = 0.0, .v = 1.0}, {.t = 2.0, .v = 3.0}};
+
+  EXPECT_NEAR(source_offset_at(c, 2.0), 4.0, 1e-6);
+  // And halfway along it has consumed a quarter less than half of that: the
+  // area of the smaller trapezoid, one to two over one second.
+  EXPECT_NEAR(source_offset_at(c, 1.0), 1.5, 1e-6);
+}
+
+TEST(TimeRemap, ACurveCannotStopTheClipDead) {
+  // A speed of zero would be a freeze, and the model has never had one: every
+  // other path through it divides by the speed. So a curve is held to the same
+  // floor a typed speed is, and a ramp aimed at zero arrives at a crawl rather
+  // than at a stop.
+  Clip c = remappable();
+  speed_curve(c) = {{.t = 0.0, .v = 0.0}, {.t = 2.0, .v = 0.0}};
+
+  EXPECT_DOUBLE_EQ(speed_at(c, 1.0), kMinSpeed);
+  EXPECT_NEAR(source_offset_at(c, 2.0), 2.0 * kMinSpeed, 1e-9);
+}
+
+TEST(TimeRemap, ARampIsSlowAtTheStartAndFastAtTheEnd) {
+  // The claim that makes the feature worth having, stated as the shape of the
+  // curve rather than as one number.
+  Clip c = remappable();
+  speed_curve(c) = {{.t = 0.0, .v = 0.1}, {.t = 4.0, .v = 4.0}};
+
+  const double first = source_offset_at(c, 1.0);
+  const double last = source_offset_at(c, 4.0) - source_offset_at(c, 3.0);
+  EXPECT_LT(first, last) << "the last second should consume far more source";
+}
+
+TEST(TimeRemap, TheOffsetOnlyEverGoesForwards) {
+  // Speed is clamped to the same bounds a typed one is, so a curve that
+  // overshoots below zero cannot wind the source backwards — which would be
+  // reverse, and reverse is a different flag.
+  Clip c = remappable();
+  speed_curve(c) = {{.t = 0.0, .v = 1.0}, {.t = 2.0, .v = 0.0}, {.t = 4.0, .v = 1.0}};
+
+  double previous = 0.0;
+  for (double t = 0.0; t <= 4.0; t += 0.25) {
+    const double now = source_offset_at(c, t);
+    EXPECT_GE(now, previous - 1e-9) << "went backwards at " << t;
+    previous = now;
+  }
+}
+
+TEST(TimeRemap, SourceTimeFollowsTheCurveAndTheClipsPlaceOnTheTimeline) {
+  Clip c = remappable();
+  speed_curve(c) = {{.t = 0.0, .v = 1.0}, {.t = 2.0, .v = 3.0}};
+
+  // Timeline 2.0 is clip-local zero: the first frame of the source.
+  EXPECT_NEAR(source_time_at(c, 2.0), 0.0, 1e-9);
+  EXPECT_NEAR(source_time_at(c, 4.0), 4.0, 1e-6);
+}
+
+TEST(TimeRemap, ReverseStillCountsBackFromTheOutPoint) {
+  Clip c = remappable();
+  c.reverse = true;
+  speed_curve(c) = {{.t = 0.0, .v = 1.0}, {.t = 4.0, .v = 1.0}};
+
+  EXPECT_NEAR(source_time_at(c, 2.0), 5.0, 1e-9) << "the out point, at the start";
+  EXPECT_NEAR(source_time_at(c, 4.0), 3.0, 1e-6);
+}
+
 }  // namespace
 }  // namespace cutline::core

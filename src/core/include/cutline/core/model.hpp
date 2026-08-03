@@ -54,13 +54,29 @@ enum class ClipEdge { In, Out };
 /// The enumerators double as indices into `Clip::keyframes`.
 /// New enumerators go on the *end*: a saved file names its keyframe lists
 /// rather than numbering them, but everything in memory indexes by position.
-enum class AnimProp { X, Y, ScaleX, ScaleY, Rotation, Opacity, AnchorX, AnchorY, Pan };
+enum class AnimProp {
+  X,
+  Y,
+  ScaleX,
+  ScaleY,
+  Rotation,
+  Opacity,
+  AnchorX,
+  AnchorY,
+  Pan,
+  /// Playback rate, and the odd one out: every other property here is *the*
+  /// value at a moment, and this one is a rate whose effect accumulates. Which
+  /// source frame is shown at a moment is the integral of it — see
+  /// `source_offset_at`. Premiere calls animating it Time Remapping.
+  Speed,
+};
 
-inline constexpr std::size_t kAnimPropCount = 9;
+inline constexpr std::size_t kAnimPropCount = 10;
 
 inline constexpr std::array<AnimProp, kAnimPropCount> kAnimProps{
-    AnimProp::X,        AnimProp::Y,       AnimProp::ScaleX,  AnimProp::ScaleY, AnimProp::Rotation,
-    AnimProp::Opacity,  AnimProp::AnchorX, AnimProp::AnchorY, AnimProp::Pan,
+    AnimProp::X,       AnimProp::Y,       AnimProp::ScaleX, AnimProp::ScaleY,
+    AnimProp::Rotation, AnimProp::Opacity, AnimProp::AnchorX, AnimProp::AnchorY,
+    AnimProp::Pan,     AnimProp::Speed,
 };
 
 [[nodiscard]] constexpr std::size_t anim_prop_index(AnimProp prop) noexcept {

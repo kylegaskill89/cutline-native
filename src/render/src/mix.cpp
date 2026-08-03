@@ -122,7 +122,16 @@ StereoGain audio_pan_at(const PlannedAudioClip& planned, double t) noexcept {
 
 double audio_source_time_at(const PlannedAudioClip& planned, double t) noexcept {
   if (planned.clip == nullptr) return 0.0;
-  const double wanted = core::source_time_at(*planned.clip, t);
+
+  // At the *constant* rate, even when the clip is time-remapped. Premiere does
+  // the same and for the same reason: a speed ramp on the picture is a ramp in
+  // pitch on the sound, and the retiming that would avoid that has to vary
+  // continuously — which is a different piece of DSP from the fixed stretch a
+  // constant speed needs. Ramping a clip and hearing it slide is worse than
+  // ramping it and having to handle the sound yourself.
+  const core::Clip& clip = *planned.clip;
+  const double local = (t - clip.start) * planned.speed;
+  const double wanted = clip.reverse ? clip.source_out - local : clip.source_in + local;
   return std::min(std::max(planned.source_in, wanted), planned.source_out);
 }
 
