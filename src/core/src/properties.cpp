@@ -105,6 +105,13 @@ Project set_canvas(Project p, int width, int height) {
   return p;
 }
 
+Project set_fps(Project p, double fps) {
+  // A rate of zero would divide by nothing in every walk of the timeline, and a
+  // negative one is reverse wearing the wrong name.
+  p.fps = std::clamp(fps, kMinFps, kMaxFps);
+  return p;
+}
+
 Project set_master_gain(Project p, double gain) {
   p.master_gain = std::clamp(gain, 0.0, kMaxMasterGain);
   return p;

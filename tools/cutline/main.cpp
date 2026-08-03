@@ -386,11 +386,6 @@ struct App {
   Shell main;
   std::vector<std::unique_ptr<Shell>> floats;
 
-  /// The switcher's buttons, so the selected one can be moved without
-  /// rebuilding the tree. Rebuilding would destroy the button whose click is
-  /// still on the stack.
-  std::vector<Button*> theme_buttons;
-
   /// The document being edited. Everything the timeline shows is derived from
   /// it, and everything a drag does goes back through it.
   cutline::editor::Session session{new_project_model()};
@@ -650,7 +645,7 @@ struct App {
   /// about an export — a snapshot renders at full size too, since it is a frame
   /// of the sequence rather than a picture of the monitor.
   double preview_scale = 1.0;
-  Button* preview_scale_button = nullptr;
+  Dropdown* preview_scale_choice = nullptr;
 
   /// Shows the sequence's size and opens the presets. Held so it can be
   /// relabelled without rebuilding the row it is in.
@@ -845,8 +840,6 @@ void refresh_handles(App& app);
 void refresh_title(App& app);
 void show_snapping(App& app);
 void toggle_snapping(App& app);
-[[nodiscard]] std::string preview_scale_name(double scale);
-[[nodiscard]] double next_preview_scale(double scale) noexcept;
 void choose_preview_scale(App& app, double scale);
 void invalidate_playback(App& app);
 void open_export_dialog(App& app);
@@ -3235,21 +3228,6 @@ constexpr std::array<std::pair<double, std::string_view>, 3> kPreviewScales{{
     {0.25, "1/4"},
 }};
 
-[[nodiscard]] std::string preview_scale_name(double scale) {
-  using Entry = std::pair<double, std::string_view>;
-  const auto found = std::ranges::find(kPreviewScales, scale, &Entry::first);
-  return std::string(found == kPreviewScales.end() ? kPreviewScales.front().second
-                                                   : found->second);
-}
-
-[[nodiscard]] double next_preview_scale(double scale) noexcept {
-  using Entry = std::pair<double, std::string_view>;
-  const auto at = std::ranges::find(kPreviewScales, scale, &Entry::first);
-  if (at == kPreviewScales.end()) return kPreviewScales.front().first;
-  const auto index = static_cast<std::size_t>(at - kPreviewScales.begin());
-  return kPreviewScales[(index + 1) % kPreviewScales.size()].first;
-}
-
 /// Resizes the sequence and brings everything that depends on its size along.
 ///
 /// The preview's renderer is sized from the project on every frame, so it
@@ -3272,15 +3250,35 @@ void apply_canvas(App& app, int width, int height) {
   app.inspector_stale = true;
 }
 
-/// The popup behind the canvas button: the presets, and two fields for a size
-/// that is not one of them.
+/// Sets the sequence's frame rate and tells what depends on it.
+void apply_fps(App& app, double fps) {
+  if (!app.session.apply(cutline::core::set_fps(app.session.project(), fps))) return;
+  refresh_timeline(app);
+  refresh_title(app);
+  invalidate_preview(app);
+}
+
+/// The rates worth offering, which are the ones cameras and screens produce.
+constexpr std::array<double, 7> kFrameRates{23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 60.0};
+
+/// A frame rate written the way a rate is written: 23.976 keeps its decimals
+/// and 30 does not get three zeroes it never had.
+[[nodiscard]] std::string fps_label(double fps) {
+  const std::string text = std::format("{:.3f}", fps);
+  const std::size_t last = text.find_last_not_of('0');
+  const std::size_t cut = text[last] == '.' ? last : last + 1;
+  return text.substr(0, cut);
+}
+
+/// The project's settings: the size of the sequence and its frame rate.
 ///
 /// A popup rather than a dialog window because that is all it needs to be —
 /// `open_popup` takes any widget, and a second real window would bring its own
 /// message loop, its own close path and its own way of being left open behind
 /// the editor.
-[[nodiscard]] std::unique_ptr<Widget> build_canvas_popup(App& app) {
+[[nodiscard]] std::unique_ptr<Widget> build_project_settings_popup(App& app) {
   auto panel = std::make_unique<Panel>();
+  panel->emplace<Label>("Sequence size").set_bold(true);
 
   for (const CanvasPreset& preset : kCanvasPresets) {
     auto& row = panel->emplace<Button>(
@@ -3314,14 +3312,74 @@ void apply_canvas(App& app, int width, int height) {
     apply_canvas(app, wide, tall);
   });
 
+  panel->emplace<Label>("Frame rate").set_bold(true);
+  auto& rates = panel->emplace<Box>(Axis::Horizontal);
+  for (const double rate : kFrameRates) {
+    auto& choice = rates.emplace<Button>(fps_label(rate), [&app, rate] {
+      if (app.main.host != nullptr) app.main.host->close_popup();
+      apply_fps(app, rate);
+    });
+    // Compared with a tolerance: 23.976 is not the number the file holds, and
+    // a preset that never looks chosen is one nobody trusts they pressed.
+    choice.set_selected(std::abs(app.session.project().fps - rate) < 0.005);
+  }
+
+  auto& own = panel->emplace<Box>(Axis::Horizontal);
+  auto& typed = own.emplace<TextField>(fps_label(app.session.project().fps));
+  own.emplace<Button>("Set", [&app, field = &typed] {
+    double rate = 0.0;
+    if (std::from_chars(field->text().data(), field->text().data() + field->text().size(),
+                        rate)
+            .ec != std::errc{}) {
+      return;
+    }
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    apply_fps(app, rate);
+  });
+
+  return panel;
+}
+
+/// Where a settings popup opens: under the menu bar, at its left edge.
+///
+/// Not at the pointer, and not over the bar it came from — a panel that covers
+/// the menu it was opened from hides the thing you would click to close it.
+[[nodiscard]] constexpr Rect settings_anchor() noexcept { return Rect{8.0, 72.0, 0.0, 0.0}; }
+
+/// The application's own settings, which belong to the person rather than to
+/// the project: the theme, and whatever else is a preference rather than a
+/// property of what is being edited.
+[[nodiscard]] std::unique_ptr<Widget> build_application_settings_popup(App& app) {
+  auto panel = std::make_unique<Panel>();
+  panel->emplace<Label>("Theme").set_bold(true);
+
+  for (std::size_t i = 0; i < built_in_themes().size(); ++i) {
+    auto& choice = panel->emplace<Button>(built_in_themes()[i].name, [&app, i] {
+      // Closed on the way, so nothing here outlives the popup. The theme
+      // buttons used to be kept in a list on `App` and set from `set_theme`;
+      // in a popup that list would be a set of pointers into a widget tree
+      // that has already been destroyed.
+      if (app.main.host != nullptr) app.main.host->close_popup();
+      set_theme(app, i);
+    });
+    choice.set_selected(i == app.theme);
+  }
   return panel;
 }
 
 void choose_preview_scale(App& app, double scale) {
   if (app.preview_scale == scale) return;
   app.preview_scale = scale;
-  if (app.preview_scale_button != nullptr) {
-    app.preview_scale_button->set_text(preview_scale_name(scale));
+  // Kept in step for the callers that are not the control itself — the
+  // dropdown has already moved when it is the one asking, and setting it back
+  // to where it is costs nothing.
+  if (app.preview_scale_choice != nullptr) {
+    using Entry = std::pair<double, std::string_view>;
+    const auto at = std::ranges::find(kPreviewScales, scale, &Entry::first);
+    if (at != kPreviewScales.end()) {
+      app.preview_scale_choice->set_selected(
+          static_cast<std::size_t>(at - kPreviewScales.begin()));
+    }
   }
   invalidate_preview(app);
 }
@@ -3812,10 +3870,23 @@ void import_media(App& app) {
     return;
   }
 
-  // At the playhead, which is where an editor expects a drop to land.
-  app.session.apply(cutline::editor::import_and_place(app.session.project(), *source,
-                                                      app.session.playhead()));
+  // Into the pool and nowhere else. Importing is filing something away, not
+  // editing with it — and a file that lands on the timeline the moment it is
+  // read is one that has to be undone before the sequence can be looked at.
+  // Placing it is a gesture of its own: a drag onto a track, or a drop.
+  std::string id;
+  app.session.apply(cutline::editor::import_media(app.session.project(), *source, &id));
   refresh_all(app);
+
+  // Selected in the pool, so it is obvious where it went — a browser that has
+  // silently grown by one is how somebody imports the same file twice.
+  if (app.browser != nullptr && !id.empty()) {
+    const auto& items = app.browser->items();
+    const auto found = std::ranges::find(items, id, &cutline::ui::MediaItem::id);
+    if (found != items.end()) {
+      app.browser->select(static_cast<std::size_t>(found - items.begin()));
+    }
+  }
 #else
   complain(app.main.window, "This build has no media layer, so there is nothing to import with.");
 #endif
@@ -4524,17 +4595,28 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
       app == nullptr ? std::string("1080p") : canvas_label(app->session.project()));
   canvas.set_on_click([app, control = &canvas] {
     if (app == nullptr || app->main.host == nullptr) return;
-    app->main.host->open_popup(build_canvas_popup(*app), control->bounds());
+    app->main.host->open_popup(build_project_settings_popup(*app), control->bounds());
   });
   if (app != nullptr) app->canvas_button = &canvas;
 
-  // One button that cycles rather than three, which is the idiom the scope tabs
-  // and the sort order already use for a short list in a crowded row.
-  auto& quality = transport.emplace<Button>(
-      preview_scale_name(app == nullptr ? 1.0 : app->preview_scale), [app] {
-        if (app != nullptr) choose_preview_scale(*app, next_preview_scale(app->preview_scale));
-      });
-  if (app != nullptr) app->preview_scale_button = &quality;
+  // A dropdown rather than a button that cycles. Cycling is fine for two
+  // states; with three it hides two of them behind the one showing, so choosing
+  // a quality means clicking until the right one comes round and there is no
+  // way to see what the choices are without doing it.
+  {
+    std::vector<std::string> names;
+    std::size_t chosen = 0;
+    for (const auto& [scale, name] : kPreviewScales) {
+      if (app != nullptr && scale == app->preview_scale) chosen = names.size();
+      names.emplace_back(name);
+    }
+    auto& quality = transport.emplace<Dropdown>(std::move(names), chosen);
+    quality.set_on_change([app](std::size_t index) {
+      if (app == nullptr || index >= kPreviewScales.size()) return;
+      choose_preview_scale(*app, kPreviewScales[index].first);
+    });
+    if (app != nullptr) app->preview_scale_choice = &quality;
+  }
 
   transport.emplace<Spacer>();
   auto& loop = transport.emplace<Button>("Loop", [app] {
@@ -5666,19 +5748,78 @@ void refresh_dock(App& app) {
   });
   if (app != nullptr) app->main.maximise = &maximise;
 
-  // The switcher lives in the window rather than on a keyboard shortcut. A
-  // harness whose only control is an undocumented keystroke is one nobody can
-  // use, including whoever wrote it.
+  // A menu bar, where a Windows application keeps the things that are done to
+  // the document rather than with it: opening and saving, what the sequence is,
+  // and what the application looks like.
+  //
+  // Built out of buttons that open popups rather than out of a menu widget of
+  // its own, because that is what every other menu here already is — the
+  // effects list, the track menu, the right-click on a clip. One idiom.
   auto& bar = shell->emplace<Box>(Axis::Horizontal);
   bar.set_padding(cutline::ui::Edges::all(4.0));
-  bar.emplace<Label>("Theme");
-  for (std::size_t i = 0; i < built_in_themes().size(); ++i) {
-    auto& choice = bar.emplace<Button>(built_in_themes()[i].name, [app, i] {
-      if (app != nullptr) set_theme(*app, i);
+
+  /// One top-level menu: a button, and the list it drops.
+  struct MenuEntry {
+    const char* label;
+    std::function<void()> act;
+  };
+  const auto menu = [app, &bar](const char* title, std::vector<MenuEntry> entries) {
+    auto& button = bar.emplace<Button>(title);
+    button.set_on_click([app, control = &button, entries = std::move(entries)] {
+      if (app == nullptr || app->main.host == nullptr) return;
+
+      std::vector<std::string> labels;
+      labels.reserve(entries.size());
+      for (const MenuEntry& entry : entries) labels.emplace_back(entry.label);
+
+      auto list = std::make_unique<MenuList>(std::move(labels));
+      list->set_on_choose([app, entries](std::size_t index) {
+        if (app->main.host != nullptr) app->main.host->close_popup();
+        if (index < entries.size() && entries[index].act) entries[index].act();
+      });
+      // Under the button rather than at the pointer, which is where a menu bar
+      // drops its menus and what makes two of them line up.
+      app->main.host->open_popup(std::move(list), control->bounds());
     });
-    choice.set_selected(app != nullptr && i == app->theme);
-    if (app != nullptr) app->theme_buttons.push_back(&choice);
-  }
+  };
+
+  menu("File", {
+      {"New Project", [app] { if (app != nullptr) new_project(*app); }},
+      {"Open Project...", [app] { if (app != nullptr) open_project(*app); }},
+      {"Save Project", [app] { if (app != nullptr) save_project(*app, false); }},
+      {"Save Project As...", [app] { if (app != nullptr) save_project(*app, true); }},
+      {"Import Media...", [app] { if (app != nullptr) import_media(*app); }},
+      {"Export...", [app] { if (app != nullptr) open_export_dialog(*app); }},
+      {"Exit", [app] {
+         if (app != nullptr && app->main.window != nullptr) {
+           PostMessageW(app->main.window, WM_CLOSE, 0, 0);
+         }
+       }},
+  });
+
+  menu("Edit", {
+      {"Undo", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Undo); }},
+      {"Redo", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Redo); }},
+  });
+
+  menu("Project", {
+      {"Project Settings...", [app] {
+         if (app == nullptr || app->main.host == nullptr) return;
+         app->main.host->open_popup(build_project_settings_popup(*app), settings_anchor());
+       }},
+  });
+
+  menu("Settings", {
+      {"Application Settings...", [app] {
+         if (app == nullptr || app->main.host == nullptr) return;
+         app->main.host->open_popup(build_application_settings_popup(*app), settings_anchor());
+       }},
+  });
+
+  menu("Help", {
+      {"Check for Updates...", [app] { if (app != nullptr) check_for_updates(*app); }},
+  });
+
   bar.emplace<Spacer>();
 
   auto& workspace_choice = bar.emplace<Button>("Workspace: Editing", [app] {
@@ -6445,10 +6586,6 @@ void render(Shell& shell) {
 void set_theme(App& app, std::size_t index) {
   if (index >= built_in_themes().size() || index == app.theme) return;
   app.theme = index;
-
-  for (std::size_t i = 0; i < app.theme_buttons.size(); ++i) {
-    app.theme_buttons[i]->set_selected(i == index);
-  }
 
   // Metrics change with the theme, so everything has to be measured again —
   // in every window, not only the one whose button was pressed.
@@ -7379,6 +7516,26 @@ template <typename T>
         std::println("{}: a title's panel offered no colour to pick", theme.id);
         ++failures;
       }
+
+      // The settings popups, for the same reason: they live on the popup layer
+      // and nothing else would ever lay them out. Both are rows of numbers and
+      // presets, which is exactly the shape that gets squeezed in a theme with
+      // a wider font.
+      for (int which = 0; which < 2; ++which) {
+        app.main.host->close_popup();
+        app.main.host->open_popup(which == 0 ? build_project_settings_popup(app)
+                                             : build_application_settings_popup(app),
+                                  settings_anchor());
+        app.main.host->update_layout(context);
+        app.main.host->paint(*painter, theme);
+        if (Widget* settings = app.main.host->popup(); settings != nullptr) {
+          walk(*settings);
+        } else {
+          std::println("{}: a settings popup did not open", theme.id);
+          ++failures;
+        }
+      }
+      app.main.host->close_popup();
     }
 
     // And the theme has to reach the pixels. Sampling a scatter of points

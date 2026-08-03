@@ -77,6 +77,16 @@ inline constexpr int kMaxCanvas = 16384;
 /// it is asking for.
 [[nodiscard]] Project set_canvas(Project p, int width, int height);
 
+inline constexpr double kMinFps = 1.0;
+inline constexpr double kMaxFps = 240.0;
+
+/// Sets the sequence's frame rate, clamped to the allowed range.
+///
+/// Nothing about the clips changes. Every time in the model is in seconds, so
+/// the rate is how finely that continuum is sampled — a cut stays where it was
+/// put, and what moves is which frames land either side of it.
+[[nodiscard]] Project set_fps(Project p, double fps);
+
 // ------------------------------------------------------------------ master --
 
 /// Sets a track's own fader, clamped to the allowed range. Audio tracks only:

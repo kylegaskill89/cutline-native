@@ -71,6 +71,31 @@ TEST(CanvasProperties, TheSequenceCanBeResized) {
   EXPECT_EQ(wide.canvas_h, 2160);
 }
 
+TEST(CanvasProperties, TheFrameRateCanBeChangedAndIsClamped) {
+  const Project p;
+  EXPECT_DOUBLE_EQ(set_fps(p, 59.94).fps, 59.94);
+  EXPECT_DOUBLE_EQ(set_fps(p, 0.0).fps, kMinFps) << "zero would divide by nothing";
+  EXPECT_DOUBLE_EQ(set_fps(p, -24.0).fps, kMinFps) << "and negative is reverse by another name";
+  EXPECT_DOUBLE_EQ(set_fps(p, 100000.0).fps, kMaxFps);
+}
+
+TEST(CanvasProperties, ChangingTheFrameRateLeavesTheClipsWhereTheyAre) {
+  // Every time in the model is in seconds, so the rate is how finely that
+  // continuum is sampled. A cut stays where it was put.
+  Project p;
+  Clip c;
+  c.id = "c1";
+  c.start = 2.5;
+  c.source_out = 4.0;
+  Track t{.id = "v1", .kind = TrackKind::Video};
+  t.clips = {std::move(c)};
+  p.tracks = {std::move(t)};
+
+  const Project faster = set_fps(p, 60.0);
+  EXPECT_DOUBLE_EQ(faster.tracks[0].clips[0].start, 2.5);
+  EXPECT_DOUBLE_EQ(faster.tracks[0].clips[0].source_out, 4.0);
+}
+
 TEST(CanvasProperties, ASizeOutsideTheRangeIsClampedRatherThanRefused) {
   const Project p;
   EXPECT_EQ(set_canvas(p, 0, 0).canvas_w, kMinCanvas);
