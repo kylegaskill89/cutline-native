@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -31,6 +32,16 @@ namespace cutline::engine {
 struct AudioMixSettings {
   int sample_rate = 48000;
   int channels = 2;
+
+  /// Mix only the clips from this audio track, counting from the top of the
+  /// stored order. Unset mixes the whole project, which is what playback and an
+  /// ordinary export want.
+  ///
+  /// One track at a time is how an export writes separate streams: a mixer per
+  /// track, each producing exactly what that track contributes to the mix. The
+  /// master fader and the limiter still apply to each — the alternative is a
+  /// set of stems that sum to something louder than the file anybody checked.
+  std::optional<int> only_track;
 };
 
 class AudioMixer {

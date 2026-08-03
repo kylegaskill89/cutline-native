@@ -63,6 +63,15 @@ struct AudioEncodeSettings {
   /// Bits per second. AAC at 192 kbps stereo is transparent enough that the
   /// encoder is not what anyone will hear.
   std::int64_t bitrate = 192000;
+
+  /// How many audio streams the file carries, all in the same format.
+  ///
+  /// More than one is how a timeline's tracks are kept apart in the output —
+  /// the thing anybody sending a cut on for a mix needs, since a stereo mixdown
+  /// cannot be unpicked back into the tracks it came from. Every stream is
+  /// written through the same writer because interleaving is a property of the
+  /// file rather than of any one stream.
+  int streams = 1;
 };
 
 /// Encodes frames and muxes them into a container.
@@ -93,16 +102,24 @@ class MediaWriter {
   /// size is reached, because AAC encodes fixed 1024-sample blocks and a caller
   /// should not have to know that. Writing audio to a writer created without it
   /// is an error rather than a silent no-op.
-  [[nodiscard]] std::expected<void, std::string> write_audio(std::span<const float> interleaved);
+  ///
+  /// `stream` picks which of them, for a file carrying more than one. They are
+  /// independent: a caller may write a block to one and nothing to another, and
+  /// each is padded to its own length only by what it is given.
+  [[nodiscard]] std::expected<void, std::string> write_audio(std::span<const float> interleaved,
+                                                             int stream = 0);
 
   /// Whether an audio stream was created.
   [[nodiscard]] bool has_audio() const noexcept;
 
+  /// How many audio streams the file carries.
+  [[nodiscard]] int audio_stream_count() const noexcept;
+
   /// The audio encoder in use, or empty when there is no audio stream.
   [[nodiscard]] const std::string& audio_encoder_name() const noexcept;
 
-  /// How many audio frames — samples per channel — have been accepted.
-  [[nodiscard]] std::int64_t audio_frame_count() const noexcept;
+  /// How many audio frames — samples per channel — one stream has accepted.
+  [[nodiscard]] std::int64_t audio_frame_count(int stream = 0) const noexcept;
 
   /// Flushes the encoder and finalises the container. Calling this is what
   /// makes the file playable; a writer destroyed without it leaves a truncated

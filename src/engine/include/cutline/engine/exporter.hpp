@@ -55,6 +55,20 @@ struct ExportSettings {
   /// Include audio. A project with no audible clips produces a video-only file
   /// regardless, rather than a silent track nobody asked for.
   bool audio = true;
+
+  /// Keep the timeline's audio tracks apart, one stream per track, instead of
+  /// summing them into one.
+  ///
+  /// What anybody sending a cut on for a mix needs: a stereo mixdown cannot be
+  /// unpicked back into the tracks it came from. Each stream is still mixed
+  /// through the master fader and the limiter, because a set of stems that sums
+  /// to something louder than the file anybody checked is a set of stems nobody
+  /// can use.
+  ///
+  /// A track with nothing on it gets no stream, so the streams follow the order
+  /// of the tracks that have something on them.
+  bool separate_audio = false;
+
   int audio_sample_rate = 48000;
   /// One channel mixes the project down to mono. The downmix happens in the
   /// resampler as each source is decoded, so a stereo source is summed into it

@@ -5763,10 +5763,16 @@ constexpr std::array kExportResolutions{
 struct MixdownChoice {
   const char* name;
   int channels;
+  /// One stream per timeline track rather than one summed stream.
+  bool separate = false;
 };
 constexpr std::array kExportMixdowns{
     MixdownChoice{"Stereo", 2},
     MixdownChoice{"Mono", 1},
+    // Last, because it is the one that produces a file most players will only
+    // play the first stream of. It is for handing the cut to somebody who is
+    // going to mix it, and a mixdown is what everything else wants.
+    MixdownChoice{"Separate tracks", 2, true},
 };
 
 /// The output size a resolution choice works out to for this project.
@@ -5841,6 +5847,7 @@ void start_export(App& app) {
   settings.height = height;
   settings.audio = app.export_setup.audio;
   settings.audio_channels = kExportMixdowns[app.export_setup.mixdown].channels;
+  settings.separate_audio = kExportMixdowns[app.export_setup.mixdown].separate;
   if (app.export_setup.marked_only && cutline::core::has_marks(project)) {
     const cutline::core::MarkedSpan span = cutline::core::marked_span(project);
     settings.start = span.start;

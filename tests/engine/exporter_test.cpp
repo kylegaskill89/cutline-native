@@ -13,14 +13,18 @@
 #include "cutline/engine/exporter.hpp"
 
 #include "cutline/core/model.hpp"
+#include "cutline/media/encoder.hpp"
 #include "cutline/media/probe.hpp"
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <numbers>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace cutline::engine {
 namespace {
@@ -93,6 +97,85 @@ class TempFile {
   return p;
 }
 
+/// A second of a 440 Hz tone in a real file, written once and shared.
+///
+/// A generated matte has no audio at all, so an audible clip needs something an
+/// exporter can actually decode. Encoding it per test would dominate the runtime
+/// of the file for no extra coverage.
+class ToneSource {
+ public:
+  [[nodiscard]] static const std::string& path() {
+    static const ToneSource instance;
+    return instance.path_;
+  }
+
+ private:
+  ToneSource() {
+    path_ = (std::filesystem::temp_directory_path() / "cutline_export_tone.mp4").string();
+
+    media::VideoEncodeSettings video;
+    video.width = 64;
+    video.height = 64;
+    video.fps = 10;
+    video.preference = media::EncoderPreference::Software;
+
+    media::AudioEncodeSettings audio;
+    audio.enabled = true;
+    audio.sample_rate = 48000;
+    audio.channels = 2;
+
+    auto writer = media::MediaWriter::create(path_, video, audio);
+    if (!writer) return;
+
+    std::vector<float> samples(48000 * 2);
+    for (std::size_t i = 0; i < 48000; ++i) {
+      const double phase = 2.0 * std::numbers::pi * 440.0 * static_cast<double>(i) / 48000.0;
+      const auto value = static_cast<float>(std::sin(phase) * 0.5);
+      samples[i * 2] = value;
+      samples[i * 2 + 1] = value;
+    }
+
+    const std::vector<std::uint8_t> frame(64 * 64 * 4, 128);
+    for (int f = 0; f < 10; ++f) {
+      if (!writer.value()->write_frame(frame)) return;
+    }
+    if (!writer.value()->write_audio(samples)) return;
+    (void)writer.value()->finish();
+  }
+
+  std::string path_;
+};
+
+/// The matte, plus `tracks` audio tracks each holding one clip of the tone.
+[[nodiscard]] Project matte_with_audio_tracks(int tracks) {
+  Project p = matte_project();
+
+  Media sound;
+  sound.id = "a";
+  sound.path = ToneSource::path();
+  sound.duration = 1.0;
+  sound.has_video = true;
+  sound.audio_stream_count = 1;
+  p.media.push_back(std::move(sound));
+
+  for (int i = 0; i < tracks; ++i) {
+    Clip c;
+    c.id = "ac" + std::to_string(i);
+    c.media_id = "a";
+    c.kind = TrackKind::Audio;
+    c.start = 0.0;
+    c.source_in = 0.0;
+    c.source_out = 0.5;
+
+    Track t;
+    t.id = "a" + std::to_string(i + 1);
+    t.kind = TrackKind::Audio;
+    t.clips = {std::move(c)};
+    p.tracks.push_back(std::move(t));
+  }
+  return p;
+}
+
 class ExportTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -113,6 +196,72 @@ class ExportTest : public ::testing::Test {
 
   std::shared_ptr<gpu::Device> device_;
 };
+
+// ----------------------------------------------------------------- audio --
+
+TEST_F(ExportTest, AMixdownIsOneStreamHoweverManyTracksThereAre) {
+  const TempFile file(".mp4");
+  const auto info = write(matte_with_audio_tracks(3),
+                          ExportSettings{.audio = true, .separate_audio = false}, file);
+
+  ASSERT_TRUE(info.has_value()) << info.error();
+  EXPECT_EQ(info->audio.size(), 1u) << "a mixdown is one stream by definition";
+}
+
+TEST_F(ExportTest, SeparateAudioWritesAStreamPerTrack) {
+  // What anybody sending a cut on for a mix needs: a stereo mixdown cannot be
+  // unpicked back into the tracks it came from.
+  const TempFile file(".mp4");
+  const auto info = write(matte_with_audio_tracks(3),
+                          ExportSettings{.audio = true, .separate_audio = true}, file);
+
+  ASSERT_TRUE(info.has_value()) << info.error();
+  EXPECT_EQ(info->audio.size(), 3u);
+}
+
+TEST_F(ExportTest, ATrackWithNothingOnItGetsNoStream) {
+  // An empty stem is a file somebody has to open to discover is empty.
+  Project p = matte_with_audio_tracks(2);
+  Track bare;
+  bare.id = "a3";
+  bare.kind = TrackKind::Audio;
+  p.tracks.push_back(std::move(bare));
+
+  const TempFile file(".mp4");
+  const auto info =
+      write(p, ExportSettings{.audio = true, .separate_audio = true}, file);
+
+  ASSERT_TRUE(info.has_value()) << info.error();
+  EXPECT_EQ(info->audio.size(), 2u);
+}
+
+TEST_F(ExportTest, SeparateAudioWithNothingAudibleWritesNoStreamAtAll) {
+  const TempFile file(".mp4");
+  const auto info =
+      write(matte_project(), ExportSettings{.audio = true, .separate_audio = true}, file);
+
+  ASSERT_TRUE(info.has_value()) << info.error();
+  EXPECT_TRUE(info->audio.empty());
+  EXPECT_TRUE(info->has_video()) << "and the picture still got written";
+}
+
+TEST_F(ExportTest, EveryStemIsTheSameLengthAsTheMixdownWouldBe) {
+  // Fed in step, so a stem set drops into a session lined up with the picture
+  // rather than each stem starting where its own first clip does.
+  const TempFile mixed_file(".mp4");
+  const auto mixed = write(matte_with_audio_tracks(2),
+                           ExportSettings{.audio = true, .separate_audio = false}, mixed_file);
+  ASSERT_TRUE(mixed.has_value()) << mixed.error();
+  ASSERT_EQ(mixed->audio.size(), 1u);
+
+  const TempFile stems_file(".mp4");
+  const auto stems = write(matte_with_audio_tracks(2),
+                           ExportSettings{.audio = true, .separate_audio = true}, stems_file);
+  ASSERT_TRUE(stems.has_value()) << stems.error();
+  ASSERT_EQ(stems->audio.size(), 2u);
+
+  EXPECT_NEAR(stems->duration, mixed->duration, 0.05);
+}
 
 // ------------------------------------------------------------- resolution --
 

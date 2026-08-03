@@ -124,17 +124,27 @@ struct MediaWriter::Impl {
   std::string name;
   std::int64_t frames = 0;
 
-  detail::CodecContext audio_encoder;
-  detail::Frame audio_frame;
-  detail::Resampler audio_resampler;
-  AVStream* audio_stream = nullptr;
+  /// One audio stream: its encoder, its buffers and its clock.
+  ///
+  /// A struct rather than a set of parallel members because a file may carry
+  /// several - one per timeline track - and every one of them needs its own
+  /// pending samples and its own sample count. Sharing either would interleave
+  /// two tracks into one stream.
+  struct AudioStream {
+    detail::CodecContext encoder;
+    detail::Frame frame;
+    detail::Resampler resampler;
+    AVStream* stream = nullptr;
+    /// The encoder's own frame size, in samples per channel.
+    int block = 0;
+    /// Interleaved float samples accepted but not yet encoded, because the
+    /// encoder takes fixed-size blocks and callers should not have to know it.
+    std::vector<float> pending;
+    std::int64_t frames = 0;
+  };
+  std::vector<AudioStream> audio;
   std::string audio_name;
   int audio_channels = 0;
-  int audio_block = 0;  ///< the encoder's own frame size, in samples per channel
-  /// Interleaved float samples accepted but not yet encoded, because the
-  /// encoder takes fixed-size blocks and callers should not have to know that.
-  std::vector<float> audio_pending;
-  std::int64_t audio_frames = 0;
 
   bool finished = false;
 
@@ -150,8 +160,9 @@ struct MediaWriter::Impl {
   [[nodiscard]] std::expected<void, std::string> drain(AVCodecContext* codec, AVStream* target,
                                                        AVFrame* input, std::int64_t duration);
 
-  /// Encodes exactly `samples` frames from the front of `audio_pending`.
-  [[nodiscard]] std::expected<void, std::string> encode_audio_block(int samples);
+  /// Encodes exactly `samples` frames from the front of one stream's pending.
+  [[nodiscard]] std::expected<void, std::string> encode_audio_block(AudioStream& target,
+                                                                    int samples);
 
   /// Creates the audio encoder and stream. Must run before the header is
   /// written, since that is where a container records its streams.
@@ -229,84 +240,90 @@ std::expected<void, std::string> MediaWriter::Impl::open_audio(
     return std::unexpected(std::format("cannot open the AAC encoder: {}", av_error_string(rc)));
   }
 
-  audio_encoder = std::move(context);
+  AudioStream built;
+  built.encoder = std::move(context);
   audio_name = aac->name;
   audio_channels = settings.channels;
   // AAC encodes 1024-sample blocks. An encoder that does not care reports zero,
   // in which case any block will do and a round number keeps the buffering
   // predictable.
-  audio_block = audio_encoder->frame_size > 0 ? audio_encoder->frame_size : 1024;
+  built.block = built.encoder->frame_size > 0 ? built.encoder->frame_size : 1024;
 
-  audio_stream = avformat_new_stream(format.get(), nullptr);
-  if (audio_stream == nullptr) return std::unexpected("cannot create an audio stream");
-  audio_stream->time_base = audio_encoder->time_base;
-  if (int rc = avcodec_parameters_from_context(audio_stream->codecpar, audio_encoder.get());
+  built.stream = avformat_new_stream(format.get(), nullptr);
+  if (built.stream == nullptr) return std::unexpected("cannot create an audio stream");
+  built.stream->time_base = built.encoder->time_base;
+  if (int rc = avcodec_parameters_from_context(built.stream->codecpar, built.encoder.get());
       rc < 0) {
     return std::unexpected(
         std::format("cannot describe the audio stream: {}", av_error_string(rc)));
   }
 
-  audio_frame.reset(av_frame_alloc());
-  if (!audio_frame) return std::unexpected("out of memory");
-  audio_frame->format = audio_encoder->sample_fmt;
-  audio_frame->nb_samples = audio_block;
-  audio_frame->sample_rate = audio_encoder->sample_rate;
-  if (int rc = av_channel_layout_copy(&audio_frame->ch_layout, &audio_encoder->ch_layout);
+  built.frame.reset(av_frame_alloc());
+  if (!built.frame) return std::unexpected("out of memory");
+  built.frame->format = built.encoder->sample_fmt;
+  built.frame->nb_samples = built.block;
+  built.frame->sample_rate = built.encoder->sample_rate;
+  if (int rc = av_channel_layout_copy(&built.frame->ch_layout, &built.encoder->ch_layout);
       rc < 0) {
     return std::unexpected(std::format("cannot set the channel layout: {}", av_error_string(rc)));
   }
-  if (int rc = av_frame_get_buffer(audio_frame.get(), 0); rc < 0) {
+  if (int rc = av_frame_get_buffer(built.frame.get(), 0); rc < 0) {
     return std::unexpected(
         std::format("cannot allocate an audio frame: {}", av_error_string(rc)));
   }
 
   SwrContext* resampler = nullptr;
-  if (int rc = swr_alloc_set_opts2(&resampler, &audio_encoder->ch_layout,
-                                   audio_encoder->sample_fmt, audio_encoder->sample_rate,
-                                   &audio_encoder->ch_layout, AV_SAMPLE_FMT_FLT,
+  if (int rc = swr_alloc_set_opts2(&resampler, &built.encoder->ch_layout,
+                                   built.encoder->sample_fmt, built.encoder->sample_rate,
+                                   &built.encoder->ch_layout, AV_SAMPLE_FMT_FLT,
                                    settings.sample_rate, 0, nullptr);
       rc < 0 || resampler == nullptr) {
     return std::unexpected(
         std::format("cannot create an audio converter: {}", av_error_string(rc)));
   }
-  audio_resampler.reset(resampler);
-  if (int rc = swr_init(audio_resampler.get()); rc < 0) {
+  built.resampler.reset(resampler);
+  if (int rc = swr_init(built.resampler.get()); rc < 0) {
     return std::unexpected(
         std::format("cannot initialise the audio converter: {}", av_error_string(rc)));
   }
 
+  audio.push_back(std::move(built));
   return {};
 }
 
-std::expected<void, std::string> MediaWriter::Impl::encode_audio_block(int samples) {
+std::expected<void, std::string> MediaWriter::Impl::encode_audio_block(AudioStream& target,
+                                                                       int samples) {
   if (samples <= 0) return {};
 
-  if (int rc = av_frame_make_writable(audio_frame.get()); rc < 0) {
+  if (int rc = av_frame_make_writable(target.frame.get()); rc < 0) {
     return std::unexpected(
         std::format("cannot write to the audio frame: {}", av_error_string(rc)));
   }
-  audio_frame->nb_samples = samples;
+  target.frame->nb_samples = samples;
 
   // Interleaved float in, whatever the encoder wants out — AAC takes planar
   // float, so this is a deinterleave rather than a format change, but going
   // through the resampler keeps it correct for an encoder that wants something
   // else.
-  const auto* input = reinterpret_cast<const std::uint8_t*>(audio_pending.data());
-  if (int rc = swr_convert(audio_resampler.get(), audio_frame->data, samples, &input, samples);
+  const auto* input = reinterpret_cast<const std::uint8_t*>(target.pending.data());
+  if (int rc = swr_convert(target.resampler.get(), target.frame->data, samples, &input, samples);
       rc < 0) {
     return std::unexpected(std::format("cannot convert audio: {}", av_error_string(rc)));
   }
 
-  // Timestamps count samples, because the time base is 1/sample_rate.
-  audio_frame->pts = audio_frames;
-  audio_frames += samples;
+  // Timestamps count samples, because the time base is 1/sample_rate. Kept per
+  // stream, so one written less often than another does not inherit its clock.
+  target.frame->pts = target.frames;
+  target.frames += samples;
 
-  if (auto ok = drain(audio_encoder.get(), audio_stream, audio_frame.get(), 0); !ok) return ok;
+  if (auto ok = drain(target.encoder.get(), target.stream, target.frame.get(), 0); !ok) {
+    return ok;
+  }
 
   const auto consumed = static_cast<std::size_t>(samples) *
                         static_cast<std::size_t>(audio_channels);
-  audio_pending.erase(audio_pending.begin(),
-                      audio_pending.begin() + static_cast<std::ptrdiff_t>(consumed));
+  target.pending.erase(target.pending.begin(),
+                       target.pending.begin() + static_cast<std::ptrdiff_t>(consumed));
   return {};
 }
 
@@ -414,7 +431,12 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
   // Audio is set up before the header, because a container records its streams
   // there: adding one afterwards would not appear in the file.
   if (audio.enabled) {
-    if (auto ok = impl->open_audio(audio); !ok) return std::unexpected(ok.error());
+    // One call per stream. Each gets its own encoder rather than sharing one,
+    // because an encoder carries the clock and the buffered tail of whatever
+    // was last written through it.
+    for (int i = 0; i < std::max(1, audio.streams); ++i) {
+      if (auto ok = impl->open_audio(audio); !ok) return std::unexpected(ok.error());
+    }
   }
 
   if ((impl->format->oformat->flags & AVFMT_NOFILE) == 0) {
@@ -493,46 +515,56 @@ std::expected<void, std::string> MediaWriter::write_frame(std::span<const std::u
   return d.drain(d.encoder.get(), d.stream, d.frame.get(), 1);
 }
 
-std::expected<void, std::string> MediaWriter::write_audio(std::span<const float> interleaved) {
+std::expected<void, std::string> MediaWriter::write_audio(std::span<const float> interleaved,
+                                                         int stream) {
   Impl& d = *impl_;
   if (d.finished) return std::unexpected("the writer has already been finished");
-  if (d.audio_stream == nullptr) {
-    return std::unexpected("this writer was created without audio");
+  if (d.audio.empty()) return std::unexpected("this writer was created without audio");
+  if (stream < 0 || static_cast<std::size_t>(stream) >= d.audio.size()) {
+    return std::unexpected("this writer has no audio stream by that number");
   }
 
+  Impl::AudioStream& target = d.audio[static_cast<std::size_t>(stream)];
   const auto channels = static_cast<std::size_t>(d.audio_channels);
   if (interleaved.size() % channels != 0) {
     return std::unexpected("the audio block is not a whole number of frames");
   }
 
-  d.audio_pending.insert(d.audio_pending.end(), interleaved.begin(), interleaved.end());
+  target.pending.insert(target.pending.end(), interleaved.begin(), interleaved.end());
 
-  const auto block = static_cast<std::size_t>(d.audio_block) * channels;
-  while (d.audio_pending.size() >= block) {
-    if (auto ok = d.encode_audio_block(d.audio_block); !ok) return ok;
+  const auto block = static_cast<std::size_t>(target.block) * channels;
+  while (target.pending.size() >= block) {
+    if (auto ok = d.encode_audio_block(target, target.block); !ok) return ok;
   }
   return {};
 }
 
-bool MediaWriter::has_audio() const noexcept { return impl_->audio_stream != nullptr; }
+bool MediaWriter::has_audio() const noexcept { return !impl_->audio.empty(); }
+
+int MediaWriter::audio_stream_count() const noexcept {
+  return static_cast<int>(impl_->audio.size());
+}
 
 const std::string& MediaWriter::audio_encoder_name() const noexcept { return impl_->audio_name; }
 
-std::int64_t MediaWriter::audio_frame_count() const noexcept { return impl_->audio_frames; }
+std::int64_t MediaWriter::audio_frame_count(int stream) const noexcept {
+  if (stream < 0 || static_cast<std::size_t>(stream) >= impl_->audio.size()) return 0;
+  return impl_->audio[static_cast<std::size_t>(stream)].frames;
+}
 
 std::expected<void, std::string> MediaWriter::finish() {
   Impl& d = *impl_;
   if (d.finished) return {};
   d.finished = true;
 
-  if (d.audio_stream != nullptr) {
+  for (Impl::AudioStream& target : d.audio) {
     // Whatever is left is shorter than a block; the encoder takes a short final
     // frame. Dropping it would clip up to 21 ms off the end of every export.
     const auto channels = static_cast<std::size_t>(d.audio_channels);
-    if (const std::size_t remaining = d.audio_pending.size() / channels; remaining > 0) {
-      if (auto ok = d.encode_audio_block(static_cast<int>(remaining)); !ok) return ok;
+    if (const std::size_t remaining = target.pending.size() / channels; remaining > 0) {
+      if (auto ok = d.encode_audio_block(target, static_cast<int>(remaining)); !ok) return ok;
     }
-    if (auto ok = d.drain(d.audio_encoder.get(), d.audio_stream, nullptr, 0); !ok) return ok;
+    if (auto ok = d.drain(target.encoder.get(), target.stream, nullptr, 0); !ok) return ok;
   }
 
   if (auto ok = d.drain(d.encoder.get(), d.stream, nullptr, 1); !ok) return ok;

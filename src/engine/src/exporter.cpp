@@ -72,19 +72,42 @@ std::expected<ExportResult, std::string> export_project(
   // Built before the writer, because whether the file gets an audio stream at
   // all depends on whether anything is audible — and a container records its
   // streams in the header, so that has to be known up front.
-  std::unique_ptr<AudioMixer> mixer;
+  // One mixer for a mixdown, one per audio track when the tracks are to be kept
+  // apart. A stem set is what anybody sending a cut on for a mix needs, since a
+  // stereo mixdown cannot be unpicked back into the tracks it came from.
+  //
+  // A track with nothing on it produces a silent mixer and gets no stream: an
+  // empty stem is a file somebody has to open to discover is empty. So the
+  // streams follow the order of the tracks that have something on them.
+  std::vector<std::unique_ptr<AudioMixer>> mixers;
   if (settings.audio) {
-    auto built = AudioMixer::create(*source, {.sample_rate = settings.audio_sample_rate,
-                                              .channels = settings.audio_channels});
-    if (!built) return std::unexpected(built.error());
-    if (!(*built)->silent()) mixer = std::move(*built);
+    const auto add = [&](std::optional<int> track) -> std::expected<void, std::string> {
+      auto built = AudioMixer::create(*source, {.sample_rate = settings.audio_sample_rate,
+                                                .channels = settings.audio_channels,
+                                                .only_track = track});
+      if (!built) return std::unexpected(built.error());
+      if (!(*built)->silent()) mixers.push_back(std::move(*built));
+      return {};
+    };
+
+    if (settings.separate_audio) {
+      int index = 0;
+      for (const core::Track& track : source->tracks) {
+        if (track.kind != core::TrackKind::Audio) continue;
+        if (auto ok = add(index); !ok) return std::unexpected(ok.error());
+        ++index;
+      }
+    } else if (auto ok = add(std::nullopt); !ok) {
+      return std::unexpected(ok.error());
+    }
   }
 
   media::AudioEncodeSettings encode_audio;
-  encode_audio.enabled = mixer != nullptr;
+  encode_audio.enabled = !mixers.empty();
   encode_audio.sample_rate = settings.audio_sample_rate;
   encode_audio.channels = settings.audio_channels;
   encode_audio.bitrate = settings.audio_bitrate;
+  encode_audio.streams = static_cast<int>(mixers.size());
 
   auto writer = media::MediaWriter::create(settings.path, encode, encode_audio);
   if (!writer) return std::unexpected(writer.error());
@@ -96,7 +119,7 @@ std::expected<ExportResult, std::string> export_project(
   // Deduplicated: a source missing for one frame is missing for all of them,
   // and a per-frame list would be thousands of identical lines.
   std::set<std::string> missing;
-  if (mixer) {
+  for (const std::unique_ptr<AudioMixer>& mixer : mixers) {
     for (const std::string& id : mixer->missing_media()) missing.insert(id);
   }
 
@@ -113,12 +136,14 @@ std::expected<ExportResult, std::string> export_project(
   // Prime the limiter. Its look-ahead delays output by a few milliseconds, and
   // the first block out is that much silence; feeding it and throwing the
   // silence away is what keeps audio aligned to picture instead of trailing it.
-  if (mixer) {
+  for (const std::unique_ptr<AudioMixer>& mixer : mixers) {
     const auto latency = std::min(static_cast<std::int64_t>(mixer->latency_frames()),
                                   audio_total);
     if (latency > 0) {
       audio_block.assign(static_cast<std::size_t>(latency) * channels, 0.0f);
       if (auto ok = mixer->mix(start, audio_block); !ok) return std::unexpected(ok.error());
+      // Every stream is the same length and fed in step, so one count serves
+      // them all — they differ in what they carry, not in how much.
       audio_fed = latency;
     }
   }
@@ -140,7 +165,7 @@ std::expected<ExportResult, std::string> export_project(
       return std::unexpected(std::format("frame {}: {}", frame, ok.error()));
     }
 
-    if (mixer) {
+    if (!mixers.empty()) {
       // How much audio this frame of video should be accompanied by, computed
       // from the frame index rather than accumulated so the two stay locked
       // together over a long timeline.
@@ -148,13 +173,15 @@ std::expected<ExportResult, std::string> export_project(
           audio_total,
           static_cast<std::int64_t>(std::llround(static_cast<double>(frame + 1) / fps * rate)));
       if (const std::int64_t need = want - audio_fed; need > 0) {
-        audio_block.assign(static_cast<std::size_t>(need) * channels, 0.0f);
         const double at = start + static_cast<double>(audio_fed) / rate;
-        if (auto ok = mixer->mix(at, audio_block); !ok) {
-          return std::unexpected(std::format("frame {}: {}", frame, ok.error()));
-        }
-        if (auto ok = (*writer)->write_audio(audio_block); !ok) {
-          return std::unexpected(std::format("frame {}: {}", frame, ok.error()));
+        for (std::size_t i = 0; i < mixers.size(); ++i) {
+          audio_block.assign(static_cast<std::size_t>(need) * channels, 0.0f);
+          if (auto ok = mixers[i]->mix(at, audio_block); !ok) {
+            return std::unexpected(std::format("frame {}: {}", frame, ok.error()));
+          }
+          if (auto ok = (*writer)->write_audio(audio_block, static_cast<int>(i)); !ok) {
+            return std::unexpected(std::format("frame {}: {}", frame, ok.error()));
+          }
         }
         audio_fed = want;
       }
@@ -172,10 +199,11 @@ std::expected<ExportResult, std::string> export_project(
 
   // The last few milliseconds are still inside the limiter's look-ahead;
   // without this they are simply lost off the end of the timeline.
-  if (mixer && mixer->latency_frames() > 0) {
-    audio_block.assign(mixer->latency_frames() * channels, 0.0f);
-    mixer->flush(audio_block);
-    if (auto ok = (*writer)->write_audio(audio_block); !ok) {
+  for (std::size_t i = 0; i < mixers.size(); ++i) {
+    if (mixers[i]->latency_frames() == 0) continue;
+    audio_block.assign(mixers[i]->latency_frames() * channels, 0.0f);
+    mixers[i]->flush(audio_block);
+    if (auto ok = (*writer)->write_audio(audio_block, static_cast<int>(i)); !ok) {
       return std::unexpected(ok.error());
     }
   }

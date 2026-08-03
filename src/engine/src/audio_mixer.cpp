@@ -195,6 +195,11 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
 
   std::set<std::string> missing;
   for (const render::PlannedAudioClip& entry : planned) {
+    // One track at a time when asked for, which is what an export writing a
+    // stream per track does. Skipped before the source is decoded rather than
+    // muted after: a mixer for one track should not pay for the others' audio.
+    if (settings.only_track.has_value() && entry.track_index != *settings.only_track) continue;
+
     Voice voice;
     voice.planned = entry;
     // Built at the clip's own start, which is where playback of it begins and
