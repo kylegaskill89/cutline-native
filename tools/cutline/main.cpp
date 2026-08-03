@@ -335,6 +335,15 @@ constexpr UINT kMediaReady = WM_APP + 1;
 /// with unsaved work is exactly the case a recovery copy is for. It fires
 /// oftener than a copy is due; `autosave_due` decides.
 constexpr UINT_PTR kAutosaveTimer = 1;
+
+/// The tooltip's delay, and its timer.
+///
+/// Half a second, which is Windows' own: long enough that a pointer crossing a
+/// toolbar on its way somewhere leaves no trail of boxes behind it, short
+/// enough that resting on a control to ask what it is feels answered rather
+/// than waited for.
+constexpr UINT_PTR kTooltipTimer = 2;
+constexpr UINT kTooltipDelayMs = 500;
 constexpr UINT kAutosaveTickMs = 5000;
 
 /// Posted by the updater's worker when its state changes. The same reason
@@ -4325,19 +4334,26 @@ struct ToolEntry {
   cutline::ui::Tool tool;
   IconButton::Icon icon;
   Key key;
+  /// What it says when the pointer rests on it. The name and the key, because
+  /// an icon button has no words at all and a shortcut nobody can discover is
+  /// one nobody uses.
+  const char* hint;
 };
 
 constexpr std::array kTools{
-    ToolEntry{cutline::ui::Tool::Selection, IconButton::Icon::Pointer, Key::V},
+    ToolEntry{cutline::ui::Tool::Selection, IconButton::Icon::Pointer, Key::V,
+              "Selection (V)"},
     // Premiere's B and N, in Premiere's order: the two edge tools sit together
     // between the pointer and the razor, because they are variations on the
     // trim the pointer already does.
-    ToolEntry{cutline::ui::Tool::Ripple, IconButton::Icon::Ripple, Key::B},
-    ToolEntry{cutline::ui::Tool::Roll, IconButton::Icon::Roll, Key::N},
-    ToolEntry{cutline::ui::Tool::Razor, IconButton::Icon::Razor, Key::C},
-    ToolEntry{cutline::ui::Tool::RateStretch, IconButton::Icon::RateStretch, Key::R},
-    ToolEntry{cutline::ui::Tool::Slip, IconButton::Icon::Slip, Key::Y},
-    ToolEntry{cutline::ui::Tool::Slide, IconButton::Icon::Slide, Key::U},
+    ToolEntry{cutline::ui::Tool::Ripple, IconButton::Icon::Ripple, Key::B,
+              "Ripple Edit (B)"},
+    ToolEntry{cutline::ui::Tool::Roll, IconButton::Icon::Roll, Key::N, "Rolling Edit (N)"},
+    ToolEntry{cutline::ui::Tool::Razor, IconButton::Icon::Razor, Key::C, "Razor (C)"},
+    ToolEntry{cutline::ui::Tool::RateStretch, IconButton::Icon::RateStretch, Key::R,
+              "Rate Stretch (R)"},
+    ToolEntry{cutline::ui::Tool::Slip, IconButton::Icon::Slip, Key::Y, "Slip (Y)"},
+    ToolEntry{cutline::ui::Tool::Slide, IconButton::Icon::Slide, Key::U, "Slide (U)"},
 };
 
 /// Pushes the snap setting into the view and lights the button for it.
@@ -4443,10 +4459,10 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   auto& tools = panel->emplace<Box>(Axis::Horizontal);
   tools.emplace<Button>("Import", [app] {
     if (app != nullptr) import_media(*app);
-  });
+  }).set_tooltip("Bring media into the project (Ctrl+I)");
   tools.emplace<Button>("Remove", [app] {
     if (app != nullptr) remove_from_pool(*app);
-  });
+  }).set_tooltip("Take the selected media out, and every clip of it");
   // One button and a menu rather than three buttons. Three would not fit — the
   // first attempt put New Title, Matte and Adjustment in this row and the last
   // of them was cut off by the edge of the panel — and a fourth generator would
@@ -4616,17 +4632,17 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   // two. `run` is what decides that, so the button and the I key cannot drift.
   transport.emplace<Button>("Mark In", [app] {
     if (app != nullptr) run_command(*app, cutline::editor::Command::MarkIn);
-  });
+  }).set_tooltip("Mark in at the playhead, or clear it (I)");
   transport.emplace<Button>("Mark Out", [app] {
     if (app != nullptr) run_command(*app, cutline::editor::Command::MarkOut);
-  });
+  }).set_tooltip("Mark out at the playhead, or clear it (O)");
   // The frame at the playhead, written out as a PNG. Under the monitor rather
   // than in the project panel, which the spec suggests: that row is already
   // full, and `--check` said so by finding two controls cut in half by the edge
   // of it. This is also where the frame being saved is on show.
   transport.emplace<Button>("Snapshot", [app] {
     if (app != nullptr) take_snapshot(*app);
-  });
+  }).set_tooltip("Write the frame at the playhead out as a PNG");
 
   // The sequence's size used to be a button here. It is a property of the
   // project, and it lives in Project Settings now — the monitor showing it was
@@ -4644,6 +4660,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
       names.emplace_back(name);
     }
     auto& quality = transport.emplace<Dropdown>(std::move(names), chosen);
+    quality.set_tooltip("How much of the picture to render while scrubbing");
     quality.set_on_change([app](std::size_t index) {
       if (app == nullptr || index >= kPreviewScales.size()) return;
       choose_preview_scale(*app, kPreviewScales[index].first);
@@ -4655,6 +4672,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   auto& loop = transport.emplace<Button>("Loop", [app] {
     if (app != nullptr) toggle_looping(*app);
   });
+  loop.set_tooltip("Play the marked span over and over");
   if (app != nullptr) {
     app->loop_button = &loop;
     loop.set_selected(app->looping);
@@ -4663,6 +4681,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   auto& play = transport.emplace<Button>("Play", [app] {
     if (app != nullptr) toggle_playback(*app);
   });
+  play.set_tooltip("Play or pause (Space)");
   if (app != nullptr) {
     app->play_button = &play;
     // The panel may have been rebuilt mid-playback — a rearrangement, a theme
@@ -4672,7 +4691,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   }
   transport.emplace<Button>("Export", [app] {
     if (app != nullptr) open_export_dialog(*app);
-  });
+  }).set_tooltip("Render the sequence to a file");
   return panel;
 }
 
@@ -4688,10 +4707,10 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   // reach it needs one place that does it.
   tools.emplace<Button>("Undo", [app] {
     if (app != nullptr) run_command(*app, cutline::editor::Command::Undo);
-  });
+  }).set_tooltip("Undo (Ctrl+Z)");
   tools.emplace<Button>("Redo", [app] {
     if (app != nullptr) run_command(*app, cutline::editor::Command::Redo);
-  });
+  }).set_tooltip("Redo (Ctrl+Y)");
   // The tool palette, between the history buttons and the timecode. Premiere
   // floats it over the timeline; a row in the toolbar is the same thing without
   // a second window to keep track of, and it cannot be lost behind anything.
@@ -4703,6 +4722,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
       if (app != nullptr) choose_tool(*app, tool);
     });
     button.set_name(std::string("tool.") + std::string(cutline::ui::to_string(entry.tool)));
+    button.set_tooltip(entry.hint);
     if (app != nullptr) {
       button.set_selected(app->tool == entry.tool);
       app->tool_buttons.push_back(&button);
@@ -4716,9 +4736,11 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   auto& link = tools.emplace<Button>("Link", [app] {
     if (app != nullptr) run_command(*app, cutline::editor::Command::LinkClips);
   });
+  link.set_tooltip("Link the selected clips (Ctrl+L)");
   auto& unlink = tools.emplace<Button>("Unlink", [app] {
     if (app != nullptr) run_command(*app, cutline::editor::Command::UnlinkClips);
   });
+  unlink.set_tooltip("Unlink them (Ctrl+Shift+L)");
   if (app != nullptr) {
     app->link_button = &link;
     app->unlink_button = &unlink;
@@ -4728,6 +4750,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   // New menu already found out: the row runs out of width before the commands
   // run out.
   auto& track_menu = tools.emplace<Button>("Track");
+  track_menu.set_tooltip("Add or remove a track");
   track_menu.set_on_click([app, control = &track_menu] {
     if (app == nullptr || app->main.host == nullptr) return;
 
@@ -4752,13 +4775,14 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   auto& snap = tools.emplace<Button>("Snap", [app] {
     if (app != nullptr) toggle_snapping(*app);
   });
+  snap.set_tooltip("Snap edges together (S)");
   if (app != nullptr) app->snap_button = &snap;
 
   tools.emplace<Button>("Fit", [app] {
     if (app == nullptr || app->timeline == nullptr) return;
     app->timeline->zoom_to_fit();
     mark_dirty(*app);
-  });
+  }).set_tooltip("Zoom to the whole sequence (\)");
 
   tools.emplace<Spacer>();
   // Eleven columns: "00:00:00:00" is what a timecode is and it is never any
@@ -4766,6 +4790,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   // row to the buttons.
   auto& readout = tools.emplace<TextField>("00:00:00:00");
   readout.set_columns(11);
+  readout.set_tooltip("Where the playhead is. Type a time to go there");
   readout.set_on_commit([app](const std::string& typed) {
     if (app == nullptr) return;
     const std::optional<double> at =
@@ -7081,6 +7106,12 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT), TME_LEAVE, window, 0};
       TrackMouseEvent(&track);
       shell->host->mouse_move(mouse_from(lparam, MouseButton::Left));
+
+      // Any movement takes the tooltip away and starts the wait again. A box
+      // that stayed up while the pointer moved on would be labelling the wrong
+      // thing, and one that never restarted would only ever appear once.
+      shell->host->hide_tooltip();
+      SetTimer(window, kTooltipTimer, kTooltipDelayMs, nullptr);
       // Not unconditionally: the pointer crossing a panel that does not care
       // leaves the picture exactly as it was, and a full repaint costs
       // milliseconds. `--benchmark` is where that number comes from.
@@ -7097,11 +7128,15 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
     }
 
     case WM_MOUSELEAVE:
+      KillTimer(window, kTooltipTimer);
+      shell->host->hide_tooltip();
       shell->host->mouse_exit();
       if (shell->host->needs_paint()) shell->dirty = true;
       return 0;
 
     case WM_LBUTTONDOWN:
+      KillTimer(window, kTooltipTimer);
+      shell->host->hide_tooltip();
       SetCapture(window);
       shell->host->mouse_down(mouse_from(lparam, MouseButton::Left));
       if (shell->host->needs_paint()) shell->dirty = true;
@@ -7310,6 +7345,16 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       return 1;  // every pixel is painted, so erasing only causes a flash
 
     case WM_TIMER:
+      if (wparam == kTooltipTimer) {
+        // Once. The pointer has rested; nothing more is due until it moves
+        // again, which is what restarts the wait.
+        KillTimer(window, kTooltipTimer);
+        if (std::string say = shell->host->tooltip_at_pointer(); !say.empty()) {
+          shell->host->show_tooltip(std::move(say));
+          if (shell->host->needs_paint()) shell->dirty = true;
+        }
+        return 0;
+      }
       if (wparam == kAutosaveTimer) {
         poll_autosave(*app);
         return 0;

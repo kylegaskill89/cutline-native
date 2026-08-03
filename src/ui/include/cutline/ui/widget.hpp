@@ -197,6 +197,16 @@ class Widget {
   virtual void on_mouse_leave();
   virtual void on_focus_changed(bool focused);
 
+  /// What this control is, and the key that does the same thing.
+  ///
+  /// Shown after the pointer has rested on it, which is what makes a tooltip
+  /// worth having rather than a thing that flashes past: an icon button has no
+  /// words at all, and a shortcut nobody can discover is a shortcut nobody
+  /// uses. Empty means nothing to say, and the question passes to the parent
+  /// exactly as the cursor's does.
+  void set_tooltip(std::string tooltip) { tooltip_ = std::move(tooltip); }
+  [[nodiscard]] const std::string& tooltip() const noexcept { return tooltip_; }
+
   /// What the pointer should look like at this point, in this widget's own
   /// coordinates.
   ///
@@ -238,6 +248,7 @@ class Widget {
   bool visible_ = true;
   bool enabled_ = true;
   bool selected_ = false;
+  std::string tooltip_;
   bool focusable_ = false;
   bool clips_children_ = false;
 
@@ -308,6 +319,22 @@ class WidgetHost {
   // ----------------------------------------------------------------- state --
 
   [[nodiscard]] Widget* hovered() const noexcept { return hovered_; }
+
+  /// The tooltip for whatever the pointer is over, or empty.
+  ///
+  /// Bubbles like the cursor: the deepest widget first, then its parents, so a
+  /// label inside a button does not swallow the button's answer.
+  [[nodiscard]] std::string tooltip_at_pointer() const;
+
+  /// Shows a tooltip beside the pointer, or takes it away.
+  ///
+  /// The *host* draws it and the application decides when. Timing belongs to
+  /// whoever owns the message loop — a widget layer with no clock cannot say
+  /// how long a pointer has rested — and drawing belongs here, where the theme
+  /// and the layers above the tree are.
+  void show_tooltip(std::string text);
+  void hide_tooltip();
+  [[nodiscard]] const std::string& tooltip() const noexcept { return tooltip_shown_; }
 
   /// What the pointer should look like where it currently is.
   ///
@@ -389,6 +416,7 @@ class WidgetHost {
   [[nodiscard]] Widget* bubble(Widget* target, Fn&& deliver);
 
   void set_hovered(Widget* widget);
+  void paint_tooltip(Painter& painter, const Theme& theme) const;
   void set_pressed(Widget* widget);
   void collect_focusable(Widget& widget, std::vector<Widget*>& out) const;
 
@@ -402,6 +430,11 @@ class WidgetHost {
   bool layout_dirty_ = false;
   bool paint_dirty_ = true;
   Widget* hovered_ = nullptr;
+  /// The tooltip on screen, and where the pointer was when it was asked for —
+  /// so it stays put while it is up rather than following the hand.
+  std::string tooltip_shown_;
+  double tooltip_x_ = 0.0;
+  double tooltip_y_ = 0.0;
   Widget* focused_ = nullptr;
   Widget* captured_ = nullptr;
   /// The widget showing as pressed, so the flag is cleared on the same widget

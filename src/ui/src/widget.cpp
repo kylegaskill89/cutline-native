@@ -300,6 +300,28 @@ Cursor WidgetHost::cursor() const {
   return Cursor::Arrow;
 }
 
+std::string WidgetHost::tooltip_at_pointer() const {
+  if (!has_mouse_ || captured_ != nullptr) return {};
+  for (Widget* widget = hovered_; widget != nullptr; widget = widget->parent()) {
+    if (!widget->tooltip().empty()) return widget->tooltip();
+  }
+  return {};
+}
+
+void WidgetHost::show_tooltip(std::string text) {
+  if (text == tooltip_shown_) return;
+  tooltip_shown_ = std::move(text);
+  tooltip_x_ = mouse_x_;
+  tooltip_y_ = mouse_y_;
+  request_paint();
+}
+
+void WidgetHost::hide_tooltip() {
+  if (tooltip_shown_.empty()) return;
+  tooltip_shown_.clear();
+  request_paint();
+}
+
 Widget* WidgetHost::target_at(double x, double y) {
   if (!popup_open()) return root_->at(x, y);
   // Inside the popup, or nothing. What is underneath is unreachable while one
@@ -549,6 +571,31 @@ void WidgetHost::paint(Painter& painter, const Theme& theme) const {
   // After everything, and outside every clip the tree set up. That is the
   // entire reason this is not a widget in the tree.
   if (popup_ != nullptr && !popup_closing_) popup_->paint(painter, theme);
+  paint_tooltip(painter, theme);
+}
+
+void WidgetHost::paint_tooltip(Painter& painter, const Theme& theme) const {
+  if (tooltip_shown_.empty()) return;
+
+  const Metrics& metrics = theme.metrics;
+  const SurfaceStyle& style = theme.style(Part::Tooltip, State::Normal);
+  const double text_width = painter.measure(tooltip_shown_, metrics.small_font_size, false);
+  const double width = text_width + 2.0 * metrics.padding_x;
+  const double height = metrics.small_font_size * metrics.line_height + metrics.padding_y;
+
+  // Below and to the right, where the hand is not. Pushed back inside the
+  // window when there is no room there, because a tooltip half off the edge is
+  // worse than one on the other side of the pointer.
+  constexpr double kGap = 14.0;
+  double x = tooltip_x_ + kGap;
+  double y = tooltip_y_ + kGap;
+  if (x + width > bounds_.right()) x = std::max(bounds_.x, tooltip_x_ - width - 4.0);
+  if (y + height > bounds_.bottom()) y = std::max(bounds_.y, tooltip_y_ - height - 4.0);
+
+  const Rect box{x, y, width, height};
+  paint_surface(painter, box, style);
+  painter.text(text_run(box, tooltip_shown_, style, metrics.small_font_size, TextAlign::Center,
+                        false));
 }
 
 }  // namespace cutline::ui

@@ -634,6 +634,103 @@ TEST(GrabRow, DrawsAnInsertionLineWhenItIsTheTarget) {
   EXPECT_EQ(painter.count(DrawCall::Kind::Line), before + 1);
 }
 
+// ------------------------------------------------------------- tooltips --
+
+TEST(Tooltip, TheDeepestThingWithSomethingToSayAnswers) {
+  // The same bubbling rule as the cursor: a label inside a button must not
+  // swallow the button's answer.
+  auto owned = std::make_unique<Panel>();
+  Panel* panel = owned.get();
+  panel->set_tooltip("the panel");
+  Button& button = panel->emplace<Button>("Go");
+  button.set_tooltip("Go (G)");
+
+  WidgetHost host(std::move(owned));
+  host.resize(Rect{0.0, 0.0, 200.0, 100.0}, flat_context());
+
+  host.mouse_move(MouseEvent{.x = button.bounds().x + 4.0, .y = button.bounds().y + 4.0});
+  EXPECT_EQ(host.tooltip_at_pointer(), "Go (G)");
+}
+
+TEST(Tooltip, AWidgetWithNothingToSayLetsItsParentAnswer) {
+  auto owned = std::make_unique<Panel>();
+  Panel* panel = owned.get();
+  panel->set_tooltip("the panel");
+  Button& button = panel->emplace<Button>("Go");
+
+  WidgetHost host(std::move(owned));
+  host.resize(Rect{0.0, 0.0, 200.0, 100.0}, flat_context());
+
+  host.mouse_move(MouseEvent{.x = button.bounds().x + 4.0, .y = button.bounds().y + 4.0});
+  EXPECT_EQ(host.tooltip_at_pointer(), "the panel");
+}
+
+TEST(Tooltip, NothingIsAskedForWhileTheButtonIsDown) {
+  // A box appearing over the thing being dragged would be labelling what the
+  // pointer is passing rather than what it is doing.
+  auto owned = std::make_unique<Panel>();
+  Panel* panel = owned.get();
+  Button& button = panel->emplace<Button>("Go");
+  button.set_tooltip("Go (G)");
+
+  WidgetHost host(std::move(owned));
+  host.resize(Rect{0.0, 0.0, 200.0, 100.0}, flat_context());
+  host.mouse_move(MouseEvent{.x = button.bounds().x + 4.0, .y = button.bounds().y + 4.0});
+  host.mouse_down(MouseEvent{.x = button.bounds().x + 4.0, .y = button.bounds().y + 4.0,
+                             .button = MouseButton::Left});
+
+  EXPECT_TRUE(host.tooltip_at_pointer().empty());
+}
+
+TEST(Tooltip, ItIsDrawnOnlyOnceItIsShown) {
+  auto owned = std::make_unique<Panel>();
+  Panel* panel = owned.get();
+  Button& button = panel->emplace<Button>("Go");
+  button.set_tooltip("Go (G)");
+
+  WidgetHost host(std::move(owned));
+  host.resize(Rect{0.0, 0.0, 200.0, 100.0}, flat_context());
+  host.mouse_move(MouseEvent{.x = button.bounds().x + 4.0, .y = button.bounds().y + 4.0});
+
+  RecordingPainter before;
+  host.paint(before, default_theme());
+
+  host.show_tooltip("Go (G)");
+  RecordingPainter after;
+  host.paint(after, default_theme());
+
+  EXPECT_GT(after.count(DrawCall::Kind::Text), before.count(DrawCall::Kind::Text));
+  EXPECT_GT(after.count(DrawCall::Kind::Fill), before.count(DrawCall::Kind::Fill));
+}
+
+TEST(Tooltip, HidingTakesItAwayAgain) {
+  WidgetHost host(std::make_unique<Panel>());
+  host.resize(Rect{0.0, 0.0, 200.0, 100.0}, flat_context());
+
+  host.show_tooltip("something");
+  EXPECT_FALSE(host.tooltip().empty());
+  host.hide_tooltip();
+  EXPECT_TRUE(host.tooltip().empty());
+}
+
+TEST(Tooltip, ItIsKeptInsideTheWindow) {
+  // Beside the pointer, unless there is no room there — a box half off the edge
+  // is worse than one on the other side of the hand.
+  WidgetHost host(std::make_unique<Panel>());
+  host.resize(Rect{0.0, 0.0, 200.0, 100.0}, flat_context());
+  host.mouse_move(MouseEvent{.x = 195.0, .y = 95.0});
+  host.show_tooltip("a rather long tooltip indeed");
+
+  RecordingPainter painter;
+  host.paint(painter, default_theme());
+
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind != DrawCall::Kind::Fill) continue;
+    EXPECT_LE(call.bounds.right(), 200.01);
+    EXPECT_LE(call.bounds.bottom(), 100.01);
+  }
+}
+
 // -------------------------------------------------------------- cursors --
 
 TEST(Cursor, AWidgetWithNothingToSayLetsTheQuestionThrough) {

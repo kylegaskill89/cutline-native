@@ -1276,8 +1276,11 @@ IconButton::IconButton(Icon icon, std::function<void()> on_click)
 LayoutItem IconButton::sizing(Axis axis, const LayoutContext& context) const {
   if (!narrow_ || axis == Axis::Vertical) return Button::sizing(axis, context);
   // Three quarters. Enough to still be an easy target, little enough that three
-  // of them together cost about what two square ones would.
-  return LayoutItem::fixed(std::round(context.metrics().control_height * 0.75));
+  // of them together cost about what two square ones would — and never narrower
+  // than the mark it has to hold, which grew with the theme's font.
+  const Metrics& metrics = context.metrics();
+  const double mark = metrics.font_size * 0.92 + 4.0;
+  return LayoutItem::fixed(std::round(std::max(metrics.control_height * 0.75, mark)));
 }
 
 void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const Color& color,
@@ -1465,11 +1468,19 @@ void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const 
 void IconButton::paint_content(Painter& painter, const Theme& theme) const {
   const SurfaceStyle& style = theme.style(part(), state());
 
-  // Fixed rather than scaled with the button: these sit in a row with text and
-  // want to match its weight, not the theme's padding.
-  constexpr double kReach = 4.0;
-  constexpr double kWidth = 1.5;
-  draw_icon(painter, icon_, bounds(), style.text, kReach, kWidth, selected());
+  // Scaled with the *text* rather than with the button, because these sit in a
+  // row with it and want to match its weight rather than the theme's padding —
+  // but scaled, where this was a flat four pixels whatever the theme said.
+  //
+  // Eight pixels across was too small to read. Half of these marks have
+  // internal structure — a razor is two blades and a gap, a slide is a block
+  // between two bars — and at eight pixels with a one-and-a-half pixel stroke
+  // there is no room for the structure to survive. Twelve is still smaller than
+  // the capital letters beside it and is legible at a glance, which is the
+  // whole job.
+  const double reach = std::max(4.0, theme.metrics.font_size * 0.46);
+  const double width = std::max(1.5, theme.metrics.font_size * 0.135);
+  draw_icon(painter, icon_, bounds(), style.text, reach, width, selected());
 
   // Whether the toggle is on is drawn into the mark as well as left to the
   // surface beneath it. The themes do define a selected state now, but a lit
@@ -1479,7 +1490,7 @@ void IconButton::paint_content(Painter& painter, const Theme& theme) const {
     const Rect area = bounds();
     const double cx = area.x + area.width * 0.5;
     const double cy = area.y + area.height * 0.5;
-    const double dot = kReach * 0.5;
+    const double dot = reach * 0.5;
     painter.fill(Rect{cx - dot, cy - dot, dot * 2.0, dot * 2.0}, dot, Fill::solid(style.text));
   }
 }
