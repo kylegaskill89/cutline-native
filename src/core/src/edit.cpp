@@ -134,6 +134,11 @@ Project place_media(Project p, std::string_view media_id, double start,
   const double source_in = honour_range ? std::max(0.0, range->in) : 0.0;
   const double source_out = honour_range ? std::min(media.duration, range->out) : media.duration;
 
+  // Which video track this went on, kept because the audio lanes are chosen to
+  // match it. Set even for a media with no picture of its own, where it stays
+  // empty and the sound starts at A1.
+  std::optional<std::size_t> video_lane;
+
   const std::vector<std::size_t> video_tracks = track_indices_of_kind(p, TrackKind::Video);
   if (media.has_video && !video_tracks.empty()) {
     std::size_t target = video_tracks.front();
@@ -145,6 +150,7 @@ Project place_media(Project p, std::string_view media_id, double start,
         }
       }
     }
+    video_lane = target;
     Clip clip;
     clip.id = new_id("clip");
     clip.media_id = media.id;
@@ -157,35 +163,44 @@ Project place_media(Project p, std::string_view media_id, double start,
     sort_track(p.tracks[target]);
   }
 
-  // Each audio stream goes to a distinct lane that is free across the clip's
-  // span, creating fresh lanes at the bottom when none is free.
-  const double audio_end = start + (source_out - source_in);
+  // Each audio stream goes to the lane that *matches* the video's, and the
+  // next lanes down for the streams after it. Fresh lanes are made at the
+  // bottom when the project does not have enough.
+  //
+  // Matching rather than searching for a free lane, which is what this did and
+  // which put a clip's picture and its sound on lanes that had nothing to do
+  // with each other: video is pushed onto its track whatever is already there,
+  // so a second placement over the first left two overlapping clips on V1 and
+  // their sound spread across A1 and A2. Two rules for one placement is one
+  // rule too many, and the one to keep is the one the video uses.
+  //
+  // Streams still get a lane each — piling a stereo pair's two streams onto one
+  // lane was the original bug and that part of the rule stands.
   std::vector<std::size_t> audio_tracks = track_indices_of_kind(p, TrackKind::Audio);
-  std::unordered_set<std::string> used_lanes;
 
-  const auto lane_free = [&](const Track& t) {
-    return std::ranges::none_of(t.clips, [&](const Clip& c) {
-      return start < clip_end(c) && c.start < audio_end;
-    });
-  };
+  // Which lane the video landed on, counted from the bottom, because that is
+  // how video lanes are numbered: V1 is the base layer and the topmost track
+  // has the highest number, while A1 is the *first* audio lane. Pairing them
+  // is what makes V1's sound land on A1.
+  std::size_t first_lane = 0;
+  if (video_lane.has_value()) {
+    const std::vector<std::size_t> video_now = track_indices_of_kind(p, TrackKind::Video);
+    const auto found = std::ranges::find(video_now, *video_lane);
+    if (found != video_now.end()) {
+      first_lane = static_cast<std::size_t>(std::distance(found, video_now.end())) - 1;
+    }
+  }
 
   for (int stream = 0; stream < media.audio_stream_count; ++stream) {
-    std::optional<std::size_t> target;
-    for (const std::size_t i : audio_tracks) {
-      if (!used_lanes.contains(p.tracks[i].id) && lane_free(p.tracks[i])) {
-        target = i;
-        break;
-      }
+    const std::size_t lane = first_lane + static_cast<std::size_t>(stream);
+    while (audio_tracks.size() <= lane) {
+      Track fresh;
+      fresh.id = new_id("track");
+      fresh.kind = TrackKind::Audio;
+      p.tracks.push_back(std::move(fresh));
+      audio_tracks.push_back(p.tracks.size() - 1);
     }
-    if (!target.has_value()) {
-      Track lane;
-      lane.id = new_id("track");
-      lane.kind = TrackKind::Audio;
-      p.tracks.push_back(std::move(lane));
-      target = p.tracks.size() - 1;
-      audio_tracks.push_back(*target);
-    }
-    used_lanes.insert(p.tracks[*target].id);
+    const std::size_t target = audio_tracks[lane];
 
     Clip clip;
     clip.id = new_id("clip");
@@ -196,8 +211,8 @@ Project place_media(Project p, std::string_view media_id, double start,
     clip.source_out = source_out;
     clip.start = start;
     clip.group_id = group_id;
-    p.tracks[*target].clips.push_back(std::move(clip));
-    sort_track(p.tracks[*target]);
+    p.tracks[target].clips.push_back(std::move(clip));
+    sort_track(p.tracks[target]);
   }
 
   return p;

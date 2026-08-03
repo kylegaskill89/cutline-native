@@ -122,21 +122,63 @@ TEST(PlaceMedia, EverythingPlacedSharesOneGroup) {
 }
 
 // The rule that was a real bug: streams must not pile onto one lane.
-TEST(PlaceMedia, OverlappingPlacementCreatesFreshLanes) {
+TEST(PlaceMedia, EachStreamTakesALaneOfItsOwn) {
   Project p = add_media(empty_project(), footage());
   p = place_media(std::move(p), "m1", 0.0);
-  p = place_media(std::move(p), "m1", 0.0);  // same span, both lanes busy
 
-  EXPECT_EQ(p.tracks.size(), 5u);  // v1, a1, a2, and two new lanes
-  for (const Track& t : p.tracks) {
-    if (t.kind == TrackKind::Audio) EXPECT_EQ(t.clips.size(), 1u);
-  }
+  EXPECT_EQ(track_by_id(p, "a1").clips.size(), 1u);
+  EXPECT_EQ(track_by_id(p, "a2").clips.size(), 1u);
 }
 
-TEST(PlaceMedia, NonOverlappingPlacementReusesLanes) {
+TEST(PlaceMedia, TheSoundGoesWhereThePictureWentEvenIfTheLaneIsBusy) {
+  // The bug this replaced a rule to fix. Video is pushed onto its track
+  // whatever is already there, and the audio used to go hunting for a lane that
+  // was free — so a second placement over the first left two clips overlapping
+  // on V1 and their sound on lanes nowhere near it.
   Project p = add_media(empty_project(), footage());
   p = place_media(std::move(p), "m1", 0.0);
-  p = place_media(std::move(p), "m1", 20.0);  // lanes are free out there
+  p = place_media(std::move(p), "m1", 0.0);  // the same span, twice
+
+  EXPECT_EQ(p.tracks.size(), 3u) << "no lanes were invented";
+  EXPECT_EQ(track_by_id(p, "v1").clips.size(), 2u);
+  EXPECT_EQ(track_by_id(p, "a1").clips.size(), 2u);
+  EXPECT_EQ(track_by_id(p, "a2").clips.size(), 2u);
+}
+
+TEST(PlaceMedia, TheSecondVideoLanesSoundLandsOnTheSecondAudioLane) {
+  // V1 with A1 and V2 with A2, which is the pairing every editor shows and the
+  // one anybody reading a timeline assumes.
+  Project p = empty_project();
+  Track v2{.id = "v2", .kind = TrackKind::Video};
+  p.tracks.insert(p.tracks.begin(), v2);  // stored topmost first, so V2 is V1's senior
+
+  Media mono = footage();
+  mono.audio_stream_count = 1;
+  p = add_media(std::move(p), mono);
+
+  p = place_media(std::move(p), "m1", 0.0, "v2");
+  EXPECT_TRUE(track_by_id(p, "a1").clips.empty());
+  EXPECT_EQ(track_by_id(p, "a2").clips.size(), 1u);
+}
+
+TEST(PlaceMedia, LanesAreMadeWhenThereAreTooFew) {
+  Project p;
+  Track v{.id = "v1", .kind = TrackKind::Video};
+  p.tracks = {v};  // no audio lanes at all
+  p = add_media(std::move(p), footage());
+
+  p = place_media(std::move(p), "m1", 0.0);
+  std::size_t lanes = 0;
+  for (const Track& t : p.tracks) {
+    if (t.kind == TrackKind::Audio) ++lanes;
+  }
+  EXPECT_EQ(lanes, 2u) << "one per stream";
+}
+
+TEST(PlaceMedia, TwoPlacementsApartShareTheSameLanes) {
+  Project p = add_media(empty_project(), footage());
+  p = place_media(std::move(p), "m1", 0.0);
+  p = place_media(std::move(p), "m1", 20.0);
 
   EXPECT_EQ(p.tracks.size(), 3u);
   EXPECT_EQ(track_by_id(p, "a1").clips.size(), 2u);
@@ -340,16 +382,20 @@ TEST(MoveClips, StaysPutAtTheEdgeOfTheTrackStack) {
 // Dragging a video clip upward must not also shuffle its linked audio between
 // audio lanes, which is what restrict_kind exists to prevent.
 TEST(MoveClips, RestrictKindLimitsVerticalMovement) {
-  Project p = add_media(empty_project(), footage());
+  // V2 above V1, which is the order tracks are stored in — topmost first — and
+  // the order the lane names assume. Placed explicitly on V1, so its sound
+  // lands on A1 and A2 and the move can be watched leaving them alone.
+  Project p = empty_project();
   Track v2;
   v2.id = "v2";
   v2.kind = TrackKind::Video;
-  p.tracks.insert(p.tracks.begin() + 1, v2);
-  p = place_media(std::move(p), "m1", 0.0);
+  p.tracks.insert(p.tracks.begin(), v2);
+  p = add_media(std::move(p), footage());
+  p = place_media(std::move(p), "m1", 0.0, "v1");
 
   const std::string video_id = track_by_id(p, "v1").clips[0].id;
   const Ids members{group_members(p, video_id)};
-  p = move_clips(std::move(p), members, 0.0, 1, TrackKind::Video);
+  p = move_clips(std::move(p), members, 0.0, -1, TrackKind::Video);
 
   EXPECT_TRUE(track_by_id(p, "v1").clips.empty());
   EXPECT_EQ(track_by_id(p, "v2").clips.size(), 1u);

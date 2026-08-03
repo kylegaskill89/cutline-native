@@ -35,10 +35,19 @@ struct PlacementRange {
 /// video, plus one audio clip per source audio stream, all sharing a fresh group
 /// so they stay linked.
 ///
-/// Each audio stream lands on a *distinct* audio lane that is free across the
-/// clip's span, and fresh lanes are created at the bottom when none is free.
-/// Piling several streams — or several placements — onto one lane region was a
-/// real bug; the distinct-and-free rule is the fix.
+/// Each audio stream lands on the lane that **matches** the video's — V1's
+/// sound on A1, V2's on A2 — with the streams after the first taking the lanes
+/// below it, and fresh lanes made at the bottom when the project has too few.
+///
+/// Matching rather than searching for a lane that happens to be free, which is
+/// what this used to do and which put a clip's picture and its sound on lanes
+/// with nothing to do with each other: video is pushed onto its track whatever
+/// is already there, so a second placement overlapping the first left two clips
+/// on V1 and their sound spread across A1 and A2. Two rules for one placement
+/// was one too many, and the video's is the one to keep.
+///
+/// Streams still take a lane each. Piling a stereo pair's two streams onto one
+/// lane was the original bug and that half of the rule stands.
 ///
 /// An empty `video_track_id` targets the topmost video track.
 [[nodiscard]] Project place_media(Project p, std::string_view media_id, double start,
