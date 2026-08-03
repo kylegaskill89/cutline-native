@@ -261,6 +261,9 @@ deciding it is probably fine:
   spot lands where the razor's blade is, needs a screen. The window class is
   registered with a **null** `hCursor` now, so a mistake here shows as no cursor
   at all rather than as the wrong one.
+- **The snap line**, drawn while a drag is stuck to something. Tested through
+  `snapped()` and through the draw calls; what it looks like against a clip
+  needs a screen.
 
 Two faults found by driving in this stretch, both invisible to the tests, are
 the reason the list exists at all: a tab press that no longer marked the window

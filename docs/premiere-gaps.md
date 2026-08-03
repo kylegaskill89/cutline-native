@@ -592,7 +592,7 @@ say so first.
 | A cursor that changes | tool cursors, trim cursors, resize, I-beam | **done** — the application had exactly one cursor from the first widget until now | — |
 | Hover feedback on a clip's zones | the trim zone lights | **done** — the trim handle under the pointer, and the razor's cut line | — |
 | Hover feedback everywhere else | yes | already had it — buttons, menu rows, splitters, tabs | — |
-| A snap that says it snapped | a line at the edge it stuck to | none — a clip that snapped and one that landed close look the same | control |
+| A snap that says it snapped | a line at the edge it stuck to | **done** — a line at what it stuck to, gone the moment it pulls away | — |
 | Tooltips | yes | none anywhere | control |
 
 **The cursor never changed.** `window_class.hCursor` was `IDC_ARROW` and nothing
@@ -616,8 +616,13 @@ said nothing. The trim handle under the pointer is now drawn, and the razor
 shows the line it would cut on — the tool whose whole gesture is one click is
 the one that most needs to say where it would land.
 
-Snapping is still silent, and that is the remaining row: a clip that snapped to
-an edge and one that happened to land near it look identical.
+Snapping says so now, with a line at the time the drag has stuck to, drawn while
+it is stuck and gone the moment the pointer pulls away. It is recomputed on
+every move rather than latched, which is what stops a line being left behind at
+the last place a drag happened to catch.
+
+What is left in this section is **tooltips** — there are none anywhere in the
+application, and several controls are icons with no words at all.
 
 ### 2.4 Reading the timeline
 

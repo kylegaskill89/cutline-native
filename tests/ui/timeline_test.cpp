@@ -293,6 +293,67 @@ TEST(TimelineHover, ThePointerLeavingTakesTheHighlightWithIt) {
   EXPECT_LT(gone.count(DrawCall::Kind::Fill), over.count(DrawCall::Kind::Fill));
 }
 
+// ------------------------------------------------------------ snapping --
+
+TEST(SnapFeedback, ADragThatSticksSaysWhatItStuckTo) {
+  // Snapping was silent: a clip that clicked into place against its neighbour
+  // and one that happened to land a pixel away looked identical, which made it
+  // something to be trusted rather than seen.
+  Fixture fixture;
+  fixture.view->set_snapping(true);
+
+  // The insert on the upper track starts at two seconds; drag the lower one's
+  // head to just short of it.
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.x + 2.0, box.bottom() - 5.0));
+  fixture.host->mouse_move(press(box.x + 2.0 + 197.0, box.bottom() - 5.0));
+
+  ASSERT_TRUE(fixture.view->snapped().has_value());
+  EXPECT_NEAR(*fixture.view->snapped(), 2.0, 1e-9);
+}
+
+TEST(SnapFeedback, ItIsDrawn) {
+  Fixture fixture;
+  fixture.view->set_snapping(true);
+
+  RecordingPainter before;
+  fixture.host->paint(before, default_theme());
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.x + 2.0, box.bottom() - 5.0));
+  fixture.host->mouse_move(press(box.x + 2.0 + 197.0, box.bottom() - 5.0));
+  ASSERT_TRUE(fixture.view->snapped().has_value());
+
+  RecordingPainter stuck;
+  fixture.host->paint(stuck, default_theme());
+  EXPECT_GT(stuck.count(DrawCall::Kind::Line), before.count(DrawCall::Kind::Line));
+}
+
+TEST(SnapFeedback, PullingAwayTakesItBack) {
+  Fixture fixture;
+  fixture.view->set_snapping(true);
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.x + 2.0, box.bottom() - 5.0));
+  fixture.host->mouse_move(press(box.x + 2.0 + 197.0, box.bottom() - 5.0));
+  ASSERT_TRUE(fixture.view->snapped().has_value());
+
+  // Far enough that nothing is within reach.
+  fixture.host->mouse_move(press(box.x + 2.0 + 340.0, box.bottom() - 5.0));
+  EXPECT_FALSE(fixture.view->snapped().has_value());
+}
+
+TEST(SnapFeedback, WithSnappingOffNothingSticksOrIsDrawn) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.x + 2.0, box.bottom() - 5.0));
+  fixture.host->mouse_move(press(box.x + 2.0 + 197.0, box.bottom() - 5.0));
+
+  EXPECT_FALSE(fixture.view->snapped().has_value());
+}
+
 // ------------------------------------------------- the ripple and roll --
 
 TEST(RippleTool, AnEdgeIsWhatItActsOn) {

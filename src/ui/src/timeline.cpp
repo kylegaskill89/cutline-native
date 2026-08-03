@@ -1052,6 +1052,18 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
   }
   painter.pop_clip();
 
+  // ---- what the drag has snapped to, over the clips so it can be seen on one
+  //
+  // A clip that clicked into place against its neighbour and one that happened
+  // to land a pixel away looked identical, which made snapping something to be
+  // trusted rather than seen.
+  if (snapped_.has_value() && mode_ != DragMode::None) {
+    const double at = time_area().x + scale_.to_x(*snapped_);
+    painter.push_clip(tracks, 0.0);
+    painter.line(at, tracks.y, at, tracks.bottom(), theme.accent, 1.0);
+    painter.pop_clip();
+  }
+
   // ---- the zone under the pointer, over the clips and under everything else
   //
   // What a press would do, said before it is done. The timeline was the only
@@ -1460,6 +1472,16 @@ void TimelineView::drag_to(double x) {
   const double tolerance = snapping_ ? kSnapDistance / scale_.pixels_per_second : 0.0;
   const std::vector<double> points = snap_points(model_, playhead_, drag_);
 
+  // What the drag stuck to, for the line that says it stuck. Cleared each time
+  // round, so letting go of an edge takes the line away rather than leaving one
+  // at the last place it happened to catch.
+  snapped_.reset();
+  const auto snap_to = [&](double value) -> std::optional<double> {
+    const std::optional<double> found = nearest_snap(points, value, tolerance);
+    if (found.has_value()) snapped_ = *found;
+    return found;
+  };
+
   TimelineBlock next = origin_;
 
   /// Puts everything the ripple is carrying at its own start plus `delta`.
@@ -1488,8 +1510,10 @@ void TimelineView::drag_to(double x) {
       if (to_start && (!to_end || std::abs(*to_start - start) <=
                                       std::abs(*to_end - (start + length)))) {
         start = *to_start;
+        snapped_ = *to_start;
       } else if (to_end) {
         start = *to_end - length;
+        snapped_ = *to_end;
       }
       start = std::max(0.0, core::snap_to_frame(start, model_.fps));
 
@@ -1518,7 +1542,7 @@ void TimelineView::drag_to(double x) {
 
     case DragMode::TrimStart: {
       double start = origin_.start + moved;
-      if (const auto snapped = nearest_snap(points, start, tolerance)) start = *snapped;
+      if (const auto snapped = snap_to(start)) start = *snapped;
       // Never past the far edge: a clip has to keep at least one frame, or it
       // vanishes and there is nothing left to drag back.
       next.start = std::clamp(core::snap_to_frame(start, model_.fps), 0.0,
@@ -1528,7 +1552,7 @@ void TimelineView::drag_to(double x) {
 
     case DragMode::TrimEnd: {
       double end = origin_.end + moved;
-      if (const auto snapped = nearest_snap(points, end, tolerance)) end = *snapped;
+      if (const auto snapped = snap_to(end)) end = *snapped;
       next.end = std::max(origin_.start + frame, core::snap_to_frame(end, model_.fps));
       break;
     }
@@ -1539,7 +1563,7 @@ void TimelineView::drag_to(double x) {
     // front, because that is the net of trimming it and closing the gap.
     case DragMode::RippleStart: {
       double start = origin_.start + moved;
-      if (const auto snapped = nearest_snap(points, start, tolerance)) start = *snapped;
+      if (const auto snapped = snap_to(start)) start = *snapped;
       start = std::clamp(core::snap_to_frame(start, model_.fps), 0.0, origin_.end - frame);
 
       const double delta = start - origin_.start;
@@ -1550,7 +1574,7 @@ void TimelineView::drag_to(double x) {
 
     case DragMode::RippleEnd: {
       double end = origin_.end + moved;
-      if (const auto snapped = nearest_snap(points, end, tolerance)) end = *snapped;
+      if (const auto snapped = snap_to(end)) end = *snapped;
       next.end = std::max(origin_.start + frame, core::snap_to_frame(end, model_.fps));
       shift_downstream(next.end - origin_.end);
       break;
@@ -1562,7 +1586,7 @@ void TimelineView::drag_to(double x) {
     case DragMode::RollStart: {
       if (!before_.has_value()) return;
       double start = origin_.start + moved;
-      if (const auto snapped = nearest_snap(points, start, tolerance)) start = *snapped;
+      if (const auto snapped = snap_to(start)) start = *snapped;
       next.start = std::clamp(core::snap_to_frame(start, model_.fps),
                               before_->origin.start + frame, origin_.end - frame);
       model_.tracks[drag_->track].blocks[before_->index].end = next.start;
@@ -1572,7 +1596,7 @@ void TimelineView::drag_to(double x) {
     case DragMode::RollEnd: {
       if (!after_.has_value()) return;
       double end = origin_.end + moved;
-      if (const auto snapped = nearest_snap(points, end, tolerance)) end = *snapped;
+      if (const auto snapped = snap_to(end)) end = *snapped;
       next.end = std::clamp(core::snap_to_frame(end, model_.fps), origin_.start + frame,
                             after_->origin.end - frame);
       model_.tracks[drag_->track].blocks[after_->index].start = next.end;
@@ -1584,14 +1608,14 @@ void TimelineView::drag_to(double x) {
     // it came from. Only the one-frame floor is left.
     case DragMode::RateStart: {
       double start = origin_.start + moved;
-      if (const auto snapped = nearest_snap(points, start, tolerance)) start = *snapped;
+      if (const auto snapped = snap_to(start)) start = *snapped;
       next.start = std::clamp(core::snap_to_frame(start, model_.fps), 0.0, origin_.end - frame);
       break;
     }
 
     case DragMode::RateEnd: {
       double end = origin_.end + moved;
-      if (const auto snapped = nearest_snap(points, end, tolerance)) end = *snapped;
+      if (const auto snapped = snap_to(end)) end = *snapped;
       next.end = std::max(origin_.start + frame, core::snap_to_frame(end, model_.fps));
       break;
     }

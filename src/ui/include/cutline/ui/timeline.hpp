@@ -851,6 +851,14 @@ class TimelineView : public Widget {
   /// gesture.
   [[nodiscard]] Cursor cursor_at(double x, double y) const override;
 
+  /// The time the drag has stuck to, while it is stuck to one.
+  ///
+  /// Snapping was silent: a clip that clicked into place against its neighbour
+  /// and one that happened to land a pixel away looked exactly the same, so the
+  /// only way to know whether an edit was frame-accurate was to zoom in and
+  /// check afterwards.
+  [[nodiscard]] const std::optional<double>& snapped() const noexcept { return snapped_; }
+
   /// Where the pointer is, so the zone under it can be drawn as well as
   /// answered. Off the widget entirely is `std::nullopt`, which is what stops
   /// a highlight being left behind when the pointer leaves.
@@ -1009,6 +1017,10 @@ class TimelineView : public Widget {
   /// zone under it. Empty when it is somewhere else, which is what takes the
   /// highlight away rather than leaving one stuck at the edge.
   std::optional<std::pair<double, double>> pointer_;
+
+  /// The time the current drag has snapped to, if any. Recomputed on every
+  /// move, so it goes as soon as the pointer pulls away from it.
+  std::optional<double> snapped_;
 
   /// Which lane a height drag is carrying, and what it was when it began —
   /// worked from the press rather than from the last move, like every other
