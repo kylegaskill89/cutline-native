@@ -108,7 +108,8 @@ json write(const Transform& t) {
           {"scale_y", t.scale_y},
           {"rotation", t.rotation},
           {"anchor_x", t.anchor_x},
-          {"anchor_y", t.anchor_y}};
+          {"anchor_y", t.anchor_y},
+          {"anti_flicker", t.anti_flicker}};
 }
 
 json write(const MatteGradient& g) { return {{"color2", g.color2}, {"angle", g.angle}}; }
@@ -338,6 +339,9 @@ Transform read_transform(const json& j) {
   // the middle of the layer, which is what those files meant.
   t.anchor_x = read_or(j, "anchor_x", t.anchor_x);
   t.anchor_y = read_or(j, "anchor_y", t.anchor_y);
+  // Absent in every file written before the filter existed, and zero is what
+  // those files meant: no softening at all.
+  t.anti_flicker = read_or(j, "anti_flicker", t.anti_flicker);
   return t;
 }
 

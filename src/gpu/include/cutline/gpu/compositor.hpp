@@ -161,6 +161,10 @@ struct Layer {
 
   Quad quad;
   float opacity = 1.0f;
+  /// How much to soften the layer vertically before it is scaled, from 0 to 1.
+  /// Premiere's Anti-flicker Filter, applied where the layer is read rather
+  /// than as a pass, because it is a property of the sampling.
+  float anti_flicker = 0.0f;
   BlendMode blend = BlendMode::Normal;
 
   /// The effect stack, in the order it is applied.

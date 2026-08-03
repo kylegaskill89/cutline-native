@@ -190,6 +190,15 @@ struct Transform {
   double anchor_x = 0.5;
   double anchor_y = 0.5;
 
+  /// How much to soften the layer vertically before it is scaled, from 0 to 1.
+  ///
+  /// Premiere's Anti-flicker Filter. A still or a graphic full of one-pixel
+  /// detail shimmers when it is scaled down or moved slowly, because which
+  /// source rows survive the resampling changes from frame to frame. Softening
+  /// vertically first takes the shimmer out, at the cost of a little sharpness
+  /// — which is why it is a slider rather than something always on.
+  double anti_flicker = 0.0;
+
   friend bool operator==(const Transform&, const Transform&) = default;
 };
 

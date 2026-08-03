@@ -1230,6 +1230,79 @@ TEST_F(CompositorTest, AStackThatDoesNotSpreadKeepsTheWholeScratch) {
   EXPECT_EQ(pixel_at(cropped_only, kWidth / 4 + 2, kHeight / 2).a, 255) << "right of it";
 }
 
+/// Three rows: black, white, black. The middle one is the one-pixel line that
+/// shimmers when it is scaled, which is what the filter exists for.
+struct StripedPatch {
+  static constexpr int kWide = 1;
+  static constexpr int kTall = 3;
+  std::array<std::uint8_t, kWide * kTall * 4> pixels{
+      0,   0,   0,   255,  //
+      255, 255, 255, 255,  //
+      0,   0,   0,   255,
+  };
+
+  [[nodiscard]] FrameView view() const {
+    FrameView frame;
+    frame.width = kWide;
+    frame.height = kTall;
+    frame.layout = PixelLayout::Rgba8;
+    frame.full_range = true;
+    frame.planes[0] = PlaneView{.data = pixels.data(), .stride = kWide * 4};
+    return frame;
+  }
+};
+
+TEST_F(CompositorTest, TheAntiFlickerFilterSoftensTheSourceVertically) {
+  // A one-pixel line is the thing that shimmers: scaled down, whether it
+  // survives depends on which source rows the resampler happens to keep.
+  // Softening spreads it onto its neighbours so there is always something there.
+  //
+  // Applied where the source is *read*, so it softens what the file holds rather
+  // than an edge some later pass cut — which is the distinction that makes it a
+  // property of the sampling rather than an effect.
+  const StripedPatch patch;
+  const FrameView frame = patch.view();
+
+  Layer layer;
+  layer.frame = &frame;
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  const std::array<Layer, 1> sharp_layers{layer};
+  const Image sharp = render(sharp_layers);
+  // A sixth of the way down is inside the top black row, well clear of the
+  // bilinear ramp either side of the white one.
+  const int above = pixel_at(sharp, kWidth / 2, kHeight / 6).r;
+
+  layer.anti_flicker = 1.0f;
+  const std::array<Layer, 1> soft_layers{layer};
+  const Image soft = render(soft_layers);
+
+  EXPECT_GT(pixel_at(soft, kWidth / 2, kHeight / 6).r, above)
+      << "the white row did not spread upwards";
+  // And the middle of the line gives some of itself up, which is what spreading
+  // means as opposed to growing.
+  EXPECT_LT(pixel_at(soft, kWidth / 2, kHeight / 2).r,
+            pixel_at(sharp, kWidth / 2, kHeight / 2).r);
+}
+
+TEST_F(CompositorTest, NoAntiFlickerLeavesTheSourceAlone) {
+  // Zero has to be free as well as neutral: it is what every layer in every
+  // project carries, and a filter that ran anyway would soften everything.
+  const StripedPatch patch;
+  const FrameView frame = patch.view();
+
+  Layer layer;
+  layer.frame = &frame;
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  const std::array<Layer, 1> layers{layer};
+  const Image image = render(layers);
+  // Not quite 255: a three-row source stretched over sixty-four is filtered,
+  // and the centre of the line is a hair off the peak.
+  EXPECT_GT(pixel_at(image, kWidth / 2, kHeight / 2).r, 240) << "the line stayed bright";
+  EXPECT_LT(pixel_at(image, kWidth / 2, kHeight / 6).r, 5) << "and the black stayed black";
+}
+
 TEST_F(CompositorTest, AFreeDrawnPathMasksTheShapeItEncloses) {
   // The one mask too big for the root constants: its corners go in a buffer and
   // the pass carries where its run starts. A triangle covering the top-left of

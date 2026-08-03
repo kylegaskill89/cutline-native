@@ -43,6 +43,10 @@ struct PlannedLayer {
   core::LayerBox box;
   /// Opacity times fades, already combined.
   double alpha = 1.0;
+
+  /// How much to soften the layer vertically before it is scaled, from 0 to 1.
+  /// Premiere's Anti-flicker Filter; see `core::Transform::anti_flicker`.
+  double anti_flicker = 0.0;
   core::BlendMode blend = core::BlendMode::Normal;
 
   /// The media time to display, clamped inside the segment so a rounding error

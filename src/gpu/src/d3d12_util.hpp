@@ -95,7 +95,9 @@ struct alignas(16) ShaderParams {
   /// is the whole reason that buffer exists.
   float path_first = 0.0f;
   float path_count = 0.0f;
-  float path_pad[2]{};  ///< to the next sixteen-byte row, which HLSL requires
+  /// How much the source is softened vertically as it is read, from 0 to 1.
+  float anti_flicker = 0.0f;
+  float anti_flicker_pad = 0.0f;
 };
 
 /// The most of the scratch a margin may take, per side.

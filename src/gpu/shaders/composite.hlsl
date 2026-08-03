@@ -140,7 +140,10 @@ struct Params {
     // constants, which is the whole reason that buffer exists.
     float pathFirst;
     float pathCount;
-    float2 pathPad;
+
+    // How much the source is softened vertically as it is read, 0 to 1.
+    float antiFlicker;
+    float antiFlickerPad;
 };
 
 
@@ -397,11 +400,35 @@ float4 codedSource(float2 uv) {
     return float4(saturate(yuvToRgb(float3(y, chroma.x, chroma.y), params.colorSpace)), 1.0);
 }
 
+/// The source, softened vertically by the anti-flicker filter when one is set.
+///
+/// The filter belongs here, where the source is *read*, rather than in the pass
+/// chain: a still full of one-pixel detail shimmers because which source rows
+/// survive the resampling changes from frame to frame, and the only place to
+/// prevent that is where the rows are read. An effect that ran afterwards would
+/// be softening an image that had already lost the rows.
+///
+/// A scratch target is exempt. It has already been read through this once, and
+/// applying it again on the way out would soften every layer with an effect on
+/// it twice.
+float4 softenedSource(float2 uv) {
+    if (params.antiFlicker <= 0.0 || params.layout == LAYOUT_CODED) return codedSource(uv);
+
+    // One row of the canvas, which is the spacing the resampler is skipping.
+    const float2 up = float2(0.0, params.antiFlicker / max(params.canvas.y, 1.0));
+
+    // Three taps, a quarter and a half and a quarter: the smallest filter that
+    // is symmetric and sums to one, which is what keeps a flat area exactly as
+    // bright as it was.
+    return codedSource(uv) * 0.5 + codedSource(saturate(uv + up)) * 0.25 +
+           codedSource(saturate(uv - up)) * 0.25;
+}
+
 /// The layer in linear light, ready to composite. The transfer function is
 /// applied exactly here, once, whether the pixels came straight from a decoder
 /// or through a stack of passes.
 float4 sourceColor(float2 uv) {
-    const float4 coded = codedSource(uv);
+    const float4 coded = softenedSource(uv);
     return float4(toLinear(coded.rgb, params.transfer), coded.a);
 }
 
@@ -872,7 +899,8 @@ float4 PSSource(VSOutput input) : SV_Target {
     if (layer.x < 0.0 || layer.x > 1.0 || layer.y < 0.0 || layer.y > 1.0) {
         return float4(0.0, 0.0, 0.0, 0.0);
     }
-    return codedSource(layer);
+
+    return softenedSource(layer);
 }
 
 /// The same, for an adjustment layer, whose source is whatever is beneath it.

@@ -792,6 +792,7 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     params.rotation[0] = std::cos(radians);
     params.rotation[1] = std::sin(radians);
     params.opacity = std::clamp(layer.opacity, 0.0f, 1.0f);
+    params.anti_flicker = std::clamp(layer.anti_flicker, 0.0f, 1.0f);
     params.layout = shader_layout(layer);
     params.blend = static_cast<int>(layer.blend);
     params.solid[0] = layer.color.r;

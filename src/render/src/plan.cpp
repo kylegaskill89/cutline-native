@@ -88,6 +88,7 @@ std::vector<PlannedLayer> plan_frame(
         core::segment_box(seg, media, project.canvas_w, project.canvas_h, t, measured);
     layer.alpha = core::segment_alpha(seg, t);
     layer.blend = clip.blend;
+    layer.anti_flicker = std::clamp(clip.transform.anti_flicker, 0.0, 1.0);
 
     // Clamped inside the segment: a rounding error at a boundary must not pull
     // in a frame from beyond the trim, which would show a flash of the wrong

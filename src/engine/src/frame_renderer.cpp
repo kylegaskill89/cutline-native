@@ -422,6 +422,7 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
                   static_cast<float>(source.box.height),
                   static_cast<float>(source.box.rotation_deg)};
     layer.opacity = static_cast<float>(std::clamp(source.alpha, 0.0, 1.0));
+    layer.anti_flicker = static_cast<float>(std::clamp(source.anti_flicker, 0.0, 1.0));
     layer.blend = to_gpu_blend(source.blend);
 
     stacks.push_back(source.clip == nullptr

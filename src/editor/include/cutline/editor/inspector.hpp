@@ -33,6 +33,8 @@ enum class ClipParam {
   AnchorX,
   AnchorY,
   Speed,
+  /// Premiere's Anti-flicker Filter, a slider under Motion.
+  AntiFlicker,
   Gain,
   Pan,
   FadeIn,

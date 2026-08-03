@@ -58,7 +58,7 @@ still opens the field rather than nudging the value somewhere nobody asked for.
 | Paired X/Y on one row | Position and Anchor Point are one row of two numbers | **done** — both, one stopwatch each | — |
 | **Anchor Point** | a property of its own; scale and rotation happen about it | **done** — in pixels of the layer, keyframeable, and it needed no shader change | — |
 | Time remapping | Speed keyframed, in Effect Controls | **done** — Speed is an animatable property, and which frame shows is the integral of it | — |
-| Anti-flicker filter | a slider under Motion | none | model + shader |
+| Anti-flicker filter | a slider under Motion | **done** — a vertical softening where the source is read | — |
 | Per-row reset button | a visible circular arrow | **done**, and hidden on an animated row where it would write a keyframe holding the default | — |
 | Per-section reset | one per `fx` group | **done** — per effect, keyframes cleared with it | — |
 | Greying a property another one governs | Uniform Scale greys Scale Width | **done** — Lock aspect greys Scale Y and leaves it readable | — |
@@ -439,9 +439,17 @@ And dragging the shape goes through the same setter a number does, so it writes
 a keyframe when the property is animated — found on screen, where a drag moved
 the outline and the render ignored it.
 
-**The shape of what is left.** One row in §1.1: the **anti-flicker filter**, a
-slider under Motion that softens the shimmer a scaled-down still gets. It is the
-last thing in this section.
+**The shape of what is left.** Nothing. Every row in section 1 is done, and the
+catalogue is a branch at a time rather than a budget whenever anybody wants more
+of it.
+
+The anti-flicker filter went in where the source is *read* rather than as a pass,
+which is the whole of what it is: a still full of one-pixel detail shimmers
+because which source rows survive the resampling changes from frame to frame, and
+the only place to prevent that is where the rows are read. An effect running
+afterwards would be softening an image that had already lost the rows. A layer
+already read through it once — anything that went to the scratch — is exempt on
+the way out, or every layer with an effect on it would be softened twice.
 
 Time remapping is done, and it is worth saying what it cost, because the answer
 was almost nothing: Speed became an animatable property like any other, so the

@@ -204,6 +204,7 @@ std::string_view to_string(ClipParam param) noexcept {
     case ClipParam::AnchorX: return "anchor_x";
     case ClipParam::AnchorY: return "anchor_y";
     case ClipParam::Speed: return "speed";
+    case ClipParam::AntiFlicker: return "anti_flicker";
     case ClipParam::Gain: return "gain";
     case ClipParam::Pan: return "pan";
     case ClipParam::FadeIn: return "fade_in";
@@ -224,6 +225,7 @@ std::string_view param_name(ClipParam param) noexcept {
     case ClipParam::AnchorX: return "Anchor Point X";
     case ClipParam::AnchorY: return "Anchor Point Y";
     case ClipParam::Speed: return "Speed";
+    case ClipParam::AntiFlicker: return "Anti-flicker";
     // Volume rather than Gain: it is what the control is called everywhere
     // else, and the row shows decibels.
     case ClipParam::Gain: return "Volume";
@@ -378,6 +380,20 @@ std::vector<ParamSpec> clip_parameters(const core::Project& project, std::string
                           .fallback = 1.0,
                           .suffix = "x"});
 
+  // Under Motion, where Premiere puts it, and after Speed because it is the
+  // least reached for of the two. Not animatable: it is a property of how the
+  // layer is sampled rather than of what it looks like at a moment, and a
+  // keyframed one would mean the sharpness changing mid-shot for no visible
+  // reason.
+  if (clip->kind == core::TrackKind::Video) {
+    out.push_back(ParamSpec{.param = ClipParam::AntiFlicker,
+                            .name = std::string(param_name(ClipParam::AntiFlicker)),
+                            .range = {.minimum = 0.0, .maximum = 100.0},
+                            .value = clip->transform.anti_flicker * kPercent,
+                            .fallback = 0.0,
+                            .suffix = "%"});
+  }
+
   // Fades are bounded by the clip they are on: a two second fade on a one
   // second clip is not a shorter fade, it is a mistake.
   out.push_back(ParamSpec{.param = ClipParam::FadeIn,
@@ -447,6 +463,10 @@ core::Project set_clip_parameter(core::Project project, std::string_view clip_id
 
     case ClipParam::Speed:
       return core::set_clip_speed(std::move(project), clip_id, value);
+
+    case ClipParam::AntiFlicker:
+      transform.anti_flicker = std::clamp(value / kPercent, 0.0, 1.0);
+      return core::set_clip_transform(std::move(project), clip_id, transform);
 
     case ClipParam::Gain:
       return core::set_clip_gain(std::move(project), clip_id, gain_stored(value));
