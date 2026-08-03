@@ -149,10 +149,25 @@ struct SkiaWindow::Impl {
         return std::unexpected("could not take the swapchain's buffers: " + described(result));
       }
 
+      // Through `shared`, like the adapter, the device and the queue above.
+      // `gr_cp` **adopts** a bare pointer — the constructor takes ownership
+      // without an `AddRef` — so handing it `Get()` leaves two owners with one
+      // reference between them. Both release it, the count goes below zero, and
+      // the debug layer says so: "DeviceChild reference counter underflow".
+      //
+      // This one call site was the only one that missed the rule, and it cost
+      // the application every resize of every window — a resize is the only
+      // place buffers are released while it keeps running. The release happens
+      // inside a window procedure, where an exception is fatal by definition,
+      // so what it looked like was the editor vanishing.
+      GrD3DTextureResourceInfo info;
+      info.fResource = shared(buffer.resource);
       // `PRESENT` is the state a freshly acquired back buffer is in, and Skia
       // needs to be told so it can put it back afterwards rather than guessing.
-      const GrD3DTextureResourceInfo info(buffer.resource.Get(), nullptr,
-                                          D3D12_RESOURCE_STATE_PRESENT, kFormat, 1, 1, 0);
+      info.fResourceState = D3D12_RESOURCE_STATE_PRESENT;
+      info.fFormat = kFormat;
+      info.fSampleCount = 1;
+      info.fLevelCount = 1;
       const GrBackendRenderTarget target = GrBackendRenderTargets::MakeD3D(width, height, info);
 
       buffer.surface = SkSurfaces::WrapBackendRenderTarget(

@@ -6987,7 +6987,9 @@ constexpr int kCursorSize = 32;
   return drawn != nullptr ? drawn : LoadCursorW(nullptr, IDC_ARROW);
 }
 
-LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+/// Everything a message does. Wrapped by `window_proc`, which is the boundary
+/// an exception must not cross.
+LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
   auto* shell = reinterpret_cast<Shell*>(GetWindowLongPtrW(window, GWLP_USERDATA));
   if (shell == nullptr || shell->app == nullptr || shell->host == nullptr) {
     return DefWindowProcW(window, message, wparam, lparam);
@@ -7362,6 +7364,31 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       break;
   }
   return DefWindowProcW(window, message, wparam, lparam);
+}
+
+/// The window procedure, and the one place an exception is caught.
+///
+/// A window procedure is a callback the *kernel* invokes, and an exception
+/// leaving one is `STATUS_FATAL_USER_CALLBACK_EXCEPTION`: the process is
+/// terminated on the spot, with no message, no chance to save, and nothing in
+/// the log but a fault offset inside `KERNELBASE`. That is how resizing a
+/// torn-out window looked like the application simply vanishing.
+///
+/// Caught rather than left to it, and said out loud. Swallowing a fault is not
+/// the point — the point is that whatever went wrong is worth one dialogue and
+/// a chance to save the project, and that a bug in one message must not take
+/// the document with it.
+LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) try {
+  return handle_message(window, message, wparam, lparam);
+} catch (const std::exception& failure) {
+  complain(window, std::string("Something went wrong handling a window message.\n\n") +
+                       failure.what() +
+                       "\n\nThe editor is still running. Save your work.");
+  return 0;
+} catch (...) {
+  complain(window, "Something went wrong handling a window message.\n\n"
+                   "The editor is still running. Save your work.");
+  return 0;
 }
 
 /// The first widget of a kind somewhere in a tree, for the headless check to
@@ -8032,6 +8059,7 @@ template <typename T>
 }
 
 }  // namespace
+
 
 int main(int argc, char** argv) {
   // `--check [dir]`: the second argument, when there is one, is where each
