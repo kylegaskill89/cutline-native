@@ -293,6 +293,117 @@ TEST(TimelineHover, ThePointerLeavingTakesTheHighlightWithIt) {
   EXPECT_LT(gone.count(DrawCall::Kind::Fill), over.count(DrawCall::Kind::Fill));
 }
 
+// ---------------------------------------------------------- scrollbars --
+
+TEST(Scrollbars, TheThumbSaysHowMuchOfTheSequenceIsOnScreen) {
+  // The whole point of it: without one, a long sequence gave no clue where the
+  // view sat in it — the wheel moved, and that was the whole of the answer.
+  Fixture fixture;
+  const Rect bar = fixture.view->scroll_area();
+  ASSERT_FALSE(bar.empty());
+
+  const double showing = fixture.view->scroll_thumb().width / bar.width;
+  const double fraction = fixture.view->scale().visible_duration(
+                              fixture.view->time_area().width) /
+                          fixture.view->model().content_duration();
+  EXPECT_NEAR(showing, fraction, 0.05);
+}
+
+TEST(Scrollbars, DraggingTheThumbMovesTheViewThroughTime) {
+  Fixture fixture;
+  const Rect thumb = fixture.view->scroll_thumb();
+  const double before = fixture.view->scale().start;
+
+  fixture.host->mouse_down(press(thumb.x + thumb.width * 0.5, thumb.y + 2.0));
+  fixture.host->mouse_move(press(thumb.x + thumb.width * 0.5 + 60.0, thumb.y + 2.0));
+
+  EXPECT_GT(fixture.view->scale().start, before);
+}
+
+TEST(Scrollbars, PressingTheEmptyPartOfTheBarGoesThere) {
+  // Rather than paging: the pointer is already where the answer is, which is
+  // the rule the ruler follows too.
+  Fixture fixture;
+  const Rect bar = fixture.view->scroll_area();
+  const double before = fixture.view->scale().start;
+
+  fixture.host->mouse_down(press(bar.right() - 4.0, bar.y + 2.0));
+  EXPECT_GT(fixture.view->scale().start, before);
+}
+
+TEST(Scrollbars, DraggingAnEndZoomsAndLeavesTheOtherEndWhereItWas) {
+  Fixture fixture;
+  const Rect grip = fixture.view->zoom_grip(true);
+  ASSERT_FALSE(grip.empty());
+
+  const double start = fixture.view->scale().start;
+  const double before = fixture.view->scale().pixels_per_second;
+
+  // The right end pulled right: more time on screen, so a smaller scale.
+  fixture.host->mouse_down(press(grip.x + grip.width * 0.5, grip.y + 2.0));
+  fixture.host->mouse_move(press(grip.x + grip.width * 0.5 + 80.0, grip.y + 2.0));
+
+  EXPECT_LT(fixture.view->scale().pixels_per_second, before);
+  EXPECT_DOUBLE_EQ(fixture.view->scale().start, start) << "the left end held still";
+}
+
+TEST(Scrollbars, ZoomingInFromTheLeftEndKeepsTheRightWhereItWas) {
+  Fixture fixture;
+  const Rect grip = fixture.view->zoom_grip(false);
+  ASSERT_FALSE(grip.empty());
+
+  const Rect area = fixture.view->time_area();
+  const double ended = fixture.view->scale().start +
+                       fixture.view->scale().visible_duration(area.width);
+
+  fixture.host->mouse_down(press(grip.x + grip.width * 0.5, grip.y + 2.0));
+  fixture.host->mouse_move(press(grip.x + grip.width * 0.5 + 60.0, grip.y + 2.0));
+
+  const double now = fixture.view->scale().start +
+                     fixture.view->scale().visible_duration(area.width);
+  EXPECT_NEAR(now, ended, 0.05);
+}
+
+TEST(Scrollbars, ThereIsNoBarWhenItWouldHaveNothingToSay) {
+  Fixture fixture;
+  fixture.view->zoom_to_fit();
+  EXPECT_TRUE(fixture.view->scroll_area().empty());
+  EXPECT_TRUE(fixture.view->scroll_thumb().empty());
+  EXPECT_TRUE(fixture.view->zoom_grip(false).empty());
+}
+
+TEST(Scrollbars, TheTracksGetOneTooWhenTheyDoNotFit) {
+  Fixture fixture;
+  EXPECT_TRUE(fixture.view->track_scroll_area().empty()) << "three tracks fit";
+
+  TimelineModel tall = sample_model();
+  for (TimelineTrack& track : tall.tracks) track.height = 200.0;
+  fixture.view->set_model(tall);
+
+  ASSERT_FALSE(fixture.view->track_scroll_area().empty());
+  const double before = fixture.view->vertical().offset;
+
+  const Rect thumb = fixture.view->track_scroll_thumb();
+  fixture.host->mouse_down(press(thumb.x + 2.0, thumb.y + thumb.height * 0.5));
+  fixture.host->mouse_move(press(thumb.x + 2.0, thumb.y + thumb.height * 0.5 + 80.0));
+  EXPECT_GT(fixture.view->vertical().offset, before);
+}
+
+TEST(Scrollbars, APressOnABarIsNotAPressOnAClip) {
+  // The bars sit outside the tracks, and a press that fell through to whatever
+  // was behind would start a marquee under the scrollbar.
+  Fixture fixture;
+  std::optional<std::vector<BlockRef>> chosen;
+  fixture.view->set_on_select([&](std::span<const BlockRef> refs) {
+    chosen = std::vector<BlockRef>(refs.begin(), refs.end());
+  });
+
+  const Rect bar = fixture.view->scroll_area();
+  fixture.host->mouse_down(press(bar.x + bar.width * 0.5, bar.y + 2.0));
+  EXPECT_FALSE(chosen.has_value());
+  EXPECT_EQ(fixture.view->drag_mode(), DragMode::ScrollTime);
+}
+
 // -------------------------------------------------- moving between lanes --
 
 TEST(TrackMove, AClipFollowsThePointerOntoAnotherTrack) {
@@ -700,6 +811,18 @@ TEST(Timeline, TheRulerSitsAboveTheTracks) {
 
   EXPECT_DOUBLE_EQ(fixture.view->ruler_area().height, metrics.ruler_height);
   EXPECT_DOUBLE_EQ(fixture.view->tracks_area().y, fixture.view->ruler_area().bottom());
+  // And stop above the scrollbar, which this model is long enough to have.
+  EXPECT_DOUBLE_EQ(fixture.view->tracks_area().bottom(),
+                   fixture.view->scroll_area().y);
+}
+
+TEST(Timeline, WithTheWholeSequenceOnScreenTheTracksReachTheBottom) {
+  // No bar, because a thumb that fills its own track says nothing and the row
+  // of pixels is better spent on the tracks.
+  Fixture fixture;
+  fixture.view->zoom_to_fit();
+
+  EXPECT_TRUE(fixture.view->scroll_area().empty());
   EXPECT_DOUBLE_EQ(fixture.view->tracks_area().bottom(), 400.0);
 }
 

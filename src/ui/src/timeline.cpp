@@ -45,6 +45,11 @@ constexpr double kTrimHandle = 8.0;
 /// strip is the full width of the header so there is plenty of it to aim at.
 constexpr double kTrackResizeReach = 4.0;
 
+/// How wide the grips at the ends of the scroll thumb are. Small, because they
+/// live inside the thumb and taking too much of it would leave nothing to
+/// scroll by on a sequence that is mostly on screen already.
+constexpr double kZoomGrip = 7.0;
+
 [[nodiscard]] Color fade(const Color& color, float amount) noexcept {
   return Color{color.r, color.g, color.b, color.a * amount};
 }
@@ -308,7 +313,61 @@ Rect TimelineView::ruler_area() const {
 Rect TimelineView::tracks_area() const {
   const Rect area = time_area();
   const double top = ruler_area().height;
-  return Rect{area.x, area.y + top, area.width, std::max(0.0, area.height - top)};
+  const double bottom = scroll_area().height;
+  return Rect{area.x, area.y + top, area.width,
+              std::max(0.0, area.height - top - bottom)};
+}
+
+Viewport TimelineView::across() const {
+  const Rect area = time_area();
+  Viewport view;
+  view.content = model_.content_duration();
+  view.visible = scale_.visible_duration(area.width);
+  view.offset = scale_.start;
+  return view;
+}
+
+Rect TimelineView::scroll_area() const {
+  // Nothing when the whole sequence already fits. A bar whose thumb fills its
+  // own track says nothing, and it costs a row of pixels the tracks want.
+  if (!across().scrollable()) return {};
+
+  const Rect area = time_area();
+  const double thickness = std::min(metrics_.scrollbar_width, area.height);
+  return Rect{area.x, area.bottom() - thickness, area.width, thickness};
+}
+
+Rect TimelineView::scroll_thumb() const {
+  const Rect bar = scroll_area();
+  if (bar.empty()) return {};
+
+  const Viewport view = across();
+  return Rect{bar.x + view.thumb_offset(bar.width), bar.y, view.thumb_size(bar.width),
+              bar.height};
+}
+
+Rect TimelineView::zoom_grip(bool at_end) const {
+  const Rect thumb = scroll_thumb();
+  // Three grips' worth at least, so the middle of the thumb is still somewhere
+  // to grab for a scroll. Below that the whole thumb scrolls and zooming is the
+  // wheel's job, which it is anyway.
+  if (thumb.empty() || thumb.width < kZoomGrip * 3.0) return {};
+  const double x = at_end ? thumb.right() - kZoomGrip : thumb.x;
+  return Rect{x, thumb.y, kZoomGrip, thumb.height};
+}
+
+Rect TimelineView::track_scroll_area() const {
+  if (!vertical_.scrollable()) return {};
+  const Rect area = tracks_area();
+  const double thickness = std::min(metrics_.scrollbar_width, area.width);
+  return Rect{area.right() - thickness, area.y, thickness, area.height};
+}
+
+Rect TimelineView::track_scroll_thumb() const {
+  const Rect bar = track_scroll_area();
+  if (bar.empty()) return {};
+  return Rect{bar.x, bar.y + vertical_.thumb_offset(bar.height), bar.width,
+              vertical_.thumb_size(bar.height)};
 }
 
 Rect TimelineView::track_rect(std::size_t track) const {
@@ -1202,6 +1261,43 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
     painter.pop_clip();
   }
 
+  // ---- the scrollbars, which say where in the sequence this is
+  //
+  // The horizontal one is the zoom control as well. Premiere's is, and the two
+  // questions are really one: how much of the sequence am I looking at, and
+  // which part. Without either of them a long sequence gives no clue where the
+  // view sits in it — the wheel moved, and that was the whole of the answer.
+  if (const Rect bar = scroll_area(); !bar.empty()) {
+    paint_surface(painter, bar, theme.style(Part::Scrollbar, State::Normal));
+
+    const Rect thumb = scroll_thumb();
+    const State state = mode_ == DragMode::ScrollTime || mode_ == DragMode::ZoomStart ||
+                                mode_ == DragMode::ZoomEnd
+                            ? State::Pressed
+                            : State::Normal;
+    const SurfaceStyle& style = theme.style(Part::ScrollThumb, state);
+    paint_surface(painter, thumb.inset(1.0), style);
+
+    // A notch on each grip, so the ends read as ends rather than as the edge of
+    // the thumb. Two lines is what every resize grip in the system is.
+    for (const bool at_end : {false, true}) {
+      const Rect grip = zoom_grip(at_end);
+      if (grip.empty()) continue;
+      const double cx = grip.x + grip.width * 0.5;
+      const double inset = grip.height * 0.25;
+      painter.line(cx - 1.0, grip.y + inset, cx - 1.0, grip.bottom() - inset, style.text, 1.0);
+      painter.line(cx + 1.0, grip.y + inset, cx + 1.0, grip.bottom() - inset, style.text, 1.0);
+    }
+  }
+
+  if (const Rect bar = track_scroll_area(); !bar.empty()) {
+    paint_surface(painter, bar, theme.style(Part::Scrollbar, State::Normal));
+    paint_surface(painter, track_scroll_thumb().inset(1.0),
+                  theme.style(Part::ScrollThumb, mode_ == DragMode::ScrollTracks
+                                                     ? State::Pressed
+                                                     : State::Normal));
+  }
+
   // ---- the playhead, last and over everything, clipped to the time area so
   // it never draws across the headers
   const double x = playhead_x();
@@ -1817,10 +1913,26 @@ Cursor TimelineView::cursor_at(double x, double y) const {
     case DragMode::FadeIn:
     case DragMode::FadeOut: return Cursor::ResizeWE;
 
+    // The ends of the scroll thumb zoom, which is a horizontal resize of what
+    // is on screen; the thumb itself is picked up and moved.
+    case DragMode::ZoomStart:
+    case DragMode::ZoomEnd: return Cursor::ResizeWE;
+    case DragMode::ScrollTime:
+    case DragMode::ScrollTracks: return Cursor::Move;
+
     case DragMode::None:
     case DragMode::Scrub:
     case DragMode::Marquee:
     case DragMode::GainPointRemove: break;
+  }
+
+  // The scrollbars, which `zone_at` knows nothing about: they are outside the
+  // tracks, and it only answers about clips.
+  if (zoom_grip(false).contains(x, y) || zoom_grip(true).contains(x, y)) {
+    return Cursor::ResizeWE;
+  }
+  if (scroll_thumb().contains(x, y) || track_scroll_thumb().contains(x, y)) {
+    return Cursor::Move;
   }
 
   // The grip under a header, which `zone_at` knows nothing about because it is
@@ -1862,6 +1974,48 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
   }
 
   if (event.button != MouseButton::Left) return false;
+
+  // The scrollbars, before anything else in the time area: they sit outside the
+  // tracks and the ruler, so nothing else can want this point.
+  if (scroll_area().contains(event.x, event.y)) {
+    zoom_origin_ = scale_;
+    scroll_origin_ = event.x;
+    press_x_ = event.x;
+
+    if (zoom_grip(false).contains(event.x, event.y)) {
+      mode_ = DragMode::ZoomStart;
+    } else if (zoom_grip(true).contains(event.x, event.y)) {
+      mode_ = DragMode::ZoomEnd;
+    } else if (scroll_thumb().contains(event.x, event.y)) {
+      mode_ = DragMode::ScrollTime;
+    } else {
+      // A press on the empty part of the bar jumps the view there and then
+      // drags from it, rather than paging: the pointer is already where the
+      // answer is, which is the same rule the ruler follows.
+      const Rect bar = scroll_area();
+      Viewport view = across();
+      view.drag_thumb(bar.width, event.x - bar.x - view.thumb_size(bar.width) * 0.5);
+      scale_.start = view.offset;
+      scale_.clamp_start(model_.content_duration());
+      zoom_origin_ = scale_;
+      mode_ = DragMode::ScrollTime;
+    }
+    return true;
+  }
+
+  if (track_scroll_area().contains(event.x, event.y)) {
+    mode_ = DragMode::ScrollTracks;
+    press_y_ = event.y;
+    scroll_origin_ = vertical_.offset;
+    if (!track_scroll_thumb().contains(event.x, event.y)) {
+      const Rect bar = track_scroll_area();
+      vertical_.drag_thumb(bar.height,
+                           event.y - bar.y - vertical_.thumb_size(bar.height) * 0.5);
+      scroll_origin_ = vertical_.offset;
+      press_y_ = event.y;
+    }
+    return true;
+  }
 
   // The line under a header, before the switches: it is at the bottom edge and
   // they are in the middle, so the two never overlap, and taking this first
@@ -2109,6 +2263,54 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
     scrub_to(event.x);
     return true;
   }
+  if (mode_ == DragMode::ScrollTime) {
+    const Rect bar = scroll_area();
+    Viewport view = across();
+    view.offset = zoom_origin_.start;
+    view.drag_thumb(bar.width,
+                    view.thumb_offset(bar.width) + (event.x - scroll_origin_));
+    scale_.start = view.offset;
+    scale_.clamp_start(model_.content_duration());
+    if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+    return true;
+  }
+
+  if (mode_ == DragMode::ZoomStart || mode_ == DragMode::ZoomEnd) {
+    // The far end holds still and the span between the two becomes what is on
+    // screen, which is what dragging the end of a scrollbar looks like it will
+    // do. Worked from the view at the press, so a long drag cannot accumulate.
+    const Rect area = time_area();
+    const double was = zoom_origin_.visible_duration(area.width);
+    const double moved = (event.x - scroll_origin_) / std::max(1.0, area.width) *
+                         model_.content_duration();
+
+    const bool from_start = mode_ == DragMode::ZoomStart;
+    const double span = std::max(core::frame_duration(model_.fps) * 2.0,
+                                 from_start ? was - moved : was + moved);
+    scale_.pixels_per_second =
+        std::clamp(area.width / span, kMinPixelsPerSecond, kMaxPixelsPerSecond);
+    // The end that was not grabbed stays where it was.
+    scale_.start = from_start ? zoom_origin_.start + (was - scale_.visible_duration(area.width))
+                              : zoom_origin_.start;
+    scale_.start = std::max(0.0, scale_.start);
+    scale_.clamp_start(model_.content_duration());
+    refresh_bounds();
+    if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+    return true;
+  }
+
+  if (mode_ == DragMode::ScrollTracks) {
+    const Rect bar = track_scroll_area();
+    Viewport view = vertical_;
+    view.offset = scroll_origin_;
+    view.drag_thumb(bar.height,
+                    view.thumb_offset(bar.height) + (event.y - press_y_));
+    vertical_.offset = view.offset;
+    vertical_.clamp();
+    if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+    return true;
+  }
+
   if (mode_ == DragMode::TrackHeight) {
     // Live, because a lane that only resized on release would be a drag with
     // nothing to aim by.
@@ -2219,6 +2421,14 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
       const std::vector<BlockRef> chosen{*drag_};
       on_select_(chosen);
     }
+  }
+
+  if (mode_ == DragMode::ScrollTime || mode_ == DragMode::ZoomStart ||
+      mode_ == DragMode::ZoomEnd || mode_ == DragMode::ScrollTracks) {
+    // Nothing to report. These move the view rather than the document, and
+    // undoing a scroll is not a thing anybody wants.
+    mode_ = DragMode::None;
+    return true;
   }
 
   if (mode_ == DragMode::TrackHeight) {

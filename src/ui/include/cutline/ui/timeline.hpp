@@ -447,6 +447,17 @@ enum class DragMode {
   /// shorter. In the header column only: over the tracks the same downward drag
   /// is a marquee, and there is no room for both.
   TrackHeight,
+  /// Dragging the bar along the bottom, which moves the view through time.
+  ScrollTime,
+  /// Dragging one end of that bar, which zooms: the far end stays where it is
+  /// and the span between them becomes what is on screen. Premiere's, and the
+  /// reason its scrollbar is the zoom control as well as the scroll control —
+  /// the two questions are one question, and answering them with one gesture
+  /// is what makes navigating a long sequence quick.
+  ZoomStart,
+  ZoomEnd,
+  /// Dragging the bar down the right, which moves the view through the tracks.
+  ScrollTracks,
   /// Sweeping a rectangle over empty track to gather up everything it touches.
   ///
   /// It starts on a press that hit no clip, which was previously the gesture
@@ -730,8 +741,30 @@ class TimelineView : public Widget {
   [[nodiscard]] Rect time_area() const;
   /// The strip of ticks along the top of the time area.
   [[nodiscard]] Rect ruler_area() const;
-  /// Below the ruler, where the tracks are.
+  /// Below the ruler, where the tracks are. Above the scrollbar, which is why
+  /// this is not simply everything under the ruler.
   [[nodiscard]] Rect tracks_area() const;
+
+  /// The bar along the bottom, and the part of it that stands for what is on
+  /// screen. Empty when the whole sequence already fits, because a scrollbar
+  /// that fills its own track says nothing and costs a row of pixels.
+  [[nodiscard]] Rect scroll_area() const;
+  [[nodiscard]] Rect scroll_thumb() const;
+  /// The two grips at the ends of that thumb, which zoom rather than scroll.
+  /// Empty when the thumb is too short to hold one.
+  [[nodiscard]] Rect zoom_grip(bool at_end) const;
+
+  /// The bar down the right of the tracks, and its thumb. Empty when the tracks
+  /// all fit.
+  [[nodiscard]] Rect track_scroll_area() const;
+  [[nodiscard]] Rect track_scroll_thumb() const;
+
+  /// The view through the sequence, in seconds: how long it is, how much of it
+  /// is on screen, and where that window starts.
+  ///
+  /// The same shape as the vertical one, so the same tested arithmetic answers
+  /// where a thumb goes and what dragging it means.
+  [[nodiscard]] Viewport across() const;
 
   /// A track's row across the time area, or empty if it is scrolled out of
   /// sight. Includes the part hidden behind the header column, so a block's
@@ -1000,6 +1033,12 @@ class TimelineView : public Widget {
   TimelineModel model_;
   TimeScale scale_;
   Viewport vertical_;
+
+  /// What a scroll or zoom drag started from: where along the bar the press
+  /// landed, and the view as it was. Worked from these rather than from the
+  /// last position, like every other drag here.
+  double scroll_origin_ = 0.0;
+  TimeScale zoom_origin_;
 
   double playhead_ = 0.0;
   bool snapping_ = true;
