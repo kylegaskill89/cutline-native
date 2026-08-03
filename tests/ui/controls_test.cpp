@@ -820,6 +820,57 @@ TEST(MenuList, ChoosingReportsWhichRow) {
   EXPECT_EQ(*chosen, 2u);
 }
 
+TEST(MenuList, TicksAreDrawnOnlyBesideTheRowsThatCarryThem) {
+  Listed test;
+  RecordingPainter plain;
+  test.list->paint(plain, default_theme());
+  EXPECT_EQ(plain.count(DrawCall::Kind::Line), 0u);
+
+  test.list->set_checked({true, false, true});
+  RecordingPainter ticked;
+  test.list->paint(ticked, default_theme());
+  EXPECT_EQ(ticked.count(DrawCall::Kind::Line), 4u) << "two rows, two strokes each";
+}
+
+TEST(MenuList, TickingIndentsEveryLabelAlike) {
+  // Including the rows with no tick — labels that stepped in and out depending
+  // on whether their own row happened to be ticked would read as a jumble.
+  const auto label_lefts = [](const RecordingPainter& painter) {
+    std::vector<double> lefts;
+    for (const DrawCall& call : painter.calls()) {
+      if (call.kind == DrawCall::Kind::Text && call.run.has_value()) {
+        lefts.push_back(call.run->bounds.x);
+      }
+    }
+    return lefts;
+  };
+
+  Listed test;
+  RecordingPainter plain;
+  test.list->paint(plain, default_theme());
+  const std::vector<double> before = label_lefts(plain);
+  ASSERT_EQ(before.size(), 3u);
+
+  test.list->set_checked({true, false, false});
+  RecordingPainter ticked;
+  test.list->paint(ticked, default_theme());
+
+  const std::vector<double> after = label_lefts(ticked);
+  ASSERT_EQ(after.size(), 3u);
+  EXPECT_GT(after.front(), before.front());
+  EXPECT_DOUBLE_EQ(after[1], after.front());
+  EXPECT_DOUBLE_EQ(after[2], after.front());
+}
+
+TEST(MenuList, NewItemsArriveWithoutTheOldTicks) {
+  // Ticks are held by position, so keeping them across a change of items would
+  // tick whatever happened to land on those rows.
+  Listed test;
+  test.list->set_checked({true, true, true});
+  test.list->set_items({"Other", "Items"});
+  EXPECT_TRUE(test.list->checked().empty());
+}
+
 TEST(MenuList, ReleasingOutsideEveryRowChoosesNothing) {
   Listed test;
   bool chosen = false;

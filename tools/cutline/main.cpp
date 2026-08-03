@@ -647,10 +647,6 @@ struct App {
   double preview_scale = 1.0;
   Dropdown* preview_scale_choice = nullptr;
 
-  /// Shows the sequence's size and opens the presets. Held so it can be
-  /// relabelled without rebuilding the row it is in.
-  Button* canvas_button = nullptr;
-
   /// The update check. Shows the running version and asks about newer ones.
   cutline::app::Updater updater;
   Button* version_button = nullptr;
@@ -3204,9 +3200,9 @@ constexpr std::array kCanvasPresets{
     CanvasPreset{"Square", 1080, 1080},
 };
 
-/// What the button says: the preset's name when the sequence is one of them,
-/// and the plain numbers when it is not. A sequence somebody typed a size into
-/// should show that size rather than the word "Custom", which says nothing.
+/// A sequence size in words: the preset's name when it is one of them, and the
+/// plain numbers when it is not. A sequence somebody typed a size into should
+/// show that size rather than the word "Custom", which says nothing.
 [[nodiscard]] std::string canvas_label(const cutline::core::Project& project) {
   for (const CanvasPreset& preset : kCanvasPresets) {
     if (preset.width == project.canvas_w && preset.height == project.canvas_h) {
@@ -3242,9 +3238,6 @@ void apply_canvas(App& app, int width, int height) {
     const cutline::core::Project& project = app.session.project();
     app.monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
   }
-  if (app.canvas_button != nullptr) {
-    app.canvas_button->set_text(canvas_label(app.session.project()));
-  }
   refresh_title(app);
   invalidate_preview(app);
   app.inspector_stale = true;
@@ -3278,7 +3271,10 @@ constexpr std::array<double, 7> kFrameRates{23.976, 24.0, 25.0, 29.97, 30.0, 50.
 /// the editor.
 [[nodiscard]] std::unique_ptr<Widget> build_project_settings_popup(App& app) {
   auto panel = std::make_unique<Panel>();
-  panel->emplace<Label>("Sequence size").set_bold(true);
+  // The current size in the heading, because the presets below only show which
+  // one is chosen and a sequence at a typed size matches none of them.
+  panel->emplace<Label>("Sequence size — " + canvas_label(app.session.project()))
+      .set_bold(true);
 
   for (const CanvasPreset& preset : kCanvasPresets) {
     auto& row = panel->emplace<Button>(
@@ -4588,16 +4584,9 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     if (app != nullptr) take_snapshot(*app);
   });
 
-  // The sequence's own size, which is not the same thing as the export's — the
-  // export dialog scales *from* this. Beside the preview resolution because the
-  // two are the pair of numbers anybody comparing them wants together.
-  auto& canvas = transport.emplace<Button>(
-      app == nullptr ? std::string("1080p") : canvas_label(app->session.project()));
-  canvas.set_on_click([app, control = &canvas] {
-    if (app == nullptr || app->main.host == nullptr) return;
-    app->main.host->open_popup(build_project_settings_popup(*app), control->bounds());
-  });
-  if (app != nullptr) app->canvas_button = &canvas;
+  // The sequence's size used to be a button here. It is a property of the
+  // project, and it lives in Project Settings now — the monitor showing it was
+  // a second way in from before there was a menu bar to hold the first.
 
   // A dropdown rather than a button that cycles. Cycling is fine for two
   // states; with three it hides two of them behind the one showing, so choosing
@@ -5649,6 +5638,55 @@ void wire_dock(App* app, Shell* shell, DockView& dock) {
   });
 }
 
+/// Whether a panel is anywhere in the arrangement, docked or torn out.
+[[nodiscard]] bool panel_is_open(App& app, const PanelId& panel) {
+  const std::vector<PanelId> open = cutline::ui::panels_in(layout_of(app));
+  return std::ranges::find(open, panel) != open.end();
+}
+
+/// What the Window menu does to a panel: opens a closed one, and puts a hidden
+/// tab of an open one to the front.
+///
+/// Closing from here as well, which is what Premiere's Window menu does and
+/// what makes the tick honest — a menu that can only ever add ticks is one
+/// where the tick is decoration.
+void toggle_panel(App& app, const PanelId& panel) {
+  DockLayout& layout = layout_of(app);
+  if (!panel_is_open(app, panel)) {
+    if (cutline::ui::open_panel(layout, panel)) app.dock_stale = true;
+    return;
+  }
+  // Open, but possibly behind another tab. Bringing it forward is the useful
+  // answer when that is so, and closing it is the useful answer when it is
+  // already the one showing.
+  if (cutline::ui::activate_panel(layout, panel)) {
+    app.dock_stale = true;
+    return;
+  }
+  if (cutline::ui::close_panel(layout, panel)) app.dock_stale = true;
+}
+
+/// The Window menu: every panel this build has, ticked where it is open.
+///
+/// Made on the click rather than kept, because what it says is a reading of the
+/// arrangement at that moment and the arrangement changes under it constantly.
+[[nodiscard]] std::unique_ptr<Widget> build_window_menu(App& app) {
+  std::vector<std::string> labels;
+  std::vector<bool> open;
+  for (const auto& [id, title] : kPanels) {
+    labels.emplace_back(title);
+    open.push_back(panel_is_open(app, PanelId(id)));
+  }
+
+  auto list = std::make_unique<MenuList>(std::move(labels));
+  list->set_checked(std::move(open));
+  list->set_on_choose([&app](std::size_t index) {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    if (index < kPanels.size()) toggle_panel(app, PanelId(kPanels[index].first));
+  });
+  return list;
+}
+
 /// Moves to another named arrangement.
 ///
 /// Nothing is copied: the layout being left *is* the workspace's, so whatever
@@ -5815,6 +5853,21 @@ void refresh_dock(App& app) {
          app->main.host->open_popup(build_application_settings_popup(*app), settings_anchor());
        }},
   });
+
+  // The Window menu, which is not built from a fixed list of entries like the
+  // others: what it says depends on which panels are open at the moment it is
+  // dropped, so it is made on the click rather than at startup.
+  //
+  // This is the only way back to a panel whose tab has been closed. Without it
+  // closing one is permanent short of resetting the whole workspace, and a
+  // close button that can throw a panel away for good is a trap.
+  {
+    auto& windows = bar.emplace<Button>("Window");
+    windows.set_on_click([app, control = &windows] {
+      if (app == nullptr || app->main.host == nullptr) return;
+      app->main.host->open_popup(build_window_menu(*app), control->bounds());
+    });
+  }
 
   menu("Help", {
       {"Check for Updates...", [app] { if (app != nullptr) check_for_updates(*app); }},
@@ -7521,10 +7574,14 @@ template <typename T>
       // and nothing else would ever lay them out. Both are rows of numbers and
       // presets, which is exactly the shape that gets squeezed in a theme with
       // a wider font.
-      for (int which = 0; which < 2; ++which) {
+      // The Window menu is here too: it is the one menu whose rows carry ticks,
+      // and a tick gutter that a theme's wider font pushes the labels out of
+      // would show up nowhere else.
+      for (int which = 0; which < 3; ++which) {
         app.main.host->close_popup();
-        app.main.host->open_popup(which == 0 ? build_project_settings_popup(app)
-                                             : build_application_settings_popup(app),
+        app.main.host->open_popup(which == 0   ? build_project_settings_popup(app)
+                                  : which == 1 ? build_application_settings_popup(app)
+                                               : build_window_menu(app),
                                   settings_anchor());
         app.main.host->update_layout(context);
         app.main.host->paint(*painter, theme);

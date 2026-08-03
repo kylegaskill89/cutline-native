@@ -434,6 +434,16 @@ class MenuList : public Widget {
   [[nodiscard]] std::size_t current() const noexcept { return current_; }
   void set_current(std::size_t index) noexcept { current_ = index; }
 
+  /// Which rows carry a tick, one flag per item.
+  ///
+  /// Different from `current`, which marks the one row a dropdown is showing:
+  /// any number of these can be ticked at once, which is what a menu of things
+  /// that are either on or off needs — the panels that are open, say. A list
+  /// with any ticks at all indents every row, ticked or not, so the labels line
+  /// up as a column rather than stepping in and out.
+  void set_checked(std::vector<bool> checked) { checked_ = std::move(checked); }
+  [[nodiscard]] const std::vector<bool>& checked() const noexcept { return checked_; }
+
   /// The row under the pointer or the keyboard, and what Enter would take.
   [[nodiscard]] std::size_t highlighted() const noexcept { return highlighted_; }
 
@@ -462,6 +472,7 @@ class MenuList : public Widget {
   void choose(std::size_t index);
 
   std::vector<std::string> items_;
+  std::vector<bool> checked_;
   std::size_t current_ = static_cast<std::size_t>(-1);
   std::size_t highlighted_ = static_cast<std::size_t>(-1);
   /// Taken at layout, where the metrics are, because painting and hit-testing

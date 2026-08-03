@@ -573,6 +573,9 @@ MenuList::MenuList(std::vector<std::string> items) : items_(std::move(items)) {}
 
 void MenuList::set_items(std::vector<std::string> items) {
   items_ = std::move(items);
+  // The ticks belonged to the old items. Kept, they would tick rows by
+  // position — which is to say, the wrong ones.
+  checked_.clear();
   highlighted_ = kNone;
 }
 
@@ -606,8 +609,11 @@ LayoutItem MenuList::sizing(Axis axis, const LayoutContext& context) const {
   for (const std::string& item : items_) {
     widest = std::max(widest, context.text.measure(item, metrics.font_size, false));
   }
+  // The tick gutter is width the labels no longer have, so it is asked for
+  // here as well as drawn — otherwise ticking a menu clips its longest label.
+  const double gutter = checked_.empty() ? 0.0 : metrics.list_row_height * 0.6;
   // Room either side, and never so narrow that a one-word menu is a sliver.
-  return LayoutItem::fixed(std::max(widest + 4.0 * metrics.padding_x, 96.0));
+  return LayoutItem::fixed(std::max(widest + gutter + 4.0 * metrics.padding_x, 96.0));
 }
 
 void MenuList::layout(const LayoutContext& context) {
@@ -634,7 +640,26 @@ void MenuList::paint_content(Painter& painter, const Theme& theme) const {
     if (row_state != State::Normal) paint_surface(painter, row, style);
     // Indented horizontally only: insetting the height too would shrink the
     // text box and push short labels off their own row.
-    const double indent = padding_ + 6.0;
+    double indent = padding_ + 6.0;
+
+    if (!checked_.empty()) {
+      const double gutter = row.height * 0.6;
+      if (i < checked_.size() && checked_[i]) {
+        // The same two lines the checkbox draws, and for the same reason: no
+        // font can be relied on to have a tick in it.
+        const double size = gutter * 0.5;
+        const double left = row.x + indent + (gutter - size) * 0.5;
+        const double right = left + size;
+        const double top = row.y + (row.height - size) * 0.5;
+        const double bottom = top + size;
+        const double elbow_x = left + size * 0.36;
+
+        painter.line(left, top + size * 0.5, elbow_x, bottom, style.text, 2.0);
+        painter.line(elbow_x, bottom, right, top, style.text, 2.0);
+      }
+      indent += gutter;
+    }
+
     const Rect text{row.x + indent, row.y, std::max(0.0, row.width - 2.0 * indent), row.height};
     painter.text(text_run(text, items_[i], style, font_size_, TextAlign::Left, false));
   }
