@@ -593,7 +593,7 @@ say so first.
 | Hover feedback on a clip's zones | the trim zone lights | **done** — the trim handle under the pointer, and the razor's cut line | — |
 | Hover feedback everywhere else | yes | already had it — buttons, menu rows, splitters, tabs | — |
 | A snap that says it snapped | a line at the edge it stuck to | **done** — a line at what it stuck to, gone the moment it pulls away | — |
-| Tooltips | yes | none anywhere | control |
+| Tooltips | yes | **done** — on every icon button and toolbar control, with the key | — |
 
 **The cursor never changed.** `window_class.hCursor` was `IDC_ARROW` and nothing
 ever called `SetCursor`, so a clip's trim edge looked exactly like its middle, a
@@ -621,8 +621,16 @@ it is stuck and gone the moment the pointer pulls away. It is recomputed on
 every move rather than latched, which is what stops a line being left behind at
 the last place a drag happened to catch.
 
-What is left in this section is **tooltips** — there are none anywhere in the
-application, and several controls are icons with no words at all.
+Tooltips are done, and they matter most where an icon has no words at all: each
+says what the control is and which key does the same thing. Timing lives in the
+application, because a widget layer with no clock cannot say how long a pointer
+has rested; drawing lives in the host, where the theme is. `Part::Tooltip` had
+been styled in all four themes since the themes were written and used by
+nothing.
+
+The icons themselves were too small to read — a flat four pixels of reach
+whatever the theme said, which is eight pixels across for marks that have
+internal structure. They scale with the text now.
 
 ### 2.4 Reading the timeline
 
