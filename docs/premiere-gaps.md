@@ -587,10 +587,30 @@ say where the trim went.
 | Duplicate (alt-drag a copy) | yes | none | wiring |
 | Label colours | eight, set per clip and per bin | **done** per clip, by name, from the clip menu | — |
 | Enable / disable a clip | yes | **done** — on the clip menu, ticked, and a switched-off clip is drawn as one | — |
-| Speed / duration dialogue | a box with both and a ripple option | Speed and Reverse in the inspector | control |
+| Speed / duration dialogue | a box with both and a ripple option | **done** — speed, duration, reverse and a ripple, from the clip menu | — |
 | Right-click a clip | the menu most edits are actually reached from | **done** — and it offers only what would do something | — |
 | Nesting | a sequence inside a sequence | none | machinery |
 | Multi-camera | none | none | machinery |
+
+**The Speed / Duration box is one number seen two ways.** A clip's length is
+its source span divided by its rate, so speed and duration are not two settings
+to keep in step — they are the same setting, and the box mirrors each field into
+the other as it is typed rather than waiting to disagree at the end. Typing a
+duration is the reason it exists at all: "make this four seconds" is a thing
+people want, and working out that it means 137% is not.
+
+The ripple is the half that makes a retime usable on a cut sequence. Without it,
+slowing a shot down either overruns the next clip or leaves the gap it used to
+fill, and both are somebody's afternoon. It moves everything past each retimed
+clip's old end, on every track a sync lock holds together, so it is the same
+edit sync lock already governs rather than a second idea about what moves.
+
+Driving it turned up something much worse than a missing feature, and not in
+this at all: **ids collide after a project is opened.** The counter starts at
+zero every run, the file already holds `clip_4`, and the next split hands that
+name out again — after which an edit aimed at one clip lands on both. It showed
+here as a retime on the second half of a cut also retiming the first half's
+audio. Fixed at the load path, which is the only place that can know.
 
 **Copy and paste was the surprise**, and it is done. There was a clipboard for
 effects and one for keyframes and none for clips — the single most-used pair of

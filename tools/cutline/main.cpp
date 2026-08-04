@@ -4758,6 +4758,96 @@ void open_label_menu(App& app, std::span<const std::string> clips, double x, dou
   app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
 }
 
+/// Speed and duration, Premiere's box, on the selection.
+///
+/// The two are one number seen two ways — a clip's length is its source span
+/// divided by its rate — so the fields mirror each other as they are typed
+/// rather than waiting to disagree until something is applied. Typing a
+/// duration is the reason the box exists at all: "make this four seconds" is a
+/// thing people want, and working out that it means 137% is not.
+///
+/// Both numbers are the *anchor's* — the first selected clip. A selection of
+/// clips at different lengths has no single duration, and showing the first
+/// one's is at least a number that came from something on screen.
+void open_speed_dialog(App& app, std::span<const std::string> clips) {
+  if (app.main.host == nullptr || clips.empty()) return;
+  const cutline::core::Clip* anchor = cutline::core::find_clip(app.session.project(), clips[0]);
+  if (anchor == nullptr) return;
+
+  const double fps = app.session.project().fps;
+  const double span = cutline::core::source_span(*anchor);
+  const double speed = cutline::core::clip_speed(*anchor);
+
+  auto panel = std::make_unique<Panel>();
+  panel->emplace<Label>("Speed / Duration").set_bold(true);
+
+  auto& speed_row = panel->emplace<Box>(Axis::Horizontal);
+  speed_row.emplace<Label>("Speed");
+  auto& speed_field = speed_row.emplace<TextField>(std::format("{:.2f}", speed * 100.0));
+  speed_field.set_columns(7);
+  speed_row.emplace<Label>("%").set_small(true);
+
+  auto& length_row = panel->emplace<Box>(Axis::Horizontal);
+  length_row.emplace<Label>("Duration");
+  auto& length_field = length_row.emplace<TextField>(
+      cutline::core::seconds_to_timecode(cutline::core::clip_duration(*anchor), fps));
+  length_field.set_columns(11);
+
+  auto& reverse = panel->emplace<Checkbox>("Reverse speed", anchor->reverse);
+  auto& ripple = panel->emplace<Checkbox>("Ripple edit, shifting trailing clips", false);
+
+  // Each field rewrites the other when its edit ends. `span` is fixed by the
+  // trim, so it is the constant the two are computed through.
+  speed_field.set_on_finish([field = &speed_field, other = &length_field, span, fps] {
+    double percent = 0.0;
+    if (std::from_chars(field->text().data(), field->text().data() + field->text().size(),
+                        percent)
+            .ec != std::errc{} ||
+        percent <= 0.0) {
+      return;
+    }
+    const double rate = std::clamp(percent / 100.0, cutline::core::kMinSpeed,
+                                   cutline::core::kMaxSpeed);
+    other->set_text(cutline::core::seconds_to_timecode(span / rate, fps));
+  });
+  length_field.set_on_finish([field = &length_field, other = &speed_field, span, fps] {
+    const std::optional<double> wanted = cutline::core::timecode_to_seconds(field->text(), fps);
+    if (!wanted.has_value() || *wanted <= 0.0) return;
+    const double rate =
+        std::clamp(span / *wanted, cutline::core::kMinSpeed, cutline::core::kMaxSpeed);
+    other->set_text(std::format("{:.2f}", rate * 100.0));
+  });
+
+  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
+  buttons.emplace<Button>(
+      "OK", [&app, chosen = std::vector<std::string>(clips.begin(), clips.end()),
+             field = &speed_field, rev = &reverse, rip = &ripple] {
+        double percent = 0.0;
+        if (std::from_chars(field->text().data(), field->text().data() + field->text().size(),
+                            percent)
+                .ec != std::errc{} ||
+            percent <= 0.0) {
+          // A typing mistake leaves the clips alone rather than retiming them
+          // to nothing, which is what a zero would clamp to.
+          if (app.main.host != nullptr) app.main.host->close_popup();
+          return;
+        }
+        if (app.main.host != nullptr) app.main.host->close_popup();
+        app.session.apply(cutline::core::set_clips_speed(app.session.project(), chosen,
+                                                         percent / 100.0, rev->checked(),
+                                                         rip->checked()));
+        refresh_timeline(app);
+        invalidate_preview(app);
+        app.inspector_stale = true;
+        mark_dirty(app);
+      });
+  buttons.emplace<Button>("Cancel", [&app] {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+  });
+
+  app.main.host->open_popup(std::move(panel), settings_anchor());
+}
+
 /// Renaming a track: a popup with a field in it, hung under the header.
 ///
 /// A popup rather than a field the timeline holds: the view draws its headers
@@ -5157,6 +5247,8 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
     if (!selected.empty()) {
       labels.emplace_back("Label...");
       ticks.push_back(false);
+      labels.emplace_back("Speed / Duration...");
+      ticks.push_back(false);
       labels.emplace_back("Fit to Frame");
       ticks.push_back(false);
       labels.emplace_back("Fill Frame");
@@ -5188,13 +5280,17 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
       if (selected.empty()) return;
 
       // The trailing rows, in the order they were added: the label menu, the
-      // two framing rows, then Enable.
+      // speed box, the two framing rows, then Enable.
       if (index == commands.size()) {
         open_label_menu(*app, selected, x, y);
         return;
       }
-      if (index == commands.size() + 1 || index == commands.size() + 2) {
-        const auto fit = index == commands.size() + 1 ? cutline::editor::FrameFit::Fit
+      if (index == commands.size() + 1) {
+        open_speed_dialog(*app, selected);
+        return;
+      }
+      if (index == commands.size() + 2 || index == commands.size() + 3) {
+        const auto fit = index == commands.size() + 2 ? cutline::editor::FrameFit::Fit
                                                       : cutline::editor::FrameFit::Fill;
         app->session.apply(cutline::editor::scale_to_frame(
             app->session.project(), selected, fit, app->session.playhead()));

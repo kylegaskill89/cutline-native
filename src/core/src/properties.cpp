@@ -7,6 +7,7 @@
 #include <cmath>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace cutline::core {
 namespace {
@@ -20,6 +21,11 @@ namespace {
   const auto it = std::ranges::find(p.tracks, track_id, &Track::id);
   return it == p.tracks.end() ? nullptr : &*it;
 }
+
+/// How close two times have to be to count as the same instant. A clip that
+/// starts where another ends is touching it, and floating-point arithmetic on
+/// frame boundaries does not land on the same double twice.
+constexpr double kTouchEps = 1e-3;
 
 [[nodiscard]] std::string_view trim(std::string_view s) noexcept {
   constexpr std::string_view ws = " \t\n\r\f\v";
@@ -161,6 +167,77 @@ Project set_clip_speed(Project p, std::string_view clip_id, double speed,
     }
     std::ranges::stable_sort(t.clips, {}, &Clip::start);
   }
+  return p;
+}
+
+Project set_clips_speed(Project p, std::span<const std::string> clip_ids, double speed,
+                        std::optional<bool> reverse, bool ripple) {
+  // Through the groups, so a picture and its sound retime together however the
+  // selection was made — clicking one of a linked pair is the usual way in.
+  std::unordered_set<std::string> members;
+  for (const std::string& id : clip_ids) {
+    for (std::string& member : group_members(p, id)) members.insert(std::move(member));
+  }
+  if (members.empty()) return p;
+
+  // Where each retime ends and by how much it moves that point. Collected
+  // before anything changes, because after the retime the old end is gone.
+  //
+  // Keyed by the old end and taking the largest delta there: a linked pair is
+  // two clips ending at the same time by the same amount, and counting both
+  // would shift the sequence twice for one edit.
+  std::vector<std::pair<double, double>> shifts;
+
+  for (Track& t : p.tracks) {
+    for (Clip& c : t.clips) {
+      if (!members.contains(c.id)) continue;
+      const double was_end = clip_end(c);
+      const double was = clip_duration(c);
+
+      c.speed = std::clamp(speed, kMinSpeed, kMaxSpeed);
+      if (reverse.has_value()) c.reverse = *reverse;
+      // Retiming can shorten the clip out from under its fades.
+      const double length = clip_duration(c);
+      c.fade_in = std::min(c.fade_in, length);
+      c.fade_out = std::min(c.fade_out, length - c.fade_in);
+
+      if (ripple && length != was) shifts.emplace_back(was_end, length - was);
+    }
+  }
+
+  if (ripple && !shifts.empty()) {
+    // Sorted by time and then by delta, so collapsing to the last entry at each
+    // instant keeps the largest — which for a slow-down is the one that makes
+    // enough room, and for a speed-up is the least of the closings and so the
+    // one that cannot pull a neighbour over the clip in front of it.
+    std::ranges::sort(shifts);
+    std::vector<std::pair<double, double>> distinct;
+    for (const auto& shift : shifts) {
+      if (!distinct.empty() && std::abs(distinct.back().first - shift.first) < kTouchEps) {
+        distinct.back().second = shift.second;
+      } else {
+        distinct.push_back(shift);
+      }
+    }
+    shifts = std::move(distinct);
+    for (Track& t : p.tracks) {
+      const bool holds_target =
+          std::ranges::any_of(t.clips, [&](const Clip& c) { return members.contains(c.id); });
+      // A pinned track still carries its own retimed clips — sync lock decides
+      // whether an edit *elsewhere* moves a track, not whether its own clip may
+      // change length and leave the one after it overlapping.
+      if (!t.sync_locked && !holds_target) continue;
+      for (Clip& c : t.clips) {
+        double moved = 0.0;
+        for (const auto& [at, delta] : shifts) {
+          if (c.start >= at - kTouchEps) moved += delta;
+        }
+        c.start += moved;
+      }
+    }
+  }
+
+  for (Track& t : p.tracks) std::ranges::stable_sort(t.clips, {}, &Clip::start);
   return p;
 }
 

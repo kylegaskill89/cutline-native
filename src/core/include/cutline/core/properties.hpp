@@ -64,6 +64,20 @@ namespace cutline::core {
 [[nodiscard]] Project set_clip_speed(Project p, std::string_view clip_id, double speed,
                                      std::optional<bool> reverse = std::nullopt);
 
+/// Retimes a whole selection, and optionally moves what follows out of the way.
+///
+/// `ripple` is Premiere's "shifting trailing clips", and it is what makes a
+/// retime usable on a cut sequence: slowing a shot down without it either
+/// overruns the next clip or leaves the gap it used to fill. Everything after
+/// each retimed clip's old end moves by however much that clip grew or shrank,
+/// on every track a sync lock holds together — the retime is an edit like any
+/// other, and a pinned track sits still through it.
+///
+/// Without `ripple` this is `set_clip_speed` across a selection, which is the
+/// right default for a clip standing on its own.
+[[nodiscard]] Project set_clips_speed(Project p, std::span<const std::string> clip_ids,
+                                      double speed, std::optional<bool> reverse, bool ripple);
+
 [[nodiscard]] Project set_clip_opacity(Project p, std::string_view clip_id, double opacity);
 
 [[nodiscard]] Project set_clip_transform(Project p, std::string_view clip_id, Transform transform);

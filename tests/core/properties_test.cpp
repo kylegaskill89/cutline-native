@@ -7,6 +7,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -223,6 +224,98 @@ TEST(Speed, ReclampsFadesToTheNewDuration) {
   EXPECT_DOUBLE_EQ(clip_duration(only_clip(p)), 2.5);
   EXPECT_DOUBLE_EQ(only_clip(p).fade_in, 2.5);
   EXPECT_DOUBLE_EQ(only_clip(p).fade_out, 0.0);
+}
+
+// ------------------------------------------------- speed across a selection --
+
+namespace {
+
+// Two clips end to end on the picture track, a third on a second track that
+// starts where the first one ends. Enough to see what a ripple moves.
+Project three_clip_project() {
+  Project p = one_clip_project();  // c1: ten seconds from zero on v1
+
+  Clip second;
+  second.id = "c2";
+  second.media_id = "m1";
+  second.start = 10.0;
+  second.source_in = 0.0;
+  second.source_out = 5.0;
+  p.tracks[0].clips.push_back(second);
+
+  Clip other;
+  other.id = "c3";
+  other.media_id = "m1";
+  other.start = 10.0;
+  other.source_in = 0.0;
+  other.source_out = 4.0;
+
+  Track v2;
+  v2.id = "v2";
+  v2.kind = TrackKind::Video;
+  v2.clips = {other};
+  p.tracks.push_back(v2);
+  return p;
+}
+
+const Clip* clip(const Project& p, std::string_view id) { return find_clip(p, id); }
+
+}  // namespace
+
+TEST(SpeedAcrossSelection, LeavesNeighboursAloneWithoutRipple) {
+  Project p = three_clip_project();
+  p = set_clips_speed(std::move(p), Ids{"c1"}, 2.0, std::nullopt, false);
+
+  EXPECT_DOUBLE_EQ(clip_duration(*clip(p, "c1")), 5.0);
+  EXPECT_DOUBLE_EQ(clip(p, "c2")->start, 10.0);  // the gap stays open
+  EXPECT_DOUBLE_EQ(clip(p, "c3")->start, 10.0);
+}
+
+TEST(SpeedAcrossSelection, RippleClosesTheGapASpeedUpLeaves) {
+  Project p = three_clip_project();
+  p = set_clips_speed(std::move(p), Ids{"c1"}, 2.0, std::nullopt, true);
+
+  EXPECT_DOUBLE_EQ(clip(p, "c2")->start, 5.0);
+  EXPECT_DOUBLE_EQ(clip(p, "c3")->start, 5.0);  // sync locked, so it comes too
+}
+
+TEST(SpeedAcrossSelection, RippleMakesRoomForASlowDown) {
+  Project p = three_clip_project();
+  p = set_clips_speed(std::move(p), Ids{"c1"}, 0.5, std::nullopt, true);
+
+  EXPECT_DOUBLE_EQ(clip_duration(*clip(p, "c1")), 20.0);
+  EXPECT_DOUBLE_EQ(clip(p, "c2")->start, 20.0);
+}
+
+// A pinned track sits still through an edit made somewhere else.
+TEST(SpeedAcrossSelection, RippleSkipsATrackWithoutSyncLock) {
+  Project p = three_clip_project();
+  p.tracks[1].sync_locked = false;
+  p = set_clips_speed(std::move(p), Ids{"c1"}, 2.0, std::nullopt, true);
+
+  EXPECT_DOUBLE_EQ(clip(p, "c2")->start, 5.0);
+  EXPECT_DOUBLE_EQ(clip(p, "c3")->start, 10.0);
+}
+
+// The linked pair is one edit, not two, so the sequence closes up once.
+TEST(SpeedAcrossSelection, ALinkedPairShiftsTheSequenceOnce) {
+  Project p = three_clip_project();
+  p.tracks[0].clips[0].group_id = "g";
+  p.tracks[1].clips[0].group_id = "g";
+  p.tracks[1].clips[0].start = 0.0;
+  p.tracks[1].clips[0].source_out = 10.0;  // the same length, and linked
+
+  p = set_clips_speed(std::move(p), Ids{"c1"}, 2.0, std::nullopt, true);
+
+  EXPECT_DOUBLE_EQ(clip_duration(*clip(p, "c3")), 5.0);  // the group retimed too
+  EXPECT_DOUBLE_EQ(clip(p, "c2")->start, 5.0);           // and moved five, not ten
+}
+
+TEST(SpeedAcrossSelection, AnEmptySelectionChangesNothing) {
+  const Project p = three_clip_project();
+  const Project after = set_clips_speed(p, Ids{}, 2.0, std::nullopt, true);
+  EXPECT_DOUBLE_EQ(clip_duration(*clip(after, "c1")), 10.0);
+  EXPECT_DOUBLE_EQ(clip(after, "c2")->start, 10.0);
 }
 
 // ------------------------------------------------------- generated media --
