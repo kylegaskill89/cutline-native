@@ -1,12 +1,22 @@
 #include "cutline/media/decoder.hpp"
 
 #include "av_common.hpp"
+#include "d3d11_share.hpp"
 
-// Pulls in d3d12.h, so it gets the same warning treatment as the rest of libav.
+// Pulls in d3d11.h and d3d12.h, so both get the same warning treatment as the
+// rest of libav.
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
+// Before the `extern "C"` below, and that is not tidiness. `d3d11.h` declares
+// `operator==` for a few of its structs, and a C++ operator cannot be given C
+// linkage — so reaching it through libav's header, which is inside the block,
+// fails to compile. Included here its guard is already set by the time libav
+// asks for it.
+#include <d3d11.h>
+
 extern "C" {
+#include <libavutil/hwcontext_d3d11va.h>
 #include <libavutil/hwcontext_d3d12va.h>
 }
 #if defined(_MSC_VER)
@@ -104,6 +114,11 @@ struct VideoDecoder::Impl {
   /// open itself again on a path that works.
   std::string path;
   VideoDecoder::Options options;
+
+  /// The crossing from a Direct3D 11 decoder onto the caller's Direct3D 12
+  /// device. Made on the first frame that needs it, because that is when the
+  /// size is known.
+  detail::D3D11Share share;
 
   int stream_index = -1;
   AVRational time_base{1, 1};
@@ -385,19 +400,53 @@ std::expected<void, std::string> VideoDecoder::seek(double seconds) {
 }
 
 std::optional<HardwareTexture> VideoDecoder::hardware_texture() const noexcept {
-  const AVFrame* frame = impl_->decoded;
-  if (frame == nullptr || frame->format != AV_PIX_FMT_D3D12) return std::nullopt;
+  AVFrame* frame = impl_->decoded;
+  if (frame == nullptr) return std::nullopt;
 
-  // For D3D12VA, data[0] points at the frame descriptor rather than at pixels.
-  const auto* descriptor = reinterpret_cast<const AVD3D12VAFrame*>(frame->data[0]);
-  if (descriptor == nullptr || descriptor->texture == nullptr) return std::nullopt;
+  if (frame->format == AV_PIX_FMT_D3D12) {
+    // For D3D12VA, data[0] points at the frame descriptor rather than at pixels.
+    const auto* descriptor = reinterpret_cast<const AVD3D12VAFrame*>(frame->data[0]);
+    if (descriptor == nullptr || descriptor->texture == nullptr) return std::nullopt;
 
-  return HardwareTexture{
-      .resource = descriptor->texture,
-      .subresource = descriptor->subresource_index,
-      .fence = descriptor->sync_ctx.fence,
-      .fence_value = descriptor->sync_ctx.fence_value,
-  };
+    return HardwareTexture{
+        .resource = descriptor->texture,
+        .subresource = descriptor->subresource_index,
+        .fence = descriptor->sync_ctx.fence,
+        .fence_value = descriptor->sync_ctx.fence_value,
+    };
+  }
+
+  // Decoded on a Direct3D 11 device and wanted on a Direct3D 12 one. The answer
+  // is the same shape either way, which is the point of doing it here: nothing
+  // above this has to know which kind of card frame it is looking at, or that
+  // there are two kinds.
+  if (frame->format == AV_PIX_FMT_D3D11 && impl_->options.d3d12_device != nullptr) {
+    // For D3D11VA, data[0] is the texture array and data[1] the slice in it.
+    auto* texture = reinterpret_cast<ID3D11Texture2D*>(frame->data[0]);
+    const auto slice = static_cast<unsigned int>(reinterpret_cast<std::intptr_t>(frame->data[1]));
+    if (texture == nullptr || impl_->codec == nullptr ||
+        impl_->codec->hw_frames_ctx == nullptr) {
+      return std::nullopt;
+    }
+
+    // On the first frame, because the size is not known before one arrives —
+    // and taking it from the stream header is how a decoder that pads out to
+    // whole macroblocks ends up sampled short.
+    if (!impl_->share.ready()) {
+      auto* frames = reinterpret_cast<AVHWFramesContext*>(impl_->codec->hw_frames_ctx->data);
+      if (frames == nullptr || frames->device_ctx == nullptr) return std::nullopt;
+      auto* device = static_cast<AVD3D11VADeviceContext*>(frames->device_ctx->hwctx);
+      if (device == nullptr) return std::nullopt;
+      if (!impl_->share.open(device->device,
+                             static_cast<ID3D12Device*>(impl_->options.d3d12_device),
+                             frame->width, frame->height)) {
+        return std::nullopt;
+      }
+    }
+    return impl_->share.copy(texture, slice);
+  }
+
+  return std::nullopt;
 }
 
 Acceleration VideoDecoder::acceleration() const noexcept { return impl_->acceleration; }

@@ -111,7 +111,12 @@ constexpr double kAssumedFrameGap = 1.0 / 30.0;
   // the planes at the end differ.
   bool decoded_on_the_card = false;
   switch (frame->format) {
+    // Both card formats, because which one a machine offers is the driver's
+    // business. The decoder answers `hardware_texture` with a Direct3D 12
+    // resource either way — that is the whole reason the crossing lives down
+    // there rather than up here.
     case AV_PIX_FMT_D3D12:
+    case AV_PIX_FMT_D3D11:
       out.layout = gpu::PixelLayout::Nv12;
       decoded_on_the_card = true;
       break;
@@ -288,40 +293,30 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   auto found = sources.find(media.id);
   if (found == sources.end()) {
     Source source;
-    // Onto the compositor's own device, so a decoded picture is already in the
-    // memory that is about to sample it: nothing comes down to the CPU and
-    // nothing goes back up. The compositor makes views over the resource's
-    // plane slices and reads it exactly as it reads planes it uploaded itself.
+    // Decoded on the card, and given this device so the picture can cross onto
+    // it. Measured on a 106 Mbps 4K60 capture: 2.76 ms a frame against 7.24 in
+    // software, and the software decoder is where most of this application's
+    // memory went besides.
     //
-    // The gap this closes is larger than the comment here used to claim.
-    // Measured on a 106 Mbps 4K60 capture: 7.24 ms a frame in software against
-    // 2.76 ms on the card, and the software decoder is where most of this
-    // application's memory went as well.
-    // Software, and it is the *driver* that decides that rather than a
-    // preference.
-    //
-    // The compositor can sample a decoder's own texture now — a frame decoded
-    // onto this device is composited from its plane slices with nothing copied
-    // either way, and there are tests that build an NV12 texture by hand and
-    // check the colour that comes out of it. What there is not, on the machine
-    // this was written on, is a driver that will decode HEVC through D3D12
-    // video at all:
+    // **Direct3D 11**, not 12, and that is the driver's choice rather than a
+    // preference. D3D12 video decode is the path that needs no crossing at all,
+    // and on the machine this was written for it fails every HEVC picture and
+    // removes the device with it:
     //
     //     [hevc] hardware accelerator failed to decode picture
     //     DXGI_ERROR_DRIVER_INTERNAL_ERROR: strong evidence that the driver has
     //     performed an undefined operation
     //
-    // and the device removal that follows takes the *compositor's* device with
-    // it, because that is the device the decoder was given. Not a decode
-    // falling back — every texture, every render target and the window. Proving
-    // it first on a throwaway device does not help either: the fault resets the
-    // adapter, so both go.
+    // The stock `ffmpeg.exe` fails identically on the same file, so it is not
+    // something this is doing wrong — and the removal takes the *compositor's*
+    // device, since that is the one the decoder was handed. D3D11 decodes the
+    // same file at 558 fps and the frames cross with one copy inside the card.
     //
-    // So this asks for software and the zero-copy path waits for a driver that
-    // can hold up its end. Measured, it is worth having: 2.76 ms a frame
-    // against 7.24 on a 106 Mbps 4K60 capture. It is not worth a reset.
-    auto opened = VideoDecoder::open(media.path,
-                                     {.preferred = media::Acceleration::Software});
+    // Software is still the floor, and `open` falls to it on its own when
+    // neither works.
+    auto opened = VideoDecoder::open(
+        media.path, {.preferred = media::Acceleration::D3D11Va,
+                     .d3d12_device = device != nullptr ? device->native_device() : nullptr});
     if (!opened) {
       source.usable = false;
     } else {
