@@ -750,17 +750,24 @@ double TimelineView::trim_handle_width(std::size_t track, std::size_t block) con
   return std::min(kTrimHandle, box.width / 3.0);
 }
 
-DragMode TimelineView::zone_at(double x, double y) const {
+DragMode TimelineView::zone_at(double x, double y, Modifiers modifiers) const {
   const std::optional<BlockRef> hit = block_at(x, y);
   if (!hit.has_value()) return DragMode::None;
 
   const Rect box = block_rect(hit->track, hit->block);
 
+  // What control turns an edge into. Shift with it is the roll, which is the
+  // pair Premiere uses and the pair that makes sense together: one moves an
+  // edge and takes the sequence with it, the other moves a join and takes
+  // nothing.
+  const bool ripple = modifiers.control && !modifiers.shift;
+  const bool roll = modifiers.control && modifiers.shift;
+
   // The volume band comes first, and only under the selection tool. It sits on
   // top of the clip body, so a press that found it would otherwise be a move —
   // and the other tools each mean one specific thing everywhere on a clip,
   // which is what makes them usable without hunting for a zone.
-  if (tool_ == Tool::Selection) {
+  if (tool_ == Tool::Selection && !modifiers.control) {
     // The fade handles first. With no fade set they sit exactly on the clip's
     // corners, which is where the trim handles are, and a corner that trimmed
     // instead of fading would leave the fades unreachable — where the trims are
@@ -808,8 +815,21 @@ DragMode TimelineView::zone_at(double x, double y) const {
   }
 
   const double handle = trim_handle_width(hit->track, hit->block);
-  if (x < box.x + handle) return DragMode::TrimStart;
-  if (x >= box.right() - handle) return DragMode::TrimEnd;
+  const bool at_start = x < box.x + handle;
+  const bool at_end = x >= box.right() - handle;
+
+  // Held anywhere on the clip rather than only on a handle. A ripple or a roll
+  // is aimed at an *edit point*, and asking for the nearer one is what every
+  // edge tool here already does — a modifier that worked in a four-pixel strip
+  // and nowhere else would be a modifier nobody could find.
+  if (ripple || roll) {
+    const bool start = at_start || (!at_end && x < box.x + box.width * 0.5);
+    if (ripple) return start ? DragMode::RippleStart : DragMode::RippleEnd;
+    return start ? DragMode::RollStart : DragMode::RollEnd;
+  }
+
+  if (at_start) return DragMode::TrimStart;
+  if (at_end) return DragMode::TrimEnd;
   return DragMode::Move;
 }
 
@@ -1232,7 +1252,7 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
     const auto [px, py] = *pointer_;
     if (const std::optional<BlockRef> hit = block_at(px, py); hit.has_value()) {
       const Rect box = block_rect(hit->track, hit->block);
-      const DragMode zone = zone_at(px, py);
+      const DragMode zone = zone_at(px, py, hover_modifiers_);
       const SurfaceStyle& style = theme.style(Part::Clip, State::Hover);
 
       if (zone == DragMode::Razor) {
@@ -2007,20 +2027,24 @@ Cursor TimelineView::cursor_at(double x, double y) const {
   // While a gesture is running the cursor describes the gesture, not the
   // pointer. Otherwise a trim dragged past the end of its clip — where there is
   // no clip under the pointer at all — would go back to an arrow mid-drag.
-  const DragMode mode = mode_ != DragMode::None ? mode_ : zone_at(x, y);
+  const DragMode mode = mode_ != DragMode::None ? mode_ : zone_at(x, y, hover_modifiers_);
 
   switch (mode) {
     case DragMode::TrimStart:
     case DragMode::TrimEnd:
-    case DragMode::RippleStart:
-    case DragMode::RippleEnd:
-    case DragMode::RollStart:
-    case DragMode::RollEnd:
-      // One cursor for all six. Which of them it is, is the *tool*, and the
-      // tool is what the button in the palette says; what the pointer has to
-      // say here is the thing nothing else was saying at all — that this pixel
-      // takes hold of an edge rather than of the clip.
+      // What this has to say is the thing nothing else was saying at all: that
+      // this pixel takes hold of an edge rather than of the clip.
       return Cursor::ResizeWE;
+
+    // Their own, rather than sharing the plain trim's. An earlier version said
+    // one cursor was enough because the *tool* names which of the three you are
+    // holding — and then control started making a ripple out of a trim, with
+    // nothing anywhere to say so. Drawn from the same art as the palette
+    // buttons, so a ripple looks like a ripple however it was reached.
+    case DragMode::RippleStart:
+    case DragMode::RippleEnd: return Cursor::Ripple;
+    case DragMode::RollStart:
+    case DragMode::RollEnd: return Cursor::Roll;
 
     case DragMode::RateStart:
     case DragMode::RateEnd: return Cursor::RateStretch;
@@ -2220,7 +2244,12 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
   // already in. Toggling rather than only adding, because otherwise there is no
   // way to correct a sweep that caught one clip too many except by starting
   // over.
-  if (hit.has_value() && event.modifiers.shift && tool_ == Tool::Selection) {
+  //
+  // Not with control, which is the roll: control and shift together already
+  // mean one thing, and a chord that both toggled the selection and started an
+  // edit would do two things nobody asked for at once.
+  if (hit.has_value() && event.modifiers.shift && !event.modifiers.control &&
+      tool_ == Tool::Selection) {
     std::vector<BlockRef> chosen = selection();
     const auto already = std::ranges::find(chosen, *hit);
     if (already != chosen.end()) {
@@ -2271,7 +2300,7 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
   }
 
   if (hit.has_value()) {
-    mode_ = zone_at(event.x, event.y);
+    mode_ = zone_at(event.x, event.y, event.modifiers);
     drag_ = hit;
     origin_ = model_.tracks[hit->track].blocks[hit->block];
     press_x_ = event.x;
@@ -2378,8 +2407,15 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
   // on the zone under the pointer is drawn from, and hovering is when it
   // matters most — the point of it is to say what a press *would* do.
   const std::optional<std::pair<double, double>> was = pointer_;
+  const Modifiers held = hover_modifiers_;
   pointer_ = std::pair{event.x, event.y};
-  if (mode_ == DragMode::None && was != pointer_) {
+  // Kept for the same reason the position is. Control turns a trim into a
+  // ripple, so the highlight and the cursor have to change when it goes down
+  // even though the pointer has not moved — and a move arrives whenever a
+  // modifier changes under a stationary hand.
+  hover_modifiers_ = event.modifiers;
+  if (mode_ == DragMode::None && (was != pointer_ || held.control != event.modifiers.control ||
+                                  held.shift != event.modifiers.shift)) {
     if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
   }
 
@@ -2406,17 +2442,18 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
     // screen, which is what dragging the end of a scrollbar looks like it will
     // do. Worked from the view at the press, so a long drag cannot accumulate.
     const Rect area = time_area();
-    const double was = zoom_origin_.visible_duration(area.width);
+    const double was_visible = zoom_origin_.visible_duration(area.width);
     const double moved = (event.x - scroll_origin_) / std::max(1.0, area.width) *
                          model_.content_duration();
 
     const bool from_start = mode_ == DragMode::ZoomStart;
     const double span = std::max(core::frame_duration(model_.fps) * 2.0,
-                                 from_start ? was - moved : was + moved);
+                                 from_start ? was_visible - moved : was_visible + moved);
     scale_.pixels_per_second =
         std::clamp(area.width / span, kMinPixelsPerSecond, kMaxPixelsPerSecond);
     // The end that was not grabbed stays where it was.
-    scale_.start = from_start ? zoom_origin_.start + (was - scale_.visible_duration(area.width))
+    scale_.start = from_start ? zoom_origin_.start +
+                                    (was_visible - scale_.visible_duration(area.width))
                               : zoom_origin_.start;
     scale_.start = std::max(0.0, scale_.start);
     scale_.clamp_start(model_.content_duration());

@@ -551,10 +551,10 @@ you want the mode to stay.
 | | Premiere | Here | Size |
 |---|---|---|---|
 | Drag an edge to trim | yes | **done** | — |
-| Slip, slide, rate stretch | tool **and** modifier gesture | tool only | wiring |
+| Slip, slide, rate stretch | tools; Premiere's *modifiers* are ripple and roll | **done** — control ripples, control and shift rolls; slip and slide are tools in Premiere too | — |
 | Ripple trim (edge drag that closes the gap) | yes | **done** — a tool, on Premiere's B | — |
 | Rolling edit (both sides of a cut at once) | yes | **done** — a tool, on Premiere's N | — |
-| Trim to playhead (`Q` / `W`) | yes | none | wiring |
+| Trim to playhead (`Q` / `W`) | yes | **done** — both, rippling, on the targeted track | — |
 | The trim monitor (two-up while trimming) | yes | none | machinery |
 | Nudge by frame | yes | **done** | — |
 
@@ -576,6 +576,31 @@ closing the gap; the drag shows that rather than showing a trim and rearranging
 on release. And because of it the edit has to report the edge it ended on
 separately — `result` says the clip starts exactly where it did, so it cannot
 say where the trim went.
+
+**The row about modifier gestures was wrong.** It claimed Premiere offers slip,
+slide and rate stretch as modifiers as well as tools. It does not — those three
+are tools there too, and what Premiere puts on a modifier is the pair this
+already had as tools: **control makes a trim a ripple, control with shift makes
+it a roll**. That is the version that is here now, and it is the more useful
+one anyway, because the tool palette is for when the mode should *stay* and one
+tightened cut is not that.
+
+Building it turned up something the tool version had been hiding. All six edge
+modes shared one cursor, on the argument that the lit button in the palette says
+which of them you are holding. Reached by a modifier there is no lit button, and
+nothing anywhere said a trim had become a ripple — so ripple and roll have their
+own cursors now, drawn from the same art as their buttons. The old rule was
+right about the tools and silent about everything else.
+
+Control also wins over the fade handles and the volume band, which sit on top of
+the clip: holding it is a statement that this gesture is a trim.
+
+**Q and W trim to the playhead**, both rippling, on the targeted track. They act
+on **one** edit point rather than every targeted lane at once, which is a
+deliberate limit: a ripple closes the sequence up by however much *that* clip
+lost, and a second clip on another lane crossing the same playhead has its own
+available source and so its own answer. Applying both in turn would ripple twice
+for one keystroke.
 
 ### 2.3 Clips on the timeline
 

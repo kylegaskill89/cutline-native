@@ -190,10 +190,16 @@ TEST(TimelineCursor, TheToolIsUnderThePointerRatherThanOnlyInThePalette) {
   EXPECT_EQ(fixture.view->cursor_at(middle, box.y + 5.0), Cursor::Slide);
   fixture.view->set_tool(Tool::RateStretch);
   EXPECT_EQ(fixture.view->cursor_at(middle, box.y + 5.0), Cursor::RateStretch);
-  // The two edge tools take hold of an edge, and that is what the pointer says
-  // — which of them it is, is the button that is lit.
+  // The two edge tools have their own too, because control reaches them without
+  // a button being lit and something has to say which of the three you are on.
   fixture.view->set_tool(Tool::Ripple);
-  EXPECT_EQ(fixture.view->cursor_at(middle, box.y + 5.0), Cursor::ResizeWE);
+  EXPECT_EQ(fixture.view->cursor_at(middle, box.y + 5.0), Cursor::Ripple);
+  fixture.view->set_tool(Tool::Roll);
+  EXPECT_EQ(fixture.view->cursor_at(middle, box.y + 5.0), Cursor::Roll);
+  // And a plain trim is still the plain resize: nothing about it needs a name.
+  fixture.view->set_tool(Tool::Selection);
+  EXPECT_EQ(fixture.view->cursor_at(box.x + 1.0, box.y + box.height * 0.5),
+            Cursor::ResizeWE);
 }
 
 TEST(TimelineCursor, TheGripUnderAHeaderSaysWhichWayItGoes) {
@@ -636,6 +642,68 @@ TEST(TrackMove, TheLanesTravelledAreReported) {
   ASSERT_TRUE(edit.has_value());
   EXPECT_EQ(edit->mode, DragMode::Move);
   EXPECT_EQ(edit->lanes, -1) << "one lane up, in the order the tracks are stored";
+}
+
+// Control turns a trim into a ripple and control with shift into a roll, which
+// is what anybody trimming actually uses — the tool palette is for when the
+// mode should stay, and one tightened cut is not that.
+TEST(TrimModifiers, ControlMakesATrimARipple) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(0, 0);
+  const double y = box.y + box.height * 0.5;
+
+  EXPECT_EQ(fixture.view->zone_at(box.x + 2.0, y, Modifiers{.control = true}),
+            DragMode::RippleStart);
+  EXPECT_EQ(fixture.view->zone_at(box.right() - 2.0, y, Modifiers{.control = true}),
+            DragMode::RippleEnd);
+}
+
+TEST(TrimModifiers, ControlAndShiftMakeItARoll) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(0, 0);
+  const double y = box.y + box.height * 0.5;
+
+  EXPECT_EQ(fixture.view->zone_at(box.x + 2.0, y, Modifiers{.shift = true, .control = true}),
+            DragMode::RollStart);
+  EXPECT_EQ(fixture.view->zone_at(box.right() - 2.0, y,
+                                  Modifiers{.shift = true, .control = true}),
+            DragMode::RollEnd);
+}
+
+// Aimed at an edit point rather than at a four-pixel strip, like every edge
+// tool here: whichever end is nearer is the one that was meant.
+TEST(TrimModifiers, TheNearerEndIsTheOneMeantFromAnywhereOnTheClip) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(0, 0);
+  const double y = box.y + box.height * 0.5;
+
+  EXPECT_EQ(fixture.view->zone_at(box.x + box.width * 0.25, y, Modifiers{.control = true}),
+            DragMode::RippleStart);
+  EXPECT_EQ(fixture.view->zone_at(box.x + box.width * 0.75, y, Modifiers{.control = true}),
+            DragMode::RippleEnd);
+}
+
+// The fade handles and the volume band sit on top of the clip body. Holding
+// control is a statement that this gesture is a trim, so it wins over both.
+TEST(TrimModifiers, ControlWinsOverWhatSitsOnTheClip) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(0, 0);
+  const Rect handle = fixture.view->fade_handle_rect(0, 0, false);
+  ASSERT_FALSE(handle.empty());
+
+  const double x = handle.x + handle.width * 0.5;
+  const double y = handle.y + handle.height * 0.5;
+  EXPECT_EQ(fixture.view->zone_at(x, y), DragMode::FadeIn) << "without it, still a fade";
+  EXPECT_EQ(fixture.view->zone_at(x, y, Modifiers{.control = true}), DragMode::RippleStart);
+  EXPECT_LT(x, box.right());
+}
+
+TEST(TrimModifiers, WithoutAModifierNothingChanges) {
+  Fixture fixture;
+  const Rect box = fixture.view->block_rect(0, 0);
+  const double y = box.y + box.height * 0.5;
+  EXPECT_EQ(fixture.view->zone_at(box.x + 2.0, y), DragMode::TrimStart);
+  EXPECT_EQ(fixture.view->zone_at(box.x + box.width * 0.5, y), DragMode::Move);
 }
 
 // Alt-drag: the gesture is a move in every way except what it reports, which

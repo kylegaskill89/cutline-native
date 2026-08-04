@@ -763,7 +763,14 @@ class TimelineView : public Widget {
   /// reachable without a modifier. The other tools each mean one thing
   /// everywhere on a clip, apart from rate stretch, which takes whichever end
   /// is nearer.
-  [[nodiscard]] DragMode zone_at(double x, double y) const;
+  /// Control makes a trim a **ripple** and control with shift makes it a
+  /// **roll**, which is Premiere's arrangement and the one anybody trimming
+  /// actually uses: the tool palette is for when the mode should stay, and a
+  /// single tightened cut is not that. Control also wins over the fade handles
+  /// and the volume band, which sit on top of the clip — holding it is a
+  /// statement that this gesture is a trim.
+  [[nodiscard]] DragMode zone_at(double x, double y, Modifiers modifiers = {}) const;
+
 
   // -------------------------------------------------------------- geometry --
   //
@@ -1108,6 +1115,11 @@ class TimelineView : public Widget {
   double press_y_ = 0.0;
   /// Whether the pointer has moved far enough for this to be a drag at all.
   bool moved_ = false;
+
+  /// The modifiers the pointer was last seen with, so hovering can say what a
+  /// press would do while control is held. `zone_at` needs them and neither the
+  /// paint nor `cursor_at` is handed an event.
+  Modifiers hover_modifiers_;
 
   /// Whether this move is carrying copies. Alt at the press, and only at the
   /// press — a modifier picked up halfway through a drag would change what the
