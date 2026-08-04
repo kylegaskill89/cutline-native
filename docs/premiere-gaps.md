@@ -759,6 +759,70 @@ zero on a typing mistake.
 
 ---
 
+## 3. Source monitor
+
+There is none. That is the whole of the section and the reason it is next:
+Premiere's editing workflow is *two* monitors, and an application with one of
+them makes you do on the timeline what should have been decided before anything
+was placed.
+
+The gap is not machinery in the usual sense. Almost everything a source monitor
+needs is already built and already reachable from somewhere else — what is
+missing is the panel that would put the pieces in one place, and two small
+things underneath it.
+
+### 3.1 What is already there
+
+Worth saying first, because the size of this section depends on it.
+
+| | Where it is now |
+|---|---|
+| A picture with a letterbox, a placeholder and a drop target | `ui::MonitorView`, used by the program monitor and not tied to it |
+| Rendering a frame at a time | `app::ProjectPreview::frame_at` / `texture_at`, which take a **project** and a time |
+| A source chosen to be placed | `Session::source_media`, set by the pool and read by insert and overwrite |
+| Placing part of a source | `core::PlacementRange`, honoured by `place_media`, `insert_media_at` and `overwrite_media_at` |
+| Marks that survive the file | `Project::in_point` / `out_point`, for the *sequence* |
+
+`PlacementRange` is the one to look at twice. Three placement operations take
+it, all three honour it, it is tested — and **nothing anywhere sets it**. The
+range half of three-point editing has been finished and unreachable for as long
+as it has existed, waiting for something to say which part of the source.
+
+### 3.2 What has to be built
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| A panel showing one source | yes | none | control |
+| Its own playhead and transport | play, step, JKL, shuttle | none — the transport belongs to the sequence | control |
+| A scrub bar with a marked span | the time ruler under the picture | no such widget anywhere | control |
+| Mark in and out **on the source** | `I` and `O` while it is focused | the sequence half only | wiring |
+| Marks that belong to the asset | kept per clip, and saved | nothing keeps them | model |
+| Insert and overwrite the marked part | the point of the whole panel | places the whole source | wiring |
+| Drag from the picture to the timeline | yes | none | control |
+| A list of recently opened sources | a dropdown of them | one at a time | control |
+| Audio-only sources shown as a waveform | yes | none | control |
+| Display mode, safe margins, zoom | yes | none — see the audit list | control |
+
+**The picture costs nothing to render.** A source monitor is a sequence of one
+clip, so it can be shown by handing `ProjectPreview` a project built on the spot
+holding exactly that: one video track, one clip, the whole media. Nothing new
+decodes, nothing new composites, and what the source monitor shows is by
+construction what the sequence would show — which is the property that makes it
+worth trusting when deciding what to place.
+
+**The marks belong to the media.** Premiere keeps a clip's in and out with the
+asset rather than with the panel, so closing a source and coming back to it
+finds them still there, and saving the project saves them. That is a field on
+`Media` rather than state on the session, and it is the only model change this
+section needs.
+
+**The scrub bar is the only genuinely new widget.** The timeline has a ruler
+that does all of this and a great deal else besides; nothing small does. It
+wants a duration, a playhead, a marked span, and a drag — and the program
+monitor should have one too, which is a gap this page has not been listing.
+
+---
+
 ## Found by audit, listed nowhere else
 
 Walking the spec's own parity checklist and Premiere's menus against the source,
@@ -809,8 +873,6 @@ becomes too slow to work with.
 
 The rest of the application, in the order it seems worth walking:
 
-- **Source monitor** — there is none at all. Premiere's whole three-point
-  editing workflow runs through it.
 - **Project panel** — bins, metadata columns, icon view, proxies, relinking.
 - **Audio** — the Audio Track Mixer, submixes, sends, the essential sound panel,
   loudness normalisation.
