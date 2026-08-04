@@ -27,12 +27,12 @@ measurements and the one correction they forced.
 | | |
 |---|---|
 | Repo | `github.com/kylegaskill89/cutline-native`, branch `main`, GPL-3.0-or-later |
-| Released | **0.1.0**, as an unsigned NSIS installer. `docs/releasing.md` |
+| Released | **0.2.0**, as an unsigned NSIS installer. `docs/releasing.md` |
 | Local | `d:\Videos\cutline-native` |
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~32k lines of source, ~22k of tests |
-| Tests | **1895** under the `ui` preset; 1632 of them need no GPU, no window, no FFmpeg |
+| Tests | **2438** under the `ui` preset; 2176 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(cutline-native
-  VERSION 0.1.0
+  VERSION 0.2.0
   DESCRIPTION "Native C++ non-linear video editor"
   LANGUAGES CXX)
 
