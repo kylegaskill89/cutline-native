@@ -1,6 +1,7 @@
 #include "cutline/core/serialize.hpp"
 
 #include "cutline/core/history.hpp"
+#include "cutline/core/id.hpp"
 #include "cutline/core/properties.hpp"
 
 #include <gtest/gtest.h>
@@ -311,6 +312,43 @@ TEST(History, DiscardsTheOldestBeyondTheLimit) {
   history.push(p);
   history.push(p);
   EXPECT_EQ(history.undo_depth(), 2u);
+}
+
+// Opening a project used to leave the id counter at zero, so the next split
+// handed out a name the file already used — and every lookup by id then found
+// two clips where it meant one.
+TEST(Ids, LoadingAProjectClaimsTheNamesItAlreadyUses) {
+  reset_ids();
+
+  Project p;
+  Clip c;
+  c.id = "clip_9";
+  c.group_id = "grp_12";
+  Track t{.id = "v1", .kind = TrackKind::Video};
+  t.clips = {std::move(c)};
+  p.tracks = {std::move(t)};
+
+  reset_ids();  // as if the application had just started
+  const auto loaded = from_json(to_json(p));
+  ASSERT_TRUE(loaded.has_value());
+
+  EXPECT_EQ(new_id("clip"), "clip_13") << "past the highest number in the file";
+}
+
+TEST(Ids, NoteIgnoresWhatItCannotHaveMinted) {
+  reset_ids();
+  note_id("v1");
+  note_id("no-underscore");
+  note_id("clip_");
+  note_id("clip_notanumber");
+  EXPECT_EQ(new_id("clip"), "clip_1");
+}
+
+TEST(Ids, TheCounterNeverGoesBackwards) {
+  reset_ids();
+  note_id("clip_50");
+  note_id("clip_2");
+  EXPECT_EQ(new_id("clip"), "clip_51");
 }
 
 TEST(History, ClearDropsBothStacks) {

@@ -1,5 +1,7 @@
 #include "cutline/core/serialize.hpp"
 
+#include "cutline/core/id.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <array>
@@ -559,6 +561,20 @@ Project read_project(const json& j) {
   return p;
 }
 
+/// Every generated name the project already uses, so the counter starts past
+/// them. Group ids count: a paste remaps groups through freshly minted ones.
+void note_ids(const Project& p) {
+  for (const Media& m : p.media) note_id(m.id);
+  for (const Marker& m : p.markers) note_id(m.id);
+  for (const Track& t : p.tracks) {
+    note_id(t.id);
+    for (const Clip& c : t.clips) {
+      note_id(c.id);
+      if (c.group_id.has_value()) note_id(*c.group_id);
+    }
+  }
+}
+
 }  // namespace
 
 std::string to_json(const Project& p, int indent) {
@@ -590,6 +606,11 @@ std::expected<LoadedProject, std::string> from_json(std::string_view text) {
   } catch (const json::exception& e) {
     return std::unexpected(std::format("malformed project: {}", e.what()));
   }
+
+  // Every id the file already holds is spoken for. Done here rather than at
+  // each call site, because a project that came in through some other door
+  // would be exactly as dangerous and nobody would think to do it.
+  note_ids(loaded.project);
 
   // Missing media are reported, never silently dropped: the clips that depend
   // on them stay put so the caller can offer a relink.
