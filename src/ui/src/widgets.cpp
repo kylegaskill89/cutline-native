@@ -255,7 +255,46 @@ void TitleBar::paint_content(Painter& painter, const Theme& theme) const {
   if (title_.empty()) return;
 
   const SurfaceStyle& style = theme.style(Part::TitleBar, state());
-  const Rect area = inset(bounds(), Edges::symmetric(theme.metrics.padding_x, 0.0));
+  Rect area = inset(bounds(), Edges::symmetric(theme.metrics.padding_x, 0.0));
+
+  if (mark_) {
+    // The application's mark, drawn rather than loaded. An icon file would have
+    // to be decoded, scaled and themed, and this is three rectangles — so it is
+    // sharp at every size and every scaling factor for free, and it borrows the
+    // theme's accent instead of carrying a blue that four themes would fight.
+    const double size = std::min(area.height * 0.5, theme.metrics.font_size * 1.15);
+    const double x = area.x;
+    const double y = area.y + (area.height - size) * 0.5;
+    const double row = size * 0.4;
+    const double gap = size * 0.2;
+    const double cut = x + size * 0.46;
+    const double hair = std::max(1.0, size * 0.1);
+
+    // The far side of each cut is the same colour worn thinner, which is what
+    // makes two pieces of one clip read as two pieces rather than as two clips.
+    const auto thinner = [](Color color, float amount) {
+      color.a *= amount;
+      return color;
+    };
+    // One hue, not two. The full icon distinguishes picture from sound by
+    // colour, and at thirteen pixels nobody reads that — what they read is
+    // whether it is one object, and a second hue against four themes' four
+    // accents is three chances out of four to clash for nothing.
+    const Color sound = thinner(theme.accent, 0.62f);
+
+    painter.fill(Rect{x, y, cut - hair - x, row}, hair, Fill::solid(theme.accent));
+    painter.fill(Rect{cut + hair, y, x + size - cut - hair, row}, hair,
+                 Fill::solid(thinner(theme.accent, 0.55f)));
+    painter.fill(Rect{x, y + row + gap, cut - hair - x, row}, hair, Fill::solid(sound));
+    painter.fill(Rect{cut + hair, y + row + gap, x + size - cut - hair, row}, hair,
+                 Fill::solid(thinner(sound, 0.55f)));
+    painter.fill(Rect{cut - hair * 0.5, y - gap * 0.5, hair, size + gap * 2.0}, 0.0,
+                 Fill::solid(style.text));
+
+    const double taken = size + theme.metrics.spacing;
+    area = Rect{area.x + taken, area.y, std::max(0.0, area.width - taken), area.height};
+  }
+
   painter.text(text_run(area, title_, style, theme.metrics.font_size, TextAlign::Left, true));
 }
 

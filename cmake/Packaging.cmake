@@ -61,6 +61,18 @@ set(CPACK_NSIS_HELP_LINK "https://github.com/kylegaskill89/cutline-native")
 # loader is perfectly happy to pick it up.
 set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
 
+# The installer's own icon, and the uninstaller's. `CPACK_NSIS_INSTALLED_ICON_NAME`
+# above only decides what Add/Remove Programs shows; without these the setup
+# executable somebody downloads from the release page is the generic NSIS one,
+# which is the first thing they see of this and says nothing about it.
+#
+# NSIS wants a native path, so the slashes are turned round here rather than
+# left for it to misread.
+file(TO_NATIVE_PATH "${CMAKE_SOURCE_DIR}/tools/cutline/cutline.ico" CUTLINE_NSIS_ICON)
+string(REPLACE "\\" "\\\\" CUTLINE_NSIS_ICON "${CUTLINE_NSIS_ICON}")
+set(CPACK_NSIS_MUI_ICON "${CUTLINE_NSIS_ICON}")
+set(CPACK_NSIS_MUI_UNIICON "${CUTLINE_NSIS_ICON}")
+
 # So the editor comes back after an update. The whole flow is: the editor
 # downloads, verifies, starts this and closes itself -- and an update that left
 # the user staring at a desktop would be one they had to think about.

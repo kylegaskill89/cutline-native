@@ -217,6 +217,14 @@ class TitleBar : public Box {
   [[nodiscard]] const std::string& title() const noexcept { return title_; }
   void set_title(std::string title) { title_ = std::move(title); }
 
+  /// Whether to draw the application's mark before the title.
+  ///
+  /// Off by default, because a torn-out panel's caption is a *window's* title
+  /// bar too and stamping the product mark on every one of them turns branding
+  /// into wallpaper. The main window sets it; nothing else does.
+  void set_mark(bool mark) noexcept { mark_ = mark; }
+  [[nodiscard]] bool mark() const noexcept { return mark_; }
+
   [[nodiscard]] Part part() const noexcept override { return Part::TitleBar; }
   [[nodiscard]] bool paints_surface() const noexcept override { return true; }
 
@@ -225,6 +233,7 @@ class TitleBar : public Box {
 
  private:
   std::string title_;
+  bool mark_ = false;
 };
 
 /// One of the three buttons at the end of a title bar.

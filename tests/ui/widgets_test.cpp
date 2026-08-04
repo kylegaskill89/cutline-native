@@ -401,6 +401,44 @@ TEST(TitleBar, DrawsItsSurfaceAndItsTitle) {
   EXPECT_EQ(text->run->text, "Cutline");
 }
 
+// The application's mark, drawn from primitives like every other glyph in the
+// caption: an icon file would have to be decoded, scaled and themed, and this
+// is five rectangles that are sharp at any size and wear the theme's accent.
+TEST(TitleBar, DrawsTheMarkOnlyWhenAskedTo) {
+  TitleBar plain("Cutline");
+  plain.arrange(Rect{0.0, 0.0, 600.0, 30.0}, flat_context());
+  RecordingPainter without;
+  plain.paint(without, default_theme());
+
+  TitleBar marked("Cutline");
+  marked.set_mark(true);
+  marked.arrange(Rect{0.0, 0.0, 600.0, 30.0}, flat_context());
+  RecordingPainter with;
+  marked.paint(with, default_theme());
+
+  EXPECT_GT(with.count(DrawCall::Kind::Fill), without.count(DrawCall::Kind::Fill));
+}
+
+// The title moves over to make room rather than being drawn under the mark.
+TEST(TitleBar, TheMarkPushesTheTitleAlong) {
+  TitleBar plain("Cutline");
+  plain.arrange(Rect{0.0, 0.0, 600.0, 30.0}, flat_context());
+  RecordingPainter without;
+  plain.paint(without, default_theme());
+
+  TitleBar marked("Cutline");
+  marked.set_mark(true);
+  marked.arrange(Rect{0.0, 0.0, 600.0, 30.0}, flat_context());
+  RecordingPainter with;
+  marked.paint(with, default_theme());
+
+  const DrawCall* bare = without.first(DrawCall::Kind::Text);
+  const DrawCall* moved = with.first(DrawCall::Kind::Text);
+  ASSERT_NE(bare, nullptr);
+  ASSERT_NE(moved, nullptr);
+  EXPECT_GT(moved->run->bounds.x, bare->run->bounds.x);
+}
+
 TEST(CaptionButton, DrawsItsGlyphFromPrimitivesRatherThanAFont) {
   // A caption font is not something that can be relied on to exist, and a
   // close button rendering as a missing-glyph box would be worse than one

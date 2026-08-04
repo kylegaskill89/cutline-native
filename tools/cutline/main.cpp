@@ -319,6 +319,11 @@ struct App;
 /// layout, all of it — and the only thing that differs is which dock they show.
 constexpr const wchar_t* kWindowClass = L"CutlineWindow";
 
+/// The icon resource, matching `cutline.rc`. Numbered rather than named
+/// because Windows picks an executable's representative icon by the lowest
+/// resource *number*, and a name would leave that to whatever the linker did.
+constexpr WORD kIconResource = 1;
+
 /// Posted by a media worker when something the timeline draws is ready.
 ///
 /// A message rather than a flag the loop polls, because the loop blocks on its
@@ -6428,6 +6433,9 @@ void refresh_dock(App& app) {
   // The window's own caption. The system one cannot be themed, so it is turned
   // off in `WM_NCCALCSIZE` and this is drawn in its place.
   auto& caption = shell->emplace<TitleBar>("Cutline");
+  // Only here. A torn-out panel's caption is a title bar too, and stamping the
+  // product mark on every one of them turns branding into wallpaper.
+  caption.set_mark(true);
   if (app != nullptr) app->main.title_bar = &caption;
 
   caption.emplace<CaptionButton>(CaptionButton::Kind::Minimise, [app] {
@@ -8581,6 +8589,17 @@ int main(int argc, char** argv) {
   // every move over the client area, and `WM_SETCURSOR` is where the interface
   // gets to say what it should be instead.
   window_class.hCursor = nullptr;
+  // The application's own icon, for the taskbar, Alt+Tab and the window's own
+  // corner. `hIcon` is the large one and `hIconSm` the small one; naming both
+  // is what stops Windows scaling the 256-pixel image down to sixteen and
+  // producing a grey smudge where the mark should be, since the .ico carries a
+  // drawn-for-the-size version of each.
+  const HINSTANCE self = window_class.hInstance;
+  window_class.hIcon = static_cast<HICON>(LoadImageW(self, MAKEINTRESOURCEW(kIconResource),
+                                                     IMAGE_ICON, 0, 0, LR_DEFAULTSIZE));
+  window_class.hIconSm = static_cast<HICON>(
+      LoadImageW(self, MAKEINTRESOURCEW(kIconResource), IMAGE_ICON,
+                 GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0));
   window_class.lpszClassName = kWindowClass;
   RegisterClassExW(&window_class);
 
