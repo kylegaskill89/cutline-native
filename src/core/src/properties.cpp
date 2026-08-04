@@ -136,6 +136,34 @@ Project set_fps(Project p, double fps) {
   return p;
 }
 
+Project match_sequence_to(Project p, std::string_view media_id) {
+  // Anything at all placed, and the question is closed: the sequence has a
+  // shape somebody has been working to.
+  for (const Track& t : p.tracks) {
+    if (!t.clips.empty()) return p;
+  }
+
+  const Media* media = nullptr;
+  for (const Media& m : p.media) {
+    if (m.id == media_id) media = &m;
+  }
+  if (media == nullptr) return p;
+
+  // Generated sources take the canvas's shape rather than giving it one, and a
+  // still has no rate to give. Both are the same test: only real footage knows
+  // what it is.
+  if (media->is_text || media->is_color || media->is_adjustment) return p;
+
+  if (media->width.has_value() && media->height.has_value() && *media->width > 0 &&
+      *media->height > 0) {
+    p = set_canvas(std::move(p), *media->width, *media->height);
+  }
+  if (media->fps.has_value() && *media->fps > 0.0) {
+    p = set_fps(std::move(p), *media->fps);
+  }
+  return p;
+}
+
 Project set_master_gain(Project p, double gain) {
   p.master_gain = std::clamp(gain, 0.0, kMaxMasterGain);
   return p;

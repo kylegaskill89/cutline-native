@@ -1,6 +1,7 @@
 #include "cutline/editor/import.hpp"
 
 #include "cutline/core/edit.hpp"
+#include "cutline/core/properties.hpp"
 #include "cutline/core/id.hpp"
 
 #include <algorithm>
@@ -92,6 +93,10 @@ core::Project import_and_place(core::Project project, const MediaSource& source,
   std::string id;
   project = import_media(std::move(project), source, &id);
   if (id.empty()) return project;
+  // Before it lands, because the rule is about an *empty* sequence and this is
+  // the moment it stops being one. A 4K60 clip dropped into a 1080p30 sequence
+  // otherwise plays every second frame and is scaled down for the privilege.
+  project = core::match_sequence_to(std::move(project), id);
   return core::place_media(std::move(project), id, std::max(0.0, at), video_track_id);
 }
 

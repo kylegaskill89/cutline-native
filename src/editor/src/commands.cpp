@@ -367,17 +367,24 @@ bool run(Session& session, Command command) {
           project, here ? std::nullopt : std::optional<double>(session.playhead())));
     }
 
-    case Command::Insert:
+    // `match_sequence_to` first, and inside the same `apply`, so the sequence
+    // taking the footage's shape and the footage landing on it are one edit and
+    // one undo entry. It does nothing unless the sequence is still empty.
+    case Command::Insert: {
       if (!can_place(session)) return false;
-      return session.apply(core::insert_media_at(project, session.source_media(),
-                                                 session.playhead(),
-                                                 edit_target(project)));
+      core::Project ready = core::match_sequence_to(project, session.source_media());
+      const std::string target = edit_target(ready);
+      return session.apply(core::insert_media_at(std::move(ready), session.source_media(),
+                                                 session.playhead(), target));
+    }
 
-    case Command::Overwrite:
+    case Command::Overwrite: {
       if (!can_place(session)) return false;
-      return session.apply(core::overwrite_media_at(project, session.source_media(),
-                                                    session.playhead(),
-                                                    edit_target(project)));
+      core::Project ready = core::match_sequence_to(project, session.source_media());
+      const std::string target = edit_target(ready);
+      return session.apply(core::overwrite_media_at(std::move(ready), session.source_media(),
+                                                    session.playhead(), target));
+    }
 
     case Command::ClearMarks:
       return session.apply(core::clear_marks(project));

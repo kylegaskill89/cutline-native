@@ -120,6 +120,25 @@ inline constexpr double kMaxFps = 240.0;
 /// put, and what moves is which frames land either side of it.
 [[nodiscard]] Project set_fps(Project p, double fps);
 
+/// Makes an **empty** sequence take its shape and rate from a media.
+///
+/// A sequence starts 1080p at 30, because it has to start as something. Drop
+/// 4K60 footage into it and every second frame is simply never shown — which
+/// looks exactly like a stuttering editor and is in fact an editor faithfully
+/// playing a 30 fps sequence. The picture is scaled down too, so the decode is
+/// paid for at full size and half of it thrown away.
+///
+/// Premiere asks about this with a dialogue. There is nothing to ask while the
+/// sequence is still empty: nothing has been placed, nothing can be reframed,
+/// and the only sensible answer is the footage's own format.
+///
+/// Does nothing once anything has been placed — after that, changing the shape
+/// of the sequence reframes work somebody has already done — and nothing for a
+/// media with no size or rate of its own, which is every title, matte and
+/// adjustment layer. A generated source takes the canvas's shape rather than
+/// giving it one.
+[[nodiscard]] Project match_sequence_to(Project p, std::string_view media_id);
+
 // ------------------------------------------------------------------ master --
 
 /// Sets a track's own fader, clamped to the allowed range. Audio tracks only:

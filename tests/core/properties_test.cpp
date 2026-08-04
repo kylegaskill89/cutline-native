@@ -193,6 +193,87 @@ TEST(Markers, SettingOneThatIsNotThereChangesNothing) {
   EXPECT_EQ(after.markers, p.markers);
 }
 
+// --------------------------------------------------- matching the sequence --
+
+namespace {
+
+Media footage_media(int width, int height, double fps) {
+  Media m;
+  m.id = "f1";
+  m.name = "capture.mkv";
+  m.duration = 60.0;
+  m.has_video = true;
+  m.width = width;
+  m.height = height;
+  m.fps = fps;
+  return m;
+}
+
+}  // namespace
+
+TEST(MatchSequence, AnEmptySequenceTakesTheFootagesShapeAndRate) {
+  Project p;
+  p.media = {footage_media(3840, 2160, 60.0)};
+
+  p = match_sequence_to(std::move(p), "f1");
+  EXPECT_EQ(p.canvas_w, 3840);
+  EXPECT_EQ(p.canvas_h, 2160);
+  EXPECT_DOUBLE_EQ(p.fps, 60.0);
+}
+
+// Once anything has been placed, the shape is one somebody has been working to.
+TEST(MatchSequence, ASequenceWithAnythingInItIsLeftAlone) {
+  Project p = one_clip_project();
+  p.media.push_back(footage_media(3840, 2160, 60.0));
+
+  const Project after = match_sequence_to(p, "f1");
+  EXPECT_EQ(after.canvas_w, p.canvas_w);
+  EXPECT_DOUBLE_EQ(after.fps, p.fps);
+}
+
+// A title takes the canvas's shape rather than giving it one, and has no rate.
+TEST(MatchSequence, GeneratedSourcesGiveTheSequenceNothing) {
+  Project p;
+  Media title;
+  title.id = "t1";
+  title.is_text = true;
+  title.width = 100;
+  title.height = 100;
+  title.fps = 12.0;
+  p.media = {title};
+
+  const Project after = match_sequence_to(p, "t1");
+  EXPECT_EQ(after.canvas_w, Project{}.canvas_w);
+  EXPECT_DOUBLE_EQ(after.fps, Project{}.fps);
+}
+
+TEST(MatchSequence, FootageThatKnowsNeitherChangesNothing) {
+  Project p;
+  Media unknown;
+  unknown.id = "u1";
+  unknown.has_video = true;
+  p.media = {unknown};
+
+  const Project after = match_sequence_to(p, "u1");
+  EXPECT_EQ(after.canvas_w, Project{}.canvas_w);
+  EXPECT_DOUBLE_EQ(after.fps, Project{}.fps);
+}
+
+TEST(MatchSequence, AMediaThatIsNotThereChangesNothing) {
+  const Project p;
+  EXPECT_EQ(match_sequence_to(p, "nobody").canvas_w, p.canvas_w);
+}
+
+// The rates and sizes a file can claim are not always ones a sequence may have.
+TEST(MatchSequence, AnAbsurdFormatIsClampedRatherThanTaken) {
+  Project p;
+  p.media = {footage_media(99999, 99999, 100000.0)};
+  p = match_sequence_to(std::move(p), "f1");
+
+  EXPECT_EQ(p.canvas_w, kMaxCanvas);
+  EXPECT_DOUBLE_EQ(p.fps, kMaxFps);
+}
+
 // ------------------------------------------------------------------- fades --
 
 TEST(Fades, AreClampedToTheClipLength) {
