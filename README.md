@@ -16,7 +16,7 @@ agree by construction rather than by careful maintenance.
 
 ## Download
 
-**[Cutline 0.2.0 for Windows](https://github.com/kylegaskill89/cutline-native/releases/latest)**
+**[Cutline 0.2.1 for Windows](https://github.com/kylegaskill89/cutline-native/releases/latest)**
 — an installer, about 12 MB.
 
 It is not code-signed, so Windows will show a SmartScreen warning the first

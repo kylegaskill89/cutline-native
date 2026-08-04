@@ -27,7 +27,7 @@ measurements and the one correction they forced.
 | | |
 |---|---|
 | Repo | `github.com/kylegaskill89/cutline-native`, branch `main`, GPL-3.0-or-later |
-| Released | **0.2.0**, as an unsigned NSIS installer. `docs/releasing.md` |
+| Released | **0.2.1**, as an unsigned NSIS installer. `docs/releasing.md` |
 | Local | `d:\Videos\cutline-native` |
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
