@@ -4853,6 +4853,114 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
   app.main.host->open_popup(std::move(panel), settings_anchor());
 }
 
+/// A marker's name, note, colour and length. Premiere's marker dialogue.
+///
+/// Opened from a double-click on the marker itself, which is the only gesture
+/// on the ruler that is not already scrubbing — a single click there has to
+/// keep moving the playhead, including over a marker, or the markers would be
+/// holes in the one control that spans the whole sequence.
+///
+/// Delete is on it rather than only on a key, because a marker with a note in
+/// it is a thing somebody made and the place to throw it away is the place they
+/// are looking at it.
+void open_marker_dialog(App& app, std::size_t index) {
+  if (app.main.host == nullptr || app.timeline == nullptr) return;
+  const std::vector<cutline::core::Marker>& markers = app.session.project().markers;
+  if (index >= markers.size()) return;
+  const cutline::core::Marker marker = markers[index];
+  const double fps = app.session.project().fps;
+
+  auto panel = std::make_unique<Panel>();
+  panel->emplace<Label>("Marker at " + cutline::core::seconds_to_timecode(marker.time, fps))
+      .set_bold(true);
+
+  auto& name_row = panel->emplace<Box>(Axis::Horizontal);
+  name_row.emplace<Label>("Name");
+  auto& name = name_row.emplace<TextField>(marker.label);
+  name.set_columns(18);
+
+  auto& note_row = panel->emplace<Box>(Axis::Horizontal);
+  note_row.emplace<Label>("Comment");
+  auto& comment = note_row.emplace<TextField>(marker.comment);
+  comment.set_columns(28);
+
+  auto& span_row = panel->emplace<Box>(Axis::Horizontal);
+  span_row.emplace<Label>("Duration");
+  // A timecode rather than seconds, like every other length in the interface.
+  // Zero reads as a point marker, which is what it writes back as too.
+  auto& span = span_row.emplace<TextField>(
+      cutline::core::seconds_to_timecode(marker.duration, fps));
+  span.set_columns(11);
+
+  panel->emplace<Label>("Colour").set_small(true);
+  auto& colors = panel->emplace<Box>(Axis::Horizontal);
+  // The label colours, which is the palette this application already has names
+  // for. A second set of colours would be a second vocabulary to learn.
+  auto chosen = std::make_shared<std::string>(marker.color);
+  // Every swatch, so pressing one can light it and put the others out. Without
+  // this the choice was silent: the colour was stored and the box went on
+  // showing whatever the marker already was, so pressing Rose looked like
+  // pressing nothing. Found by driving it — the code was right and the
+  // interface said so nowhere.
+  auto swatches = std::make_shared<std::vector<Button*>>();
+  const auto choose = [&app, chosen, swatches](std::string color, Button* pressed) {
+    *chosen = std::move(color);
+    for (Button* swatch : *swatches) swatch->set_selected(swatch == pressed);
+    if (app.main.host != nullptr) app.main.host->request_paint();
+  };
+
+  {
+    auto& none = colors.emplace<Button>("None");
+    none.set_on_click([choose, button = &none] { choose(std::string{}, button); });
+    none.set_selected(marker.color.empty());
+    swatches->push_back(&none);
+  }
+  for (const cutline::editor::ClipLabel& label : cutline::editor::clip_labels()) {
+    auto& swatch = colors.emplace<Button>(std::string(label.name));
+    swatch.set_on_click([choose, button = &swatch, color = std::string(label.color)] {
+      choose(color, button);
+    });
+    swatch.set_selected(marker.color == label.color);
+    swatches->push_back(&swatch);
+  }
+
+  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
+  buttons.emplace<Button>("OK", [&app, id = marker.id, fps, chosen, n = &name, c = &comment,
+                                 d = &span] {
+    // A duration that does not parse leaves the one it had rather than
+    // becoming zero, which would silently turn a span back into a point.
+    const std::optional<double> length = cutline::core::timecode_to_seconds(d->text(), fps);
+    const cutline::core::Marker* was = nullptr;
+    for (const cutline::core::Marker& m : app.session.project().markers) {
+      if (m.id == id) was = &m;
+    }
+    const double duration = length.value_or(was != nullptr ? was->duration : 0.0);
+
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    app.session.apply(cutline::core::set_marker(app.session.project(), id, n->text(),
+                                                c->text(), *chosen, duration));
+    refresh_timeline(app);
+    mark_dirty(app);
+  });
+  buttons.emplace<Button>("Delete", [&app, id = marker.id] {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    app.session.apply(cutline::core::remove_marker(app.session.project(), id));
+    refresh_timeline(app);
+    mark_dirty(app);
+  });
+  buttons.emplace<Button>("Cancel", [&app] {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+  });
+
+  // Beside the marker rather than under the menu bar. A dialogue about a thing
+  // on the ruler that opens at the far corner of the window makes you look away
+  // from what you are editing and then find your way back — and the marker is
+  // usually the very thing you want to see while typing what it means.
+  const Rect tab = app.timeline->marker_rect(index);
+  app.main.host->open_popup(std::move(panel),
+                            tab.empty() ? settings_anchor() : Rect{tab.x, tab.bottom(), 0.0, 0.0});
+}
+
 /// Renaming a track: a popup with a field in it, hung under the header.
 ///
 /// A popup rather than a field the timeline holds: the view draws its headers
@@ -5370,6 +5478,10 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
   // rather than a field the timeline holds: the view draws its headers and
   // builds no widgets in them, and giving it one for this alone would mean it
   // owning focus, a caret and a commit rule it has no other use for.
+  tracks.set_on_marker_activate([app](std::size_t marker) {
+    if (app != nullptr) open_marker_dialog(*app, marker);
+  });
+
   tracks.set_on_track_rename([app](std::size_t track) {
     if (app != nullptr) rename_track(*app, track);
   });

@@ -465,6 +465,19 @@ struct Marker {
   std::string label;
   std::string color;
 
+  /// How long the marker covers. Zero is a point, which is what most are and
+  /// what every marker written before there was a duration reads back as.
+  ///
+  /// A span rather than a pair of markers because it is one thing somebody
+  /// meant — "this whole passage is the problem" — and two markers would be two
+  /// things to move, delete and keep in step.
+  double duration = 0.0;
+
+  /// The longer note. `label` is what fits on the ruler; this is what somebody
+  /// actually wanted to say, and keeping them apart is what stops a name being
+  /// either too long to draw or too short to mean anything.
+  std::string comment;
+
   friend bool operator==(const Marker&, const Marker&) = default;
 };
 

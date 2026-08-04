@@ -690,6 +690,65 @@ Rect TimelineView::marker_rect(std::size_t index) const {
   return tab;
 }
 
+Rect TimelineView::marker_span(std::size_t index) const {
+  if (index >= model_.markers.size()) return {};
+  const TimelineMarker& marker = model_.markers[index];
+  if (marker.duration <= 0.0) return {};
+
+  const Rect ruler = ruler_area();
+  const Rect tab = marker_rect(index);
+  // From where the tab sits, so the band and the tab read as one object rather
+  // than as a marker with a stripe near it.
+  const double x = ruler.x + scale_.to_x(marker.time);
+  const double width = std::max(1.0, scale_.width_of(marker.duration));
+  const Rect band{x, tab.empty() ? ruler.y + ruler.height * 0.45 : tab.y, width,
+                  tab.empty() ? std::max(4.0, ruler.height * 0.3) : tab.height};
+  if (band.right() < ruler.x || band.x > ruler.right()) return {};
+  return band;
+}
+
+std::optional<std::size_t> TimelineView::marker_at(double x, double y) const {
+  // Backwards, so the one drawn last — on top — is the one found. Markers can
+  // sit on each other, and the answer has to match the picture.
+  for (std::size_t i = model_.markers.size(); i-- > 0;) {
+    if (marker_rect(i).contains(x, y)) return i;
+    if (const Rect band = marker_span(i); !band.empty() && band.contains(x, y)) return i;
+  }
+  return std::nullopt;
+}
+
+std::string TimelineView::tooltip_at(double x, double y) const {
+  if (const std::optional<TrackControlRef> control = control_at(x, y)) {
+    // Named for what the switch *is*, not for what pressing it would do. A
+    // label that flips between "Mute" and "Unmute" makes you read it to find
+    // out which state you are in, when the switch already shows that.
+    switch (control->control) {
+      case TrackControl::Target: return "Target this track for insert and overwrite";
+      case TrackControl::Mute: return "Mute this track";
+      case TrackControl::Solo: return "Solo: play only the soloed tracks";
+      case TrackControl::Lock: return "Lock: nothing on this track can be edited";
+      case TrackControl::Hide: return "Hide this track from the picture";
+    }
+  }
+
+  if (const std::optional<std::size_t> marker = marker_at(x, y)) {
+    const TimelineMarker& found = model_.markers[*marker];
+    if (!found.label.empty() && !found.comment.empty()) {
+      return found.label + " — " + found.comment;
+    }
+    if (!found.comment.empty()) return found.comment;
+    if (!found.label.empty()) return found.label;
+    return "Marker (double-click to name it)";
+  }
+
+  for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
+    if (resize_rect(track).contains(x, y)) {
+      return "Drag to resize the track, double-click to put it back";
+    }
+  }
+  return tooltip();
+}
+
 Rect TimelineView::marked_bar() const {
   if (!model_.in_point.has_value() && !model_.out_point.has_value()) return {};
 
@@ -1301,13 +1360,19 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
 
   for (std::size_t i = 0; i < model_.markers.size(); ++i) {
     const Rect tab = marker_rect(i);
-    if (tab.empty()) continue;
+    const Rect band = marker_span(i);
+    if (tab.empty() && band.empty()) continue;
 
     // Its own colour when it has one. That is what a marker's colour is for —
     // somebody has said this one means something the others do not.
     const Color color = model_.markers[i].color.empty()
                             ? ruler_style.text
                             : parse_color(model_.markers[i].color, ruler_style.text);
+
+    // The span first and faded, so the tab that names it still stands out
+    // against it — a band at full strength would swallow its own head.
+    if (!band.empty()) painter.fill(band, 2.0, Fill::solid(fade(color, 0.35f)));
+    if (tab.empty()) continue;
     painter.fill(tab, 2.0, Fill::solid(color));
     // A stem down to the ticks, so a marker can be lined up against a time
     // rather than only noticed.
@@ -2202,6 +2267,17 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
     }
     if (on_track_toggle_) on_track_toggle_(*hit);
     return true;
+  }
+
+  // A marker before the ruler swallows the press, and only on a double-click:
+  // a single click on the ruler scrubs, including over a marker, because
+  // hunting for the gaps between markers to move the playhead would be worse
+  // than not being able to open one.
+  if (event.click_count >= 2) {
+    if (const auto marker = marker_at(event.x, event.y)) {
+      if (on_marker_activate_) on_marker_activate_(*marker);
+      return true;
+    }
   }
 
   // A double-click anywhere else on a header renames the track. After the

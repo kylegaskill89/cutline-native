@@ -163,6 +163,36 @@ TEST(ClipProperties, TransitionSetAndClear) {
   EXPECT_FALSE(only_clip(p).transition_out.has_value());
 }
 
+// ---------------------------------------------------------------- markers --
+
+TEST(Markers, CarryANoteAndALength) {
+  Project p;
+  p = add_marker(std::move(p), 4.0, "cue");
+  ASSERT_EQ(p.markers.size(), 1u);
+
+  const std::string id = p.markers[0].id;
+  p = set_marker(std::move(p), id, "reshoot", "the boom is in frame here", "#c07a92", 3.0);
+
+  EXPECT_EQ(p.markers[0].label, "reshoot");
+  EXPECT_EQ(p.markers[0].comment, "the boom is in frame here");
+  EXPECT_EQ(p.markers[0].color, "#c07a92");
+  EXPECT_DOUBLE_EQ(p.markers[0].duration, 3.0);
+  EXPECT_DOUBLE_EQ(p.markers[0].time, 4.0) << "when it is is not what this edits";
+}
+
+// A marker that ended before it began would draw backwards and mean nothing.
+TEST(Markers, ANegativeLengthBecomesAPoint) {
+  Project p = add_marker(Project{}, 1.0);
+  p = set_marker(std::move(p), p.markers[0].id, {}, {}, {}, -5.0);
+  EXPECT_DOUBLE_EQ(p.markers[0].duration, 0.0);
+}
+
+TEST(Markers, SettingOneThatIsNotThereChangesNothing) {
+  const Project p = add_marker(Project{}, 1.0);
+  const Project after = set_marker(p, "nobody", "x", "y", "#fff", 2.0);
+  EXPECT_EQ(after.markers, p.markers);
+}
+
 // ------------------------------------------------------------------- fades --
 
 TEST(Fades, AreClampedToTheClipLength) {
@@ -250,7 +280,7 @@ TEST(FrameHold, ReleasingItPutsTheClipBackAsItWas) {
 
 // A hold asked for outside the clip still freezes it on a frame it owns.
 TEST(FrameHold, IsClampedIntoTheClip) {
-  Project p = one_clip_project(); 
+  Project p = one_clip_project();
   p = set_clips_hold(std::move(p), Ids{"c1"}, 99.0);
   ASSERT_TRUE(only_clip(p).hold.has_value());
   EXPECT_DOUBLE_EQ(*only_clip(p).hold, 10.0) << "its own out point";

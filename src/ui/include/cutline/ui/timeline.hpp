@@ -345,6 +345,11 @@ struct TimelineMarker {
   double time = 0.0;
   std::string label;
   std::string color;
+  /// How long it covers. Zero is a point, and a point is what most are.
+  double duration = 0.0;
+  /// The longer note, shown when the pointer rests on the marker rather than on
+  /// the ruler, where there is room for a word and not for a sentence.
+  std::string comment;
 
   friend bool operator==(const TimelineMarker&, const TimelineMarker&) = default;
 };
@@ -734,6 +739,12 @@ class TimelineView : public Widget {
   /// Reported rather than handled: renaming needs somewhere to type, and the
   /// timeline draws its headers rather than building widgets in them. Whoever
   /// handles this owns the field.
+  /// A marker was double-clicked: open whatever edits one. The timeline has no
+  /// fields of its own and no opinion about what a marker should say.
+  void set_on_marker_activate(std::function<void(std::size_t)> on_activate) {
+    on_marker_activate_ = std::move(on_activate);
+  }
+
   void set_on_track_rename(std::function<void(std::size_t)> on_rename) {
     on_track_rename_ = std::move(on_rename);
   }
@@ -890,6 +901,18 @@ class TimelineView : public Widget {
   /// Where a marker's tab is drawn on the ruler. Empty when there is no such
   /// marker, or when it is scrolled out of sight.
   [[nodiscard]] Rect marker_rect(std::size_t index) const;
+
+  /// The band a marker with a duration covers, along the ruler. Empty for a
+  /// point marker, which has no span to draw.
+  [[nodiscard]] Rect marker_span(std::size_t index) const;
+
+  /// Which marker is under a point on the ruler, tab or span. Nothing when
+  /// there is none — the ruler is mostly empty and a scrub must still reach it.
+  [[nodiscard]] std::optional<std::size_t> marker_at(double x, double y) const;
+  /// What the thing under the pointer is called. The header switches are five
+  /// single letters that are not widgets and cannot say what they do any other
+  /// way, and a marker's note is longer than the ruler has room for.
+  [[nodiscard]] std::string tooltip_at(double x, double y) const override;
 
   [[nodiscard]] std::optional<BlockRef> block_at(double x, double y) const;
 
@@ -1181,6 +1204,7 @@ class TimelineView : public Widget {
   std::function<void(std::size_t, std::optional<double>)> on_track_resize_;
   std::function<void(double, double)> on_context_menu_;
   std::function<void(std::size_t)> on_track_rename_;
+  std::function<void(std::size_t)> on_marker_activate_;
 };
 
 }  // namespace cutline::ui

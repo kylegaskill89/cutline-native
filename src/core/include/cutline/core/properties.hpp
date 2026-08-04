@@ -195,6 +195,16 @@ struct TrackPropsPatch {
 [[nodiscard]] Project add_marker(Project p, double time, std::string label = {},
                                  std::string color = {});
 
+/// Rewrites a marker in place: its name, its note, its colour and how long it
+/// covers. Everything a marker carries except when it is, which is what moving
+/// one means and has its own gesture.
+///
+/// One call rather than four setters, because the dialogue that edits a marker
+/// edits all of it at once and four undo entries for one press would be four
+/// presses to get back.
+[[nodiscard]] Project set_marker(Project p, std::string_view marker_id, std::string label,
+                                 std::string comment, std::string color, double duration);
+
 [[nodiscard]] Project remove_marker(Project p, std::string_view marker_id);
 
 [[nodiscard]] Project clear_markers(Project p);

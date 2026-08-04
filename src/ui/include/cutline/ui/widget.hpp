@@ -207,6 +207,19 @@ class Widget {
   void set_tooltip(std::string tooltip) { tooltip_ = std::move(tooltip); }
   [[nodiscard]] const std::string& tooltip() const noexcept { return tooltip_; }
 
+  /// The tooltip for one point in this widget, which by default is the one
+  /// tooltip it has.
+  ///
+  /// Overridden by widgets that draw several things and build no children for
+  /// them — the timeline's track switches are five buttons that are not
+  /// widgets, and a single string for the whole panel could only ever describe
+  /// the panel. The same shape as `cursor_at`, and for the same reason.
+  [[nodiscard]] virtual std::string tooltip_at(double x, double y) const {
+    (void)x;
+    (void)y;
+    return tooltip_;
+  }
+
   /// What the pointer should look like at this point, in this widget's own
   /// coordinates.
   ///

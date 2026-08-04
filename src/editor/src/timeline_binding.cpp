@@ -106,8 +106,11 @@ ui::TimelineModel timeline_model(const core::Project& project,
 
   model.markers.reserve(project.markers.size());
   for (const core::Marker& marker : project.markers) {
-    model.markers.push_back(ui::TimelineMarker{
-        .time = marker.time, .label = marker.label, .color = marker.color});
+    model.markers.push_back(ui::TimelineMarker{.time = marker.time,
+                                               .label = marker.label,
+                                               .color = marker.color,
+                                               .duration = marker.duration,
+                                               .comment = marker.comment});
   }
   model.tracks.reserve(project.tracks.size());
 

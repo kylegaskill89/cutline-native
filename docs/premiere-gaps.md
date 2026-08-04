@@ -739,7 +739,7 @@ internal structure. They scale with the text now.
 | Scrollbars | horizontal (which also zooms) and vertical | **done** — neither appears when it would have nothing to say | — |
 | An fx badge on a clip with effects | yes | **done** | — |
 | Track height, per track | dragged, and expand/collapse all | **done** — dragged on the line under a header, double-click puts it back | — |
-| Markers with duration and comment | yes | a name and a colour, no duration | model + control |
+| Markers with duration and comment | yes | **done** — a band on the ruler, and a box on a double-click | — |
 | Scroll to follow playback | smooth or page | **done** — pages, so the picture is not always moving | — |
 | Timecode field to type into | yes | **done** — typed into to go there, forgiving about what is typed | — |
 

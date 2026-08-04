@@ -386,6 +386,19 @@ Project add_marker(Project p, double time, std::string label, std::string color)
   return p;
 }
 
+Project set_marker(Project p, std::string_view marker_id, std::string label,
+                   std::string comment, std::string color, double duration) {
+  const auto it = std::ranges::find(p.markers, marker_id, &Marker::id);
+  if (it == p.markers.end()) return p;
+  it->label = std::move(label);
+  it->comment = std::move(comment);
+  it->color = std::move(color);
+  // Never negative: a marker that ended before it began would draw backwards
+  // and mean nothing. Zero is a point, which is what most markers are.
+  it->duration = std::max(0.0, duration);
+  return p;
+}
+
 Project remove_marker(Project p, std::string_view marker_id) {
   std::erase_if(p.markers, [&](const Marker& m) { return m.id == marker_id; });
   return p;

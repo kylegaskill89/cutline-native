@@ -263,6 +263,8 @@ json write(const Marker& m) {
   json j{{"id", m.id}, {"time", m.time}};
   if (!m.label.empty()) j["label"] = m.label;
   if (!m.color.empty()) j["color"] = m.color;
+  if (m.duration > 0.0) j["duration"] = m.duration;
+  if (!m.comment.empty()) j["comment"] = m.comment;
   return j;
 }
 
@@ -554,6 +556,8 @@ Project read_project(const json& j) {
           .time = read_or(m, "time", 0.0),
           .label = read_or(m, "label", std::string{}),
           .color = read_or(m, "color", std::string{}),
+          .duration = read_or(m, "duration", 0.0),
+          .comment = read_or(m, "comment", std::string{}),
       });
     }
   }

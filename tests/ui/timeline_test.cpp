@@ -2157,6 +2157,110 @@ TEST(Markers, DoNotOverlapTheMarkedSpanAlongTheFoot) {
   EXPECT_LE(fixture.view->marker_rect(0).bottom(), fixture.view->marked_bar().y);
 }
 
+// A marker with a duration covers a span of the ruler rather than being a point
+// with a stripe near it.
+TEST(MarkerSpans, ADurationDrawsABand) {
+  Fixture fixture;
+  TimelineModel model = fixture.view->model();
+  model.markers = {TimelineMarker{.time = 1.0, .label = "a"},
+                   TimelineMarker{.time = 2.0, .label = "b", .duration = 3.0}};
+  fixture.view->set_model(model);
+
+  EXPECT_TRUE(fixture.view->marker_span(0).empty()) << "a point has no span";
+  const Rect band = fixture.view->marker_span(1);
+  ASSERT_FALSE(band.empty());
+  EXPECT_GT(band.width, fixture.view->marker_rect(1).width);
+}
+
+TEST(MarkerSpans, TheWholeBandIsTheMarker) {
+  Fixture fixture;
+  TimelineModel model = fixture.view->model();
+  model.markers = {TimelineMarker{.time = 2.0, .label = "b", .duration = 3.0}};
+  fixture.view->set_model(model);
+
+  const Rect band = fixture.view->marker_span(0);
+  ASSERT_FALSE(band.empty());
+  const auto found = fixture.view->marker_at(band.right() - 2.0, band.y + band.height * 0.5);
+  ASSERT_TRUE(found.has_value());
+  EXPECT_EQ(*found, 0u);
+}
+
+TEST(MarkerSpans, TheRulerIsMostlyNotAMarker) {
+  Fixture fixture;
+  TimelineModel model = fixture.view->model();
+  model.markers = {TimelineMarker{.time = 2.0, .duration = 1.0}};
+  fixture.view->set_model(model);
+
+  const Rect ruler = fixture.view->ruler_area();
+  EXPECT_FALSE(fixture.view->marker_at(ruler.right() - 2.0, ruler.y + ruler.height * 0.5)
+                   .has_value());
+}
+
+// Double-clicking one opens whatever edits it; a single click still scrubs,
+// because hunting for the gaps between markers to move the playhead would be
+// worse than not being able to open one.
+TEST(MarkerSpans, ADoubleClickActivatesAMarker) {
+  Fixture fixture;
+  TimelineModel model = fixture.view->model();
+  model.markers = {TimelineMarker{.time = 2.0, .label = "b"}};
+  fixture.view->set_model(model);
+
+  std::optional<std::size_t> opened;
+  fixture.view->set_on_marker_activate([&](std::size_t index) { opened = index; });
+
+  const Rect tab = fixture.view->marker_rect(0);
+  ASSERT_FALSE(tab.empty());
+  const double x = tab.x + tab.width * 0.5;
+  const double y = tab.y + tab.height * 0.5;
+
+  MouseEvent single = press(x, y);
+  fixture.host->mouse_down(single);
+  fixture.host->mouse_up(single);
+  EXPECT_FALSE(opened.has_value()) << "one click scrubs";
+
+  MouseEvent twice = press(x, y);
+  twice.click_count = 2;
+  fixture.host->mouse_down(twice);
+  ASSERT_TRUE(opened.has_value());
+  EXPECT_EQ(*opened, 0u);
+}
+
+// The header switches are five single letters that are not widgets, so a
+// tooltip for the whole panel could only ever describe the panel.
+TEST(HeaderTooltips, EverySwitchSaysWhatItDoes) {
+  Fixture fixture;
+  for (const TrackControl control : {TrackControl::Target, TrackControl::Mute,
+                                     TrackControl::Solo, TrackControl::Lock}) {
+    const Rect box = fixture.view->control_rect(0, control);
+    if (box.empty()) continue;
+    const std::string said =
+        fixture.view->tooltip_at(box.x + box.width * 0.5, box.y + box.height * 0.5);
+    EXPECT_FALSE(said.empty()) << to_string(control);
+    EXPECT_GT(said.size(), 2u) << "longer than the letter it explains";
+  }
+}
+
+TEST(HeaderTooltips, AMarkerSaysItsNoteWhereTheRulerHasNoRoom) {
+  Fixture fixture;
+  TimelineModel model = fixture.view->model();
+  model.markers = {TimelineMarker{
+      .time = 2.0, .label = "reshoot", .duration = 0.0, .comment = "boom in shot"}};
+  fixture.view->set_model(model);
+
+  const Rect tab = fixture.view->marker_rect(0);
+  ASSERT_FALSE(tab.empty());
+  const std::string said =
+      fixture.view->tooltip_at(tab.x + tab.width * 0.5, tab.y + tab.height * 0.5);
+  EXPECT_NE(said.find("reshoot"), std::string::npos);
+  EXPECT_NE(said.find("boom in shot"), std::string::npos);
+}
+
+TEST(HeaderTooltips, EmptyTrackSaysNothing) {
+  const Fixture fixture;
+  const Rect tracks = fixture.view->tracks_area();
+  EXPECT_TRUE(fixture.view->tooltip_at(tracks.right() - 4.0, tracks.bottom() - 4.0).empty());
+}
+
 TEST(Markers, ScrolledOutOfSightAreNotDrawn) {
   Fixture fixture;
   TimelineModel model = sample_model();

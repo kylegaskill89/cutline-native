@@ -303,7 +303,9 @@ Cursor WidgetHost::cursor() const {
 std::string WidgetHost::tooltip_at_pointer() const {
   if (!has_mouse_ || captured_ != nullptr) return {};
   for (Widget* widget = hovered_; widget != nullptr; widget = widget->parent()) {
-    if (!widget->tooltip().empty()) return widget->tooltip();
+    if (std::string found = widget->tooltip_at(mouse_x_, mouse_y_); !found.empty()) {
+      return found;
+    }
   }
   return {};
 }
