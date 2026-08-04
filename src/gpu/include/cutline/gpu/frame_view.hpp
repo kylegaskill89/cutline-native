@@ -43,6 +43,34 @@ struct PlaneView {
   int stride = 0;
 };
 
+/// A frame that never left the graphics card.
+///
+/// A hardware decoder given the compositor's own device writes into that
+/// device's memory, so the picture is already where it needs to be: there is
+/// nothing to copy down and nothing to upload back. The compositor makes views
+/// over the resource's plane slices and samples it exactly as it samples the
+/// planes it uploaded itself.
+///
+/// Untyped so d3d12.h stays out of this header, which is the same bargain the
+/// decoder's `HardwareTexture` makes and for the same reason.
+struct SourceTexture {
+  /// `ID3D12Resource*`, NV12. Borrowed: whoever decoded it keeps it alive, and
+  /// `compose` waits for the GPU before returning, so it only has to outlive
+  /// the call.
+  void* resource = nullptr;
+  /// Array slice, when the decoder's frame pool is a texture array.
+  int subresource = 0;
+
+  /// `ID3D12Fence*` the decoder signals when this frame is finished, and the
+  /// value to wait for. Sampling before that reads a half-decoded picture —
+  /// intermittently, depending on how busy the card is, which is the worst kind
+  /// of fault to be left with.
+  void* fence = nullptr;
+  unsigned long long fence_value = 0;
+
+  [[nodiscard]] bool empty() const noexcept { return resource == nullptr; }
+};
+
 struct FrameView {
   int width = 0;
   int height = 0;
@@ -54,6 +82,10 @@ struct FrameView {
   bool full_range = false;
 
   PlaneView planes[3];
+
+  /// Set when the pixels are already on the compositor's device, in which case
+  /// `planes` says nothing and nothing is uploaded.
+  SourceTexture texture;
 };
 
 }  // namespace cutline::gpu

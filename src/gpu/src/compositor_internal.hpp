@@ -65,6 +65,23 @@ struct Compositor::Impl {
   };
   std::vector<PlaneSet> planes;
 
+  /// Fences a decoder has to reach before this frame may be sampled, gathered
+  /// while the layers are prepared and waited on just before the work is
+  /// submitted. One per hardware-decoded layer, and usually none.
+  struct DecodedWait {
+    ID3D12Fence* fence = nullptr;
+    UINT64 value = 0;
+  };
+  std::vector<DecodedWait> decoded_waits;
+
+  /// Points a layer's three descriptor slots at a decoder's own texture.
+  ///
+  /// The picture is NV12 in one resource of two plane slices, which is exactly
+  /// the pair of textures the uploading path builds by hand — so the shader
+  /// needs to know nothing about where a frame came from.
+  [[nodiscard]] std::expected<void, std::string> view_decoded(const FrameView& frame,
+                                                              UINT layer);
+
   ComPtr<ID3D12Resource> upload;
   std::size_t upload_capacity = 0;
 

@@ -17,6 +17,10 @@
 // compositor's own headers keep Direct3D out of sight; a test asserting on the
 // state may as well name it rather than write the number.
 #include <d3d12.h>
+#include <windows.h>
+#include <wrl/client.h>
+
+#include <cstring>
 
 #include <array>
 #include <cmath>
@@ -137,6 +141,200 @@ TEST_F(CompositorTest, TheColourIsUniformAcrossTheWholeFrame) {
   EXPECT_EQ(pixel_at(image, 1, kHeight - 2), corner);
   EXPECT_EQ(pixel_at(image, kWidth - 2, kHeight - 2), corner);
   EXPECT_EQ(pixel_at(image, kWidth / 2, kHeight / 2), corner);
+}
+
+// ------------------------------------------------ a frame already on the card --
+//
+// A hardware decoder given this device writes its pictures straight into it,
+// and the compositor samples the resource's own plane slices rather than
+// uploading anything. There is no decoder in these tests - the point is the
+// *compositor* half, so the texture is made and filled here, which also means
+// the assertion can be about a colour somebody chose rather than about whatever
+// a file happened to contain.
+
+namespace {
+
+/// An NV12 texture on the device, filled with one colour.
+///
+/// NV12 is a full-resolution luma plane and a half-resolution interleaved
+/// chroma plane inside one resource, addressed as plane slices - exactly what a
+/// decoder hands over, and exactly what the compositor makes two views onto.
+class Nv12Texture {
+ public:
+  [[nodiscard]] static Nv12Texture create(Device& device, int width, int height,
+                                          std::uint8_t luma, std::uint8_t cb,
+                                          std::uint8_t cr) {
+    Nv12Texture made;
+    auto* d3d = static_cast<ID3D12Device*>(device.native_device());
+    if (d3d == nullptr) return made;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = static_cast<UINT64>(width);
+    desc.Height = static_cast<UINT>(height);
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_NV12;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    if (FAILED(d3d->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                            D3D12_RESOURCE_STATE_COMMON, nullptr,
+                                            IID_PPV_ARGS(&made.texture_)))) {
+      return made;
+    }
+
+    made.fill(device, *d3d, luma, cb, cr);
+    return made;
+  }
+
+  [[nodiscard]] bool ok() const noexcept { return texture_ != nullptr && filled_; }
+
+  [[nodiscard]] FrameView view(int width, int height) const {
+    FrameView frame;
+    frame.width = width;
+    frame.height = height;
+    frame.layout = PixelLayout::Nv12;
+    frame.full_range = true;
+    frame.texture = SourceTexture{.resource = texture_.Get()};
+    return frame;
+  }
+
+ private:
+  void fill(Device& device, ID3D12Device& d3d, std::uint8_t luma, std::uint8_t cb,
+            std::uint8_t cr) {
+    // Both plane slices in one upload. Their footprints say where each lands
+    // and how its rows are padded, so they are asked for rather than worked out.
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout[2]{};
+    UINT rows[2]{};
+    UINT64 row_bytes[2]{};
+    UINT64 total = 0;
+    const D3D12_RESOURCE_DESC desc = texture_->GetDesc();
+    d3d.GetCopyableFootprints(&desc, 0, 2, 0, layout, rows, row_bytes, &total);
+
+    D3D12_HEAP_PROPERTIES upload_heap{};
+    upload_heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_DESC buffer{};
+    buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    buffer.Width = total;
+    buffer.Height = 1;
+    buffer.DepthOrArraySize = 1;
+    buffer.MipLevels = 1;
+    buffer.Format = DXGI_FORMAT_UNKNOWN;
+    buffer.SampleDesc.Count = 1;
+    buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> staging;
+    if (FAILED(d3d.CreateCommittedResource(&upload_heap, D3D12_HEAP_FLAG_NONE, &buffer,
+                                           D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                           IID_PPV_ARGS(&staging)))) {
+      return;
+    }
+
+    std::uint8_t* mapped = nullptr;
+    if (FAILED(staging->Map(0, nullptr, reinterpret_cast<void**>(&mapped)))) return;
+    for (UINT y = 0; y < rows[0]; ++y) {
+      std::memset(mapped + layout[0].Offset + y * layout[0].Footprint.RowPitch, luma,
+                  static_cast<std::size_t>(row_bytes[0]));
+    }
+    for (UINT y = 0; y < rows[1]; ++y) {
+      std::uint8_t* row = mapped + layout[1].Offset + y * layout[1].Footprint.RowPitch;
+      for (UINT64 x = 0; x + 1 < row_bytes[1]; x += 2) {
+        row[x] = cb;
+        row[x + 1] = cr;
+      }
+    }
+    staging->Unmap(0, nullptr);
+
+    // Its own list and its own wait: the compositor's is busy being the thing
+    // under test, and this has to be finished before that runs.
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commands;
+    if (FAILED(d3d.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                          IID_PPV_ARGS(&allocator)))) {
+      return;
+    }
+    if (FAILED(d3d.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(),
+                                     nullptr, IID_PPV_ARGS(&commands)))) {
+      return;
+    }
+
+    for (UINT plane = 0; plane < 2; ++plane) {
+      D3D12_TEXTURE_COPY_LOCATION destination{};
+      destination.pResource = texture_.Get();
+      destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+      destination.SubresourceIndex = plane;
+
+      D3D12_TEXTURE_COPY_LOCATION source{};
+      source.pResource = staging.Get();
+      source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+      source.PlacedFootprint = layout[plane];
+
+      commands->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
+    }
+    commands->Close();
+
+    auto* queue = static_cast<ID3D12CommandQueue*>(device.native_queue());
+    if (queue == nullptr) return;
+    ID3D12CommandList* lists[] = {commands.Get()};
+    queue->ExecuteCommandLists(1, lists);
+
+    Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+    if (FAILED(d3d.CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return;
+    queue->Signal(fence.Get(), 1);
+    if (fence->GetCompletedValue() < 1) {
+      HANDLE done = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+      fence->SetEventOnCompletion(1, done);
+      WaitForSingleObject(done, INFINITE);
+      CloseHandle(done);
+    }
+    filled_ = true;
+  }
+
+  Microsoft::WRL::ComPtr<ID3D12Resource> texture_;
+  bool filled_ = false;
+};
+
+}  // namespace
+
+TEST_F(CompositorTest, AFrameAlreadyOnTheCardIsSampledWithoutUploading) {
+  // Full-range BT.709 white: luma at the top, both chroma channels neutral.
+  // What comes out has to be white, which says both plane slices were found and
+  // read the right way round.
+  const Nv12Texture texture = Nv12Texture::create(*device_, kWidth, kHeight, 255, 128, 128);
+  if (!texture.ok()) GTEST_SKIP() << "cannot make an NV12 texture on this device";
+
+  const FrameView frame = texture.view(kWidth, kHeight);
+  Layer layer;
+  layer.frame = &frame;
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_NEAR(centre.r, 255, 3);
+  EXPECT_NEAR(centre.g, 255, 3);
+  EXPECT_NEAR(centre.b, 255, 3);
+  EXPECT_EQ(centre.a, 255);
+}
+
+TEST_F(CompositorTest, ChromaFromACardFrameLandsOnTheRightChannels) {
+  // Blue in full-range BT.709: dark luma, chroma well above neutral on Cb and
+  // below it on Cr. The plane slices the wrong way round, or the two chroma
+  // channels swapped, gives a colour nothing like this.
+  const Nv12Texture texture = Nv12Texture::create(*device_, kWidth, kHeight, 29, 255, 107);
+  if (!texture.ok()) GTEST_SKIP() << "cannot make an NV12 texture on this device";
+
+  const FrameView frame = texture.view(kWidth, kHeight);
+  Layer layer;
+  layer.frame = &frame;
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+
+  const Rgba centre = pixel_at(render({&layer, 1}), kWidth / 2, kHeight / 2);
+  EXPECT_LT(centre.r, 70);
+  EXPECT_LT(centre.g, 70);
+  EXPECT_GT(centre.b, 190);
 }
 
 // -------------------------------------------------------------- draw order --

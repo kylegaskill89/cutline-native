@@ -351,6 +351,51 @@ std::expected<void, std::string> Compositor::Impl::ensure_mask_points(std::size_
 
 // ------------------------------------------------------------ plane upload --
 
+std::expected<void, std::string> Compositor::Impl::view_decoded(const FrameView& frame,
+                                                                UINT layer) {
+  auto* resource = static_cast<ID3D12Resource*>(frame.texture.resource);
+  if (resource == nullptr) return std::unexpected("a decoded frame with no texture in it");
+
+  // A decoder's frame pool is often one texture array with a slice per frame,
+  // and sometimes a plain texture. Which it is decides how the view addresses
+  // the picture, and the resource is the only thing that knows.
+  const D3D12_RESOURCE_DESC desc = resource->GetDesc();
+  const bool array = desc.DepthOrArraySize > 1;
+  const auto slice = static_cast<UINT>(std::max(0, frame.texture.subresource));
+
+  // NV12 is luma in plane 0 and interleaved chroma at half resolution in plane
+  // 1 — the same two textures the uploading path creates, so everything after
+  // this is identical whichever way the pixels arrived.
+  constexpr DXGI_FORMAT kPlaneFormats[2] = {DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8_UNORM};
+  for (UINT plane = 0; plane < 2; ++plane) {
+    D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+    view.Format = kPlaneFormats[plane];
+    view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    if (array) {
+      view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+      view.Texture2DArray.MipLevels = 1;
+      view.Texture2DArray.FirstArraySlice = slice;
+      view.Texture2DArray.ArraySize = 1;
+      view.Texture2DArray.PlaneSlice = plane;
+    } else {
+      view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      view.Texture2D.MipLevels = 1;
+      view.Texture2D.PlaneSlice = plane;
+    }
+    gpu().device->CreateShaderResourceView(resource, &view,
+                                           srv_cpu(layer * kSlotsPerLayer + plane));
+  }
+  // NV12 uses two of the three slots. The third keeps a null descriptor rather
+  // than a stale view of some previous frame's plane.
+  write_null_srv(srv_cpu(layer * kSlotsPerLayer + 2));
+
+  if (frame.texture.fence != nullptr) {
+    decoded_waits.push_back({static_cast<ID3D12Fence*>(frame.texture.fence),
+                             frame.texture.fence_value});
+  }
+  return {};
+}
+
 std::expected<void, std::string> Compositor::Impl::upload_planes(std::span<const Layer> layers) {
   // Work out every layer's plane textures first, then size one upload buffer
   // for the whole compose rather than one per layer.
@@ -363,10 +408,28 @@ std::expected<void, std::string> Compositor::Impl::upload_planes(std::span<const
   std::vector<Copy> copies;
   UINT64 total = 0;
 
+  decoded_waits.clear();
+
   for (std::size_t i = 0; i < layers.size(); ++i) {
     if (layers[i].frame == nullptr) continue;
     const FrameView& frame = *layers[i].frame;
     if (frame.width <= 0 || frame.height <= 0) continue;
+
+    // Already on this device. Views over the resource's own plane slices, no
+    // copy, and a note to wait for the decoder before any of it is sampled.
+    if (!frame.texture.empty()) {
+      if (auto ok = view_decoded(frame, static_cast<UINT>(i)); !ok) return ok;
+      // The textures this layer used to own are not wanted while a decoder is
+      // supplying them, and holding them would keep a frame's worth of memory
+      // per layer for nothing.
+      PlaneSet& set = planes[i];
+      if (!set.textures.empty()) {
+        gpu().wait_for_idle();
+        set.textures.clear();
+        set.layout.clear();
+      }
+      continue;
+    }
 
     const std::vector<PlaneDescription> layout = describe_planes(frame);
     PlaneSet& set = planes[i];
@@ -988,6 +1051,13 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
   auto to_resource = transition(d.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
   commands->ResourceBarrier(1, &to_resource);
+
+  // Before the queue is given anything that samples them. A wait on the queue
+  // costs the CPU nothing — it is the GPU that stalls, and only until the
+  // decoder has finished the picture it is about to read.
+  for (const Impl::DecodedWait& wait : d.decoded_waits) {
+    if (wait.fence != nullptr) d.gpu().queue->Wait(wait.fence, wait.value);
+  }
 
   if (auto ok = d.gpu().submit(); !ok) return std::unexpected(ok.error());
   d.gpu().wait_for_idle();
