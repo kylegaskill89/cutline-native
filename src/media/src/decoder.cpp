@@ -124,6 +124,61 @@ VideoDecoder::~VideoDecoder() = default;
 
 std::expected<std::unique_ptr<VideoDecoder>, std::string> VideoDecoder::open(std::string_view path,
                                                                             Options options) {
+  // Best first, then down. Support varies by codec, by driver and — this is the
+  // part that was missing — by *file*.
+  std::vector<Acceleration> order;
+  switch (options.preferred) {
+    case Acceleration::D3D12Va:
+      order = {Acceleration::D3D12Va, Acceleration::D3D11Va, Acceleration::Software};
+      break;
+    case Acceleration::D3D11Va:
+      order = {Acceleration::D3D11Va, Acceleration::Software};
+      break;
+    case Acceleration::Software: order = {Acceleration::Software}; break;
+  }
+
+  std::string last;
+  for (const Acceleration wanted : order) {
+    auto made = open_with(path, options, wanted);
+    if (!made) {
+      last = made.error();
+      continue;
+    }
+
+    // Software always works, and a 4K frame costs a sixth of a second to prove
+    // it — so the trial is only for the paths that might be lying.
+    if (wanted == Acceleration::Software) return made;
+
+    // A frame, because "the decoder opened" and "the decoder can decode this"
+    // are different questions and only the first one was ever asked. A driver
+    // that advertises D3D12 HEVC and then fails every picture passed every
+    // check there was: the format was supported, the device was created, the
+    // context opened — and then `hardware accelerator failed to decode
+    // picture`, once per frame, for ever, with no fallback left to take
+    // because the choice had been made before a single packet was read.
+    const auto frame = (*made)->next_frame();
+    if (!frame.has_value()) {
+      last = frame.error();
+      continue;
+    }
+    if (!*frame) {
+      // No frame and no error is an empty stream rather than a broken decoder,
+      // and trying the next acceleration would find the same nothing.
+      return made;
+    }
+    // Back to the beginning, so the trial costs a frame and changes nothing.
+    if (auto back = (*made)->seek(0.0); !back) {
+      last = back.error();
+      continue;
+    }
+    return made;
+  }
+
+  return std::unexpected(last.empty() ? std::string("no usable video decoder") : last);
+}
+
+std::expected<std::unique_ptr<VideoDecoder>, std::string> VideoDecoder::open_with(
+    std::string_view path, const Options& options, Acceleration wanted) {
   const std::string path_string(path);
   auto impl = std::make_unique<Impl>();
 
@@ -176,13 +231,17 @@ std::expected<std::unique_ptr<VideoDecoder>, std::string> VideoDecoder::open(std
     impl->acceleration = kind;
   };
 
-  if (options.preferred == Acceleration::D3D12Va) {
+  if (wanted == Acceleration::D3D12Va) {
     try_hardware(AV_HWDEVICE_TYPE_D3D12VA, Acceleration::D3D12Va, options.d3d12_device);
-    // Falling back to D3D11 rather than straight to the CPU: it still decodes
-    // on the GPU, and a copy across devices beats a software decode.
+  } else if (wanted == Acceleration::D3D11Va) {
     try_hardware(AV_HWDEVICE_TYPE_D3D11VA, Acceleration::D3D11Va, nullptr);
-  } else if (options.preferred == Acceleration::D3D11Va) {
-    try_hardware(AV_HWDEVICE_TYPE_D3D11VA, Acceleration::D3D11Va, nullptr);
+  }
+  // Asked for hardware and did not get it. Saying so rather than quietly
+  // decoding in software is what lets `open` move on to the next one — and what
+  // stops a machine with no D3D12 reporting that it is using it.
+  if (wanted != Acceleration::Software && impl->acceleration != wanted) {
+    return std::unexpected(std::format("{} is not available for this file",
+                                       to_string(wanted)));
   }
   if (impl->acceleration == Acceleration::Software) {
     impl->codec->thread_count = options.threads;

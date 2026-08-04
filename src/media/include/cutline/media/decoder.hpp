@@ -108,6 +108,14 @@ class VideoDecoder {
 
  private:
   struct Impl;
+
+  /// One attempt at opening with a particular acceleration, and no fallback of
+  /// its own. Which ones to try, and in what order, is `open`'s business — this
+  /// only ever answers "did *this* one work", which is what makes the answer
+  /// worth acting on.
+  [[nodiscard]] static std::expected<std::unique_ptr<VideoDecoder>, std::string> open_with(
+      std::string_view path, const Options& options, Acceleration wanted);
+
   explicit VideoDecoder(std::unique_ptr<Impl> impl);
   std::unique_ptr<Impl> impl_;
 };
