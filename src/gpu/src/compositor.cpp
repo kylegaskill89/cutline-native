@@ -1,12 +1,11 @@
-#include "cutline/gpu/compositor.hpp"
+﻿#include "cutline/gpu/compositor.hpp"
 
 #include "compositor_internal.hpp"
 
 #include <algorithm>
-#include <cstring>
-#include <map>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <numbers>
 #include <ranges>
 
@@ -364,7 +363,7 @@ std::expected<void, std::string> Compositor::Impl::view_decoded(const FrameView&
   const auto slice = static_cast<UINT>(std::max(0, frame.texture.subresource));
 
   // NV12 is luma in plane 0 and interleaved chroma at half resolution in plane
-  // 1 — the same two textures the uploading path creates, so everything after
+  // 1 â€” the same two textures the uploading path creates, so everything after
   // this is identical whichever way the pixels arrived.
   constexpr DXGI_FORMAT kPlaneFormats[2] = {DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8_UNORM};
   for (UINT plane = 0; plane < 2; ++plane) {
@@ -751,7 +750,7 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
 
   // Every free-drawn mask's corners, gathered into one buffer before anything is
   // recorded. One buffer for the frame rather than one per pass, because the
-  // command list is recorded once and submitted once — a buffer rewritten
+  // command list is recorded once and submitted once â€” a buffer rewritten
   // between draws would be read by all of them with whatever it ended up
   // holding. Each pass is told where its own run starts instead.
   std::vector<std::array<float, 2>> corners;
@@ -887,7 +886,7 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     // How much empty border the scratch needs, per side, as a fraction of it.
     //
     // A blur has to be able to spread past the layer the way Premiere's does,
-    // and it can only spread into pixels that exist — so a stack that spreads
+    // and it can only spread into pixels that exist â€” so a stack that spreads
     // draws the layer smaller, into the middle of the scratch, and the
     // composite grows the quad back by the same factor.
     //
@@ -897,7 +896,7 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     // side, so the margin is at least that many pixels on both axes.
     //
     // The layer then occupies `span` of the scratch, which makes the blur wider
-    // relative to it — so the reach it needs is `3σ·span`, and the fraction
+    // relative to it â€” so the reach it needs is `3ÏƒÂ·span`, and the fraction
     // solves to r/(1+2r).
     float margin = 0.0f;
     if (through_passes) {
@@ -972,7 +971,7 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
           }
 
           // How wide a tap is depends on the target's size, which is the one
-          // thing the plan cannot know — so every pass that samples its
+          // thing the plan cannot know â€” so every pass that samples its
           // neighbours has its step filled in here.
           const float texel_x = 1.0f / static_cast<float>(d.width);
           const float texel_y = 1.0f / static_cast<float>(d.height);
@@ -1053,7 +1052,7 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
   commands->ResourceBarrier(1, &to_resource);
 
   // Before the queue is given anything that samples them. A wait on the queue
-  // costs the CPU nothing — it is the GPU that stalls, and only until the
+  // costs the CPU nothing â€” it is the GPU that stalls, and only until the
   // decoder has finished the picture it is about to read.
   for (const Impl::DecodedWait& wait : d.decoded_waits) {
     if (wait.fence != nullptr) d.gpu().queue->Wait(wait.fence, wait.value);
@@ -1070,8 +1069,8 @@ namespace {
 
 /// Runs the present pass: the linear scene encoded into the display target.
 ///
-/// Both ways out of the compositor need this and only this in common — one
-/// then copies the result to the CPU, the other hands the texture over — so it
+/// Both ways out of the compositor need this and only this in common â€” one
+/// then copies the result to the CPU, the other hands the texture over â€” so it
 /// lives in one place rather than being written twice and drifting.
 ///
 /// Leaves `display` in RENDER_TARGET state; the caller transitions it onward
@@ -1221,3 +1220,4 @@ std::expected<Image, std::string> Compositor::read_back() {
 }
 
 }  // namespace cutline::gpu
+

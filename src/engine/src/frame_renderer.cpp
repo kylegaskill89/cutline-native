@@ -328,11 +328,21 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   Source& source = found->second;
   if (!source.usable || !source.decoder) return nullptr;
 
+  // Whichever way this leaves, the answer to "which decoder made that" is the
+  // same one — and it has to be set on *every* path out, not just the last.
+  // Missing it on the short-circuit below meant a card frame arrived with no
+  // decoder to ask for its texture, so the layer was dropped and the frame came
+  // out black: about every other frame during playback, which is exactly what
+  // "flickering between frames" looks like.
+  const auto answer = [&](const AVFrame* current) {
+    if (from != nullptr) *from = current != nullptr ? source.decoder.get() : nullptr;
+    return current != nullptr ? current : source.held.get();
+  };
+
   // Already there. Scrubbing within one frame's worth of time asks for the same
   // picture repeatedly, and re-decoding it would be pure waste.
   if (source.position >= 0.0 && std::abs(source.position - time) <= kFrameEpsilon) {
-    const AVFrame* current = source.decoder->frame();
-    return current != nullptr ? current : source.held.get();
+    return answer(source.decoder->frame());
   }
 
   // Decoding stops at the first frame whose timestamp reaches the request, so
@@ -391,9 +401,7 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   }
 
   // Past the end, the decoder has released its frame, so the held one stands in.
-  const AVFrame* current = source.decoder->frame();
-  if (from != nullptr) *from = current != nullptr ? source.decoder.get() : nullptr;
-  return current != nullptr ? current : source.held.get();
+  return answer(source.decoder->frame());
 }
 
 FrameRenderer::FrameRenderer(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}

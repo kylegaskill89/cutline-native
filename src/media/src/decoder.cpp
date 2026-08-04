@@ -429,19 +429,35 @@ std::optional<HardwareTexture> VideoDecoder::hardware_texture() const noexcept {
       return std::nullopt;
     }
 
+    auto* frames = reinterpret_cast<AVHWFramesContext*>(impl_->codec->hw_frames_ctx->data);
+    if (frames == nullptr || frames->device_ctx == nullptr) return std::nullopt;
+    auto* device = static_cast<AVD3D11VADeviceContext*>(frames->device_ctx->hwctx);
+    if (device == nullptr) return std::nullopt;
+
+    // Under libav's own lock, which is what guards the immediate context — and
+    // the copy below goes straight through it while the decoder is using it
+    // from its own threads. Without this the picture flickers between frames:
+    // two command streams interleaved on one context, which is how a data race
+    // there shows up rather than as anything that looks like a fault.
+    //
+    // The lock is required to be recursive, so taking it around the whole of
+    // this is safe even though the setup below asks libav for nothing.
+    if (device->lock != nullptr) device->lock(device->lock_ctx);
+    struct Unlock {
+      AVD3D11VADeviceContext* device;
+      ~Unlock() {
+        if (device->unlock != nullptr) device->unlock(device->lock_ctx);
+      }
+    } release{device};
+
     // On the first frame, because the size is not known before one arrives —
     // and taking it from the stream header is how a decoder that pads out to
     // whole macroblocks ends up sampled short.
-    if (!impl_->share.ready()) {
-      auto* frames = reinterpret_cast<AVHWFramesContext*>(impl_->codec->hw_frames_ctx->data);
-      if (frames == nullptr || frames->device_ctx == nullptr) return std::nullopt;
-      auto* device = static_cast<AVD3D11VADeviceContext*>(frames->device_ctx->hwctx);
-      if (device == nullptr) return std::nullopt;
-      if (!impl_->share.open(device->device,
-                             static_cast<ID3D12Device*>(impl_->options.d3d12_device),
-                             frame->width, frame->height)) {
-        return std::nullopt;
-      }
+    if (!impl_->share.ready() &&
+        !impl_->share.open(device->device,
+                           static_cast<ID3D12Device*>(impl_->options.d3d12_device),
+                           frame->width, frame->height)) {
+      return std::nullopt;
     }
     return impl_->share.copy(texture, slice);
   }

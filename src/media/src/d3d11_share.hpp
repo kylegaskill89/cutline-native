@@ -61,6 +61,13 @@ class D3D11Share {
   /// `slice` is the array index within the decoder's frame pool, which is how
   /// D3D11 decoders hand out frames: one texture array, a slice per frame in
   /// flight.
+  ///
+  /// **Call this with libav's device lock held.** The copy goes through the
+  /// immediate context, which is the very thing that lock protects, and the
+  /// decoder is using it from its own threads at the same time. Without it the
+  /// picture flickers between frames — intermittently, which is how a data race
+  /// on a command stream shows up rather than as anything that looks like a
+  /// synchronisation fault.
   [[nodiscard]] std::optional<HardwareTexture> copy(ID3D11Texture2D* frame,
                                                     unsigned int slice);
 
