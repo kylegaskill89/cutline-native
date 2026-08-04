@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <deque>
 #include <map>
 #include <vector>
 
@@ -48,6 +50,62 @@ constexpr double kFrameEpsilon = 1e-4;
 
 /// Assumed source frame interval when a stream does not report a usable rate.
 constexpr double kAssumedFrameGap = 1.0 / 30.0;
+
+/// How much memory to spend keeping decoded frames behind the playhead.
+///
+/// This is the reverse-playback budget. Playing backwards cannot decode
+/// backwards — a compressed stream is only enterable at a keyframe — so every
+/// step back costs a seek and a whole group of pictures. Keeping the frames
+/// that decode produced turns one seek per *frame* into one seek per *run*, and
+/// the length of the run is what decides how much of that cost is amortised.
+///
+/// Measured on a 106 Mbps 4K60 capture, playing 120 frames backwards:
+///
+///     kept    ms/frame    seeks   decoded
+///     none      261.0       119     ~16000
+///     24         55.4         6        803
+///     48         24.2         3        437
+///     96         13.1         2        291
+///
+/// Bytes rather than a count, because a frame is not a fixed thing: the same
+/// run is 96 frames of 1080p or 24 of 4K for the same memory, and the smaller
+/// picture both needs less and can afford more. A count would have made one of
+/// those two wrong.
+///
+/// Half a gigabyte is the most this will spend. It is a great deal for a cache
+/// and still not enough to play 4K backwards at full rate — that would want the
+/// whole group of pictures, which is measured above at over a gigabyte for this
+/// footage alone. What it buys is 4K reverse that runs rather than crawls, and
+/// 1080p reverse that is simply smooth.
+constexpr std::size_t kRememberedBytes = 384u * 1024u * 1024u;
+
+/// The most and fewest frames to keep, whatever the budget works out to.
+///
+/// The ceiling is there because a hardware decoder lends its frames from a pool
+/// sized when it opens, and every surface reserved is video memory whether
+/// reverse is ever used or not. The floor is there because a run of two frames
+/// buys nothing and a decoder still has to be told a number.
+constexpr int kMinKeptFrames = 8;
+constexpr int kMaxKeptFrames = 64;
+
+/// How many frames of this media the budget affords.
+///
+/// Answered from the media rather than from a decoded frame, because the
+/// decoder has to be told how many surfaces to allocate *before* it opens —
+/// there is no asking for one later. A media that does not know its own size is
+/// assumed to be the common one; getting it wrong costs memory or smoothness,
+/// not correctness.
+[[nodiscard]] int frames_to_keep(const core::Media& media) noexcept {
+  const auto width = static_cast<std::size_t>(std::max(1, media.width.value_or(1920)));
+  const auto height = static_cast<std::size_t>(std::max(1, media.height.value_or(1080)));
+  // A byte and a half a pixel: NV12 and its relatives are a full luma plane and
+  // a quarter-resolution pair of chroma planes.
+  const std::size_t per_frame = width * height * 3 / 2;
+  if (per_frame == 0) return kMinKeptFrames;
+
+  const auto afford = static_cast<int>(kRememberedBytes / per_frame);
+  return std::clamp(afford, kMinKeptFrames, kMaxKeptFrames);
+}
 
 [[nodiscard]] BlendMode to_gpu_blend(core::BlendMode mode) noexcept {
   switch (mode) {
@@ -162,7 +220,10 @@ constexpr double kAssumedFrameGap = 1.0 / 30.0;
 
   if (decoded_on_the_card) {
     if (from == nullptr) return false;
-    const std::optional<media::HardwareTexture> texture = from->hardware_texture();
+    // This frame, not whatever the decoder happens to be holding: it may be one
+    // from the run of remembered frames, or the held last frame of an exhausted
+    // stream, and neither is the decoder's current one.
+    const std::optional<media::HardwareTexture> texture = from->hardware_texture(frame);
     if (!texture.has_value()) return false;
     out.texture = gpu::SourceTexture{.resource = texture->resource,
                                      .subresource = texture->subresource,
@@ -185,6 +246,9 @@ struct FrameDeleter {
 struct Source {
   std::unique_ptr<VideoDecoder> decoder;
   double position = -1.0;  ///< timestamp of the frame currently decoded
+  /// How many frames this source may keep behind the playhead, decided when it
+  /// opened because that is when the decoder's surface pool was sized.
+  std::size_t keep = 0;
   bool exhausted = false;  ///< ran off the end
   bool usable = true;      ///< opened, and producing a layout we can draw
 
@@ -200,6 +264,61 @@ struct Source {
     av_frame_unref(held.get());
     // Reference, not copy: this is a refcount bump, not a pixel copy.
     av_frame_ref(held.get(), frame);
+  }
+
+  /// Frames already decoded, newest last, so a step *backwards* need not decode
+  /// a whole group of pictures over again.
+  ///
+  /// Playing forwards costs one decode per frame. Playing backwards used to
+  /// cost a seek and a whole GOP per frame, because a compressed stream cannot
+  /// be entered anywhere but a keyframe and cannot be run in reverse at all.
+  /// Measured on a 106 Mbps 4K60 capture: 1.98 ms a frame forwards and
+  /// **261 ms** backwards, which is 132 times worse and nowhere near playable.
+  ///
+  /// The frames were all decoded anyway. Reaching frame N from a keyframe K
+  /// means decoding every frame between them, and the next thing reverse asks
+  /// for is N-1 — one this decoder held in its hands a moment ago and threw
+  /// away. Keeping a run of them turns one seek per frame into one seek per
+  /// run.
+  ///
+  /// References rather than copies, so this costs a refcount and not a picture.
+  /// A **contiguous run** and not a set: a hole in it would be indistinguishable
+  /// from the end of it, and "the frame covering time t" is the last one at or
+  /// before t — which is the wrong frame entirely if the right one was skipped.
+  /// Cleared on a seek for that reason.
+  struct Recent {
+    double at = 0.0;
+    std::unique_ptr<AVFrame, FrameDeleter> frame;
+  };
+  std::deque<Recent> recent;
+
+  void remember(const AVFrame* frame, double at) {
+    if (frame == nullptr || keep == 0) return;
+    std::unique_ptr<AVFrame, FrameDeleter> copy(av_frame_alloc());
+    if (!copy) return;
+    if (av_frame_ref(copy.get(), frame) < 0) return;
+    recent.push_back(Recent{.at = at, .frame = std::move(copy)});
+    while (recent.size() > keep) recent.pop_front();
+  }
+
+  /// The remembered frame covering `time`, or null. The last one at or before
+  /// it, which is the same rule the decoder follows: a frame is shown from its
+  /// own timestamp until the next one.
+  [[nodiscard]] const AVFrame* remembered(double time) const {
+    if (recent.empty()) return nullptr;
+    // Before the run began, so whatever covers this was never decoded here.
+    if (time < recent.front().at - kFrameEpsilon) return nullptr;
+    // And past the end of it. "The last frame at or before t" is only an answer
+    // *within* the run: beyond the newest entry the right frame is one nobody
+    // has decoded yet, and handing back the newest would freeze the picture
+    // there for ever while playing forwards.
+    if (time > recent.back().at + kFrameEpsilon) return nullptr;
+    const AVFrame* found = nullptr;
+    for (const Recent& entry : recent) {
+      if (entry.at > time + kFrameEpsilon) break;
+      found = entry.frame.get();
+    }
+    return found;
   }
 };
 
@@ -293,6 +412,10 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   auto found = sources.find(media.id);
   if (found == sources.end()) {
     Source source;
+    // Decided here because the decoder's surface pool is sized when it opens
+    // and cannot be added to afterwards.
+    const int keeping = frames_to_keep(media);
+    source.keep = static_cast<std::size_t>(keeping);
     // Decoded on the card, and given this device so the picture can cross onto
     // it. Measured on a 106 Mbps 4K60 capture: 2.76 ms a frame against 7.24 in
     // software, and the software decoder is where most of this application's
@@ -315,8 +438,13 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
     // Software is still the floor, and `open` falls to it on its own when
     // neither works.
     auto opened = VideoDecoder::open(
-        media.path, {.preferred = media::Acceleration::D3D11Va,
-                     .d3d12_device = device != nullptr ? device->native_device() : nullptr});
+        media.path,
+        {.preferred = media::Acceleration::D3D11Va,
+         // Surfaces for the run kept behind the playhead. Without this the pool
+         // empties the moment reverse starts and decoding stops outright:
+         // "Static surface pool size exceeded", then `get_buffer() failed`.
+         .extra_frames = keeping,
+         .d3d12_device = device != nullptr ? device->native_device() : nullptr});
     if (!opened) {
       source.usable = false;
     } else {
@@ -343,6 +471,16 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // picture repeatedly, and re-decoding it would be pure waste.
   if (source.position >= 0.0 && std::abs(source.position - time) <= kFrameEpsilon) {
     return answer(source.decoder->frame());
+  }
+
+  // Decoded a moment ago and kept. This is what makes playing backwards
+  // possible at all: every frame of the run behind the playhead is one this
+  // decoder already produced on its way forward, and handing it back costs
+  // nothing where decoding it again costs a seek and a whole GOP.
+  if (const AVFrame* known = source.remembered(time); known != nullptr) {
+    ++stats.frames_remembered;
+    if (from != nullptr) *from = source.decoder.get();
+    return known;
   }
 
   // Decoding stops at the first frame whose timestamp reaches the request, so
@@ -376,6 +514,11 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
     }
     source.exhausted = false;
     source.position = -1.0;
+    // The run is contiguous or it is nothing, and a seek breaks it. Keeping the
+    // old entries would leave a hole that reads as the end of the run, and
+    // "the last frame at or before t" would then answer with one from the
+    // wrong side of it.
+    source.recent.clear();
   }
 
   // Decode forwards until the frame covering `time` is in hand. A frame is
@@ -398,6 +541,10 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
     ++stats.frames_decoded;
     source.position = source.decoder->timestamp();
     source.hold(source.decoder->frame());
+    // Kept on the way past, which is the whole trick: reaching frame N from a
+    // keyframe decodes everything between them, and reverse is about to ask for
+    // every one of them in turn.
+    source.remember(source.decoder->frame(), source.position);
   }
 
   // Past the end, the decoder has released its frame, so the held one stands in.

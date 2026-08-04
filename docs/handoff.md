@@ -252,7 +252,17 @@ something else. What has shipped on tests and `--check` alone is listed here
 rather than left implicit, and the list is emptied by driving it, not by
 deciding it is probably fine.
 
-**Nothing is waiting.** The last of it — the cursors, the snap line, and the two
+**Waiting now:**
+
+- **Reverse playback and shuttle**, with the run of remembered frames behind the
+  playhead. Measured at 8.0 ms a frame against 261 before, on a 106 Mbps 4K60
+  capture, which is well inside a 60 fps budget — but smoothness is about
+  *evenness* as much as average rate, and a seek still lands once every thirty
+  frames or so. What to look for is whether that seek shows as a hitch.
+- **Forward playback** at the same time, to confirm the run costs it nothing.
+  Measured unchanged at 2.5 ms a frame.
+
+Before those, the last of it — the cursors, the snap line, and the two
 clip-menu framing rows — was driven and is recorded below.
 
 The cursors needed a way to check them that a screenshot cannot give: neither

@@ -266,6 +266,12 @@ std::expected<std::unique_ptr<VideoDecoder>, std::string> VideoDecoder::open_wit
   if (impl->acceleration == Acceleration::Software) {
     impl->codec->thread_count = options.threads;
   }
+  // Room in the pool for whatever the caller means to keep. Only hardware has a
+  // pool to run out of; software frames are ordinary allocations and a caller
+  // may hold as many as it can pay for.
+  if (impl->acceleration != Acceleration::Software && options.extra_frames > 0) {
+    impl->codec->extra_hw_frames = options.extra_frames;
+  }
 
   if (const int rc = avcodec_open2(impl->codec, codec, nullptr); rc < 0) {
     return std::unexpected(std::format("cannot open decoder: {}", av_error_string(rc)));
@@ -400,7 +406,11 @@ std::expected<void, std::string> VideoDecoder::seek(double seconds) {
 }
 
 std::optional<HardwareTexture> VideoDecoder::hardware_texture() const noexcept {
-  AVFrame* frame = impl_->decoded;
+  return hardware_texture(impl_->decoded);
+}
+
+std::optional<HardwareTexture> VideoDecoder::hardware_texture(
+    const AVFrame* frame) const noexcept {
   if (frame == nullptr) return std::nullopt;
 
   if (frame->format == AV_PIX_FMT_D3D12) {

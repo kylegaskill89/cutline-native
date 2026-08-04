@@ -9,6 +9,7 @@
 ///
 /// With a frame count it renders that many in sequence and reports what they
 /// cost, which is the measurement every decision about the pipeline rests on.
+/// A negative count walks backwards, which is what reverse playback does.
 
 #include "cutline/core/serialize.hpp"
 #include "cutline/engine/frame_renderer.hpp"
@@ -193,8 +194,13 @@ int main(int argc, char** argv) {
   // it costs — and the cost is the whole reason for choosing a decoder, a
   // preview scale or a compositor path, so it needs measuring rather than
   // guessing at.
-  const int frames = argc > 4 ? std::max(1, std::atoi(argv[4])) : 1;
-  const double step = project.fps > 0.0 ? 1.0 / project.fps : 1.0 / 30.0;
+  // A negative count walks *backwards*, which is what reverse playback does and
+  // what costs a decoder dearly: every step is a move back, and a move back
+  // means seeking to a keyframe and decoding forward to get there.
+  const int asked = argc > 4 ? std::atoi(argv[4]) : 1;
+  const int frames = std::max(1, std::abs(asked));
+  const double direction = asked < 0 ? -1.0 : 1.0;
+  const double step = (project.fps > 0.0 ? 1.0 / project.fps : 1.0 / 30.0) * direction;
 
   // The first frame is not like the others: it opens the file, builds the
   // decoder and warms every cache there is. Timing it with the rest would
@@ -218,6 +224,13 @@ int main(int argc, char** argv) {
     std::println("{} frames in {:.2f}s   {:.1f} fps   {:.2f} ms/frame", timed, seconds,
                  seconds > 0.0 ? timed / seconds : 0.0,
                  timed > 0 ? seconds * 1000.0 / timed : 0.0);
+
+    // What the time went on. A run that seeks per frame and one that decodes
+    // per frame look identical from outside and want opposite fixes.
+    const auto stats = (*renderer)->decode_stats();
+    std::println("  decoded {}   remembered {}   seeks {} ({} back, {} forward)",
+                 stats.frames_decoded, stats.frames_remembered, stats.seeks,
+                 stats.backward_seeks, stats.forward_seeks);
   }
   for (const std::string& id : (*renderer)->missing_media()) {
     std::println(stderr, "missing media: {}", id);

@@ -63,6 +63,23 @@ class VideoDecoder {
     /// Hardware decoding is attempted first and falls back to software, since
     /// codec and driver support varies by machine, driver and file.
     Acceleration preferred = Acceleration::D3D12Va;
+    /// How many decoded frames the caller intends to keep hold of.
+    ///
+    /// A hardware decoder draws its pictures from a pool of surfaces fixed in
+    /// size when it opens. Holding references to frames takes surfaces out of
+    /// that pool, and holding too many empties it:
+    ///
+    ///     [AVHWFramesContext] Static surface pool size exceeded.
+    ///     [hevc] get_buffer() failed
+    ///
+    /// which is decoding stopping, not slowing. Saying up front how many will
+    /// be kept is what makes the pool big enough to lend them — there is no
+    /// asking for one later, because the pool is allocated once.
+    ///
+    /// Costs video memory in proportion, at the full size of a frame each, so
+    /// it is a number to choose rather than to round up generously.
+    int extra_frames = 0;
+
     /// Software decoding thread count; 0 lets libav choose.
     int threads = 0;
 
@@ -98,8 +115,17 @@ class VideoDecoder {
   [[nodiscard]] std::expected<void, std::string> seek(double seconds);
 
   /// The current frame as a GPU texture, or nothing when decoding in software.
-  /// Only meaningful for `D3D12Va`.
   [[nodiscard]] std::optional<HardwareTexture> hardware_texture() const noexcept;
+
+  /// Any frame this decoder produced, as a GPU texture.
+  ///
+  /// The caller may be holding frames of its own — a cache of recent ones, or
+  /// the last frame of an exhausted stream — and those are not the decoder's
+  /// current frame. Asking about the current one instead would hand back a
+  /// picture from somewhere else entirely, which is a very quiet way to be
+  /// wrong.
+  [[nodiscard]] std::optional<HardwareTexture> hardware_texture(
+      const AVFrame* frame) const noexcept;
 
   /// What the decoder actually got, which may not be what was asked for.
   [[nodiscard]] Acceleration acceleration() const noexcept;

@@ -93,6 +93,11 @@ class FrameRenderer {
     /// judgement and may simply be miscalibrated.
     std::int64_t backward_seeks = 0;
     std::int64_t forward_seeks = 0;
+    /// Frames served from the run of recently decoded ones rather than decoded
+    /// again. Playing backwards is almost entirely these — that is what makes
+    /// it possible — so a reverse pass where this stays near zero means the run
+    /// is not being kept or not being found.
+    std::int64_t frames_remembered = 0;
   };
   [[nodiscard]] DecodeStats decode_stats() const noexcept;
 
