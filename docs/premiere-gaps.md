@@ -771,7 +771,7 @@ had been written down anywhere:
 |---|---|---|---|
 | ~~Separate audio on export~~ | one stream per track, or a mix | **done** — a third choice beside Stereo and Mono | — |
 | ~~Scale to frame size~~ | right-click a clip, and an import default | **the row was wrong** — see below. Fit and Fill are both on the clip menu now | — |
-| Frame hold / freeze frame | a still from one frame, in place | none | model |
+| Frame hold / freeze frame | a still from one frame, in place | **done** — held at the playhead, picture only | — |
 | Interpret footage | override a source's frame rate, alpha, channels | none — a source is what it says it is | model |
 | Paste attributes | pick which properties travel | the effect stack only, whole | control |
 | Preview render bar | red/yellow over the ruler, Enter renders it | none, and nothing caches a rendered span | machinery |

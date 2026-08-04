@@ -5254,6 +5254,13 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
       ticks.push_back(false);
       labels.emplace_back("Speed / Duration...");
       ticks.push_back(false);
+      // Ticked, because a hold is a state a clip is in rather than something
+      // to do to it — and the row that turns it off has to be the same row.
+      labels.emplace_back("Frame Hold");
+      ticks.push_back(std::ranges::any_of(selected, [&](const std::string& id) {
+        const cutline::core::Clip* clip = cutline::core::find_clip(app->session.project(), id);
+        return clip != nullptr && clip->hold.has_value();
+      }));
       labels.emplace_back("Fit to Frame");
       ticks.push_back(false);
       labels.emplace_back("Fill Frame");
@@ -5285,7 +5292,7 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
       if (selected.empty()) return;
 
       // The trailing rows, in the order they were added: the label menu, the
-      // speed box, the two framing rows, then Enable.
+      // speed box, the frame hold, the two framing rows, then Enable.
       if (index == commands.size()) {
         open_label_menu(*app, selected, x, y);
         return;
@@ -5294,8 +5301,27 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
         open_speed_dialog(*app, selected);
         return;
       }
-      if (index == commands.size() + 2 || index == commands.size() + 3) {
-        const auto fit = index == commands.size() + 2 ? cutline::editor::FrameFit::Fit
+      if (index == commands.size() + 2) {
+        // At the playhead when it is over the clip, which is Premiere's default
+        // and the only choice that means anything: the frame you are looking at
+        // is the one you want held. Each clip clamps it into its own trim, so a
+        // selection spread across the sequence still freezes on a frame it owns.
+        const bool held = std::ranges::any_of(selected, [&](const std::string& id) {
+          const cutline::core::Clip* clip =
+              cutline::core::find_clip(app->session.project(), id);
+          return clip != nullptr && clip->hold.has_value();
+        });
+        app->session.apply(cutline::core::set_clips_hold(
+            app->session.project(), selected,
+            held ? std::nullopt : std::optional<double>{app->session.playhead()}));
+        refresh_timeline(*app);
+        invalidate_preview(*app);
+        app->inspector_stale = true;
+        mark_dirty(*app);
+        return;
+      }
+      if (index == commands.size() + 3 || index == commands.size() + 4) {
+        const auto fit = index == commands.size() + 3 ? cutline::editor::FrameFit::Fit
                                                       : cutline::editor::FrameFit::Fill;
         app->session.apply(cutline::editor::scale_to_frame(
             app->session.project(), selected, fit, app->session.playhead()));

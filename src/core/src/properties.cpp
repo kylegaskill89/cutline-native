@@ -27,6 +27,13 @@ namespace {
 /// frame boundaries does not land on the same double twice.
 constexpr double kTouchEps = 1e-3;
 
+/// The clip as it would be with no hold, for asking which frame plays at a
+/// time. Without this, moving a hold would keep answering with the old frame.
+[[nodiscard]] Clip strip_hold(Clip c) noexcept {
+  c.hold.reset();
+  return c;
+}
+
 [[nodiscard]] std::string_view trim(std::string_view s) noexcept {
   constexpr std::string_view ws = " \t\n\r\f\v";
   const auto first = s.find_first_not_of(ws);
@@ -238,6 +245,30 @@ Project set_clips_speed(Project p, std::span<const std::string> clip_ids, double
   }
 
   for (Track& t : p.tracks) std::ranges::stable_sort(t.clips, {}, &Clip::start);
+  return p;
+}
+
+Project set_clips_hold(Project p, std::span<const std::string> clip_ids,
+                       std::optional<double> at_timeline_time) {
+  const std::unordered_set<std::string> ids(clip_ids.begin(), clip_ids.end());
+  for (Track& t : p.tracks) {
+    // Video only. A held frame with its sound still running is the effect, and
+    // freezing the audio's "source time" would mean a stuck sample rather than
+    // silence — a noise nobody asked for.
+    if (t.kind != TrackKind::Video) continue;
+    for (Clip& c : t.clips) {
+      if (!ids.contains(c.id)) continue;
+      if (!at_timeline_time.has_value()) {
+        c.hold.reset();
+        continue;
+      }
+      // Clamped into the clip, so asking to hold at a playhead that is not over
+      // this member of the group still freezes it on a frame it owns rather
+      // than on one outside its own trim.
+      const double at = std::clamp(*at_timeline_time, c.start, clip_end(c));
+      c.hold = source_time_at(strip_hold(c), at);
+    }
+  }
   return p;
 }
 

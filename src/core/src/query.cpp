@@ -79,6 +79,10 @@ double source_offset_at(const Clip& c, double local_t) noexcept {
 }
 
 double source_time_at(const Clip& c, double t) noexcept {
+  // A held clip shows one frame however far into it you look. Answered here
+  // rather than at each caller because this is the one question the picture
+  // asks of a clip, so it is the one place a hold can be honoured completely.
+  if (c.hold.has_value()) return *c.hold;
   const double local = source_offset_at(c, t - c.start);
   return c.reverse ? c.source_out - local : c.source_in + local;
 }

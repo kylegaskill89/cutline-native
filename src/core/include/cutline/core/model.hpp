@@ -366,6 +366,17 @@ struct Clip {
   double speed = 1.0;
   bool reverse = false;
 
+  /// Frame hold: the one source time this clip shows, for its whole length.
+  ///
+  /// A time rather than a flag, so a hold survives everything that changes the
+  /// clip around it — a trim, a retime, a split — by naming the frame instead
+  /// of naming a place to find one. Premiere's Frame Hold Options offer the in
+  /// point, the out point and the playhead, and all three are just this number.
+  ///
+  /// The picture only. Sound goes on playing under a held frame, which is both
+  /// what Premiere does and the effect anybody reaches for it wanting.
+  std::optional<double> hold;
+
   std::optional<Transition> transition_out;
   BlendMode blend = BlendMode::Normal;
 

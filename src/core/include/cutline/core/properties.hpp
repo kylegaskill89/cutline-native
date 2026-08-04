@@ -78,6 +78,18 @@ namespace cutline::core {
 [[nodiscard]] Project set_clips_speed(Project p, std::span<const std::string> clip_ids,
                                       double speed, std::optional<bool> reverse, bool ripple);
 
+/// Freezes the clip on one source frame, or lets it play again.
+///
+/// The *picture* only, and the whole selection at once — a shot is usually
+/// several clips, and holding the frame while its sound keeps running is the
+/// point rather than an oversight.
+///
+/// The source time is each clip's own, worked out from where it is asked to
+/// hold, so a linked pair freezes on the same instant even when the two clips
+/// are trimmed differently. `std::nullopt` releases it.
+[[nodiscard]] Project set_clips_hold(Project p, std::span<const std::string> clip_ids,
+                                     std::optional<double> at_timeline_time);
+
 [[nodiscard]] Project set_clip_opacity(Project p, std::string_view clip_id, double opacity);
 
 [[nodiscard]] Project set_clip_transform(Project p, std::string_view clip_id, Transform transform);

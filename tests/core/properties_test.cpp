@@ -226,6 +226,61 @@ TEST(Speed, ReclampsFadesToTheNewDuration) {
   EXPECT_DOUBLE_EQ(only_clip(p).fade_out, 0.0);
 }
 
+// ------------------------------------------------------------ frame hold --
+
+TEST(FrameHold, FreezesOnTheFrameUnderThePlayhead) {
+  Project p = one_clip_project();  // source [0,10) at timeline 0
+  p = set_clips_hold(std::move(p), Ids{"c1"}, 4.0);
+
+  ASSERT_TRUE(only_clip(p).hold.has_value());
+  EXPECT_DOUBLE_EQ(*only_clip(p).hold, 4.0);
+  // And that is the frame however far into the clip you look.
+  EXPECT_DOUBLE_EQ(source_time_at(only_clip(p), 1.0), 4.0);
+  EXPECT_DOUBLE_EQ(source_time_at(only_clip(p), 9.0), 4.0);
+}
+
+TEST(FrameHold, ReleasingItPutsTheClipBackAsItWas) {
+  Project p = one_clip_project();
+  p = set_clips_hold(std::move(p), Ids{"c1"}, 4.0);
+  p = set_clips_hold(std::move(p), Ids{"c1"}, std::nullopt);
+
+  EXPECT_FALSE(only_clip(p).hold.has_value());
+  EXPECT_DOUBLE_EQ(source_time_at(only_clip(p), 3.0), 3.0);
+}
+
+// A hold asked for outside the clip still freezes it on a frame it owns.
+TEST(FrameHold, IsClampedIntoTheClip) {
+  Project p = one_clip_project(); 
+  p = set_clips_hold(std::move(p), Ids{"c1"}, 99.0);
+  ASSERT_TRUE(only_clip(p).hold.has_value());
+  EXPECT_DOUBLE_EQ(*only_clip(p).hold, 10.0) << "its own out point";
+}
+
+// Moving a hold asks where the clip *would* be playing, not where it is frozen.
+TEST(FrameHold, CanBeMovedToAnotherFrame) {
+  Project p = one_clip_project();
+  p = set_clips_hold(std::move(p), Ids{"c1"}, 2.0);
+  p = set_clips_hold(std::move(p), Ids{"c1"}, 7.0);
+  EXPECT_DOUBLE_EQ(*only_clip(p).hold, 7.0);
+}
+
+// The picture only. A frozen frame over running sound is the effect.
+TEST(FrameHold, LeavesAudioAlone) {
+  Project p = one_clip_project();
+  Clip sound;
+  sound.id = "a1c";
+  sound.media_id = "m1";
+  sound.kind = TrackKind::Audio;
+  sound.source_out = 10.0;
+  Track a{.id = "a1", .kind = TrackKind::Audio};
+  a.clips = {std::move(sound)};
+  p.tracks.push_back(std::move(a));
+
+  p = set_clips_hold(std::move(p), Ids{"c1", "a1c"}, 4.0);
+  EXPECT_TRUE(only_clip(p).hold.has_value());
+  EXPECT_FALSE(find_clip(p, "a1c")->hold.has_value());
+}
+
 // ------------------------------------------------- speed across a selection --
 
 namespace {

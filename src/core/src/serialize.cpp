@@ -214,6 +214,7 @@ json write(const Clip& c) {
          {"label_color", c.label_color},
          {"transform", write(c.transform)}};
   put_if_set(j, "group_id", c.group_id);
+  put_if_set(j, "hold", c.hold);
   put_unless_empty(j, "gain_keyframes", write(c.gain_keyframes));
 
   if (c.transition_out.has_value()) {
@@ -465,6 +466,7 @@ Clip read_clip(const json& j) {
   c.blend = read_or(j, "blend", BlendMode::Normal);
   c.disabled = read_or(j, "disabled", false);
   c.label_color = read_or(j, "label_color", std::string{});
+  c.hold = read_optional<double>(j, "hold");
 
   const auto transform = j.find("transform");
   if (transform != j.end() && transform->is_object()) c.transform = read_transform(*transform);
