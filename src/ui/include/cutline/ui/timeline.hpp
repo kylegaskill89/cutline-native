@@ -1144,6 +1144,14 @@ class TimelineView : public Widget {
   /// paint nor `cursor_at` is handed an event.
   Modifiers hover_modifiers_;
 
+  /// A model that arrived while a gesture was in flight, waiting for it to
+  /// finish. See `set_model` for why it is not simply applied.
+  std::optional<TimelineModel> pending_model_;
+
+  /// Takes whatever arrived during a gesture, once there is no gesture. Called
+  /// wherever a drag ends, which is the only place it could safely land.
+  void settle_model();
+
   /// Whether this move is carrying copies. Alt at the press, and only at the
   /// press — a modifier picked up halfway through a drag would change what the
   /// gesture is while it is being made, and the picture would already have been

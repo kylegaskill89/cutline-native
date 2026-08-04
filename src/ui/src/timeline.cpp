@@ -243,7 +243,32 @@ TimelineView::TimelineView() {
 }
 
 void TimelineView::set_model(TimelineModel model) {
+  // Not while a gesture is in flight. Every drag here is a *live edit of this
+  // model* — that is what makes a trim, a move or a volume band visible while
+  // it happens — so a rebuild landing mid-gesture wipes it out between one
+  // mouse move and the next.
+  //
+  // Playback is what made this constant rather than occasional: the loop
+  // rebuilds the timeline once per displayed frame, so a drag during playback
+  // had the model pulled out from under it sixty times a second. It was
+  // reported as the volume band being unadjustable while the preview plays,
+  // which is where anybody would notice it; it was every drag on the timeline.
+  //
+  // Kept rather than discarded, and applied when the gesture ends. Discarding
+  // would lose a waveform or a filmstrip that arrived mid-drag, and those
+  // arrive on a worker whenever they happen to be ready.
+  if (mode_ != DragMode::None) {
+    pending_model_ = std::move(model);
+    return;
+  }
   model_ = std::move(model);
+  refresh_bounds();
+}
+
+void TimelineView::settle_model() {
+  if (!pending_model_.has_value()) return;
+  model_ = std::move(*pending_model_);
+  pending_model_.reset();
   refresh_bounds();
 }
 
@@ -2405,6 +2430,7 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
                                 .gain_to = removed});
         }
         mode_ = DragMode::None;
+        settle_model();
         drag_.reset();
         duplicating_ = false;
         return true;
@@ -2667,14 +2693,18 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
     // Nothing to report. These move the view rather than the document, and
     // undoing a scroll is not a thing anybody wants.
     mode_ = DragMode::None;
+    settle_model();
     return true;
   }
 
   if (mode_ == DragMode::TrackHeight) {
     mode_ = DragMode::None;
+    // After the report, not before: what it reports is the height that was
+    // dragged to, and that lives in the model a pending rebuild would replace.
     if (on_track_resize_ && sizing_ < model_.tracks.size()) {
       on_track_resize_(sizing_, model_.tracks[sizing_].height);
     }
+    settle_model();
     return true;
   }
 
@@ -2682,6 +2712,7 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
   // is no edit at the end of it — nothing about the project changed.
   if (mode_ == DragMode::Marquee) {
     mode_ = DragMode::None;
+    settle_model();
     moved_ = false;
     marquee_from_.clear();
     return true;
@@ -2715,6 +2746,7 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
     }
 
     mode_ = DragMode::None;
+    settle_model();
     drag_.reset();
     duplicating_ = false;
     moved_ = false;
@@ -2735,6 +2767,7 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
                             .fade = mode_ == DragMode::FadeIn ? clip.fade_in : clip.fade_out});
     }
     mode_ = DragMode::None;
+    settle_model();
     drag_.reset();
     duplicating_ = false;
     moved_ = false;
@@ -2778,6 +2811,7 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
   }
 
   mode_ = DragMode::None;
+  settle_model();
   drag_.reset();
   duplicating_ = false;
   before_.reset();

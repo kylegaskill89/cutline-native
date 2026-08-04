@@ -3007,6 +3007,59 @@ TEST(GainBand, DraggingTheBandSetsTheLevel) {
   EXPECT_DOUBLE_EQ(fixture.band().level, last->gain);
 }
 
+// The document goes on changing under a gesture, and playback is the case that
+// makes it constant: the loop rebuilds the timeline once a displayed frame, so
+// during playback a drag has the model pulled out from under it sixty times a
+// second. Every gesture here is a live edit of the model — that is what makes a
+// drag visible while it happens — so a rebuild mid-gesture wipes it out between
+// one mouse move and the next.
+//
+// Reported as "the volume slider cannot be adjusted while the preview is
+// playing", which is where anybody would notice it. It was every drag on the
+// timeline, not only that one.
+TEST(GainBand, ARebuildDuringADragDoesNotWipeIt) {
+  BandFixture fixture;
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect box = fixture.view->block_rect(1, 0);
+  const double y = fixture.view->gain_to_y(1, 0, 1.0);
+
+  fixture.host->mouse_down(press(box.x + 200.0, y));
+  fixture.host->mouse_move(press(box.x + 200.0, y + 10.0));
+
+  // What playback does between two mouse moves: hand over the document's own
+  // model, which knows nothing of the gesture in flight.
+  const double pulled = fixture.band().level;
+  fixture.view->set_model(banded_model({}));
+  EXPECT_DOUBLE_EQ(fixture.band().level, pulled) << "the rebuild wiped the drag";
+
+  fixture.host->mouse_move(press(box.x + 200.0, y + 20.0));
+  fixture.host->mouse_up(press(box.x + 200.0, y + 20.0));
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::GainLevel);
+  EXPECT_LT(last->gain, 1.0);
+}
+
+// And once the gesture is over the view takes the document's word again, or a
+// drag would leave it showing its own answer for ever.
+TEST(GainBand, TheRebuildLandsOnceTheDragIsOver) {
+  BandFixture fixture;
+  const Rect box = fixture.view->block_rect(1, 0);
+  const double y = fixture.view->gain_to_y(1, 0, 1.0);
+
+  fixture.host->mouse_down(press(box.x + 200.0, y));
+  fixture.host->mouse_move(press(box.x + 200.0, y + 10.0));
+
+  TimelineModel changed = banded_model({});
+  changed.tracks[1].blocks[0].gain->level = 0.375;
+  fixture.view->set_model(changed);
+
+  fixture.host->mouse_up(press(box.x + 200.0, y + 10.0));
+  EXPECT_DOUBLE_EQ(fixture.band().level, 0.375);
+}
+
 // A band pulled straight down travels no distance in x at all. A drag threshold
 // measured along one axis would sit there refusing to start, which is exactly
 // the gesture this control is for.
