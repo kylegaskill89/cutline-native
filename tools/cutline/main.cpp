@@ -5352,8 +5352,14 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
     // highlighted rather than only the one under the pointer. `selected_group`
     // rather than the raw selection, so linked partners travel too.
     const std::vector<std::string> carried = app->session.selected_group();
-    app->session.apply(
-        cutline::editor::apply_timeline_edit(app->session.project(), *id, edit, carried));
+    std::vector<std::string> made;
+    app->session.apply(cutline::editor::apply_timeline_edit(app->session.project(), *id, edit,
+                                                            carried, &made));
+    // An alt-drag leaves the originals where they were and the copies under the
+    // pointer. Selecting the copies is what makes the nudge or the second drag
+    // that usually follows act on what was just put down rather than on what it
+    // came from.
+    if (!made.empty()) app->session.select(made);
     // Rebuilt whether or not the edit applied: when it did not, the view is
     // showing where the pointer went rather than where the clip is allowed to
     // be, and it has to snap back.

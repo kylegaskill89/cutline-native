@@ -584,13 +584,32 @@ say where the trim went.
 | Drag from the pool onto a track | yes | **done**, at the point of release | — |
 | Drag a clip to move it | along the track **and between tracks** | **done** — the second half was missing and the row said otherwise | — |
 | Copy and paste clips | Ctrl+C / Ctrl+V, and paste-insert | **done** — copy, cut, paste and paste-insert | — |
-| Duplicate (alt-drag a copy) | yes | none | wiring |
+| Duplicate (alt-drag a copy) | yes | **done** — alt at the press, with the originals drawn where they will be left | — |
 | Label colours | eight, set per clip and per bin | **done** per clip, by name, from the clip menu | — |
 | Enable / disable a clip | yes | **done** — on the clip menu, ticked, and a switched-off clip is drawn as one | — |
 | Speed / duration dialogue | a box with both and a ripple option | **done** — speed, duration, reverse and a ripple, from the clip menu | — |
 | Right-click a clip | the menu most edits are actually reached from | **done** — and it offers only what would do something | — |
 | Nesting | a sequence inside a sequence | none | machinery |
 | Multi-camera | none | none | machinery |
+
+**Alt-drag is a move that reports itself differently.** The timeline knows
+nothing about duplicating: the gesture is captured, clamped, snapped and
+previewed as a move, and the only thing alt changes is a flag on what it hands
+back. Making the copies is the project's business, which is where the fresh ids
+and the group remapping belong.
+
+Alt is read at the *press* and never again. A modifier picked up halfway through
+would change what the gesture is while it is being made, after the picture has
+been showing the other one for as long as the hand took to get there.
+
+The originals are drawn during the drag, faint and outlined, where they will be
+left. They have to be painted from the arrangement at the press, because the
+preview drags the real blocks rather than inventing copies to drag — the model
+mid-gesture has already forgotten they were ever there. Without them an alt-drag
+and a plain drag look identical until the mouse comes up.
+
+And the copies end up selected, not the originals. The nudge or the second drag
+that usually follows should act on what was just put down.
 
 **The Speed / Duration box is one number seen two ways.** A clip's length is
 its source span divided by its rate, so speed and duration are not two settings

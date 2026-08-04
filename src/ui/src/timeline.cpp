@@ -906,6 +906,33 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
 
   // ---- the tracks, clipped so blocks do not run out over the headers
   painter.push_clip(tracks, 0.0);
+
+  // Where an alt-drag's originals will be left, under the clips so a copy that
+  // has not travelled far yet still reads as the thing on top.
+  //
+  // Drawn from the arrangement at the press, which is the only place that still
+  // knows: the model shows the blocks already moved, because the preview drags
+  // the originals rather than inventing copies to drag. Faint and outlined
+  // rather than solid — this is a promise about the release, not a clip that
+  // exists yet.
+  if (duplicating_ && moved_) {
+    for (const Moving& carried : moving_) {
+      if (carried.ref.track >= press_model_.tracks.size()) continue;
+      const Rect row = track_rect(carried.ref.track);
+      if (row.bottom() < tracks.y || row.y > tracks.bottom()) continue;
+
+      const Rect box{row.x + scale_.to_x(carried.origin.start), row.y,
+                     std::max(kMinBlockWidth, scale_.width_of(carried.origin.duration())),
+                     row.height};
+      if (box.right() < tracks.x || box.x > tracks.right()) continue;
+
+      const SurfaceStyle& style = theme.style(Part::Clip, State::Normal);
+      painter.fill(box.inset(1.0), style.corner_radius,
+                   Fill::solid(fade(style.text, 0.12f)));
+      painter.stroke(box.inset(1.0), style.corner_radius, fade(style.text, 0.5f), 1.0);
+    }
+  }
+
   for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
     const Rect row = track_rect(track);
     if (row.bottom() < tracks.y || row.y > tracks.bottom()) continue;
@@ -2274,6 +2301,7 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
         }
         mode_ = DragMode::None;
         drag_.reset();
+        duplicating_ = false;
         return true;
       }
 
@@ -2315,6 +2343,7 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
     if (mode_ == DragMode::Move) {
       capture_moving();
       carried_lanes_ = 0;
+      duplicating_ = event.modifiers.alt;
     }
     if (mode_ == DragMode::Slide) capture_neighbours();
     if (mode_ == DragMode::RippleStart || mode_ == DragMode::RippleEnd) {
@@ -2574,6 +2603,7 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
 
     mode_ = DragMode::None;
     drag_.reset();
+    duplicating_ = false;
     moved_ = false;
     gain_segment_.clear();
     gain_segment_origin_.clear();
@@ -2593,6 +2623,7 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
     }
     mode_ = DragMode::None;
     drag_.reset();
+    duplicating_ = false;
     moved_ = false;
     return true;
   }
@@ -2628,12 +2659,14 @@ bool TimelineView::on_mouse_up(const MouseEvent& event) {
           .lanes = mode_ == DragMode::Move ? carried_lanes_ : 0,
           .delta = core::snap_to_frame((event.x - press_x_) / scale_.pixels_per_second,
                                        model_.fps),
-          .at = edge});
+          .at = edge,
+          .copy = mode_ == DragMode::Move && duplicating_});
     }
   }
 
   mode_ = DragMode::None;
   drag_.reset();
+  duplicating_ = false;
   before_.reset();
   after_.reset();
   moving_.clear();

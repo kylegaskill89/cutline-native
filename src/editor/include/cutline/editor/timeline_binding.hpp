@@ -17,6 +17,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace cutline::editor {
 
@@ -90,10 +91,16 @@ struct TimelineMedia {
 /// Empty, or not containing `clip_id`, means the gesture applies to that clip
 /// alone — so a drag on something outside the selection does not sweep up
 /// whatever happened to be highlighted elsewhere.
+///
+/// `made` collects the ids an alt-drag put down, so the caller can select the
+/// copies rather than leaving the originals highlighted — which would make the
+/// nudge that usually follows act on the wrong clips. Untouched by every other
+/// mode, none of which creates anything.
 [[nodiscard]] core::Project apply_timeline_edit(core::Project project,
                                                 std::string_view clip_id,
                                                 const ui::TimelineEdit& edit,
-                                                std::span<const std::string> selection = {});
+                                                std::span<const std::string> selection = {},
+                                                std::vector<std::string>* made = nullptr);
 
 /// Flips one of a track's header switches.
 ///

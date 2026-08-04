@@ -657,6 +657,43 @@ Project move_clips_layered(Project p, std::span<const std::string> clip_ids, dou
   return p;
 }
 
+Project duplicate_clips(Project p, std::span<const std::string> clip_ids, double delta_time,
+                        int delta_track_index, TrackKind kind,
+                        std::vector<std::string>* made) {
+  const std::unordered_set<std::string> ids = id_set(clip_ids);
+
+  std::unordered_map<std::string, std::string> groups;
+  std::vector<std::string> fresh;
+
+  for (Track& t : p.tracks) {
+    // Built to one side and appended after, because appending while walking a
+    // track would have the copies copied in their turn.
+    std::vector<Clip> copies;
+    for (const Clip& c : t.clips) {
+      if (!ids.contains(c.id)) continue;
+      Clip copy = c;
+      copy.id = new_id("clip");
+      if (copy.group_id.has_value()) {
+        auto [entry, added] = groups.try_emplace(*copy.group_id);
+        if (added) entry->second = new_id("grp");
+        copy.group_id = entry->second;
+      }
+      fresh.push_back(copy.id);
+      copies.push_back(std::move(copy));
+    }
+    for (Clip& copy : copies) t.clips.push_back(std::move(copy));
+  }
+
+  if (fresh.empty()) return p;
+
+  // The copies sit exactly on top of their originals until this. It is the same
+  // call a move makes, so a duplicate can land nowhere a move could not.
+  p = move_clips_layered(std::move(p), fresh, delta_time, delta_track_index, kind);
+  sort_all_tracks(p);
+  if (made != nullptr) *made = std::move(fresh);
+  return p;
+}
+
 Project ripple_insert(Project p, double at_time, double amount) {
   std::vector<std::string> spanning;
   for (const Track& t : p.tracks) {

@@ -380,6 +380,82 @@ TEST(MoveClips, MovesBetweenTracksOfTheSameKind) {
   EXPECT_EQ(track_by_id(p, "v2").clips.size(), 1u);
 }
 
+// ------------------------------------------------------------- duplicates --
+
+TEST(DuplicateClips, LeavesTheOriginalAndMovesTheCopy) {
+  Project p = one_clip_project(2.0);
+  std::vector<std::string> made;
+  p = duplicate_clips(std::move(p), Ids{"c1"}, 8.0, 0, TrackKind::Video, &made);
+
+  ASSERT_EQ(p.tracks[0].clips.size(), 2u);
+  ASSERT_EQ(made.size(), 1u);
+  EXPECT_DOUBLE_EQ(p.tracks[0].clips[0].start, 2.0) << "the original stays";
+  EXPECT_DOUBLE_EQ(p.tracks[0].clips[1].start, 10.0);
+  EXPECT_EQ(p.tracks[0].clips[1].id, made[0]);
+  EXPECT_NE(p.tracks[0].clips[1].id, "c1") << "and the copy is its own clip";
+}
+
+TEST(DuplicateClips, CopiesEverythingTheClipCarried) {
+  Project p = one_clip_project();
+  p.tracks[0].clips[0].opacity = 0.4;
+  p.tracks[0].clips[0].label_color = "#5f8f5f";
+  p.tracks[0].clips[0].effects = {ClipEffect{.type = "blur", .params = {{"amount", 3.0}}}};
+
+  std::vector<std::string> made;
+  p = duplicate_clips(std::move(p), Ids{"c1"}, 9.0, 0, TrackKind::Video, &made);
+
+  const Clip* copy = find_clip(p, made.at(0));
+  ASSERT_NE(copy, nullptr);
+  EXPECT_DOUBLE_EQ(copy->opacity, 0.4);
+  EXPECT_EQ(copy->label_color, "#5f8f5f");
+  ASSERT_EQ(copy->effects.size(), 1u);
+  EXPECT_EQ(copy->effects[0].type, "blur");
+}
+
+// A duplicated pair is linked to itself. Kept on the original group and moving
+// one of them would drag its source along ever after.
+TEST(DuplicateClips, RemapsGroupsToTheCopies) {
+  Project p = add_media(empty_project(), footage());
+  p = place_media(std::move(p), "m1", 0.0);
+  const std::vector<std::string> group = group_members(p, p.tracks[0].clips[0].id);
+  ASSERT_GE(group.size(), 2u);
+
+  std::vector<std::string> made;
+  p = duplicate_clips(std::move(p), group, 12.0, 0, TrackKind::Video, &made);
+
+  ASSERT_GE(made.size(), 2u);
+  const Clip* first = find_clip(p, made[0]);
+  const Clip* second = find_clip(p, made[1]);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  ASSERT_TRUE(first->group_id.has_value());
+  EXPECT_EQ(first->group_id, second->group_id) << "the copies are linked to each other";
+  EXPECT_NE(first->group_id, find_clip(p, group[0])->group_id) << "and not to the original";
+}
+
+TEST(DuplicateClips, CanLandOnAnotherLane) {
+  Project p = one_clip_project();
+  Track v2;
+  v2.id = "v2";
+  v2.kind = TrackKind::Video;
+  p.tracks.push_back(v2);
+
+  std::vector<std::string> made;
+  p = duplicate_clips(std::move(p), Ids{"c1"}, 0.0, 1, TrackKind::Video, &made);
+
+  EXPECT_EQ(track_by_id(p, "v1").clips.size(), 1u) << "the original did not move";
+  ASSERT_EQ(track_by_id(p, "v2").clips.size(), 1u);
+  EXPECT_EQ(track_by_id(p, "v2").clips[0].id, made.at(0));
+}
+
+TEST(DuplicateClips, NothingNamedLeavesTheProjectAlone) {
+  const Project p = one_clip_project();
+  std::vector<std::string> made;
+  const Project after = duplicate_clips(p, Ids{"nobody"}, 5.0, 0, TrackKind::Video, &made);
+  EXPECT_EQ(after.tracks, p.tracks);
+  EXPECT_TRUE(made.empty());
+}
+
 TEST(MoveClips, StaysPutAtTheEdgeOfTheTrackStack) {
   Project p = one_clip_project();
   p = move_clips(std::move(p), Ids{"c1"}, 0.0, -1);  // already the top video track

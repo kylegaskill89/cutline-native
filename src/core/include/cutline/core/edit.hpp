@@ -104,6 +104,28 @@ struct PlacementRange {
                                          double delta_time, int delta_track_index = 0,
                                          TrackKind kind = TrackKind::Video);
 
+/// Leaves the named clips where they are and moves *copies* of them by the
+/// same amounts a move would. Premiere's alt-drag.
+///
+/// Built out of the move rather than out of the paste, so a duplicate lands
+/// exactly where dragging the original there would have — including what it
+/// does to the audio lanes when a video clip changes compositing layer. A paste
+/// would put the copies back on the track they came from and need moving
+/// afterwards, which is a second arrangement pass with its own opinions.
+///
+/// Fresh ids throughout, and groups are remapped together: a duplicated A/V
+/// pair is linked to *itself*, or moving the original would drag the copy along
+/// ever after.
+///
+/// `made` collects the new ids, so the caller can select the copies — which is
+/// what makes the nudge or the drag that usually follows act on them.
+///
+/// Returns the project unchanged when nothing named exists.
+[[nodiscard]] Project duplicate_clips(Project p, std::span<const std::string> clip_ids,
+                                      double delta_time, int delta_track_index = 0,
+                                      TrackKind kind = TrackKind::Video,
+                                      std::vector<std::string>* made = nullptr);
+
 /// Splits anything spanning `at_time`, then opens a gap of `amount` seconds by
 /// shifting everything from there onward to the right. Insert editing.
 [[nodiscard]] Project ripple_insert(Project p, double at_time, double amount);

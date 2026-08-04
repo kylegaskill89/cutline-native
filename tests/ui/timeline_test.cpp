@@ -638,6 +638,83 @@ TEST(TrackMove, TheLanesTravelledAreReported) {
   EXPECT_EQ(edit->lanes, -1) << "one lane up, in the order the tracks are stored";
 }
 
+// Alt-drag: the gesture is a move in every way except what it reports, which
+// is the whole of what the timeline knows about duplicating. Making the copies
+// is the project's business.
+TEST(AltDrag, AMoveWithAltHeldReportsACopy) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  std::optional<TimelineEdit> edit;
+  fixture.view->set_on_edit([&](const TimelineEdit& done) { edit = done; });
+
+  const Rect box = fixture.view->block_rect(0, 0);
+  MouseEvent down = press(box.x + 20.0, box.y + 5.0);
+  down.modifiers.alt = true;
+  fixture.host->mouse_down(down);
+  fixture.host->mouse_move(press(box.x + 90.0, box.y + 5.0));
+  fixture.host->mouse_up(press(box.x + 90.0, box.y + 5.0));
+
+  ASSERT_TRUE(edit.has_value());
+  EXPECT_EQ(edit->mode, DragMode::Move);
+  EXPECT_TRUE(edit->copy);
+}
+
+TEST(AltDrag, AnOrdinaryMoveDoesNotReportOne) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  std::optional<TimelineEdit> edit;
+  fixture.view->set_on_edit([&](const TimelineEdit& done) { edit = done; });
+
+  const Rect box = fixture.view->block_rect(0, 0);
+  fixture.host->mouse_down(press(box.x + 20.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.x + 90.0, box.y + 5.0));
+  fixture.host->mouse_up(press(box.x + 90.0, box.y + 5.0));
+
+  ASSERT_TRUE(edit.has_value());
+  EXPECT_FALSE(edit->copy);
+}
+
+// The press decides. A modifier picked up halfway through would change what the
+// gesture is while it is being made, after the picture has been showing the
+// other one for as long as the hand took to get there.
+TEST(AltDrag, AltPickedUpMidDragChangesNothing) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  std::optional<TimelineEdit> edit;
+  fixture.view->set_on_edit([&](const TimelineEdit& done) { edit = done; });
+
+  const Rect box = fixture.view->block_rect(0, 0);
+  fixture.host->mouse_down(press(box.x + 20.0, box.y + 5.0));
+  MouseEvent moved = press(box.x + 90.0, box.y + 5.0);
+  moved.modifiers.alt = true;
+  fixture.host->mouse_move(moved);
+  fixture.host->mouse_up(moved);
+
+  ASSERT_TRUE(edit.has_value());
+  EXPECT_FALSE(edit->copy);
+}
+
+// And a trim is not a move. Alt on an edge must not turn a trim into anything.
+TEST(AltDrag, ATrimWithAltHeldIsStillATrim) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  std::optional<TimelineEdit> edit;
+  fixture.view->set_on_edit([&](const TimelineEdit& done) { edit = done; });
+
+  const Rect box = fixture.view->block_rect(0, 0);
+  // Below the fade handles, which own the top of each corner.
+  const double y = box.y + box.height * 0.5;
+  MouseEvent down = press(box.right() - 2.0, y);
+  down.modifiers.alt = true;
+  fixture.host->mouse_down(down);
+  fixture.host->mouse_move(press(box.right() - 40.0, y));
+  fixture.host->mouse_up(press(box.right() - 40.0, y));
+
+  ASSERT_TRUE(edit.has_value());
+  EXPECT_EQ(edit->mode, DragMode::TrimEnd);
+  EXPECT_FALSE(edit->copy);
+}
+
 TEST(TrackMove, APictureCannotBeDraggedIntoTheAudio) {
   // Video and audio lanes are different kinds of place. A clip dragged past the
   // last lane of its own kind holds there.

@@ -212,7 +212,8 @@ ui::TimelineModel timeline_model(const core::Project& project,
 
 core::Project apply_timeline_edit(core::Project project, std::string_view clip_id,
                                   const ui::TimelineEdit& edit,
-                                  std::span<const std::string> selection) {
+                                  std::span<const std::string> selection,
+                                  std::vector<std::string>* made) {
   const core::Clip* clip = core::find_clip(project, clip_id);
   if (clip == nullptr) return project;
 
@@ -233,6 +234,14 @@ core::Project apply_timeline_edit(core::Project project, std::string_view clip_i
       const std::span<const std::string> moving =
           carries_selection ? selection : std::span<const std::string>{ids};
       const double shift = edit.result.start - clip->start;
+
+      // Alt-drag: the originals stay and copies make the journey. Its own
+      // operation rather than a move followed by a paste, so the copies land
+      // exactly where dragging the originals there would have put them.
+      if (edit.copy) {
+        return core::duplicate_clips(std::move(project), moving, shift, edit.lanes,
+                                     clip->kind, made);
+      }
 
       // Straight along the track, which is most moves, and the one that must
       // not disturb which lane anything is on.

@@ -569,6 +569,9 @@ struct TimelineEdit {
   /// `Razor` only: cut every track at `at` rather than only the clip clicked.
   bool all_tracks = false;
 
+  /// `Move` only: leave the originals and move copies instead. Alt-drag.
+  bool copy = false;
+
   /// `GainLevel` only: the level the band was dragged to, as a linear
   /// multiplier.
   double gain = 1.0;
@@ -1105,6 +1108,12 @@ class TimelineView : public Widget {
   double press_y_ = 0.0;
   /// Whether the pointer has moved far enough for this to be a drag at all.
   bool moved_ = false;
+
+  /// Whether this move is carrying copies. Alt at the press, and only at the
+  /// press — a modifier picked up halfway through a drag would change what the
+  /// gesture is while it is being made, and the picture would already have been
+  /// showing the other one.
+  bool duplicating_ = false;
 
   /// Which automation point is being dragged, and where it was when the drag
   /// began. Kept for the same reason `origin_` is: every position is worked out
