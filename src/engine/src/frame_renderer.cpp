@@ -101,10 +101,20 @@ constexpr double kAssumedFrameGap = 1.0 / 30.0;
 
 /// Describes a decoded frame for the compositor. Returns false for layouts the
 /// GPU path does not handle, which is reported rather than guessed at.
-[[nodiscard]] bool describe(const AVFrame* frame, gpu::FrameView& out) noexcept {
+[[nodiscard]] bool describe(const AVFrame* frame, const media::VideoDecoder* from,
+                            gpu::FrameView& out) noexcept {
   if (frame == nullptr) return false;
 
+  // A hardware frame carries a handle rather than pixels. Everything the
+  // compositor reads off the frame besides the pixels — its size, its colour
+  // tagging, its range — is the same either way, so only this one branch and
+  // the planes at the end differ.
+  bool decoded_on_the_card = false;
   switch (frame->format) {
+    case AV_PIX_FMT_D3D12:
+      out.layout = gpu::PixelLayout::Nv12;
+      decoded_on_the_card = true;
+      break;
     case AV_PIX_FMT_NV12:
       out.layout = gpu::PixelLayout::Nv12;
       break;
@@ -143,6 +153,17 @@ constexpr double kAssumedFrameGap = 1.0 / 30.0;
     default:
       out.transfer = gpu::TransferFunction::Bt709;
       break;
+  }
+
+  if (decoded_on_the_card) {
+    if (from == nullptr) return false;
+    const std::optional<media::HardwareTexture> texture = from->hardware_texture();
+    if (!texture.has_value()) return false;
+    out.texture = gpu::SourceTexture{.resource = texture->resource,
+                                     .subresource = texture->subresource,
+                                     .fence = texture->fence,
+                                     .fence_value = texture->fence_value};
+    return true;
   }
 
   for (int i = 0; i < 3; ++i) out.planes[i] = {frame->data[i], frame->linesize[i]};
@@ -219,7 +240,11 @@ struct FrameRenderer::Impl {
   [[nodiscard]] core::Size measure(const core::Media& media);
 
   /// Positions the source at `time` and returns its frame, or null.
-  [[nodiscard]] const AVFrame* frame_at(const core::Media& media, double time);
+  /// `from` receives the decoder that produced the frame, which is what a
+  /// hardware frame needs asking for its texture. Null past the end of a
+  /// stream, where the held frame stands in and no decoder owns it.
+  [[nodiscard]] const AVFrame* frame_at(const core::Media& media, double time,
+                                        const media::VideoDecoder** from = nullptr);
 };
 
 #if CUTLINE_HAVE_TEXT
@@ -258,19 +283,43 @@ core::Size FrameRenderer::Impl::measure(const core::Media&) { return {}; }
 
 #endif
 
-const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double time) {
+const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double time,
+                                            const media::VideoDecoder** from) {
   auto found = sources.find(media.id);
   if (found == sources.end()) {
     Source source;
-    // Software decode, deliberately: the compositor uploads from plane
-    // pointers, and a hardware frame has none to give. The decoder can now
-    // produce Direct3D 12 textures on the compositor's own device, but nothing
-    // yet samples them, and asking for frames nothing can draw would only fail
-    // later and less clearly.
+    // Onto the compositor's own device, so a decoded picture is already in the
+    // memory that is about to sample it: nothing comes down to the CPU and
+    // nothing goes back up. The compositor makes views over the resource's
+    // plane slices and reads it exactly as it reads planes it uploaded itself.
     //
-    // The gap is smaller than it sounds. Measured on 4K60 HEVC, software decode
-    // costs 2.13 ms a frame against 1.70 ms for d3d12va — 1.3x, not the order
-    // of magnitude the phrase "hardware decode" suggests.
+    // The gap this closes is larger than the comment here used to claim.
+    // Measured on a 106 Mbps 4K60 capture: 7.24 ms a frame in software against
+    // 2.76 ms on the card, and the software decoder is where most of this
+    // application's memory went as well.
+    // Software, and it is the *driver* that decides that rather than a
+    // preference.
+    //
+    // The compositor can sample a decoder's own texture now — a frame decoded
+    // onto this device is composited from its plane slices with nothing copied
+    // either way, and there are tests that build an NV12 texture by hand and
+    // check the colour that comes out of it. What there is not, on the machine
+    // this was written on, is a driver that will decode HEVC through D3D12
+    // video at all:
+    //
+    //     [hevc] hardware accelerator failed to decode picture
+    //     DXGI_ERROR_DRIVER_INTERNAL_ERROR: strong evidence that the driver has
+    //     performed an undefined operation
+    //
+    // and the device removal that follows takes the *compositor's* device with
+    // it, because that is the device the decoder was given. Not a decode
+    // falling back — every texture, every render target and the window. Proving
+    // it first on a throwaway device does not help either: the fault resets the
+    // adapter, so both go.
+    //
+    // So this asks for software and the zero-copy path waits for a driver that
+    // can hold up its end. Measured, it is worth having: 2.76 ms a frame
+    // against 7.24 on a 106 Mbps 4K60 capture. It is not worth a reset.
     auto opened = VideoDecoder::open(media.path,
                                      {.preferred = media::Acceleration::Software});
     if (!opened) {
@@ -348,6 +397,7 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
 
   // Past the end, the decoder has released its frame, so the held one stands in.
   const AVFrame* current = source.decoder->frame();
+  if (from != nullptr) *from = current != nullptr ? source.decoder.get() : nullptr;
   return current != nullptr ? current : source.held.get();
 }
 
@@ -485,9 +535,10 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
           continue;
         }
 
-        const AVFrame* frame = d.frame_at(*source.media, source.source_time);
+        const media::VideoDecoder* from = nullptr;
+        const AVFrame* frame = d.frame_at(*source.media, source.source_time, &from);
         gpu::FrameView view;
-        if (!describe(frame, view)) {
+        if (!describe(frame, from, view)) {
           d.missing.push_back(source.media->id);
           continue;
         }
