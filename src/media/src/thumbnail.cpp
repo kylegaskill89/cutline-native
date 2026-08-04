@@ -105,6 +105,7 @@ std::expected<std::vector<Thumbnail>, std::string> extract_thumbnails(std::strin
   Extractor ex;
 
   AVFormatContext* raw = nullptr;
+  detail::quiet_av_logging();
   if (const int rc = avformat_open_input(&raw, path_string.c_str(), nullptr, nullptr); rc < 0) {
     return std::unexpected(std::format("cannot open {}: {}", path_string, av_error_string(rc)));
   }

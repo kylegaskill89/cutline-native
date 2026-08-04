@@ -351,6 +351,7 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
   impl->height = settings.height & ~1;
 
   AVFormatContext* format = nullptr;
+  detail::quiet_av_logging();
   if (int rc = avformat_alloc_output_context2(&format, nullptr, nullptr, path.c_str());
       rc < 0 || format == nullptr) {
     return std::unexpected(

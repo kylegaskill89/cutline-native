@@ -50,6 +50,7 @@ std::expected<AudioBuffer, std::string> decode_audio(std::string_view path, int 
   const std::string path_string(path);
 
   AVFormatContext* raw = nullptr;
+  detail::quiet_av_logging();
   if (const int rc = avformat_open_input(&raw, path_string.c_str(), nullptr, nullptr); rc < 0) {
     return std::unexpected(std::format("cannot open {}: {}", path_string, av_error_string(rc)));
   }

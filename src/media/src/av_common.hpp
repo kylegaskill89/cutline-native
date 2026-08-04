@@ -11,6 +11,24 @@
 
 namespace cutline::media::detail {
 
+/// Quietens libav* to things somebody can act on, once per process.
+///
+/// It logs to stderr at warning level by default and is chatty about matters
+/// nobody can do anything about — "UDTA parsing failed retrying raw" on
+/// ordinary camera mp4s, once per open — and this application opens a file per
+/// clip, per waveform, per filmstrip and per probe. The result was a console
+/// scrolling past faster than a real error could be noticed in it, which is the
+/// same as having no log at all.
+///
+/// Errors are kept. A file that genuinely will not open is worth saying.
+inline void quiet_av_logging() noexcept {
+  static const bool once = [] {
+    av_log_set_level(AV_LOG_ERROR);
+    return true;
+  }();
+  (void)once;
+}
+
 [[nodiscard]] inline std::string av_error_string(int code) {
   char buffer[AV_ERROR_MAX_STRING_SIZE] = {};
   av_strerror(code, buffer, sizeof(buffer));
