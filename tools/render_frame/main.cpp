@@ -5,13 +5,18 @@
 /// result out. That makes the pipeline checkable by eye and by script long
 /// before there is an editor, and it is most of what export will do per frame.
 ///
-///     render_frame <project.json> <time-in-seconds> <out.png>
+///     render_frame <project.json> <time-in-seconds> <out.png> [frames]
+///
+/// With a frame count it renders that many in sequence and reports what they
+/// cost, which is the measurement every decision about the pipeline rests on.
 
 #include "cutline/core/serialize.hpp"
 #include "cutline/engine/frame_renderer.hpp"
 #include "cutline/gpu/device.hpp"
 
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <print>
 #include <sstream>
@@ -183,9 +188,36 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // Optionally the same thing over and over, forwards, which is how export and
+  // playback walk time. One frame says the chain works; a run of them says what
+  // it costs — and the cost is the whole reason for choosing a decoder, a
+  // preview scale or a compositor path, so it needs measuring rather than
+  // guessing at.
+  const int frames = argc > 4 ? std::max(1, std::atoi(argv[4])) : 1;
+  const double step = project.fps > 0.0 ? 1.0 / project.fps : 1.0 / 30.0;
+
+  // The first frame is not like the others: it opens the file, builds the
+  // decoder and warms every cache there is. Timing it with the rest would
+  // report a throughput nothing sustains.
   if (auto ok = (*renderer)->render(project, time); !ok) {
     std::println(stderr, "render failed: {}", ok.error());
     return 1;
+  }
+
+  if (frames > 1) {
+    const auto started = std::chrono::steady_clock::now();
+    for (int i = 1; i < frames; ++i) {
+      if (auto ok = (*renderer)->render(project, time + step * i); !ok) {
+        std::println(stderr, "render failed at frame {}: {}", i, ok.error());
+        return 1;
+      }
+    }
+    const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    const int timed = frames - 1;
+    std::println("{} frames in {:.2f}s   {:.1f} fps   {:.2f} ms/frame", timed, seconds,
+                 seconds > 0.0 ? timed / seconds : 0.0,
+                 timed > 0 ? seconds * 1000.0 / timed : 0.0);
   }
   for (const std::string& id : (*renderer)->missing_media()) {
     std::println(stderr, "missing media: {}", id);
