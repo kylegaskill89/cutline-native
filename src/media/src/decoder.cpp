@@ -100,6 +100,11 @@ struct VideoDecoder::Impl {
   AVFrame* decoded = nullptr;
   AVPacket* packet = nullptr;
 
+  /// What this was opened from, so a decoder that fails part-way through can
+  /// open itself again on a path that works.
+  std::string path;
+  VideoDecoder::Options options;
+
   int stream_index = -1;
   AVRational time_base{1, 1};
   VideoStreamInfo info;
@@ -265,11 +270,13 @@ std::expected<std::unique_ptr<VideoDecoder>, std::string> VideoDecoder::open_wit
   impl->info.fps = rational_to_double(stream->avg_frame_rate);
   impl->info.codec = codec->name != nullptr ? codec->name : "";
   impl->info.pixel_format = pixel_name == nullptr ? "" : pixel_name;
+  impl->path = path_string;
+  impl->options = options;
 
   return std::unique_ptr<VideoDecoder>(new VideoDecoder(std::move(impl)));
 }
 
-std::expected<bool, std::string> VideoDecoder::next_frame() {
+std::expected<bool, std::string> VideoDecoder::decode_next() {
   Impl& d = *impl_;
   d.have_frame = false;
   if (d.finished) return false;
@@ -323,6 +330,35 @@ std::expected<bool, std::string> VideoDecoder::next_frame() {
       }
     }
     av_packet_unref(d.packet);
+  }
+}
+
+std::expected<bool, std::string> VideoDecoder::next_frame() {
+  auto got = decode_next();
+  if (got.has_value() || impl_->acceleration == Acceleration::Software) return got;
+
+  // A hardware decoder that got through the trial frame and then failed part
+  // of the way in. This footage does exactly that — D3D11 decodes its opening
+  // frames and then gives up on a later one — and until now that was the end
+  // of the decode: an error out of `next_frame`, a black preview, and nothing
+  // anywhere able to try the one path that always works.
+  //
+  // So it opens itself again in software and carries on from where it stopped.
+  // The frame that failed is decoded a second time by a decoder that can, and
+  // what the caller sees is a pause rather than an ending.
+  auto software = open_with(impl_->path, impl_->options, Acceleration::Software);
+  if (!software) return got;
+
+  const double resume = impl_->timestamp;
+  impl_ = std::move((*software)->impl_);
+  // Backwards to the keyframe at or before where we were, then forward: the
+  // caller asked for the *next* frame, and handing it one it has already had
+  // would be a stutter rather than a recovery.
+  if (auto back = seek(resume); !back) return got;
+  while (true) {
+    auto again = decode_next();
+    if (!again.has_value() || !*again) return again;
+    if (impl_->timestamp > resume + 1e-6) return again;
   }
 }
 

@@ -116,6 +116,10 @@ class VideoDecoder {
   [[nodiscard]] static std::expected<std::unique_ptr<VideoDecoder>, std::string> open_with(
       std::string_view path, const Options& options, Acceleration wanted);
 
+  /// One decode attempt, with no fallback of its own. `next_frame` is this plus
+  /// the recovery, kept apart so the recovery cannot recurse into itself.
+  [[nodiscard]] std::expected<bool, std::string> decode_next();
+
   explicit VideoDecoder(std::unique_ptr<Impl> impl);
   std::unique_ptr<Impl> impl_;
 };
