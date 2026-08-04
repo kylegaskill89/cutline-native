@@ -29,6 +29,14 @@ enum class Command {
   NudgeLeft,
   NudgeRight,
 
+  /// Trims the edit point *before* the playhead up to it, closing the gap:
+  /// the clip under the playhead loses its head and the sequence comes with
+  /// it. Premiere's Q.
+  TrimPreviousToPlayhead,
+  /// And the edit point *after*: the clip under the playhead loses its tail
+  /// and everything past it comes back to meet it. Premiere's W.
+  TrimNextToPlayhead,
+
   // -- the clipboard
   /// Takes a copy of the selection, whole clips and all.
   Copy,

@@ -4312,6 +4312,11 @@ constexpr std::array kTransportKeys{
     Binding{Key::Period, false, false, cutline::editor::Command::Overwrite},
     Binding{Key::Left, false, false, cutline::editor::Command::NudgeLeft, true},
     Binding{Key::Right, false, false, cutline::editor::Command::NudgeRight, true},
+    // Premiere's Q and W: trim the edit point before the playhead up to it, and
+    // the one after it back. Both ripple, which is what makes them the fastest
+    // way to tighten a cut — the sequence closes over what went.
+    Binding{Key::Q, false, false, cutline::editor::Command::TrimPreviousToPlayhead},
+    Binding{Key::W, false, false, cutline::editor::Command::TrimNextToPlayhead},
     Binding{Key::Delete, false, false, cutline::editor::Command::Delete},
     Binding{Key::Delete, false, true, cutline::editor::Command::RippleDelete},
     Binding{Key::Escape, false, false, cutline::editor::Command::SelectNone},
@@ -6359,6 +6364,12 @@ void refresh_dock(App& app) {
       // Premiere keeps these on the Clip menu, which this has no equivalent of;
       // the timeline's right-click is where a clip's own commands live, and
       // these act on the *source* rather than on a clip.
+      {"Trim Previous Edit to Playhead", [app] {
+         if (app != nullptr) run_command(*app, cutline::editor::Command::TrimPreviousToPlayhead);
+       }},
+      {"Trim Next Edit to Playhead", [app] {
+         if (app != nullptr) run_command(*app, cutline::editor::Command::TrimNextToPlayhead);
+       }},
       {"Insert", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Insert); }},
       {"Overwrite",
        [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Overwrite); }},

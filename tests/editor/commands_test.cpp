@@ -61,6 +61,8 @@ constexpr std::array kAllCommands{
     Command::Copy,          Command::Cut,           Command::Paste,
     Command::PasteInsert,   Command::Insert,        Command::Overwrite,
     Command::Undo,          Command::Redo,
+    Command::TrimPreviousToPlayhead,
+    Command::TrimNextToPlayhead,
 };
 
 // ----------------------------------------------------------- the contract --
@@ -151,6 +153,67 @@ TEST(Commands, SplitIgnoresASelectionThePlayheadIsNowhereNear) {
 
   EXPECT_FALSE(can_run(session, Command::Split));
   EXPECT_EQ(clip_count(session.project()), 2u);
+}
+
+// -------------------------------------------------- trimming to the playhead --
+
+TEST(Commands, TrimPreviousTakesTheHeadAndClosesUp) {
+  Session session(sample_project());  // c1 [0,5), c2 [5,12)
+  session.set_playhead(2.0);
+
+  ASSERT_TRUE(can_run(session, Command::TrimPreviousToPlayhead));
+  ASSERT_TRUE(run(session, Command::TrimPreviousToPlayhead));
+
+  const Clip* first = core::find_clip(session.project(), "c1");
+  const Clip* second = core::find_clip(session.project(), "c2");
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  // Two seconds went from the head, and the clip stayed where it was rather
+  // than leaving a hole in front of itself.
+  EXPECT_DOUBLE_EQ(first->start, 0.0);
+  EXPECT_DOUBLE_EQ(core::clip_duration(*first), 3.0);
+  EXPECT_DOUBLE_EQ(second->start, 3.0) << "and everything after came with it";
+}
+
+TEST(Commands, TrimNextTakesTheTailAndClosesUp) {
+  Session session(sample_project());
+  session.set_playhead(2.0);
+
+  ASSERT_TRUE(run(session, Command::TrimNextToPlayhead));
+
+  const Clip* first = core::find_clip(session.project(), "c1");
+  const Clip* second = core::find_clip(session.project(), "c2");
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_DOUBLE_EQ(core::clip_duration(*first), 2.0);
+  EXPECT_DOUBLE_EQ(second->start, 2.0);
+}
+
+TEST(Commands, TrimmingNeedsSomethingUnderThePlayhead) {
+  Session session(sample_project());
+  session.set_playhead(40.0);
+  EXPECT_FALSE(can_run(session, Command::TrimPreviousToPlayhead));
+  EXPECT_FALSE(can_run(session, Command::TrimNextToPlayhead));
+  EXPECT_FALSE(run(session, Command::TrimNextToPlayhead));
+}
+
+// An edit aimed at a lane: targeting is how the sequence is told which one.
+TEST(Commands, TrimmingFollowsTheTargetedTrack) {
+  Project project = sample_project();
+  Track second{.id = "v2", .kind = TrackKind::Video};
+  second.clips = {
+      Clip{.id = "d1", .media_id = "m1", .source_in = 0.0, .source_out = 9.0, .start = 0.0}};
+  // Stored above v1, and the only one targeted.
+  project.tracks.insert(project.tracks.begin(), std::move(second));
+  project.tracks[0].targeted = true;
+
+  Session session(std::move(project));
+  session.set_playhead(2.0);
+  ASSERT_TRUE(run(session, Command::TrimNextToPlayhead));
+
+  EXPECT_DOUBLE_EQ(core::clip_duration(*core::find_clip(session.project(), "d1")), 2.0);
+  EXPECT_DOUBLE_EQ(core::clip_duration(*core::find_clip(session.project(), "c1")), 5.0)
+      << "the untargeted lane kept its clip whole";
 }
 
 // ------------------------------------------------------------- removing --

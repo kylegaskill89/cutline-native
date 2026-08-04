@@ -44,6 +44,32 @@ namespace {
   return clips_under(session.project(), session.playhead());
 }
 
+/// The one clip a trim-to-playhead should act on, or nothing.
+///
+/// One clip rather than a list, and that is a deliberate limit. `ripple_trim_edge`
+/// closes the sequence up by however much *this* clip lost, on every track; a
+/// second clip on another lane crossing the same playhead has its own available
+/// source and so its own answer, and applying both in turn would ripple twice
+/// for one gesture. One edit point at a time is the honest version.
+///
+/// Which one: the first targeted track the playhead crosses, and any track it
+/// crosses when nothing is targeted. Targeting is how the sequence is told which
+/// lane an edit is aimed at, and this is exactly such an edit.
+[[nodiscard]] std::string trim_target(const Session& session) {
+  const core::Project& project = session.project();
+  const double at = session.playhead();
+  const bool any_targeted =
+      std::ranges::any_of(project.tracks, [](const core::Track& t) { return t.targeted; });
+
+  for (const core::Track& track : project.tracks) {
+    if (any_targeted && !track.targeted) continue;
+    for (const core::Clip& clip : track.clips) {
+      if (at > clip.start && at < core::clip_end(clip)) return clip.id;
+    }
+  }
+  return {};
+}
+
 /// Whether marking is worth offering: something to mark, or a mark to remove.
 ///
 /// The second half matters. Pressing the key where the mark already is removes
@@ -142,6 +168,8 @@ std::string_view to_string(Command command) noexcept {
     case Command::RippleDelete: return "ripple_delete";
     case Command::NudgeLeft: return "nudge_left";
     case Command::NudgeRight: return "nudge_right";
+    case Command::TrimPreviousToPlayhead: return "trim_previous_to_playhead";
+    case Command::TrimNextToPlayhead: return "trim_next_to_playhead";
     case Command::Insert: return "insert";
     case Command::Overwrite: return "overwrite";
     case Command::Copy: return "copy";
@@ -185,6 +213,10 @@ bool can_run(const Session& session, Command command) {
     case Command::Copy:
     case Command::Cut:
       return !session.selection().empty();
+
+    case Command::TrimPreviousToPlayhead:
+    case Command::TrimNextToPlayhead:
+      return !trim_target(session).empty();
 
     case Command::Paste:
     case Command::PasteInsert:
@@ -269,6 +301,20 @@ bool run(Session& session, Command command) {
       return session.apply(core::move_clips(project, session.selected_group(), -frame));
     case Command::NudgeRight:
       return session.apply(core::move_clips(project, session.selected_group(), frame));
+
+    case Command::TrimPreviousToPlayhead:
+    case Command::TrimNextToPlayhead: {
+      const std::string target = trim_target(session);
+      if (target.empty()) return false;
+      // The head for the previous edit point and the tail for the next, which
+      // is the same statement read from either side: what goes is the material
+      // between the playhead and the cut, and the sequence closes over it.
+      const core::ClipEdge edge = command == Command::TrimPreviousToPlayhead
+                                      ? core::ClipEdge::In
+                                      : core::ClipEdge::Out;
+      return session.apply(
+          core::ripple_trim_edge(project, target, edge, session.playhead()));
+    }
 
     case Command::Copy: {
       // The whole linked group, like every other edit: copying a shot has to
