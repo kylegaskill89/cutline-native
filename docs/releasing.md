@@ -41,6 +41,36 @@ the day after a nightly starts warm.
 
 ---
 
+## Running what is on `main`
+
+A release is cut from a tag, so it is always behind. To try something between
+one release and the next without building the tree yourself:
+
+**Actions → Nightly → Run workflow**, and when it finishes take the
+`cutline-main` artifact from the run's summary page. It is a zip of the same
+directory the installer lays down — the executable, the FFmpeg and Skia
+runtimes beside it, and the compiled shaders — and it runs where it is
+unpacked. Nothing is installed and nothing is registered, so it can sit beside
+an installed copy without either noticing.
+
+The nightly also runs itself at 05:00 UTC, so most mornings there is one
+already built.
+
+It is deliberately not signed, not versioned and not an installer. It is a test
+build, and dressing it as a release would invite it into places a test build
+should not go — including the updater, which only ever looks at releases.
+
+Building it locally is the other way, and takes over an hour from cold because
+of FFmpeg and Skia:
+
+```
+cmake --preset ui
+cmake --build --preset ui
+./build/ui/tools/cutline/Release/cutline.exe
+```
+
+---
+
 ## The manifest
 
 ```json

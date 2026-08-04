@@ -73,3 +73,24 @@ jobs:
       # of which any unit test sees.
       - name: Paint every theme headlessly
         run: ./build/ui/tools/cutline/Release/cutline.exe --check
+
+      # A build somebody can actually run, from whatever is on `main`.
+      #
+      # Releases are cut from tags and are therefore always behind: between one
+      # and the next there was no way to try a fix without building the whole
+      # tree, FFmpeg and Skia included, which is over an hour on a cold cache.
+      # This is the same directory the installer packages — the executable, the
+      # runtimes beside it and the compiled shaders — as a zip that runs where
+      # it is unpacked. Unsigned and unversioned, because it is a *test* build
+      # and dressing it as a release would invite it into places it should not
+      # go.
+      - name: Stage the application
+        run: cmake --install build/ui --config Release --prefix staged
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cutline-main
+          path: staged
+          # A fortnight. Long enough to be useful for a build that is replaced
+          # every night, short enough that the artifacts do not accumulate.
+          retention-days: 14
