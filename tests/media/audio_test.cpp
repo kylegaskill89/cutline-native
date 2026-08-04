@@ -227,6 +227,26 @@ TEST_F(ReferenceAudio, WaveformSpansTheWholeClip) {
   EXPECT_TRUE(has_signal);
 }
 
+// The envelope is folded block by block as the stream decodes rather than
+// computed from a decode of the whole thing, which is what stopped a long
+// recording costing a gigabyte to draw a line on a clip. The two have to agree
+// exactly, or the fix would have changed what a waveform looks like.
+TEST_F(ReferenceAudio, TheStreamedEnvelopeMatchesTheWholeBufferOne) {
+  const auto streamed = extract_waveform(path_, 0, 100);
+  ASSERT_TRUE(streamed.has_value()) << streamed.error();
+
+  const auto audio = decode_audio(path_);
+  ASSERT_TRUE(audio.has_value()) << audio.error();
+  const WaveformPeaks whole = compute_peaks(*audio, 100);
+
+  ASSERT_EQ(streamed->size(), whole.size());
+  EXPECT_EQ(streamed->buckets_per_second, whole.buckets_per_second);
+  for (std::size_t i = 0; i < whole.size(); ++i) {
+    EXPECT_FLOAT_EQ(streamed->minimum[i], whole.minimum[i]) << "bucket " << i;
+    EXPECT_FLOAT_EQ(streamed->maximum[i], whole.maximum[i]) << "bucket " << i;
+  }
+}
+
 // ------------------------------------------------------------- thumbnails --
 
 class ReferenceThumbnails : public ReferenceAudio {};

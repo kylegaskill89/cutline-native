@@ -6,7 +6,10 @@
 #include <cmath>
 #include <cstdint>
 #include <format>
+#include <functional>
+#include <span>
 #include <limits>
+#include <vector>
 
 namespace cutline::media {
 namespace {
@@ -40,13 +43,25 @@ using namespace detail;
   return {};
 }
 
-}  // namespace
-
-std::expected<AudioBuffer, std::string> decode_audio(std::string_view path, int audio_stream,
-                                                     AudioDecodeOptions options) {
-  if (options.channels <= 0 || options.sample_rate <= 0) {
-    return std::unexpected("target sample rate and channel count must be positive");
-  }
+/// One pass over an audio stream, resampled to `options`' format.
+///
+/// `consume` is called after every decoded frame with everything resampled so
+/// far sitting in `out`; whatever it leaves behind is carried into the next
+/// call. That is the whole point of it: a caller that only needs a *summary* of
+/// the audio can fold and clear as it goes rather than holding the stream.
+///
+/// The alternative — what this used to be — is a single vector the length of
+/// the file. A ten-minute recording with four audio streams is about a
+/// gigabyte decoded, measured at 1,355 MB peak for one clip, and that is what
+/// this application was paying to draw a line on a clip.
+///
+/// Returns the source time of the first sample handed over, which is at or
+/// before what was asked for: a compressed stream cannot be entered
+/// mid-packet, so a range seeks backwards and the surplus is trimmed by
+/// whoever asked for it.
+[[nodiscard]] std::expected<double, std::string> read_audio(
+    std::string_view path, int audio_stream, const AudioDecodeOptions& options,
+    std::vector<float>& out, const std::function<void()>& consume) {
   const std::string path_string(path);
 
   AVFormatContext* raw = nullptr;
@@ -103,10 +118,6 @@ std::expected<AudioBuffer, std::string> decode_audio(std::string_view path, int 
   Packet packet(av_packet_alloc());
   if (!frame || !packet) return std::unexpected("out of memory allocating audio buffers");
 
-  AudioBuffer buffer;
-  buffer.sample_rate = options.sample_rate;
-  buffer.channels = options.channels;
-
   const bool ranged = options.duration > 0.0 || options.start > 0.0;
   const double wanted_start = std::max(0.0, options.start);
   const double wanted_end =
@@ -147,11 +158,11 @@ std::expected<AudioBuffer, std::string> decode_audio(std::string_view path, int 
         if (at >= wanted_end) past_end = true;
       }
 
-      if (auto ok = drain_resampler(resampler.get(), frame.get(), options.channels,
-                                    buffer.samples);
+      if (auto ok = drain_resampler(resampler.get(), frame.get(), options.channels, out);
           !ok) {
         return ok;
       }
+      consume();
     }
   };
 
@@ -180,10 +191,34 @@ std::expected<AudioBuffer, std::string> decode_audio(std::string_view path, int 
 
   // The resampler holds back samples for its own latency; without this flush
   // the last few milliseconds of every clip would go missing.
-  if (auto ok = drain_resampler(resampler.get(), nullptr, options.channels, buffer.samples);
-      !ok) {
+  if (auto ok = drain_resampler(resampler.get(), nullptr, options.channels, out); !ok) {
     return std::unexpected(ok.error());
   }
+  consume();
+
+  return decoded_start;
+}
+
+}  // namespace
+
+std::expected<AudioBuffer, std::string> decode_audio(std::string_view path, int audio_stream,
+                                                     AudioDecodeOptions options) {
+  if (options.channels <= 0 || options.sample_rate <= 0) {
+    return std::unexpected("target sample rate and channel count must be positive");
+  }
+
+  AudioBuffer buffer;
+  buffer.sample_rate = options.sample_rate;
+  buffer.channels = options.channels;
+
+  // Nothing to consume as it arrives: this is the caller that genuinely wants
+  // the whole thing, because what it feeds is real-time playback scheduling.
+  const auto decoded = read_audio(path, audio_stream, options, buffer.samples, [] {});
+  if (!decoded) return std::unexpected(decoded.error());
+  const double decoded_start = *decoded;
+
+  const bool ranged = options.duration > 0.0 || options.start > 0.0;
+  const double wanted_start = std::max(0.0, options.start);
 
   if (ranged) {
     const auto lanes = static_cast<std::size_t>(options.channels);
@@ -251,12 +286,92 @@ WaveformPeaks compute_peaks(const AudioBuffer& audio, int buckets_per_second) {
   return peaks;
 }
 
+namespace {
+
+/// `compute_peaks`, one block at a time.
+///
+/// Buckets are counted in frames from the start of the stream, exactly as the
+/// whole-buffer version counts them, so the two produce the same envelope —
+/// there is a test that says so. What differs is that this never sees more than
+/// one decoded block at once.
+class PeakFolder {
+ public:
+  PeakFolder(int sample_rate, int channels, int buckets_per_second)
+      : channels_(static_cast<std::size_t>(std::max(1, channels))),
+        per_bucket_(static_cast<std::size_t>(
+            std::max(1.0, static_cast<double>(sample_rate) /
+                              std::max(1, buckets_per_second)))) {
+    peaks_.buckets_per_second = std::max(1, buckets_per_second);
+  }
+
+  /// Folds a block of interleaved frames. Whole frames only, which is what the
+  /// resampler produces.
+  void take(std::span<const float> block) {
+    const std::size_t frames = block.size() / channels_;
+    for (std::size_t f = 0; f < frames; ++f) {
+      for (std::size_t ch = 0; ch < channels_; ++ch) {
+        // Channels are folded together so the envelope covers everything
+        // audible at that moment rather than one side of a stereo pair.
+        const float sample = block[f * channels_ + ch];
+        if (!seen_) {
+          low_ = sample;
+          high_ = sample;
+          seen_ = true;
+        } else {
+          low_ = std::min(low_, sample);
+          high_ = std::max(high_, sample);
+        }
+      }
+      if (++in_bucket_ == per_bucket_) close();
+    }
+  }
+
+  /// The envelope, with any part-filled last bucket closed off. A stream whose
+  /// length is not a whole number of buckets still ends where it ends.
+  [[nodiscard]] WaveformPeaks finish() {
+    if (in_bucket_ > 0) close();
+    return std::move(peaks_);
+  }
+
+ private:
+  void close() {
+    peaks_.minimum.push_back(low_);
+    peaks_.maximum.push_back(high_);
+    in_bucket_ = 0;
+    seen_ = false;
+    low_ = 0.0f;
+    high_ = 0.0f;
+  }
+
+  std::size_t channels_ = 2;
+  std::size_t per_bucket_ = 1;
+  std::size_t in_bucket_ = 0;
+  float low_ = 0.0f;
+  float high_ = 0.0f;
+  bool seen_ = false;
+  WaveformPeaks peaks_;
+};
+
+}  // namespace
+
 std::expected<WaveformPeaks, std::string> extract_waveform(std::string_view path,
                                                            int audio_stream,
                                                            int buckets_per_second) {
-  const auto audio = decode_audio(path, audio_stream);
-  if (!audio) return std::unexpected(audio.error());
-  return compute_peaks(*audio, buckets_per_second);
+  const AudioDecodeOptions options;
+  PeakFolder folder(options.sample_rate, options.channels, buckets_per_second);
+
+  // Folded and thrown away block by block. An envelope is the one thing here
+  // that reads a whole stream and keeps almost none of it — a ten-minute
+  // recording is a gigabyte decoded and about a megabyte of envelope — so
+  // holding the decode was paying a thousand times over for the answer.
+  std::vector<float> block;
+  const auto decoded = read_audio(path, audio_stream, options, block, [&] {
+    folder.take(block);
+    block.clear();
+  });
+  if (!decoded) return std::unexpected(decoded.error());
+
+  return folder.finish();
 }
 
 }  // namespace cutline::media
