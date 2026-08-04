@@ -144,6 +144,10 @@ struct Params {
     // How much the source is softened vertically as it is read, 0 to 1.
     float antiFlicker;
     float antiFlickerPad;
+    // The fourth slot of the last row. HLSL would round the buffer up to it
+    // anyway; declaring it is what keeps this and `ShaderParams` the same
+    // fifty-two floats by statement rather than by coincidence.
+    float rowPad;
 };
 
 

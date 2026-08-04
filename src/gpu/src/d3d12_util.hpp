@@ -98,6 +98,16 @@ struct alignas(16) ShaderParams {
   /// How much the source is softened vertically as it is read, from 0 to 1.
   float anti_flicker = 0.0f;
   float anti_flicker_pad = 0.0f;
+  /// The fourth slot of the last row, declared rather than left to the
+  /// compiler.
+  ///
+  /// Without it this struct is fifty-one floats and `alignas(16)` quietly pads
+  /// it to fifty-two — so the assert below passed by describing something the
+  /// compiler decided rather than something anybody wrote, and the two sides of
+  /// the root signature agreed by coincidence. MSVC says so as C4324, which is
+  /// how this was found. Named, it is fifty-two floats on both sides and no
+  /// padding is inserted anywhere.
+  float row_pad = 0.0f;
 };
 
 /// The most of the scratch a margin may take, per side.
