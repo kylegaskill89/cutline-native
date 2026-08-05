@@ -845,6 +845,72 @@ monitor should have one too, which is a gap this page has not been listing.
 
 ---
 
+## 4. Project panel
+
+The pool works and is flat. Everything in a project is in one list, ordered by
+one of five sorts and narrowed by one search box — which is enough to build a
+sequence from a dozen files and stops being enough at a hundred.
+
+### 4.1 What is already there
+
+| | Where it is now |
+|---|---|
+| The pool as a list | `ui::MediaBrowser`, drawn rather than built as widgets, so hundreds of rows cost twenty |
+| What each entry is | `ui::MediaKind` and its badge: video, audio, image, title, colour, adjustment |
+| Ordering | `BrowserSort` — pool order, name, kind, duration, and least-used-first |
+| Narrowing | `BrowserOptions::search` |
+| Knowing a file has gone | `MediaItem::offline`, filled from `ProjectPreview::missing_media` |
+| Knowing what is unused | `MediaItem::uses`, which is what least-used-first is for |
+| Renaming, removing | `rename_media`, `remove_media` — the second takes the clips with it |
+| Getting media onto the timeline | double-click, drag with a landing ghost, insert and overwrite |
+
+Two things are worth saying plainly because they change what is left to build.
+
+**`uses` and `offline` are already there**, so "find what this project does not
+need" and "find what has gone missing" are both answerable today — they are
+just answered by sorting rather than by a column you can see.
+
+**Bins exist and are not these bins.** `editor::Bins` gathers *effects* into
+folders in the Effects panel. It is the same idea and none of the same code:
+media bins live in the project and are saved with it, and effect bins are a
+fact about the person and are saved beside the presets.
+
+### 4.2 What has to be built
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Bins | folders of media, nested, saved with the project | one flat pool | model |
+| Relinking | point a moved file at its new home, and the clips follow | offline is *shown* and nothing repairs it | wiring |
+| Proxies | attach a small copy, edit against it, export from the original | none | model + machinery |
+| Metadata columns | a real column view, sortable by clicking a heading | one name and one detail string | control |
+| Icon view | thumbnails, and hover to scrub them | a letter badge | control |
+| Labels | a colour per entry, carried onto its clips | none | model |
+| New sequence from a clip | drag onto "New Item", or the menu | none | wiring |
+
+**Relinking is the smallest of these and the one that loses work without it.**
+Everything needed is present: a source knows its path, `missing_media` says
+which paths did not open, and clips name media by id rather than by path — so
+repointing one entry repairs every clip that used it. What is missing is a
+dialog and one setter.
+
+**Proxies are the one with teeth**, and the reason to do them: every
+performance measurement in this project ends at 4K decode. A proxy is a second
+path on the `Media`, a switch saying which to render from, and an exporter that
+ignores the switch — plus something to *make* them, which is the encoder this
+application already has. The model change is small and the machinery is not.
+
+**Bins are a model change and a drawing change at once.** A tree of folders in
+the project, and a browser that draws a tree rather than a list. The browser
+already draws rather than builds, so nesting is arithmetic in `row_rect` rather
+than a new widget.
+
+**Columns and icon view are the same feature seen twice** — both are "show more
+about each entry than a name" — and both are worth less than they look while
+the pool is flat, because the thing that makes a large pool workable is
+somewhere to put things rather than more to read about them.
+
+---
+
 ## Found by audit, listed nowhere else
 
 Walking the spec's own parity checklist and Premiere's menus against the source,
@@ -904,7 +970,7 @@ becomes too slow to work with.
 
 The rest of the application, in the order it seems worth walking:
 
-- **Project panel** — bins, metadata columns, icon view, proxies, relinking.
+- ~~**Project panel**~~ — audited, and written up as section 4 above.
 - **Audio** — the Audio Track Mixer, submixes, sends, the essential sound panel,
   loudness normalisation.
 - **Titles and graphics** — the Essential Graphics panel, layered graphics,
