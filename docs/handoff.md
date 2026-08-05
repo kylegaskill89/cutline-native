@@ -320,12 +320,36 @@ twice a second are down to one in ten. Forward is untouched — 315 distinct
 frames against 319, nothing above 50 ms — because the prefetch only runs when
 the requests are moving backwards.
 
-Not finished. One stall of 297 ms survives in ten seconds and seven over 100,
-and the cause is known: a run holds 22 frames at 4K, so there are 22 turns to
-spend the ~230 ms that decoding a group of pictures costs. That is about ten
-milliseconds a turn against a budget of twelve, which leaves no margin when a
-group runs long. Longer runs would fix it and the pool ceiling is what stops
-them (see `kMaxPooledFrames`).
+#### Driven a third time: a decoder of its own
+
+The run was 22 frames because two runs shared one decoder's pool, and that
+pool has a ceiling the driver does not document. **The ceiling is per decoder**,
+which was the thing missed: a second decoder that does nothing but read ahead
+gets a pool of its own, and runs go to 32.
+
+| | one run | + prefetch | + a second decoder |
+|---|---|---|---|
+| distinct frames in 10 s | 241 | 261 | **~345** |
+| median gap | 30 ms | 36 ms | **30 ms** |
+| p95 gap | 187 ms | 84 ms | **49 ms** |
+| gaps over 100 ms | 16 | 7 | **~4** |
+| gaps over 250 ms | 8 | 1 | **~2** |
+
+The median penalty is gone as well, because the prefetch no longer takes the
+serving decoder away to do its reading.
+
+And the stalls stopped *bunching*. A shuttle that advances by however long the
+last turn took will, after a quarter-second hitch, jump fifteen frames — half a
+run — so the next stretch has half as many turns to read ahead in and stalls
+sooner. Driven, that was visible as hitches at 10832, 11396, 11881, 12941,
+13493 ms, closing in. Capping how far one turn may advance broke the loop:
+182, 4577, 8922, 11177, 13334 — evenly spaced. Nothing is out of sync as a
+result, because J and L are a silent shuttle with no clock to agree with.
+
+Still not perfect: one hitch every two to four seconds, where it was two a
+second. What is left is a group of pictures occasionally running longer than
+the run has turns to pay for, and the honest next step is measuring GOP length
+rather than guessing at the budget again.
 
 Before those, the last of it — the cursors, the snap line, and the two
 clip-menu framing rows — was driven and is recorded below.

@@ -3952,7 +3952,22 @@ void advance_shuttle(App& app) {
   if (!app.shuttling()) return;
 
   const auto now = std::chrono::steady_clock::now();
-  const double elapsed = std::chrono::duration<double>(now - app.shuttled_at).count();
+  // Capped, and the cap is what stops one slow turn making the next one worse.
+  //
+  // A shuttle that advances by however long the last turn took will, after a
+  // hitch of a quarter of a second, jump fifteen frames of a 60fps source — and
+  // fifteen frames is half the run of decoded frames the renderer keeps, so the
+  // next stretch has half as many turns to read ahead in, and stalls sooner.
+  // Driven, that showed as hitches arriving four seconds apart and then bunching
+  // up: 10832, 11396, 11881, 12941, 13493 milliseconds, closing in.
+  //
+  // Nothing is out of sync as a result. J and L are a *silent* shuttle — the
+  // sound card only plays at its own rate — so there is no clock this has to
+  // agree with, and playing a moment slow after a hitch is invisible where the
+  // hitch itself is not.
+  constexpr double kMaxShuttleStep = 0.1;
+  const double elapsed =
+      std::min(std::chrono::duration<double>(now - app.shuttled_at).count(), kMaxShuttleStep);
   app.shuttled_at = now;
 
   const double duration = cutline::core::timeline_duration(app.session.project());

@@ -107,8 +107,7 @@ constexpr std::size_t kRememberedBytes = 384u * 1024u * 1024u;
 constexpr int kMinKeptFrames = 8;
 constexpr int kMaxKeptFrames = 64;
 
-/// The most surfaces to ask a hardware decoder to lend at once, across both
-/// runs and the held frame together.
+/// The most surfaces to ask *one* hardware decoder to lend.
 ///
 /// `extra_hw_frames` is a request, not a guarantee. D3D11 video decoding hands
 /// out slices of one texture array, and the driver stops honouring the number
@@ -119,9 +118,12 @@ constexpr int kMaxKeptFrames = 64;
 /// which is decoding stopping. Found by measuring: with the pool starved, the
 /// same 1240 decodes that should have cost 2.6 s cost 10.3 s, so the prefetch
 /// looked like a five-fold *regression* when what it had actually done was walk
-/// into a ceiling. Forty-eight is comfortably under it and still two runs of
-/// twenty-four.
-constexpr int kMaxPooledFrames = 48;
+/// into a ceiling.
+///
+/// Per decoder, which is the thing that was missed first time round. Two runs
+/// in one pool had to share this and left runs of twenty-two frames; two pools
+/// hold a full run each and neither comes close.
+constexpr int kMaxPooledFrames = 40;
 
 /// How many frames of this media the budget affords.
 ///
@@ -139,9 +141,10 @@ constexpr int kMaxPooledFrames = 48;
   if (per_frame == 0) return kMinKeptFrames;
 
   const auto afford = static_cast<int>(kRememberedBytes / per_frame);
-  // Two of these are held at once — the run being played and the run being
-  // decoded ahead of it — so the pool ceiling is halved before it is applied.
-  const int by_pool = (kMaxPooledFrames - 4) / 2;
+  // One run per decoder, and each decoder gets its own pool, so the whole
+  // ceiling is available to a run — less the few surfaces the decoder itself
+  // has in flight beside the ones lent out.
+  const int by_pool = kMaxPooledFrames - 6;
   return std::clamp(std::min(afford, by_pool), kMinKeptFrames, kMaxKeptFrames);
 }
 
@@ -284,6 +287,31 @@ struct FrameDeleter {
 struct Source {
   std::unique_ptr<VideoDecoder> decoder;
   double position = -1.0;  ///< timestamp of the frame currently decoded
+
+  /// A second decoder, which does nothing but read ahead of the first.
+  ///
+  /// Two rather than one for two separate reasons, and either alone would
+  /// justify it.
+  ///
+  /// The prefetch used to seek the *serving* decoder, so the moment a request
+  /// missed the run in hand the decoder was somewhere else entirely and the
+  /// ordinary path had to seek all the way back — the abandoned prefetch and
+  /// the recovery both paid for the same group of pictures.
+  ///
+  /// And the pool ceiling is per decoder, not per source. Holding two runs in
+  /// one decoder's pool ran into a limit the driver does not document at around
+  /// sixty-five surfaces, which forced runs down to twenty-two frames — barely
+  /// enough turns to spread a group of pictures across, and the reason a stall
+  /// survived. Two pools of thirty-two are nowhere near it.
+  std::unique_ptr<VideoDecoder> ahead;
+  double ahead_position = -1.0;
+  /// Turned off when the second decoder cannot be opened or stops working.
+  /// Losing it is the stall coming back, not the picture: the run in hand still
+  /// serves every frame it holds and the ordinary path still fetches the rest.
+  bool keep_ahead = true;
+  /// Kept so the second decoder can be opened later, on the first backwards
+  /// step, rather than paying for one in every project that never reverses.
+  std::string path;
   /// How many frames this source may keep behind the playhead, decided when it
   /// opened because that is when the decoder's surface pool was sized.
   std::size_t keep = 0;
@@ -483,6 +511,10 @@ struct FrameRenderer::Impl {
   /// has already arrived and waiting for the rest is cheaper than starting over.
   void decode_ahead(Source& source, bool budgeted = true);
 
+  /// Opens one decoder for a file, sized to lend `keeping` frames.
+  [[nodiscard]] std::expected<std::unique_ptr<media::VideoDecoder>, std::string> open_decoder(
+      const std::string& path, int keeping);
+
   [[nodiscard]] const AVFrame* frame_at(const core::Media& media, double time,
                                         const media::VideoDecoder** from = nullptr);
 };
@@ -523,6 +555,45 @@ core::Size FrameRenderer::Impl::measure(const core::Media&) { return {}; }
 
 #endif
 
+/// Opens one decoder for a file, sized to lend `keeping` frames.
+///
+/// Decoded on the card, and given this device so the picture can cross onto it.
+/// Measured on a 106 Mbps 4K60 capture: 2.76 ms a frame against 7.24 in
+/// software, and the software decoder is where most of this application's
+/// memory went besides.
+///
+/// **Direct3D 11**, not 12, and that is the driver's choice rather than a
+/// preference. D3D12 video decode is the path that needs no crossing at all,
+/// and on the machine this was written for it fails every HEVC picture and
+/// removes the device with it:
+///
+///     [hevc] hardware accelerator failed to decode picture
+///     DXGI_ERROR_DRIVER_INTERNAL_ERROR: strong evidence that the driver has
+///     performed an undefined operation
+///
+/// The stock `ffmpeg.exe` fails identically on the same file, so it is not
+/// something this is doing wrong — and the removal takes the *compositor's*
+/// device, since that is the one the decoder was handed. D3D11 decodes the same
+/// file at 558 fps and the frames cross with one copy inside the card.
+///
+/// Software is still the floor, and `open` falls to it on its own when neither
+/// works.
+std::expected<std::unique_ptr<VideoDecoder>, std::string> FrameRenderer::Impl::open_decoder(
+    const std::string& path, int keeping) {
+  return VideoDecoder::open(
+      path, {.preferred = media::Acceleration::D3D11Va,
+             // Surfaces for the run this decoder is asked to keep. Without them
+             // the pool empties the moment reverse starts and decoding stops
+             // outright: "Static surface pool size exceeded", then
+             // `get_buffer() failed`.
+             //
+             // The slack is not optional. A full run is held by the caller and
+             // beside it sit the held last frame and whatever the decoder has
+             // in flight; sized at exactly a run the pool empties again.
+             .extra_frames = keeping + 6,
+             .d3d12_device = device != nullptr ? device->native_device() : nullptr});
+}
+
 /// Decodes a little of the run *before* the one in hand, so that run is ready
 /// before the playhead reaches the end of this one.
 ///
@@ -532,7 +603,9 @@ core::Size FrameRenderer::Impl::measure(const core::Media&) { return {}; }
 /// wildly different amounts of the turn depending on the file. The budget is
 /// the thing that must not be exceeded, so the budget is what is counted.
 void FrameRenderer::Impl::decode_ahead(Source& source, bool budgeted) {
-  if (!source.usable || source.keep == 0 || source.recent.empty()) return;
+  if (!source.usable || !source.keep_ahead || source.keep == 0 || source.recent.empty()) {
+    return;
+  }
 
   // The prefetch has to meet the run in hand exactly: a gap between them reads
   // as the end of a run, and "the last frame at or before t" would then answer
@@ -546,48 +619,79 @@ void FrameRenderer::Impl::decode_ahead(Source& source, bool budgeted) {
   if (source.pending.size() >= source.keep && !source.extending) return;
   const std::size_t room = source.keep;
 
+  // The reading decoder, opened the first time one is wanted. A project that is
+  // never played backwards never pays for it.
+  if (source.ahead == nullptr) {
+    auto opened = open_decoder(source.path, static_cast<int>(source.keep));
+    if (!opened.has_value()) {
+      // Not fatal. Without a second decoder the run in hand still serves every
+      // frame it holds, and the ordinary path still fetches the rest — it is
+      // the stall coming back, not the picture.
+      source.keep_ahead = false;
+      return;
+    }
+    source.ahead = std::move(*opened);
+  }
+
   if (!source.extending) {
     // Far enough back that a seek lands on a keyframe at or before the frames
     // wanted. Aiming at the frame just before the run in hand would seek to the
     // keyframe before *that* and decode the same pictures either way, so the
     // span is chosen to fill the room rather than to be short.
     const double from_time = std::max(0.0, meet - static_cast<double>(room) * gap);
-    if (!source.decoder->seek(from_time)) {
-      source.usable = false;
+    if (!source.ahead->seek(from_time)) {
+      source.keep_ahead = false;
       return;
     }
-    source.exhausted = false;
-    source.position = -1.0;
+    source.ahead_position = -1.0;
     source.pending_until = meet;
     source.extending = true;
   }
 
+  // How much of the run in hand is still to be shown. Reverse consumes it from
+  // the newest end, so what is left is everything below the playhead.
+  std::size_t left = 0;
+  for (const Source::Recent& entry : source.recent) {
+    if (entry.at < source.last_request + kFrameEpsilon) ++left;
+  }
+
+  // A budget that grows as the run runs out. What has to be decoded is a whole
+  // group of pictures and there is no telling how long that is until it has
+  // been done, so a fixed share of each turn is a guess that is sometimes
+  // wrong: measured, about one run in four finished late and each one of those
+  // was a stall of a quarter of a second. Spending more of the last few turns
+  // makes those turns heavier and makes the stall not happen, which is the
+  // trade this whole mechanism exists to make.
+  auto budget = kPrefetchBudget;
+  if (left * 4 < source.keep) budget *= 3;
+  else if (left * 2 < source.keep) budget *= 2;
+
   const auto started = std::chrono::steady_clock::now();
   while (source.extending) {
-    if (budgeted && std::chrono::steady_clock::now() - started >= kPrefetchBudget) return;
+    if (budgeted && std::chrono::steady_clock::now() - started >= budget) return;
 
-    const auto got = source.decoder->next_frame();
+    const auto got = source.ahead->next_frame();
     if (!got) {
-      source.usable = false;
+      source.keep_ahead = false;
+      source.forget_pending();
       return;
     }
     if (!*got) {
       // The source ended before the run did, which means the run in hand is
       // already at the end of the file. Nothing to decode ahead of it.
-      source.exhausted = true;
       source.forget_pending();
       return;
     }
-    source.position = source.decoder->timestamp();
+    source.ahead_position = source.ahead->timestamp();
 
     // Everything on the way past that belongs before the run in hand. The
     // frames decoded before the wanted span are what a seek to a keyframe
     // costs, and they are dropped by `trim` as newer ones arrive.
-    if (source.position < source.pending_until - kFrameEpsilon) {
+    if (source.ahead_position < source.pending_until - kFrameEpsilon) {
       std::unique_ptr<AVFrame, FrameDeleter> copy(av_frame_alloc());
-      if (copy && av_frame_ref(copy.get(), source.decoder->frame()) >= 0) {
+      if (copy && av_frame_ref(copy.get(), source.ahead->frame()) >= 0) {
         source.pending.push_back(
-            Source::Recent{.at = source.position, .frame = std::move(copy)});
+            Source::Recent{.at = source.ahead_position, .frame = std::move(copy)});
         ++stats.frames_decoded_ahead;
         source.trim();
       }
@@ -629,30 +733,9 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
     //
     // Software is still the floor, and `open` falls to it on its own when
     // neither works.
-    auto opened = VideoDecoder::open(
-        media.path,
-        {.preferred = media::Acceleration::D3D11Va,
-         // Surfaces for the run kept behind the playhead, and for the one being
-         // decoded ahead of it. Without them the pool empties the moment
-         // reverse starts and decoding stops outright: "Static surface pool
-         // size exceeded", then `get_buffer() failed`.
-         //
-         // **Two** runs and not one, which is what makes the prefetch worth
-         // having. Sized for a single run, the prefetch can only grow into the
-         // surfaces the run in hand has released — so it starts with room for
-         // about three frames, and the run it hands over is three frames long.
-         // That turns one seek per thirty frames into one per three, and
-         // measured five times *worse* than no prefetch at all: 40 ms a frame
-         // against 8. The pool is the constraint, so the pool is what had to
-         // give.
-         //
-         // The slack is not optional either. Both runs can be full at once, and
-         // beside them sit the held last frame and whatever the decoder has in
-         // flight; sized at exactly two runs the pool empties again, which is
-         // the same "Static surface pool size exceeded" and the same stop.
-         .extra_frames = keeping * 2 + 4,
-         .d3d12_device = device != nullptr ? device->native_device() : nullptr});
-    if (!opened) {
+    source.path = media.path;
+    auto opened = open_decoder(media.path, keeping);
+    if (!opened.has_value()) {
       source.usable = false;
     } else {
       source.decoder = std::move(*opened);
@@ -702,6 +785,14 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // is the moment the stall used to happen.
   if (source.remembered(time) == nullptr && source.pending_covers(time)) {
     source.recent = std::move(source.pending);
+    // And the decoders change places with the runs, because a frame belongs to
+    // the pool it was lent from: these were decoded by the reading decoder, and
+    // asking the other one for their textures would hand back a picture from
+    // somewhere else entirely. Swapping is also what leaves the reading decoder
+    // positioned where the *next* run has to start from.
+    std::swap(source.decoder, source.ahead);
+    std::swap(source.position, source.ahead_position);
+    source.exhausted = false;
     source.forget_pending();
     ++stats.runs_taken_ahead;
   }
