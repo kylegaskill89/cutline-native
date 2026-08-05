@@ -48,18 +48,73 @@ std::size_t ThumbnailCache::bytes() const {
   return bytes_;
 }
 
-void ThumbnailCache::request(std::string media_id, std::string path, double duration) {
+ThumbnailCache::Span ThumbnailCache::missing(const std::vector<Span>& have,
+                                             Span want) noexcept {
+  if (want.empty()) return {};
+  double from = want.from;
+  double to = want.to;
+  // Eat into the wanted stretch from each end with whatever already covers it.
+  // Only the ends, because a hole in the middle is not worth a second job — the
+  // range that covers it re-extracts a few frames already held, and one seek
+  // saved is worth more than a few frames of memory.
+  for (const Span& had : have) {
+    if (had.from <= from + 1e-6 && had.to > from) from = std::max(from, had.to);
+    if (had.to >= to - 1e-6 && had.from < to) to = std::min(to, had.from);
+  }
+  if (!(to > from)) return {};
+  return Span{from, to};
+}
+
+namespace {
+
+/// Merges a stretch into a sorted, non-overlapping list.
+void cover(std::vector<ThumbnailCache::Span>& spans, ThumbnailCache::Span add) {
+  if (add.empty()) return;
+  std::vector<ThumbnailCache::Span> out;
+  out.reserve(spans.size() + 1);
+  for (const ThumbnailCache::Span& span : spans) {
+    // Touching counts as overlapping, so two views scrolled past each other
+    // leave one stretch rather than a seam that asks to be filled for ever.
+    if (span.to < add.from - 1e-6 || span.from > add.to + 1e-6) {
+      out.push_back(span);
+      continue;
+    }
+    add.from = std::min(add.from, span.from);
+    add.to = std::max(add.to, span.to);
+  }
+  out.push_back(add);
+  std::ranges::sort(out, {}, &ThumbnailCache::Span::from);
+  spans = std::move(out);
+}
+
+}  // namespace
+
+void ThumbnailCache::request(std::string media_id, std::string path, double from, double to) {
   // Generated media have no file behind them, and a still has one frame that
   // never changes — neither is a filmstrip.
   if (path.empty()) return;
+  if (!(to > from)) return;
 
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     if (stopping_) return;
-    if (strips_.contains(media_id)) return;
-    if (requested_.contains(media_id)) return;
-    requested_.emplace(media_id, true);
-    queue_.push_back(Job{std::move(media_id), std::move(path), duration});
+
+    // What is already held and what is already on its way, both subtracted. A
+    // timeline rebuilds after every gesture and would otherwise queue the same
+    // stretch again each time.
+    std::vector<Span> known;
+    if (const auto found = strips_.find(media_id); found != strips_.end()) {
+      known = found->second.covered;
+    }
+    if (const auto asked = requested_.find(media_id); asked != requested_.end()) {
+      for (const Span& span : asked->second) cover(known, span);
+    }
+
+    const Span want = missing(known, Span{from, to});
+    if (want.empty()) return;
+
+    cover(requested_[media_id], want);
+    queue_.push_back(Job{std::move(media_id), std::move(path), want});
     ++outstanding_;
   }
   ensure_worker();
@@ -131,32 +186,96 @@ void ThumbnailCache::run() {
     // exactly the work this class exists to keep off it.
     media::ThumbnailOptions options;
     options.height = kThumbnailHeight;
-    auto frames = media::extract_thumbnails(job.path, frames_for(job.duration), options);
+    options.start = job.span.from;
+    options.end = job.span.to;
+    // Paced rather than given the machine. This is the difference between an
+    // editor that is busy and one that looks like it is failing.
+    options.threads = kThumbnailThreads;
+    const double length = job.span.to - job.span.from;
+    auto frames = media::extract_thumbnails(job.path, frames_for(length), options);
     if (!frames.has_value()) continue;
 
-    auto strip = std::make_shared<ui::Filmstrip>();
-    std::size_t weight = 0;
-    strip->frames.reserve(frames->size());
+    std::vector<ui::FilmFrame> fresh;
+    fresh.reserve(frames->size());
     for (media::Thumbnail& thumb : *frames) {
       if (thumb.width <= 0 || thumb.height <= 0 || thumb.rgba.empty()) continue;
-      weight += thumb.rgba.size();
-      strip->frames.push_back(ui::FilmFrame{.t = thumb.timestamp,
-                                            .width = thumb.width,
-                                            .height = thumb.height,
-                                            .rgba = std::move(thumb.rgba)});
+      fresh.push_back(ui::FilmFrame{.t = thumb.timestamp,
+                                    .width = thumb.width,
+                                    .height = thumb.height,
+                                    .rgba = std::move(thumb.rgba)});
     }
-    if (strip->frames.empty()) continue;
-    // In time order, because the drawing asks for the frame nearest a source
-    // time and a caller may reasonably assume the strip reads left to right.
-    std::ranges::sort(strip->frames, {}, &ui::FilmFrame::t);
+    if (fresh.empty()) continue;
 
     std::function<void()> tell;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       if (stopping_) return;
-      bytes_ += weight;
-      strips_.insert_or_assign(job.media_id,
-                               Entry{.strip = std::move(strip), .bytes = weight, .used = ++tick_});
+
+      Entry& entry = strips_[job.media_id];
+      // Built anew rather than added to. Whoever asked for the strip last is
+      // holding the old one and may be painting it on another thread this
+      // instant; the shared pointer is what makes that safe, and it is only
+      // safe while what it points at never changes.
+      auto strip = std::make_shared<ui::Filmstrip>();
+      if (entry.strip != nullptr) {
+        strip->frames.reserve(entry.strip->frames.size() + fresh.size());
+        for (const ui::FilmFrame& frame : entry.strip->frames) {
+          // A frame the fresh stretch also covers is the fresh one's to
+          // provide: the ranges were meant to abut and a little overlap is
+          // cheaper than a seam.
+          if (frame.t >= job.span.from - 1e-6 && frame.t <= job.span.to + 1e-6) continue;
+          strip->frames.push_back(frame);
+        }
+      }
+      for (ui::FilmFrame& frame : fresh) strip->frames.push_back(std::move(frame));
+
+      // In time order, because the drawing asks for the frame nearest a source
+      // time and a caller may reasonably assume the strip reads left to right.
+      std::ranges::sort(strip->frames, {}, &ui::FilmFrame::t);
+
+      // Following the view means a source scrolled end to end would otherwise
+      // grow without limit. What goes is what is furthest from the stretch just
+      // asked for, which is the part of the file nobody is looking at.
+      const double middle = (job.span.from + job.span.to) * 0.5;
+      while (strip->frames.size() > kFramesPerSource) {
+        const bool front_is_further =
+            std::abs(strip->frames.front().t - middle) > std::abs(strip->frames.back().t - middle);
+        if (front_is_further) {
+          strip->frames.erase(strip->frames.begin());
+        } else {
+          strip->frames.pop_back();
+        }
+      }
+
+      std::size_t kept = 0;
+      for (const ui::FilmFrame& frame : strip->frames) kept += frame.rgba.size();
+      bytes_ -= std::min(bytes_, entry.bytes);
+      bytes_ += kept;
+
+      cover(entry.covered, Span{job.span.from, job.span.to});
+      // And what the cap dropped is no longer covered, or it would never be
+      // asked for again and the strip would have a hole nothing could fill.
+      if (!strip->frames.empty()) {
+        const Span kept_span{strip->frames.front().t, strip->frames.back().t};
+        std::erase_if(entry.covered, [&](const Span& span) {
+          return span.to < kept_span.from - 1e-6 || span.from > kept_span.to + 1e-6;
+        });
+        for (Span& span : entry.covered) {
+          span.from = std::max(span.from, kept_span.from);
+          span.to = std::min(span.to, kept_span.to);
+        }
+        std::erase_if(entry.covered, [](const Span& span) { return span.empty(); });
+      }
+      // What was in flight is in flight no longer, whatever came of it.
+      if (const auto asked = requested_.find(job.media_id); asked != requested_.end()) {
+        std::erase_if(asked->second, [&](const Span& span) {
+          return span.from >= job.span.from - 1e-6 && span.to <= job.span.to + 1e-6;
+        });
+      }
+
+      entry.strip = std::move(strip);
+      entry.bytes = kept;
+      entry.used = ++tick_;
       evict();
       tell = on_arrival_;
     }

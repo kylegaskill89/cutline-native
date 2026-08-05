@@ -132,7 +132,7 @@ std::expected<std::vector<Thumbnail>, std::string> extract_thumbnails(std::strin
   }
   // Software decoding, deliberately: these frames have to reach the CPU to be
   // scaled, so putting them on the GPU first would only add a download.
-  ex.decoder->thread_count = 0;
+  ex.decoder->thread_count = std::max(0, options.threads);
   if (const int rc = avcodec_open2(ex.decoder.get(), codec, nullptr); rc < 0) {
     return std::unexpected(std::format("cannot open decoder: {}", av_error_string(rc)));
   }

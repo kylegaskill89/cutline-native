@@ -2922,9 +2922,37 @@ void request_media([[maybe_unused]] App& app) {
       // A still has one frame that never changes and a generated source has no
       // file, so neither is a filmstrip — asking would be an error reported
       // once a frame for as long as the clip is on screen.
-      if (media->has_video && !cutline::core::is_generated_media(*media) && !media->is_image) {
-        app.filmstrips.request(media->id, media->path, media->duration);
+      if (!media->has_video || cutline::core::is_generated_media(*media) || media->is_image) {
+        continue;
       }
+
+      // Only the stretch of the source that is actually on screen, translated
+      // from timeline time through the clip's own trim and speed. A ten-minute
+      // capture at an ordinary zoom shows about thirteen seconds of itself, and
+      // asking for the whole file to draw those was 48 seeks across a 4K
+      // capture — the hundred seconds of processor time that made dropping a
+      // clip feel like a crash.
+      if (app.timeline == nullptr) continue;
+      const cutline::ui::TimeScale& view = app.timeline->scale();
+      const double left = view.start;
+      const double right = left + view.visible_duration(app.timeline->time_area().width);
+
+      const double ends = cutline::core::clip_end(clip);
+      if (ends <= left || clip.start >= right) continue;  // not on screen at all
+
+      // Clamped to the clip, then carried into the source. `source_in` is where
+      // the clip starts in the file, and a clip playing at speed covers more of
+      // the source than it occupies on the timeline.
+      const double speed = cutline::core::clip_speed(clip);
+      const double from_edge = std::max(0.0, left - clip.start);
+      const double to_edge = std::min(ends, right) - clip.start;
+
+      // A margin either side, so scrolling gently does not ask for a new
+      // stretch on every frame of the movement.
+      const double margin = (to_edge - from_edge) * 0.5;
+      const double from = clip.source_in + std::max(0.0, from_edge - margin) * speed;
+      const double to = clip.source_in + (to_edge + margin) * speed;
+      app.filmstrips.request(media->id, media->path, from, std::min(to, media->duration));
     }
   }
 #endif

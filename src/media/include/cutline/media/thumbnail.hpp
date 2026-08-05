@@ -26,6 +26,16 @@ struct ThumbnailOptions {
   /// file, letting a trimmed clip ask only for the part it shows.
   double start = 0.0;
   double end = -1.0;
+
+  /// Decoding threads; 0 lets libav take the machine.
+  ///
+  /// Taking the machine is the right default for one extraction in a tool and
+  /// the wrong one for a background worker. Measured on a ten-minute 4K
+  /// capture: dropping it on the timeline cost about a hundred seconds of
+  /// processor time in ten seconds of wall clock — every core busy — and while
+  /// the interface never actually stopped, a machine in that state is
+  /// indistinguishable from one that is about to fall over.
+  int threads = 0;
 };
 
 /// Extracts `count` frames evenly spaced across the requested range.
