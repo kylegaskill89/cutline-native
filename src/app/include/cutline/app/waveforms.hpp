@@ -79,6 +79,15 @@ class WaveformCache {
   /// a status line.
   [[nodiscard]] std::size_t size() const;
 
+  /// How many are still to come: queued, plus the one being worked on.
+  ///
+  /// The interface never blocks on this work — measured, and the message loop
+  /// does not stall for a millisecond — but a ten-minute capture with four
+  /// audio streams costs about a hundred seconds of processor time spread
+  /// across every core it can reach, and for those seconds the machine is
+  /// visibly busy with nothing on screen to say why. This is what lets it say.
+  [[nodiscard]] std::size_t pending() const;
+
  private:
   struct Job {
     std::string media_id;
@@ -102,6 +111,14 @@ class WaveformCache {
   std::condition_variable wake_;
   std::thread worker_;
   bool stopping_ = false;
+  /// Asked for and not yet finished with, counted rather than derived.
+  ///
+  /// `requested_.size() - waveforms_.size()` looks like the same number and is
+  /// not: a source that cannot be decoded keeps its `requested_` entry for ever
+  /// — deliberately, so a broken path is not retried on every rebuild — and
+  /// would leave the count stuck at one and the indicator spinning for the life
+  /// of the session.
+  std::size_t outstanding_ = 0;
   std::atomic<bool> arrived_{false};
   /// Guarded by `mutex_`, and copied out before being called so the worker
   /// never holds the lock across something it does not control.

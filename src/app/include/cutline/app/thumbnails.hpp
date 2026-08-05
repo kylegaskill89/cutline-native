@@ -96,6 +96,11 @@ class ThumbnailCache {
   /// How many bytes of pixels are held.
   [[nodiscard]] std::size_t bytes() const;
 
+  /// How many filmstrips are still to come: queued, plus the one in hand.
+  /// Counted rather than derived, for the same reason as the envelopes — a
+  /// source that will not decode keeps its `requested_` entry for good.
+  [[nodiscard]] std::size_t pending() const;
+
   /// How many frames a source of this length is worth taking.
   [[nodiscard]] static int frames_for(double duration) noexcept;
 
@@ -134,6 +139,7 @@ class ThumbnailCache {
   bool stopping_ = false;
   std::atomic<bool> arrived_{false};
   std::function<void()> on_arrival_;
+  std::size_t outstanding_ = 0;
 };
 
 }  // namespace cutline::app

@@ -154,6 +154,27 @@ TEST_F(WithVideoFootage, TheSameSourceIsExtractedOnceHoweverOftenItIsAskedFor) {
   EXPECT_EQ(cache.find("boiler"), strip) << "every clip of a source shares one strip";
 }
 
+TEST_F(WithVideoFootage, WhatIsStillToComeIsCountedAndComesBackDown) {
+  ThumbnailCache cache;
+  EXPECT_EQ(cache.pending(), 0u);
+
+  cache.request("boiler", path_, 6.0);
+  ASSERT_NE(wait_for(cache, "boiler"), nullptr);
+  EXPECT_EQ(cache.pending(), 0u);
+}
+
+TEST(Thumbnails, ASourceThatWillNotDecodeStopsBeingOutstanding) {
+  // Three ways out of the worker's loop — extracted, refused, and yielding no
+  // usable frames — and the count has to come down on all of them.
+  ThumbnailCache cache;
+  cache.request("nowhere", "Z:/definitely/not/here.mp4", 10.0);
+
+  for (int i = 0; i < 200 && cache.pending() > 0; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_EQ(cache.pending(), 0u);
+}
+
 TEST_F(WithVideoFootage, TheWakeUpFires) {
   ThumbnailCache cache;
   std::atomic<int> woken{0};

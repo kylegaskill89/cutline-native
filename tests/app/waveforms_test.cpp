@@ -147,6 +147,47 @@ TEST_F(WithAudioFootage, TheSameSourceIsDecodedOnceHoweverOftenItIsAskedFor) {
   EXPECT_EQ(cache.find("boiler", 0), wave);
 }
 
+TEST_F(WithAudioFootage, WhatIsStillToComeIsCountedAndComesBackDown) {
+  // What the busy indicator reads. It has to reach zero, or the interface says
+  // it is working over an idle machine.
+  WaveformCache cache;
+  EXPECT_EQ(cache.pending(), 0u);
+
+  cache.request("boiler", path_, 0);
+  ASSERT_NE(wait_for(cache, "boiler", 0), nullptr);
+  EXPECT_EQ(cache.pending(), 0u);
+}
+
+TEST_F(WithAudioFootage, AskingTwentyTimesIsStillOneThingOutstanding) {
+  WaveformCache cache;
+  for (int i = 0; i < 20; ++i) cache.request("boiler", path_, 0);
+  EXPECT_LE(cache.pending(), 1u) << "the count followed the asking, not the work";
+  ASSERT_NE(wait_for(cache, "boiler", 0), nullptr);
+  EXPECT_EQ(cache.pending(), 0u);
+}
+
+TEST(Waveforms, ASourceThatWillNotDecodeStopsBeingOutstanding) {
+  // The trap this counter exists to avoid. A failed job keeps its `requested_`
+  // entry for good — deliberately, so a broken path is not retried on every
+  // rebuild — so a count derived from that map would stick at one and the
+  // indicator would spin for the rest of the session.
+  WaveformCache cache;
+  cache.request("nowhere", "Z:/definitely/not/here.wav", 0);
+
+  for (int i = 0; i < 200 && cache.pending() > 0; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_EQ(cache.pending(), 0u);
+  EXPECT_EQ(cache.find("nowhere", 0), nullptr);
+}
+
+TEST(Waveforms, ClearingForgetsWhatWasOutstanding) {
+  WaveformCache cache;
+  cache.request("nowhere", "Z:/definitely/not/here.wav", 0);
+  cache.clear();
+  EXPECT_EQ(cache.pending(), 0u);
+}
+
 TEST_F(WithAudioFootage, TheWakeUpFires) {
   WaveformCache cache;
   std::atomic<int> woken{0};

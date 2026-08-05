@@ -28,6 +28,11 @@ std::size_t WaveformCache::size() const {
   return waveforms_.size();
 }
 
+std::size_t WaveformCache::pending() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return outstanding_;
+}
+
 void WaveformCache::request(std::string media_id, std::string path, int stream) {
   // Generated media — titles, colour mattes, adjustment layers — have no file
   // behind them, and asking the decoder for one would be an error reported once
@@ -44,6 +49,7 @@ void WaveformCache::request(std::string media_id, std::string path, int stream) 
     if (requested_.contains(key)) return;
     requested_.emplace(key, true);
     queue_.push_back(Job{std::move(media_id), std::move(path), stream});
+    ++outstanding_;
   }
   ensure_worker();
   wake_.notify_one();
@@ -59,6 +65,9 @@ void WaveformCache::clear() {
   waveforms_.clear();
   requested_.clear();
   queue_.clear();
+  // Whatever the worker is in the middle of is no longer anybody's business,
+  // so it is not counted either.
+  outstanding_ = 0;
 }
 
 void WaveformCache::ensure_worker() {
@@ -88,7 +97,11 @@ void WaveformCache::run() {
     if (!peaks.has_value()) {
       // A source that cannot be decoded is left with no envelope and not asked
       // for again. `requested_` keeps the entry, which is what stops a broken
-      // path being retried on every rebuild for the life of the session.
+      // path being retried on every rebuild for the life of the session — and
+      // is why `outstanding_` has to come down here too, or one unreadable file
+      // would leave the interface saying it was still working for ever.
+      const std::lock_guard<std::mutex> lock(mutex_);
+      if (outstanding_ > 0) --outstanding_;
       continue;
     }
 
@@ -102,6 +115,7 @@ void WaveformCache::run() {
       const std::lock_guard<std::mutex> lock(mutex_);
       if (stopping_) return;
       waveforms_.insert_or_assign(Key{job.media_id, job.stream}, std::move(wave));
+      if (outstanding_ > 0) --outstanding_;
       tell = on_arrival_;
     }
     // Set after the map is written, so a frame that sees the flag finds the

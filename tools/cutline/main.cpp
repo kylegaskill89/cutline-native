@@ -669,6 +669,17 @@ struct App {
   cutline::app::Updater updater;
   Button* version_button = nullptr;
 
+  /// Says when the workers are still reading a source.
+  ///
+  /// The interface does not stop while they do — measured with
+  /// `SendMessageTimeout`, and the message loop does not miss a beat — but a
+  /// ten-minute 4K capture with four audio streams costs around a hundred
+  /// seconds of processor time across every core it can reach, and takes some
+  /// seconds of wall clock before the waveforms and the filmstrip appear. With
+  /// nothing saying so, a busy machine and an empty timeline lane are
+  /// indistinguishable from an editor that has hung.
+  Label* busy_label = nullptr;
+
   /// Set when the picture has changed and the measurements no longer describe
   /// it. Deferred like the preview is, so scrubbing across ten frames measures
   /// the one that is finally shown rather than all ten.
@@ -839,6 +850,7 @@ void mark_dirty(App& app) {
 
 void set_theme(App& app, std::size_t index);
 void refresh_timeline(App& app);
+void refresh_busy(App& app);
 void refresh_browser(App& app);
 void refresh_dock(App& app);
 void reconcile_windows(App& app);
@@ -2934,11 +2946,39 @@ void refresh_command_buttons(App& app) {
   }
 }
 
+/// Says what the workers are still reading, or nothing when they are idle.
+///
+/// Called from the timeline refresh, which is where the sources get asked for,
+/// and again when one arrives — the two ends of the work. Polling it on a timer
+/// instead would mean the label appeared a beat after the machine got busy,
+/// which is the beat that matters.
+void refresh_busy(App& app) {
+  if (app.busy_label == nullptr) return;
+#if CUTLINE_HAVE_PREVIEW
+  const std::size_t left = app.waveforms.pending() + app.filmstrips.pending();
+  // Counted rather than a bare "working": four audio streams and a filmstrip is
+  // five things, and a number that comes down is the difference between waiting
+  // and wondering.
+  std::string says = left == 0 ? std::string{} : std::format("Reading media ({})", left);
+#else
+  std::string says;
+#endif
+  if (says == app.busy_label->text()) return;
+  // Hidden rather than merely blank when there is nothing to say. `--check`
+  // counts a widget that takes up room and draws nothing as a fault, and it is
+  // right to: an idle editor should have an empty corner, not an empty label
+  // holding a space open for one.
+  app.busy_label->set_visible(!says.empty());
+  app.busy_label->set_text(std::move(says));
+  mark_dirty(app);
+}
+
 void refresh_timeline(App& app) {
   refresh_command_buttons(app);
   if (app.timeline == nullptr) return;
 
   request_media(app);
+  refresh_busy(app);
   app.timeline->set_model(cutline::editor::timeline_model(
       app.session.project(), app.session.selection(), app.timeline_media));
   app.timeline->set_playhead(app.session.playhead());
@@ -4575,6 +4615,14 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
       });
   if (app != nullptr) app->version_button = &version;
   footer.emplace<Spacer>();
+
+  // At the far end of the row the version sits on, which is where Premiere puts
+  // its progress too. Small and quiet: it is reassurance that something is
+  // happening, not a thing to watch.
+  auto& busy = footer.emplace<Label>(std::string{});
+  busy.set_small(true);
+  busy.set_visible(false);
+  if (app != nullptr) app->busy_label = &busy;
 
   return panel;
 }
@@ -7843,6 +7891,10 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       const bool waves = app->waveforms.take_arrival();
       const bool strips = app->filmstrips.take_arrival();
       if (waves || strips) refresh_timeline(*app);
+      // Outside the test as well: the last arrival of a burst brings the count
+      // to zero, and a label still saying "Reading media (1)" over an idle
+      // machine is worse than no label at all.
+      refresh_busy(*app);
       return 0;
     }
 #endif
@@ -8185,10 +8237,19 @@ template <typename T>
     const auto walk_within = [&](this const auto& self, const Widget& widget,
                                  const Widget* clipper) -> void {
       ++counted;
-      // A spacer is the exception: it exists to absorb whatever room is left
-      // over, and when a column has overflowed its panel there is none. Zero is
-      // the right answer there, not a layout that went wrong.
-      if (widget.bounds().empty() && dynamic_cast<const Spacer*>(&widget) == nullptr) ++empty;
+      // Two exceptions, and both are "no room was the right answer".
+      //
+      // A spacer exists to absorb whatever is left over, and when a column has
+      // overflowed its panel there is none.
+      //
+      // A hidden widget is one something has deliberately taken out of the
+      // layout — the busy indicator is hidden whenever the workers are idle,
+      // which is nearly always. Counting those as faults would mean the only
+      // way to have a control that comes and goes is to rebuild the panel
+      // around it.
+      const bool allowed_to_be_empty =
+          !widget.visible() || dynamic_cast<const Spacer*>(&widget) != nullptr;
+      if (widget.bounds().empty() && !allowed_to_be_empty) ++empty;
       if (widget.bounds().x < -0.5 || widget.bounds().right() > kWidth + 0.5) ++escaped;
 
       // A widget narrower than it asked to be.

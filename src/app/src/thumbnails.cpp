@@ -38,6 +38,11 @@ std::size_t ThumbnailCache::size() const {
   return strips_.size();
 }
 
+std::size_t ThumbnailCache::pending() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return outstanding_;
+}
+
 std::size_t ThumbnailCache::bytes() const {
   const std::lock_guard<std::mutex> lock(mutex_);
   return bytes_;
@@ -55,6 +60,7 @@ void ThumbnailCache::request(std::string media_id, std::string path, double dura
     if (requested_.contains(media_id)) return;
     requested_.emplace(media_id, true);
     queue_.push_back(Job{std::move(media_id), std::move(path), duration});
+    ++outstanding_;
   }
   ensure_worker();
   wake_.notify_one();
@@ -71,6 +77,7 @@ void ThumbnailCache::clear() {
   requested_.clear();
   queue_.clear();
   bytes_ = 0;
+  outstanding_ = 0;
 }
 
 void ThumbnailCache::ensure_worker() {
@@ -106,6 +113,18 @@ void ThumbnailCache::run() {
       job = std::move(queue_.front());
       queue_.pop_front();
     }
+
+    // Whatever becomes of this job — extracted, refused, or yielding no usable
+    // frames — it stops being outstanding. Done here rather than at each of the
+    // three ways out of the loop, which is how one of them gets forgotten and
+    // the interface says it is still working long after it stopped.
+    struct Done {
+      ThumbnailCache* cache;
+      ~Done() {
+        const std::lock_guard<std::mutex> lock(cache->mutex_);
+        if (cache->outstanding_ > 0) --cache->outstanding_;
+      }
+    } done{this};
 
     // Outside the lock: this is seconds of seeking and decoding, and holding
     // the mutex across it would make every lookup on the paint thread wait for
