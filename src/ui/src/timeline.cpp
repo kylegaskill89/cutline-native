@@ -829,6 +829,23 @@ std::optional<DropPoint> TimelineView::drop_at(double x, double y) const {
   return std::nullopt;
 }
 
+void TimelineView::set_drop_ghost(std::optional<DropGhost> ghost) {
+  drop_ghost_ = std::move(ghost);
+}
+
+Rect TimelineView::drop_ghost_rect() const {
+  if (!drop_ghost_.has_value()) return {};
+  if (drop_ghost_->track >= model_.tracks.size()) return {};
+
+  const Rect row = track_rect(drop_ghost_->track);
+  if (row.empty()) return {};
+
+  // A minimum width for the same reason a block has one: a clip a few frames
+  // long is still something you have to be able to see yourself dropping.
+  const double width = std::max(kMinBlockWidth, scale_.width_of(drop_ghost_->duration));
+  return Rect{row.x + scale_.to_x(drop_ghost_->start), row.y, width, row.height};
+}
+
 double TimelineView::trim_handle_width(std::size_t track, std::size_t block) const {
   const Rect box = block_rect(track, block);
   return std::min(kTrimHandle, box.width / 3.0);
@@ -1034,6 +1051,28 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
       painter.fill(box.inset(1.0), style.corner_radius,
                    Fill::solid(fade(style.text, 0.12f)));
       painter.stroke(box.inset(1.0), style.corner_radius, fade(style.text, 0.5f), 1.0);
+    }
+  }
+
+  // Where a clip dragged in from the pool would land. Under the clips, like the
+  // duplicate ghost and for the same reason: it is a promise about the release
+  // and must not hide what is already there.
+  if (const Rect landing = drop_ghost_rect();
+      !landing.empty() && landing.right() >= tracks.x && landing.x <= tracks.right()) {
+    const SurfaceStyle& style = theme.style(Part::Clip, State::Normal);
+    painter.fill(landing.inset(1.0), style.corner_radius, Fill::solid(fade(style.text, 0.14f)));
+    painter.stroke(landing.inset(1.0), style.corner_radius, fade(style.text, 0.55f), 1.0);
+
+    // Both edges picked out, because where it *starts* is the thing being
+    // aimed and a soft-edged rectangle does not say precisely where that is.
+    painter.line(landing.x, landing.y, landing.x, landing.bottom(),
+                 theme.style(Part::Playhead, State::Normal).fill.color, 1.5);
+
+    if (!drop_ghost_->label.empty() && landing.width > metrics_.padding_x * 3.0) {
+      const Rect text{landing.x + metrics_.padding_x * 0.5, landing.y,
+                      landing.width - metrics_.padding_x, landing.height};
+      painter.text(text_run(text, drop_ghost_->label, style, metrics_.small_font_size,
+                            TextAlign::Left, false));
     }
   }
 

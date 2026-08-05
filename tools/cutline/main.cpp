@@ -851,6 +851,7 @@ void mark_dirty(App& app) {
 void set_theme(App& app, std::size_t index);
 void refresh_timeline(App& app);
 void refresh_busy(App& app);
+void refresh_drop_ghost(App& app);
 void refresh_browser(App& app);
 void refresh_dock(App& app);
 void reconcile_windows(App& app);
@@ -3125,6 +3126,46 @@ void place_from_pool(App& app, std::size_t index,
   refresh_all(app);
 }
 
+/// Shows where a row dragged out of the pool would land, while it is in the air.
+///
+/// The same arithmetic `place_from_pool` does on release — snapped to the frame
+/// grid, aimed at the track under the pointer, the length the source's marks
+/// give it — so what is drawn is a promise the drop keeps rather than an
+/// approximation of it.
+void refresh_drop_ghost(App& app) {
+  if (app.timeline == nullptr || app.browser == nullptr) return;
+
+  // Worked out first and applied once, so the repaint can be asked for exactly
+  // when the answer changed. A ghost that redrew on every mouse move would cost
+  // a full repaint per pixel of a gesture that mostly stands still.
+  std::optional<cutline::ui::DropGhost> ghost;
+
+  if (const std::optional<std::size_t> row = app.browser->dragging();
+      row.has_value() && *row < app.browser->items().size()) {
+    // Nothing over the tracks means nothing to promise — over the headers, the
+    // ruler, or off the panel entirely.
+    if (const auto where =
+            app.timeline->drop_at(app.browser->drag_x(), app.browser->drag_y());
+        where.has_value()) {
+      const cutline::core::Project& project = app.session.project();
+      const std::string& media_id = app.browser->items()[*row].id;
+      const auto media = std::ranges::find(project.media, media_id, &cutline::core::Media::id);
+      if (media != project.media.end()) {
+        ghost = cutline::ui::DropGhost{
+            .track = where->track,
+            .start = cutline::core::snap_to_frame(where->time, project.fps),
+            .duration = cutline::core::placed_length(
+                *media, cutline::core::source_range(project, media_id)),
+            .label = media->name};
+      }
+    }
+  }
+
+  if (app.timeline->drop_ghost() == ghost) return;
+  app.timeline->set_drop_ghost(std::move(ghost));
+  mark_dirty(app);
+}
+
 /// Takes an entry out of the pool, and every clip that used it with it.
 void remove_from_pool(App& app) {
   if (app.browser == nullptr) return;
@@ -4609,6 +4650,8 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   });
   pool.set_on_drop([app](std::size_t index, double x, double y) {
     if (app == nullptr) return;
+    // The promise is kept or it is withdrawn; either way it stops being shown.
+    if (app->timeline != nullptr) app->timeline->set_drop_ghost(std::nullopt);
     const auto where = app->timeline == nullptr ? std::nullopt : app->timeline->drop_at(x, y);
     // A drag that ended anywhere but over a track is one that was thought
     // better of, not one that meant the playhead.
@@ -7652,6 +7695,11 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       TrackMouseEvent(&track);
       shell->host->mouse_move(mouse_from(lparam, MouseButton::Left));
 
+      // After the move, so the browser has been told how far the drag has got.
+      // Only the main window has both a pool and a timeline in it; a floating
+      // one may have either, and asking costs nothing when it has neither.
+      if (app != nullptr) refresh_drop_ghost(*app);
+
       // Any movement takes the tooltip away and starts the wait again. A box
       // that stayed up while the pointer moved on would be labelling the wrong
       // thing, and one that never restarted would only ever appear once.
@@ -7693,6 +7741,11 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
     case WM_LBUTTONUP:
       ReleaseCapture();
       shell->host->mouse_up(mouse_from(lparam, MouseButton::Left));
+      // A drag released anywhere — over the tracks, over a panel, off the
+      // window — is a drag that is over, and the promise goes with it. The
+      // browser has already forgotten the gesture by now, so this works the
+      // answer out the same way every other move does and finds there is none.
+      if (app != nullptr) refresh_drop_ghost(*app);
       if (shell->host->needs_paint()) shell->dirty = true;
       return 0;
 

@@ -401,6 +401,22 @@ struct DropPoint {
   friend bool operator==(const DropPoint&, const DropPoint&) = default;
 };
 
+/// Where a clip being dragged in from elsewhere would land.
+///
+/// Shown while the drag is in the air, so that letting go is a decision rather
+/// than a guess. The timeline does not know what is being dragged or where it
+/// came from — whoever owns the drag works out the track, the time and the
+/// length, and this is only how it is drawn.
+struct DropGhost {
+  std::size_t track = 0;
+  double start = 0.0;
+  double duration = 0.0;
+  /// What the clip will be called, drawn in it when there is room.
+  std::string label;
+
+  friend bool operator==(const DropGhost&, const DropGhost&) = default;
+};
+
 /// What a press on a clip means. Premiere's tool palette.
 ///
 /// The tool is state rather than a held modifier, because that is what makes
@@ -925,6 +941,15 @@ class TimelineView : public Widget {
   /// and stays ignorant of what was being dragged.
   [[nodiscard]] std::optional<DropPoint> drop_at(double x, double y) const;
 
+  /// Shows, or stops showing, where an incoming clip would land. Nothing means
+  /// no drag is over the tracks.
+  void set_drop_ghost(std::optional<DropGhost> ghost);
+  [[nodiscard]] const std::optional<DropGhost>& drop_ghost() const noexcept {
+    return drop_ghost_;
+  }
+  /// Its rectangle, empty when there is none or it is scrolled out of sight.
+  [[nodiscard]] Rect drop_ghost_rect() const;
+
   /// The block a drop from somewhere else would land on, outlined so it is
   /// obvious *which* clip is about to receive it.
   ///
@@ -1157,6 +1182,9 @@ class TimelineView : public Widget {
   /// gesture is while it is being made, and the picture would already have been
   /// showing the other one.
   bool duplicating_ = false;
+
+  /// Where a clip dragged in from outside would land, while it is in the air.
+  std::optional<DropGhost> drop_ghost_;
 
   /// Which automation point is being dragged, and where it was when the drag
   /// began. Kept for the same reason `origin_` is: every position is worked out

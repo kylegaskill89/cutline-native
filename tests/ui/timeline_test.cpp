@@ -1379,6 +1379,69 @@ TEST(Timeline, ADropFollowsTheScroll) {
   EXPECT_DOUBLE_EQ(where->time, 5.0);
 }
 
+// --------------------------------------------------------- the drop ghost --
+
+TEST(Timeline, WithNothingInTheAirThereIsNoGhost) {
+  const Fixture fixture;
+  EXPECT_FALSE(fixture.view->drop_ghost().has_value());
+  EXPECT_TRUE(fixture.view->drop_ghost_rect().empty());
+}
+
+TEST(Timeline, TheGhostSitsWhereTheClipWouldLand) {
+  // The whole point of it: what is drawn is where letting go would put the
+  // clip, in the track it would land on and the length it would be.
+  Fixture fixture;
+  fixture.view->set_drop_ghost(DropGhost{.track = 1, .start = 2.0, .duration = 3.0});
+
+  const Rect box = fixture.view->drop_ghost_rect();
+  const Rect row = fixture.view->track_rect(1);
+  ASSERT_FALSE(box.empty());
+  EXPECT_DOUBLE_EQ(box.x, row.x + fixture.view->scale().to_x(2.0));
+  EXPECT_DOUBLE_EQ(box.width, fixture.view->scale().width_of(3.0));
+  EXPECT_DOUBLE_EQ(box.y, row.y);
+  EXPECT_DOUBLE_EQ(box.height, row.height);
+}
+
+TEST(Timeline, TheGhostFollowsTheScroll) {
+  Fixture fixture;
+  fixture.view->set_drop_ghost(DropGhost{.track = 0, .start = 6.0, .duration = 2.0});
+  const double before = fixture.view->drop_ghost_rect().x;
+
+  fixture.view->set_scale(TimeScale{.pixels_per_second = 100.0, .start = 4.0});
+  EXPECT_LT(fixture.view->drop_ghost_rect().x, before)
+      << "the ghost stayed put while the view moved under it";
+}
+
+TEST(Timeline, AVeryShortGhostIsStillWideEnoughToSee) {
+  // The same floor a real block gets. A clip a few frames long is still
+  // something somebody has to be able to see themselves dropping.
+  Fixture fixture;
+  fixture.view->set_drop_ghost(DropGhost{.track = 0, .start = 1.0, .duration = 0.001});
+  EXPECT_GT(fixture.view->drop_ghost_rect().width, 1.0);
+}
+
+TEST(Timeline, AGhostOnATrackThatIsNotThereIsNotDrawn) {
+  Fixture fixture;
+  fixture.view->set_drop_ghost(DropGhost{.track = 99, .start = 1.0, .duration = 2.0});
+  EXPECT_TRUE(fixture.view->drop_ghost_rect().empty());
+}
+
+TEST(Timeline, TheGhostIsDrawnAndThenTakenAway) {
+  Fixture fixture;
+  const auto drawn = [&] {
+    RecordingPainter painter;
+    fixture.view->paint(painter, default_theme());
+    return painter.calls().size();
+  };
+
+  const std::size_t plain = drawn();
+  fixture.view->set_drop_ghost(DropGhost{.track = 0, .start = 1.0, .duration = 2.0});
+  EXPECT_GT(drawn(), plain);
+
+  fixture.view->set_drop_ghost(std::nullopt);
+  EXPECT_EQ(drawn(), plain);
+}
+
 TEST(Timeline, ADropOverTheHeadersIsRefused) {
   // Not clamped to zero: a drop that has no time is not a drop at the start of
   // the sequence, and quietly turning one into the other puts clips where
