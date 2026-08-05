@@ -242,6 +242,15 @@ class DockView : public Widget {
   [[nodiscard]] std::string title_of(const PanelId& panel) const;
   /// The panel whose tab is under a point, or nothing.
   [[nodiscard]] std::optional<PanelId> tab_at(double x, double y) const;
+
+ public:
+  /// The panel under a point, counting the whole group rather than its tab —
+  /// which is what "the panel the pointer is over" means, and what maximising
+  /// with `~` acts on. The panel *showing* in that group, since the others are
+  /// behind it.
+  [[nodiscard]] std::optional<PanelId> panel_at(double x, double y) const;
+
+ private:
   /// The rectangle a drop would fill, for the highlight.
   [[nodiscard]] Rect drop_rect(const DropTarget& target) const;
 

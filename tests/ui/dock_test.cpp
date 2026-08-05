@@ -112,6 +112,68 @@ TEST(Dock, ASplitHasNoActivePanelOfItsOwn) {
 
 // ------------------------------------------------------------- normalising --
 
+// ------------------------------------------------------------- maximising --
+
+TEST(DockMaximise, APanelFillsTheWindowAndThenGivesItBack) {
+  DockLayout layout = sample_layout();
+  const DockNode arrangement = layout.root;
+
+  EXPECT_TRUE(toggle_maximised(layout, "monitor"));
+  EXPECT_EQ(layout.maximised, "monitor");
+  // The tree is untouched, which is the whole of why coming back is exact.
+  EXPECT_EQ(layout.root, arrangement);
+
+  EXPECT_TRUE(toggle_maximised(layout, "monitor"));
+  EXPECT_TRUE(layout.maximised.empty());
+  EXPECT_EQ(layout.root, arrangement);
+}
+
+TEST(DockMaximise, MaximisingAnotherPanelSwapsRatherThanNesting) {
+  DockLayout layout = sample_layout();
+  EXPECT_TRUE(toggle_maximised(layout, "monitor"));
+  EXPECT_TRUE(toggle_maximised(layout, "timeline"));
+  EXPECT_EQ(layout.maximised, "timeline");
+}
+
+TEST(DockMaximise, APanelInAWindowOfItsOwnIsRefused) {
+  // It is already a window. Filling the main one with it would take it out of
+  // the window it lives in, which is not what the key means.
+  DockLayout layout = sample_layout();
+  ASSERT_TRUE(float_panel(layout, "effects", Rect{0.0, 0.0, 300.0, 300.0}));
+
+  EXPECT_FALSE(toggle_maximised(layout, "effects"));
+  EXPECT_TRUE(layout.maximised.empty());
+}
+
+TEST(DockMaximise, NamingNothingDoesNothing) {
+  DockLayout layout = sample_layout();
+  EXPECT_FALSE(toggle_maximised(layout, ""));
+  EXPECT_TRUE(layout.maximised.empty());
+}
+
+TEST(DockMaximise, ClosingWhatIsFillingTheWindowPutsTheRestBack) {
+  // Otherwise the window shows a panel that is no longer in the layout, and
+  // nothing can put it back.
+  DockLayout layout = sample_layout();
+  ASSERT_TRUE(toggle_maximised(layout, "monitor"));
+  ASSERT_TRUE(close_panel(layout, "monitor"));
+  EXPECT_TRUE(layout.maximised.empty());
+}
+
+TEST(DockMaximise, APanelThisBuildNoLongerHasStopsFillingTheWindow) {
+  DockLayout layout = sample_layout();
+  ASSERT_TRUE(toggle_maximised(layout, "monitor"));
+
+  const std::vector<PanelId> known{"project", "effects", "timeline"};
+  reconcile_panels(layout, known);
+  EXPECT_TRUE(layout.maximised.empty());
+}
+
+TEST(DockMaximise, RestoringWhenNothingIsMaximisedChangesNothing) {
+  DockLayout layout = sample_layout();
+  EXPECT_FALSE(restore_maximised(layout));
+}
+
 TEST(DockNormalise, ASplitWithOnePaneIsNotASplit) {
   DockNode node = DockNode::split(Axis::Horizontal, {DockNode::tabs({"only"})});
   normalise(node);

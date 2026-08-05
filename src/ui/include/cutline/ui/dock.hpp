@@ -99,6 +99,15 @@ struct DockLayout {
   DockNode root;
   std::vector<FloatingDock> floating;
 
+  /// The panel filling the main window on its own, or empty when the
+  /// arrangement is showing as laid out.
+  ///
+  /// Premiere's `~`. Held *beside* the tree rather than by rewriting it, which
+  /// is the whole of why coming back is exact: nothing is moved, so nothing has
+  /// to be moved back, and a workspace saved while maximised still describes
+  /// the arrangement somebody built.
+  PanelId maximised;
+
   friend bool operator==(const DockLayout&, const DockLayout&) = default;
 };
 
@@ -181,6 +190,19 @@ bool activate_panel(DockLayout& layout, std::string_view panel);
 
 /// Removes `panel` from the layout entirely.
 bool close_panel(DockLayout& layout, std::string_view panel);
+
+/// Fills the main window with `panel` alone, or puts the arrangement back when
+/// that panel is already the one filling it. Reports whether anything changed.
+///
+/// A panel in a window of its own cannot be maximised: it already is one, and
+/// the main window is not where it lives. Naming one is refused rather than
+/// quietly maximising something else.
+bool toggle_maximised(DockLayout& layout, std::string_view panel);
+
+/// Puts the arrangement back, whatever was filling the window. What a
+/// rearrangement calls, since a panel dragged somewhere while another one was
+/// maximised would otherwise be dropped into a layout nobody can see.
+bool restore_maximised(DockLayout& layout);
 
 /// Makes a layout show exactly the panels the application has.
 ///

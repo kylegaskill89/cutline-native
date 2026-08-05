@@ -395,12 +395,43 @@ bool activate_panel(DockLayout& layout, std::string_view panel) {
 
 bool close_panel(DockLayout& layout, std::string_view panel) {
   if (!detach(layout, panel)) return false;
+  // A panel that has been closed cannot go on filling the window, and leaving
+  // it named there would show an empty one nothing can put back.
+  if (layout.maximised == panel) layout.maximised.clear();
   normalise(layout);
+  return true;
+}
+
+bool toggle_maximised(DockLayout& layout, std::string_view panel) {
+  if (panel.empty()) return false;
+  if (layout.maximised == panel) {
+    layout.maximised.clear();
+    return true;
+  }
+  // Only what the main window holds. A floating panel is already a window of
+  // its own, and filling the main window with it would take it out of the one
+  // it is in.
+  const std::vector<PanelId> here = panels_in(layout.root);
+  if (std::ranges::find(here, panel) == here.end()) return false;
+
+  layout.maximised = PanelId(panel);
+  return true;
+}
+
+bool restore_maximised(DockLayout& layout) {
+  if (layout.maximised.empty()) return false;
+  layout.maximised.clear();
   return true;
 }
 
 bool reconcile_panels(DockLayout& layout, std::span<const PanelId> known) {
   const DockLayout before = layout;
+
+  // A panel that is no longer in this build cannot go on filling the window.
+  if (!layout.maximised.empty() &&
+      std::ranges::find(known, layout.maximised) == known.end()) {
+    layout.maximised.clear();
+  }
 
   // Unknown ones first, so that opening the missing ones does not put them
   // beside a panel that is about to be taken away.

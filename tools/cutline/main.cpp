@@ -7020,6 +7020,9 @@ void wire_dock(App* app, Shell* shell, DockView& dock) {
   });
   dock.set_on_dock([app](PanelId panel, cutline::ui::DropTarget target) {
     if (app == nullptr) return;
+    // Whatever was filling the window stops: a panel dropped into an
+    // arrangement nobody can see is a move nobody can check.
+    if (cutline::ui::restore_maximised(layout_of(*app))) app->dock_stale = true;
     const bool moved =
         target.at_edge ? cutline::ui::dock_panel_at_edge(layout_of(*app), panel, target.side)
                        : cutline::ui::dock_panel(layout_of(*app), panel, target.onto, target.side);
@@ -7039,6 +7042,9 @@ void wire_dock(App* app, Shell* shell, DockView& dock) {
   // does it become a window of its own.
   dock.set_on_tear_out([app, shell](PanelId panel, double x, double y) {
     if (app == nullptr || shell == nullptr || shell->window == nullptr) return;
+    // The same reason a drop restores: a panel torn out of a window showing one
+    // panel would leave that window showing nothing.
+    if (cutline::ui::restore_maximised(layout_of(*app))) app->dock_stale = true;
 
     POINT screen{static_cast<LONG>(x), static_cast<LONG>(y)};
     ClientToScreen(shell->window, &screen);
@@ -7184,7 +7190,14 @@ void refresh_dock(App& app) {
     if (shell->dock == nullptr) continue;
 
     const DockNode* node = &layout_of(app).root;
-    if (!shell->is_main()) {
+    // One panel filling the main window, when something is maximised. Built
+    // here rather than by rewriting the tree, which is what makes coming back
+    // exact — the arrangement was never taken apart.
+    DockNode only;
+    if (!layout_of(app).maximised.empty() && shell->is_main()) {
+      only = DockNode::tabs({layout_of(app).maximised});
+      node = &only;
+    } else if (!shell->is_main()) {
       const auto found =
           std::ranges::find(layout_of(app).floating, shell->floating_id, &FloatingDock::id);
       if (found == layout_of(app).floating.end()) continue;
@@ -7932,6 +7945,10 @@ void refresh_float_titles(App& app) {
     // dropped it and the binding sat there doing nothing.
     case VK_OEM_COMMA: return Key::Comma;
     case VK_OEM_PERIOD: return Key::Period;
+    // Maximise. The same trap as the comma above, and it caught this too: the
+    // binding was written, the key was pressed, and nothing happened because
+    // the backtick arrives as `VK_OEM_3` rather than as its character.
+    case VK_OEM_3: return Key::Backtick;
     default: return Key::None;
   }
 }
@@ -8582,6 +8599,24 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       if (event.key == Key::Tab) {
         shell->host->focus_next(event.modifiers.shift);
         mark_dirty(*app);
+        return 0;
+      }
+
+      // Premiere's `~`: the panel under the pointer fills the window, and again
+      // puts it back. Under the *pointer* rather than whatever has the keyboard,
+      // because it is used to get a closer look at something being watched, and
+      // watching a panel does not focus it.
+      if (event.key == Key::Backtick && held.none() && shell->is_main()) {
+        if (shell->dock != nullptr) {
+          POINT at{};
+          GetCursorPos(&at);
+          ScreenToClient(window, &at);
+          const auto over = shell->dock->panel_at(static_cast<double>(at.x),
+                                                  static_cast<double>(at.y));
+          const PanelId panel =
+              over.value_or(layout_of(*app).maximised);
+          if (cutline::ui::toggle_maximised(layout_of(*app), panel)) app->dock_stale = true;
+        }
         return 0;
       }
 

@@ -407,6 +407,19 @@ std::optional<PanelId> DockView::tab_at(double x, double y) const {
   return std::nullopt;
 }
 
+std::optional<PanelId> DockView::panel_at(double x, double y) const {
+  // The whole group, tab strip and body alike, and the panel *showing* in it —
+  // which is what "the panel under the pointer" means when panels are stacked.
+  // The innermost match wins, though groups do not nest today: taking the first
+  // hit would be a rule that quietly stops being right if they ever do.
+  std::optional<PanelId> found;
+  for (const DockGroup* group : groups_) {
+    if (!group->bounds().contains(x, y)) continue;
+    if (const PanelId showing = group->active_panel(); !showing.empty()) found = showing;
+  }
+  return found;
+}
+
 bool DockView::on_mouse_down(const MouseEvent& event) {
   if (event.button != MouseButton::Left) return false;
 

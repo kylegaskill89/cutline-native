@@ -864,7 +864,7 @@ had been written down anywhere:
 | Safe margins | title-safe and action-safe overlays | none | control |
 | Monitor zoom level | Fit, 10%…400%, and scroll | letterboxed fit only | control |
 | Display mode | composite, alpha, and the scopes, over the picture | the Scopes panel instead, docked | control |
-| Maximise a panel | `~` over any panel | none | control |
+| ~~Maximise a panel~~ | `~` over any panel | **done** — the panel under the pointer, and again to put it back | — |
 
 **The three monitor rows are §3's last row**, moved here rather than left there:
 they belong to the program monitor as much as to the source one, and doing them
