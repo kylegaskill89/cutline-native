@@ -13,6 +13,7 @@ add_library(cutline_ui
   src/painter.cpp
   src/recording_painter.cpp
   src/scopes_view.cpp
+  src/scrub_bar.cpp
   src/theme.cpp
   src/themes.cpp
   src/timeline.cpp

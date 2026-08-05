@@ -54,6 +54,7 @@ add_executable(cutline_core_tests
   ui/monitor_test.cpp
   ui/painter_test.cpp
   ui/scopes_view_test.cpp
+  ui/scrub_bar_test.cpp
   ui/theme_test.cpp
   ui/timeline_test.cpp
   ui/timescale_test.cpp
