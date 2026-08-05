@@ -261,6 +261,13 @@ deciding it is probably fine.
   frames or so. What to look for is whether that seek shows as a hitch.
 - **Forward playback** at the same time, to confirm the run costs it nothing.
   Measured unchanged at 2.5 ms a frame.
+- **A source placed as it is marked** — the marks themselves cannot be set by
+  eye yet, so this is only reachable through a saved project for now. What to
+  look for is that insert, overwrite and a drag from the pool all put down the
+  same span.
+- **`--check`**, which was skipped for the scrub bar rather than run: the widget
+  is in no panel yet, so the four themes have nothing new to lay out. It is due
+  the moment anything places it.
 
 Before those, the last of it — the cursors, the snap line, and the two
 clip-menu framing rows — was driven and is recorded below.
