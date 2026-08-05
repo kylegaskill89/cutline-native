@@ -58,6 +58,7 @@ add_executable(cutline_core_tests
   ui/theme_test.cpp
   ui/timeline_test.cpp
   ui/timescale_test.cpp
+  ui/waveform_view_test.cpp
   ui/widget_test.cpp
   ui/widgets_test.cpp)
 

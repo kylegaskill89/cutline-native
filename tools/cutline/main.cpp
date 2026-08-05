@@ -53,6 +53,7 @@
 #include "cutline/ui/monitor.hpp"
 #include "cutline/ui/scopes_view.hpp"
 #include "cutline/ui/scrub_bar.hpp"
+#include "cutline/ui/waveform_view.hpp"
 #include "cutline/ui/skia_painter.hpp"
 #include "cutline/ui/skia_window.hpp"
 #include "cutline/ui/theme.hpp"
@@ -155,6 +156,7 @@ using cutline::ui::Spacer;
 using cutline::ui::Splitter;
 using cutline::ui::TextAlign;
 using cutline::ui::TextField;
+using cutline::ui::WaveformView;
 using cutline::ui::Theme;
 using cutline::ui::to_hex;
 using cutline::ui::TimelineView;
@@ -695,8 +697,20 @@ struct App {
   // where insert, overwrite and a drag from the pool already read them.
 
   MonitorView* source_monitor = nullptr;
+  /// Shown instead of the picture when the source has none. A sound file in a
+  /// monitor that renders video is a black rectangle, which looks exactly like
+  /// a file that failed to decode.
+  WaveformView* source_waveform = nullptr;
   ScrubBar* source_scrub = nullptr;
-  Label* source_name = nullptr;
+  /// The sources looked at lately, most recent first, and the control that
+  /// chooses between them.
+  ///
+  /// Premiere's source monitor names what it is showing and drops down the
+  /// others, which is the difference between a monitor and a monitor you can
+  /// work in: comparing two takes means going back and forth, and going through
+  /// the pool each time makes that a chore rather than a glance.
+  Dropdown* source_choice = nullptr;
+  std::vector<std::string> source_recent;
   /// The panel's root, so "is the source monitor the one being worked in" can
   /// be answered by asking where the keyboard is rather than by keeping a flag
   /// that something forgets to clear.
@@ -907,6 +921,8 @@ void refresh_busy(App& app);
 void refresh_drop_ghost(App& app);
 void open_from_command_line(App& app, const std::filesystem::path& path);
 void refresh_source(App& app);
+void refresh_source_list(App& app);
+void show_source(App& app, const std::string& media_id);
 [[nodiscard]] const cutline::core::Media* source_media_of(const App& app);
 void step_source(App& app, double frames);
 void mark_source(App& app, bool out_point);
@@ -3521,6 +3537,63 @@ void advance_source_playback([[maybe_unused]] App& app) {
 #endif
 }
 
+/// Shows a source in the source monitor, remembering it as recently looked at.
+///
+/// The one way in, so the pool's selection, the dropdown and anything later all
+/// leave the same state behind: the list in the order last looked at, and the
+/// playhead back at the start when the source itself changed.
+void show_source(App& app, const std::string& media_id) {
+  if (media_id != app.session.source_media()) app.source_playhead = 0.0;
+  app.session.set_source_media(media_id);
+
+  // Newest first, and only ever *added* to the front — something already in the
+  // list stays where it is.
+  //
+  // Reordering on every look was the first attempt and it fought the dropdown
+  // it feeds: choosing the second entry moved that entry to the top, so the
+  // index the control had just acted on named something else, and the list
+  // settled showing the name of the source you had switched away from. A list
+  // whose items move while you are choosing from them is the wrong shape for a
+  // control you choose from.
+  if (!media_id.empty() && std::ranges::find(app.source_recent, media_id) ==
+                               app.source_recent.end()) {
+    app.source_recent.insert(app.source_recent.begin(), media_id);
+    // Long enough to go back and forth between a handful of takes, short enough
+    // that the list is still something to glance at rather than read.
+    constexpr std::size_t kRecentSources = 10;
+    if (app.source_recent.size() > kRecentSources) app.source_recent.resize(kRecentSources);
+  }
+  refresh_source(app);
+  mark_dirty(app);
+}
+
+/// Fills the dropdown from what has been looked at, dropping anything the
+/// project no longer has — media can be removed, and a list naming something
+/// gone would offer a source that cannot be shown.
+void refresh_source_list(App& app) {
+  if (app.source_choice == nullptr) return;
+
+  const cutline::core::Project& project = app.session.project();
+  std::erase_if(app.source_recent, [&](const std::string& id) {
+    return std::ranges::find(project.media, id, &cutline::core::Media::id) == project.media.end();
+  });
+
+  std::vector<std::string> names;
+  names.reserve(app.source_recent.size());
+  for (const std::string& id : app.source_recent) {
+    const auto found = std::ranges::find(project.media, id, &cutline::core::Media::id);
+    names.push_back(found == project.media.end() ? id : found->name);
+  }
+  if (names.empty()) names.emplace_back("No source");
+
+  if (names != app.source_choice->options()) app.source_choice->set_options(std::move(names));
+
+  const auto at = std::ranges::find(app.source_recent, app.session.source_media());
+  app.source_choice->set_selected(at == app.source_recent.end()
+                                      ? 0
+                                      : static_cast<std::size_t>(at - app.source_recent.begin()));
+}
+
 /// Renders the source monitor, and keeps its scrub bar in step.
 void refresh_source([[maybe_unused]] App& app) {
 #if CUTLINE_HAVE_PREVIEW
@@ -3532,20 +3605,41 @@ void refresh_source([[maybe_unused]] App& app) {
     // placeholder rather than showing the last source, which would be a picture
     // of something nobody is pointing at.
     app.source_monitor->clear_frame();
+    if (app.source_waveform != nullptr) app.source_waveform->set_visible(false);
     if (app.source_scrub != nullptr) {
       app.source_scrub->set_duration(0.0);
       app.source_scrub->set_marks(std::nullopt, std::nullopt);
     }
-    if (app.source_name != nullptr) app.source_name->set_text("No source");
+    refresh_source_list(app);
     app.source_built_for.clear();
     return;
   }
 
-  if (app.source_name != nullptr) app.source_name->set_text(media->name);
+  refresh_source_list(app);
   if (app.source_scrub != nullptr) {
     app.source_scrub->set_duration(media->duration);
     app.source_scrub->set_marks(media->in_point, media->out_point);
     app.source_scrub->set_playhead(app.source_playhead);
+  }
+
+  // A source with no picture is shown as its shape instead. Which of the two
+  // widgets is in the layout at all is decided here, so the panel never holds
+  // an empty rectangle where the other one would be.
+  const bool has_picture = media->has_video;
+  if (app.source_waveform != nullptr) {
+    app.source_waveform->set_visible(!has_picture);
+    if (!has_picture) {
+      app.waveforms.request(media->id, media->path, 0);
+      app.source_waveform->set_waveform(app.waveforms.find(media->id, 0));
+      app.source_waveform->set_duration(media->duration);
+      app.source_waveform->set_playhead(app.source_playhead);
+    }
+  }
+  app.source_monitor->set_visible(has_picture);
+  if (!has_picture) {
+    app.source_monitor->clear_frame();
+    mark_dirty(app);
+    return;
   }
 
   if (app.source_failed) return;
@@ -4366,6 +4460,11 @@ void import_media(App& app) {
     if (found != items.end()) {
       app.browser->select(static_cast<std::size_t>(found - items.begin()));
     }
+    // And into the source monitor, because selecting a row from here does not
+    // go through the browser's own callback — it is set, not chosen. Without
+    // this the pool showed the new file highlighted and the source monitor
+    // said "No source", which is two panels disagreeing about what is selected.
+    show_source(app, id);
   }
 #else
   complain(app.main.window, "This build has no media layer, so there is nothing to import with.");
@@ -4708,6 +4807,7 @@ void open_from_command_line(App& app, const std::filesystem::path& path) {
     app.session.apply(cutline::editor::import_media(app.session.project(), *source, &id));
     refresh_all(app);
     if (app.browser != nullptr && !id.empty()) app.browser->select_id(id);
+    show_source(app, id);
     return;
   }
 #endif
@@ -5087,15 +5187,8 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   pool.set_on_select([app](std::optional<std::size_t> index) {
     if (app == nullptr || app->browser == nullptr) return;
     const std::vector<cutline::ui::MediaItem>& items = app->browser->items();
-    const std::string chosen =
-        index.has_value() && *index < items.size() ? items[*index].id : std::string{};
-    // Back to the start when the source changes. Keeping the old time would
-    // point the new source's playhead at a moment chosen for a different file,
-    // which for a shorter one is past its end.
-    if (chosen != app->session.source_media()) app->source_playhead = 0.0;
-    app->session.set_source_media(chosen);
-    refresh_source(*app);
-    mark_dirty(*app);
+    show_source(*app, index.has_value() && *index < items.size() ? items[*index].id
+                                                                : std::string{});
   });
   pool.set_on_drop([app](std::size_t index, double x, double y) {
     if (app == nullptr) return;
@@ -6677,9 +6770,17 @@ void build_track_strip(App& app, Box& column, const cutline::core::Track& track,
 [[nodiscard]] std::unique_ptr<Widget> make_source_panel(App* app) {
   auto panel = std::make_unique<Panel>();
 
-  auto& name = panel->emplace<Label>("No source");
-  name.set_small(true);
-  if (app != nullptr) app->source_name = &name;
+  // The name of what is showing, and the way to the others. One control rather
+  // than a label and a list, which is what Premiere does and for the reason
+  // that the name *is* the thing you press to change it.
+  auto& choice = panel->emplace<Dropdown>(std::vector<std::string>{"No source"});
+  if (app != nullptr) {
+    app->source_choice = &choice;
+    choice.set_on_change([app](std::size_t index) {
+      if (index >= app->source_recent.size()) return;
+      show_source(*app, app->source_recent[index]);
+    });
+  }
 
   auto& picture = panel->emplace<MonitorView>();
   picture.set_placeholder("Select something in the project panel.");
@@ -6696,6 +6797,10 @@ void build_track_strip(App& app, Box& column, const cutline::core::Track& track,
       place_media_from(*app, app->session.source_media(), where);
     });
   }
+
+  auto& envelope = panel->emplace<WaveformView>();
+  envelope.set_visible(false);
+  if (app != nullptr) app->source_waveform = &envelope;
 
   auto& bar = panel->emplace<ScrubBar>();
   // So a click on it takes the keyboard, which is what makes the transport and

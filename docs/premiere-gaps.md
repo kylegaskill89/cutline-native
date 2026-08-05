@@ -806,9 +806,13 @@ way to *set* them by eye, which is the panel.
 | ~~Marks that belong to the asset~~ | kept per clip, and saved | **done** | — |
 | ~~Insert and overwrite the marked part~~ | the point of the whole panel | **done** | — |
 | ~~Drag from the picture to the timeline~~ | yes | **done** — with the same ghost the pool's drag shows | — |
-| A list of recently opened sources | a dropdown of them | one at a time | control |
-| Audio-only sources shown as a waveform | yes | none | control |
-| Display mode, safe margins, zoom | yes | none — see the audit list | control |
+| ~~A list of recently opened sources~~ | a dropdown of them | **done** — the name of what is showing *is* the chooser | — |
+| ~~Audio-only sources shown as a waveform~~ | yes | **done** — `ui::WaveformView` | — |
+| Display mode, safe margins, zoom | yes | none — and not this section's, since it is both monitors' | audit |
+
+Section 3 is closed but for the last row, which the audit list owns: display
+mode, safe margins and zoom belong to the program monitor as much as to this
+one, and building them here alone would be building them twice.
 
 **The picture costs nothing to render.** A source monitor is a sequence of one
 clip, so it can be shown by handing `ProjectPreview` a project built on the spot

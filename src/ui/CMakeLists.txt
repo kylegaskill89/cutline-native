@@ -14,6 +14,7 @@ add_library(cutline_ui
   src/recording_painter.cpp
   src/scopes_view.cpp
   src/scrub_bar.cpp
+  src/waveform_view.cpp
   src/theme.cpp
   src/themes.cpp
   src/timeline.cpp
