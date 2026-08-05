@@ -716,6 +716,23 @@ struct App {
   double source_playhead = 0.0;
   bool source_failed = false;
 
+  /// Playing the source, with its sound.
+  ///
+  /// The same `engine::Player` the sequence uses, handed the one-clip project
+  /// the source monitor is already drawn from — a source monitor being a
+  /// sequence of one clip is what makes that work, and it is why playing one
+  /// gets audio without a second audio path being written.
+  ///
+  /// One at a time, because there is one sound card: starting this stops the
+  /// sequence, and starting the sequence stops this. Premiere does the same.
+  std::unique_ptr<cutline::engine::Player> source_player;
+  std::string source_player_for;
+  Button* source_play_button = nullptr;
+
+  [[nodiscard]] bool source_playing() const noexcept {
+    return source_player != nullptr && source_player->playing();
+  }
+
   /// Set when the picture has changed and the measurements no longer describe
   /// it. Deferred like the preview is, so scrubbing across ten frames measures
   /// the one that is finally shown rather than all ten.
@@ -894,6 +911,11 @@ void refresh_source(App& app);
 void step_source(App& app, double frames);
 void mark_source(App& app, bool out_point);
 [[nodiscard]] bool source_has_focus(const App& app);
+void toggle_source_playback(App& app);
+void stop_source_playback(App& app);
+void stop_playback(App& app);
+void advance_source_playback(App& app);
+[[nodiscard]] cutline::core::Project source_project(const cutline::core::Media& media);
 void refresh_browser(App& app);
 void refresh_dock(App& app);
 void reconcile_windows(App& app);
@@ -3393,6 +3415,85 @@ void mark_source(App& app, bool out_point) {
   refresh_all(app);
 }
 
+/// Stops the source playing, and says so on the button.
+void stop_source_playback(App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.source_player != nullptr) app.source_player->pause();
+  if (app.source_play_button != nullptr) app.source_play_button->set_text("Play");
+  mark_dirty(app);
+#else
+  (void)app;
+#endif
+}
+
+/// Plays the source, or stops it.
+void toggle_source_playback([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.source_playing()) {
+    stop_source_playback(app);
+    return;
+  }
+
+  const cutline::core::Media* media = source_media_of(app);
+  if (media == nullptr || media->path.empty()) return;
+  if (app.player_failed) return;
+
+  // One sound card, so one thing playing. Stopping the sequence rather than
+  // refusing: pressing play on a source is a clear statement about which of the
+  // two is being watched.
+  if (app.playing()) stop_playback(app);
+  if (app.shuttling()) set_shuttle(app, 0.0);
+
+  if (app.source_player != nullptr && app.source_player_for != media->id) {
+    app.source_player.reset();
+  }
+  if (app.source_player == nullptr) {
+    auto made = cutline::engine::Player::create(source_project(*media));
+    if (!made.has_value()) {
+      app.player_failed = true;
+      complain(app.main.window, "Playback is unavailable.\n\n" + made.error());
+      return;
+    }
+    app.source_player = std::move(*made);
+    app.source_player_for = media->id;
+  }
+
+  app.source_player->seek(app.source_playhead);
+  app.source_player->play();
+  // The same reason the sequence does it: without this `Sleep(1)` in the loop
+  // really sleeps about 15 ms, which is most of a frame at 60 Hz.
+  timeBeginPeriod(1);
+  if (app.source_play_button != nullptr) app.source_play_button->set_text("Stop");
+  mark_dirty(app);
+#endif
+}
+
+/// One turn of source playback. The sound card says where time is, exactly as
+/// it does for the sequence, and the picture follows.
+void advance_source_playback([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (!app.source_playing()) return;
+
+  if (!app.source_player->error().empty()) {
+    const std::string message = app.source_player->error();
+    stop_source_playback(app);
+    complain(app.main.window, "Playback stopped.\n\n" + message);
+    return;
+  }
+
+  const double at = app.source_player->position();
+  if (app.source_player->finished()) {
+    app.source_playhead = at;
+    stop_source_playback(app);
+    refresh_source(app);
+    return;
+  }
+
+  app.source_playhead = at;
+  refresh_source(app);
+#endif
+}
+
 /// Renders the source monitor, and keeps its scrub bar in step.
 void refresh_source([[maybe_unused]] App& app) {
 #if CUTLINE_HAVE_PREVIEW
@@ -4863,6 +4964,13 @@ bool handle_source_key(App& app, Key key, const Modifiers& modifiers) {
     case Key::End:
       app.source_playhead = std::max(0.0, media->duration);
       refresh_source(app);
+      return true;
+    case Key::Space:
+      if (modifiers.shift) return false;
+      toggle_source_playback(app);
+      return true;
+    case Key::K:
+      stop_source_playback(app);
       return true;
     default:
       return false;
@@ -6572,14 +6680,29 @@ void build_track_strip(App& app, Box& column, const cutline::core::Track& track,
 
   // A frame either way. The buttons and the arrow keys go through the same
   // call, so the two can never disagree about what a frame is.
-  auto& back = row.emplace<Button>("<", [app] {
+  //
+  // Drawn icons rather than "<" and ">", which is what the rest of the
+  // application uses and — the reason it changed — half the width. Spelled out,
+  // this row and a Play button together were fourteen controls squeezed in two
+  // themes of four.
+  auto& back = row.emplace<IconButton>(IconButton::Icon::ArrowLeft, [app] {
     if (app != nullptr) step_source(*app, -1.0);
   });
   back.set_tooltip("Back one frame (Left)");
-  auto& forward = row.emplace<Button>(">", [app] {
+  back.set_narrow(true);
+  auto& forward = row.emplace<IconButton>(IconButton::Icon::ArrowRight, [app] {
     if (app != nullptr) step_source(*app, 1.0);
   });
   forward.set_tooltip("On one frame (Right)");
+  // A pair that belongs together, so they take about the room one control
+  // would — which is what buys the Play button its place on the row.
+  forward.set_narrow(true);
+
+  auto& play = row.emplace<Button>("Play", [app] {
+    if (app != nullptr) toggle_source_playback(*app);
+  });
+  play.set_tooltip("Play the source, with its sound (Space)");
+  if (app != nullptr) app->source_play_button = &play;
 
   // "In" and "Out" rather than "Mark In" and "Mark Out": this panel is a third
   // of the width the program monitor's row has, and with the two step buttons
@@ -6593,7 +6716,10 @@ void build_track_strip(App& app, Box& column, const cutline::core::Track& track,
     if (app != nullptr) mark_source(*app, true);
   });
   mark_out.set_tooltip("Mark out on the source (O)");
-  row.emplace<Button>("Clear", [app] {
+  // A cross rather than the word, which is the last thing Aero's roomier chrome
+  // had room for — spelled out it was fourteen controls squeezed, in that theme
+  // alone. Taking both marks away is a rarer thing to want than setting either.
+  auto& clear = row.emplace<IconButton>(IconButton::Icon::Cross, [app] {
     if (app == nullptr) return;
     if (const cutline::core::Media* media = source_media_of(*app); media != nullptr) {
       app->session.apply(
@@ -6601,6 +6727,7 @@ void build_track_strip(App& app, Box& column, const cutline::core::Track& track,
       refresh_all(*app);
     }
   });
+  clear.set_tooltip("Take both of the source's marks away");
   row.emplace<Spacer>();
 
   return panel;
@@ -9253,7 +9380,7 @@ int main(int argc, char** argv) {
     // watching only the first would go back to blocking with a thread still to
     // join and a bar stopped short of the end — which worked, whenever the
     // timing happened to fall the right way.
-    if (app.playing() || app.shuttling() || app.exporting() ||
+    if (app.playing() || app.shuttling() || app.source_playing() || app.exporting() ||
         app.export_job.finished.load()) {
       while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
         if (message.message == WM_QUIT) {
@@ -9266,10 +9393,11 @@ int main(int argc, char** argv) {
       if (running) {
         advance_playback(app);
         advance_shuttle(app);
+        advance_source_playback(app);
         poll_export(app);
         // Nothing is due this instant when only the export is running, and the
         // encoder wants the core far more than this loop does.
-        if (!app.playing() && !app.shuttling()) Sleep(8);
+        if (!app.playing() && !app.shuttling() && !app.source_playing()) Sleep(8);
       }
     } else if (GetMessageW(&message, nullptr, 0, 0) > 0) {
       TranslateMessage(&message);
