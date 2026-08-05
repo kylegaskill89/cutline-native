@@ -254,20 +254,51 @@ deciding it is probably fine.
 
 **Waiting now:**
 
-- **Reverse playback and shuttle**, with the run of remembered frames behind the
-  playhead. Measured at 8.0 ms a frame against 261 before, on a 106 Mbps 4K60
-  capture, which is well inside a 60 fps budget — but smoothness is about
-  *evenness* as much as average rate, and a seek still lands once every thirty
-  frames or so. What to look for is whether that seek shows as a hitch.
-- **Forward playback** at the same time, to confirm the run costs it nothing.
-  Measured unchanged at 2.5 ms a frame.
 - **A source placed as it is marked** — the marks themselves cannot be set by
   eye yet, so this is only reachable through a saved project for now. What to
   look for is that insert, overwrite and a drag from the pool all put down the
   same span.
-- **`--check`**, which was skipped for the scrub bar rather than run: the widget
-  is in no panel yet, so the four themes have nothing new to lay out. It is due
-  the moment anything places it.
+- **`--check`** for the scrub bar, once anything places it. It is in no panel
+  yet, so the four themes currently have nothing new to lay out.
+
+#### Driven: playback, and the hitch the average hid
+
+The question the list posed was whether the seek at the end of a run of
+remembered frames *shows*. It does, and plainly.
+
+Measured by sampling a strip of the picture off the screen every 6 ms and
+recording when it changes, which is the only way to see evenness — an average
+frame time cannot distinguish thirty even frames from twenty even ones and a
+stall.
+
+| | forward | reverse (J, 1x) |
+|---|---|---|
+| distinct frames in 10 s | ~400 | 240 |
+| median gap | 24 ms | 30 ms |
+| p95 gap | 36 ms | 187 ms |
+| worst gap | 38 ms | 424 ms |
+| stalls over 250 ms | 0 | 8 |
+
+**Forward is even** — nothing above 38 ms — but runs at about 40 fps on 4K60
+rather than 60. Worth a look on its own account; it is not what makes anything
+stutter.
+
+**Reverse stalls on a metronome.** The stalls land at 200, 734, 1244, 2795,
+3329, 3850, 4389, 4898 ms and so on: a gap of **509–540 ms, over and over**,
+each one costing a mean of 264 ms. Half the wall clock is spent stopped.
+
+That period is the run of remembered frames being used up. `frames_to_keep`
+gives about thirty frames at 4K against the 384 MB budget, and thirty frames of
+60 fps content played backwards at 1x is half a second — which is the number
+measured, to within the sampling. Pressing J twice to shuttle at 2x makes them
+more frequent, as a run-boundary explanation predicts and a random-hiccup one
+does not.
+
+So the cache did what it was measured to do and the average was honest: most
+frames became cheap. What it did not do was make playback smooth, because the
+cost it removed from twenty-nine frames it left, whole, on the thirtieth.
+**The fix is to stop doing the work in one lump where it can be seen** — not to
+make the lump smaller.
 
 Before those, the last of it — the cursors, the snap line, and the two
 clip-menu framing rows — was driven and is recorded below.
