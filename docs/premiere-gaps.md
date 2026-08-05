@@ -800,9 +800,9 @@ way to *set* them by eye, which is the panel.
 | | Premiere | Here | Size |
 |---|---|---|---|
 | ~~A panel showing one source~~ | yes | **done** — beside the program monitor, as Premiere has it | — |
-| Its own playhead and transport | play, step, JKL, shuttle | a playhead, scrubbed; no transport yet | control |
+| Its own playhead and transport | play, step, JKL, shuttle | scrub, step a frame, Home/End — no *playing* yet | control |
 | ~~A scrub bar with a marked span~~ | the time ruler under the picture | **done** — `ui::ScrubBar` | — |
-| Mark in and out **on the source** | `I` and `O` while it is focused | buttons, yes; the keys still mark the sequence | wiring |
+| ~~Mark in and out **on the source**~~ | `I` and `O` while it is focused | **done** — routed by where the keyboard is | — |
 | ~~Marks that belong to the asset~~ | kept per clip, and saved | **done** | — |
 | ~~Insert and overwrite the marked part~~ | the point of the whole panel | **done** | — |
 | Drag from the picture to the timeline | yes | none | control |

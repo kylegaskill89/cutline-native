@@ -697,6 +697,10 @@ struct App {
   MonitorView* source_monitor = nullptr;
   ScrubBar* source_scrub = nullptr;
   Label* source_name = nullptr;
+  /// The panel's root, so "is the source monitor the one being worked in" can
+  /// be answered by asking where the keyboard is rather than by keeping a flag
+  /// that something forgets to clear.
+  Widget* source_panel = nullptr;
 
   /// Its own renderer, and so its own decoders.
   ///
@@ -887,6 +891,9 @@ void refresh_drop_ghost(App& app);
 void open_from_command_line(App& app, const std::filesystem::path& path);
 void refresh_source(App& app);
 [[nodiscard]] const cutline::core::Media* source_media_of(const App& app);
+void step_source(App& app, double frames);
+void mark_source(App& app, bool out_point);
+[[nodiscard]] bool source_has_focus(const App& app);
 void refresh_browser(App& app);
 void refresh_dock(App& app);
 void reconcile_windows(App& app);
@@ -3339,6 +3346,53 @@ void refresh_preview(App& app) {
   return found == project.media.end() ? nullptr : &*found;
 }
 
+/// Whether the keyboard is somewhere inside the source monitor.
+///
+/// Premiere routes the transport and the marking keys to whichever monitor is
+/// focused, and this is that question asked of the widget tree rather than of a
+/// flag: a flag has to be cleared by everything that could take the focus away,
+/// and the one that forgets is the one that leaves `I` marking the wrong thing.
+[[nodiscard]] bool source_has_focus(const App& app) {
+  if (app.source_panel == nullptr || app.main.host == nullptr) return false;
+  for (const Widget* at = app.main.host->focused(); at != nullptr; at = at->parent()) {
+    if (at == app.source_panel) return true;
+  }
+  return false;
+}
+
+/// Moves the source monitor's playhead, in frames of the source itself.
+void step_source(App& app, double frames) {
+  const cutline::core::Media* media = source_media_of(app);
+  if (media == nullptr) return;
+
+  const double fps = media->fps.value_or(0.0) > 0.0 ? *media->fps : 30.0;
+  const double at = app.source_playhead + frames / fps;
+  app.source_playhead =
+      std::clamp(cutline::core::snap_to_frame(at, fps), 0.0, std::max(0.0, media->duration));
+  refresh_source(app);
+}
+
+/// Marks the source at its own playhead, and takes the mark away when it is
+/// already there — the same rule the sequence's own `I` and `O` follow.
+void mark_source(App& app, bool out_point) {
+  const cutline::core::Media* media = source_media_of(app);
+  if (media == nullptr) return;
+
+  const std::optional<double>& already = out_point ? media->out_point : media->in_point;
+  const double fps = media->fps.value_or(0.0) > 0.0 ? *media->fps : 30.0;
+  const bool here =
+      already.has_value() && std::abs(*already - app.source_playhead) < 0.5 / fps;
+
+  const std::optional<double> to = here ? std::nullopt
+                                        : std::optional<double>(app.source_playhead);
+  app.session.apply(out_point
+                        ? cutline::core::set_source_out_point(app.session.project(),
+                                                              media->id, to)
+                        : cutline::core::set_source_in_point(app.session.project(),
+                                                             media->id, to));
+  refresh_all(app);
+}
+
 /// Renders the source monitor, and keeps its scrub bar in step.
 void refresh_source([[maybe_unused]] App& app) {
 #if CUTLINE_HAVE_PREVIEW
@@ -4757,6 +4811,47 @@ void go_to_time(App& app, double at) {
 #endif
   invalidate_preview(app);
   mark_dirty(app);
+}
+
+/// The transport and marking keys, when the source monitor is the one in hand.
+///
+/// Reports whether it took the key, so the sequence's own bindings see only
+/// what this did not want. The set is deliberately the same as the sequence's —
+/// these are the keys everybody's fingers already know, and which of the two
+/// monitors they act on is the whole question a focused panel answers.
+bool handle_source_key(App& app, Key key, const Modifiers& modifiers) {
+  if (!source_has_focus(app)) return false;
+  if (source_media_of(app) == nullptr) return false;
+  if (modifiers.control || modifiers.alt) return false;
+
+  const cutline::core::Media* media = source_media_of(app);
+  switch (key) {
+    case Key::I:
+      if (modifiers.shift) return false;
+      mark_source(app, false);
+      return true;
+    case Key::O:
+      if (modifiers.shift) return false;
+      mark_source(app, true);
+      return true;
+    case Key::Left:
+      // Shift for a bigger step, as the sequence's nudge does.
+      step_source(app, modifiers.shift ? -5.0 : -1.0);
+      return true;
+    case Key::Right:
+      step_source(app, modifiers.shift ? 5.0 : 1.0);
+      return true;
+    case Key::Home:
+      app.source_playhead = 0.0;
+      refresh_source(app);
+      return true;
+    case Key::End:
+      app.source_playhead = std::max(0.0, media->duration);
+      refresh_source(app);
+      return true;
+    default:
+      return false;
+  }
 }
 
 /// Runs whichever command the key is bound to, if any.
@@ -6441,7 +6536,11 @@ void build_track_strip(App& app, Box& column, const cutline::core::Track& track,
   if (app != nullptr) app->source_monitor = &picture;
 
   auto& bar = panel->emplace<ScrubBar>();
+  // So a click on it takes the keyboard, which is what makes the transport and
+  // the marking keys land here rather than on the sequence.
+  bar.set_focusable(true);
   if (app != nullptr) {
+    app->source_panel = panel.get();
     app->source_scrub = &bar;
     // The bar does not move its own playhead. This decides where the playhead
     // really is — snapped to the source's own frame grid — and sets it back, so
@@ -6455,22 +6554,30 @@ void build_track_strip(App& app, Box& column, const cutline::core::Track& track,
   }
 
   auto& row = panel->emplace<Box>(Axis::Horizontal);
-  row.emplace<Button>("Mark In", [app] {
-    if (app == nullptr) return;
-    if (const cutline::core::Media* media = source_media_of(*app); media != nullptr) {
-      app->session.apply(cutline::core::set_source_in_point(app->session.project(), media->id,
-                                                            app->source_playhead));
-      refresh_all(*app);
-    }
+
+  // A frame either way. The buttons and the arrow keys go through the same
+  // call, so the two can never disagree about what a frame is.
+  auto& back = row.emplace<Button>("<", [app] {
+    if (app != nullptr) step_source(*app, -1.0);
   });
-  row.emplace<Button>("Mark Out", [app] {
-    if (app == nullptr) return;
-    if (const cutline::core::Media* media = source_media_of(*app); media != nullptr) {
-      app->session.apply(cutline::core::set_source_out_point(app->session.project(), media->id,
-                                                             app->source_playhead));
-      refresh_all(*app);
-    }
+  back.set_tooltip("Back one frame (Left)");
+  auto& forward = row.emplace<Button>(">", [app] {
+    if (app != nullptr) step_source(*app, 1.0);
   });
+  forward.set_tooltip("On one frame (Right)");
+
+  // "In" and "Out" rather than "Mark In" and "Mark Out": this panel is a third
+  // of the width the program monitor's row has, and with the two step buttons
+  // beside them `--check` found fourteen controls squeezed and clipped in three
+  // themes of four. The tooltips carry the whole name.
+  auto& mark_in = row.emplace<Button>("In", [app] {
+    if (app != nullptr) mark_source(*app, false);
+  });
+  mark_in.set_tooltip("Mark in on the source (I)");
+  auto& mark_out = row.emplace<Button>("Out", [app] {
+    if (app != nullptr) mark_source(*app, true);
+  });
+  mark_out.set_tooltip("Mark out on the source (O)");
   row.emplace<Button>("Clear", [app] {
     if (app == nullptr) return;
     if (const cutline::core::Media* media = source_media_of(*app); media != nullptr) {
@@ -8195,7 +8302,14 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       // After the tree, and only if it did not want the key. A focused slider
       // owns the arrows before the playhead does.
       if (!shell->host->key_down(event)) {
-        run_binding(*app, kTransportKeys, event.key, held);
+        // Premiere sends the transport and the marking keys to whichever
+        // monitor is focused, and the source is a monitor. Before the sequence
+        // bindings, because these are the same keys meaning the same thing
+        // about a different thing — an `I` with the source in hand is a mark on
+        // the source, not on the timeline behind it.
+        if (!handle_source_key(*app, event.key, held)) {
+          run_binding(*app, kTransportKeys, event.key, held);
+        }
       }
       mark_dirty(*app);
       return 0;
