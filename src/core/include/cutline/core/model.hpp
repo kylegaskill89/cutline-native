@@ -164,6 +164,18 @@ struct Media {
   std::optional<int> height;
   std::optional<double> fps;
 
+  /// In and out marked on the source itself, in source time.
+  ///
+  /// These belong to the asset rather than to whatever panel is showing it, so
+  /// looking at another source and coming back finds the span still marked, and
+  /// saving the project saves it. Premiere keeps them here for the same reason:
+  /// a decision about which part of a file to use outlives the looking.
+  ///
+  /// Either end may be marked without the other — an in alone means from there
+  /// to the end of the source, an out alone means from the start to there.
+  std::optional<double> in_point;
+  std::optional<double> out_point;
+
   friend bool operator==(const Media&, const Media&) = default;
 };
 

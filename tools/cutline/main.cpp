@@ -3049,8 +3049,11 @@ void place_from_pool(App& app, std::size_t index,
     }
   }
 
+  // Dragged from the pool, so it lands as the source is marked — the same span
+  // insert and overwrite would place, since it is the same decision.
+  const auto range = cutline::core::source_range(app.session.project(), media_id);
   app.session.apply(
-      cutline::core::place_media(app.session.project(), media_id, at, track_id));
+      cutline::core::place_media(app.session.project(), media_id, at, track_id, range));
   refresh_all(app);
 }
 

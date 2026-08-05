@@ -193,6 +193,88 @@ TEST(Markers, SettingOneThatIsNotThereChangesNothing) {
   EXPECT_EQ(after.markers, p.markers);
 }
 
+// ------------------------------------------------------ marks on a source --
+
+namespace {
+
+Project one_source_project() {
+  Project p;
+  Media m;
+  m.id = "f1";
+  m.duration = 30.0;
+  m.has_video = true;
+  p.media = {m};
+  return p;
+}
+
+}  // namespace
+
+TEST(SourceMarks, TheMarksAreKeptOnTheSourceRatherThanTheSequence) {
+  // The point of keeping them here: they are a fact about the file, so the
+  // sequence's own marks are untouched by marking a source.
+  Project p = one_source_project();
+  p = set_source_in_point(std::move(p), "f1", 4.0);
+  p = set_source_out_point(std::move(p), "f1", 9.0);
+
+  EXPECT_DOUBLE_EQ(*p.media[0].in_point, 4.0);
+  EXPECT_DOUBLE_EQ(*p.media[0].out_point, 9.0);
+  EXPECT_FALSE(p.in_point.has_value());
+  EXPECT_FALSE(p.out_point.has_value());
+}
+
+TEST(SourceMarks, AMarkPastTheEndOfTheSourceLandsOnTheEnd) {
+  // A sequence grows to hold what is put in it; a file does not.
+  Project p = one_source_project();
+  p = set_source_out_point(std::move(p), "f1", 500.0);
+  EXPECT_DOUBLE_EQ(*p.media[0].out_point, 30.0);
+
+  p = set_source_in_point(std::move(p), "f1", -5.0);
+  EXPECT_DOUBLE_EQ(*p.media[0].in_point, 0.0);
+}
+
+TEST(SourceMarks, AnInPastTheOutClearsTheOut) {
+  // The same rule as the sequence marks, so the pair can never be inverted and
+  // nothing reading them has to check.
+  Project p = one_source_project();
+  p = set_source_out_point(std::move(p), "f1", 5.0);
+  p = set_source_in_point(std::move(p), "f1", 8.0);
+
+  EXPECT_DOUBLE_EQ(*p.media[0].in_point, 8.0);
+  EXPECT_FALSE(p.media[0].out_point.has_value());
+}
+
+TEST(SourceMarks, AnOutBeforeTheInClearsTheIn) {
+  Project p = one_source_project();
+  p = set_source_in_point(std::move(p), "f1", 8.0);
+  p = set_source_out_point(std::move(p), "f1", 5.0);
+
+  EXPECT_DOUBLE_EQ(*p.media[0].out_point, 5.0);
+  EXPECT_FALSE(p.media[0].in_point.has_value());
+}
+
+TEST(SourceMarks, NothingIsGivenNothingToClear) {
+  Project p = one_source_project();
+  p = set_source_in_point(std::move(p), "f1", 4.0);
+  p = set_source_in_point(std::move(p), "f1", std::nullopt);
+  EXPECT_FALSE(p.media[0].in_point.has_value());
+}
+
+TEST(SourceMarks, MarkingASourceThatIsNotThereChangesNothing) {
+  const Project p = one_source_project();
+  EXPECT_EQ(set_source_in_point(p, "nobody", 2.0).media, p.media);
+  EXPECT_EQ(clear_source_marks(p, "nobody").media, p.media);
+}
+
+TEST(SourceMarks, ClearingTakesBothEnds) {
+  Project p = one_source_project();
+  p = set_source_in_point(std::move(p), "f1", 4.0);
+  p = set_source_out_point(std::move(p), "f1", 9.0);
+  p = clear_source_marks(std::move(p), "f1");
+
+  EXPECT_FALSE(p.media[0].in_point.has_value());
+  EXPECT_FALSE(p.media[0].out_point.has_value());
+}
+
 // --------------------------------------------------- matching the sequence --
 
 namespace {

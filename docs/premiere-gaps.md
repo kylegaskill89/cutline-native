@@ -782,11 +782,18 @@ Worth saying first, because the size of this section depends on it.
 | A source chosen to be placed | `Session::source_media`, set by the pool and read by insert and overwrite |
 | Placing part of a source | `core::PlacementRange`, honoured by `place_media`, `insert_media_at` and `overwrite_media_at` |
 | Marks that survive the file | `Project::in_point` / `out_point`, for the *sequence* |
+| **Marks on a source** — **done** | `Media::in_point` / `out_point`, set by `core::set_source_in_point`, saved with the project |
+| **Placing only the marked part** — **done** | `core::source_range` joins the two, and insert, overwrite and a drag from the pool all pass it |
 
-`PlacementRange` is the one to look at twice. Three placement operations take
-it, all three honour it, it is tested — and **nothing anywhere sets it**. The
-range half of three-point editing has been finished and unreachable for as long
-as it has existed, waiting for something to say which part of the source.
+`PlacementRange` was the one to look at twice. Three placement operations took
+it, all three honoured it, it was tested — and **nothing anywhere set it**. The
+range half of three-point editing had been finished and unreachable for as long
+as it had existed, waiting for something to say which part of the source.
+
+That is now closed. The marks live on `Media`, `source_range` turns them into a
+`PlacementRange`, and the three ways a source reaches the timeline — insert,
+overwrite, and a drag from the pool — all pass it. What is still missing is a
+way to *set* them by eye, which is the panel.
 
 ### 3.2 What has to be built
 
@@ -795,9 +802,9 @@ as it has existed, waiting for something to say which part of the source.
 | A panel showing one source | yes | none | control |
 | Its own playhead and transport | play, step, JKL, shuttle | none — the transport belongs to the sequence | control |
 | A scrub bar with a marked span | the time ruler under the picture | no such widget anywhere | control |
-| Mark in and out **on the source** | `I` and `O` while it is focused | the sequence half only | wiring |
-| Marks that belong to the asset | kept per clip, and saved | nothing keeps them | model |
-| Insert and overwrite the marked part | the point of the whole panel | places the whole source | wiring |
+| Mark in and out **on the source** | `I` and `O` while it is focused | the model takes them; nothing focused can send them | wiring |
+| ~~Marks that belong to the asset~~ | kept per clip, and saved | **done** | — |
+| ~~Insert and overwrite the marked part~~ | the point of the whole panel | **done** | — |
 | Drag from the picture to the timeline | yes | none | control |
 | A list of recently opened sources | a dropdown of them | one at a time | control |
 | Audio-only sources shown as a waveform | yes | none | control |

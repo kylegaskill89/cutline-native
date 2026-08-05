@@ -191,6 +191,8 @@ json write(const Media& m) {
   put_if_set(j, "width", m.width);
   put_if_set(j, "height", m.height);
   put_if_set(j, "fps", m.fps);
+  put_if_set(j, "in_point", m.in_point);
+  put_if_set(j, "out_point", m.out_point);
   return j;
 }
 
@@ -445,6 +447,8 @@ Media read_media(const json& j) {
   m.width = read_optional<int>(j, "width");
   m.height = read_optional<int>(j, "height");
   m.fps = read_optional<double>(j, "fps");
+  m.in_point = read_optional<double>(j, "in_point");
+  m.out_point = read_optional<double>(j, "out_point");
   return m;
 }
 

@@ -825,6 +825,41 @@ TEST(Commands, AnInsertRipplesWhatWasAlreadyThere) {
   EXPECT_DOUBLE_EQ(lane.clips[2].start, 13.0) << "c2 was pushed along by eight seconds";
 }
 
+TEST(Commands, AnInsertPlacesOnlyTheMarkedPartOfTheSource) {
+  // The other half of three-point editing. `PlacementRange` had been honoured
+  // by every placement operation and set by nothing, so however a source was
+  // marked the whole of it went down.
+  Project project = targetable_project();
+  project.tracks[1].targeted = true;
+  project = core::set_source_in_point(std::move(project), "m2", 2.0);
+  project = core::set_source_out_point(std::move(project), "m2", 5.0);
+  Session session(std::move(project));
+  session.set_source_media("m2");
+  session.set_playhead(5.0);
+
+  ASSERT_TRUE(run(session, Command::Insert));
+
+  const Track& lane = session.project().tracks[1];
+  ASSERT_EQ(lane.clips.size(), 3u);
+  EXPECT_DOUBLE_EQ(lane.clips[1].source_in, 2.0);
+  EXPECT_DOUBLE_EQ(lane.clips[1].source_out, 5.0);
+  EXPECT_DOUBLE_EQ(lane.clips[2].start, 8.0) << "rippled by three seconds, not eight";
+}
+
+TEST(Commands, AnOverwriteTakesTheMarkedPartToo) {
+  Project project = targetable_project();
+  project.tracks[0].targeted = true;
+  project = core::set_source_out_point(std::move(project), "m2", 3.0);
+  Session session(std::move(project));
+  session.set_source_media("m2");
+  session.set_playhead(2.0);
+
+  ASSERT_TRUE(run(session, Command::Overwrite));
+  const Clip& placed = session.project().tracks[0].clips.at(0);
+  EXPECT_DOUBLE_EQ(placed.source_in, 0.0);
+  EXPECT_DOUBLE_EQ(placed.source_out, 3.0);
+}
+
 TEST(Commands, AnOverwriteLeavesTheSequenceTheLengthItWas) {
   Project project = targetable_project();
   project.tracks[1].targeted = true;

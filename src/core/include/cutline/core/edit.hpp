@@ -63,6 +63,23 @@ struct PlacementRange {
 [[nodiscard]] double placed_length(const Media& media,
                                    std::optional<PlacementRange> range = std::nullopt) noexcept;
 
+/// A source's marked span as a placement range, or nothing when neither end is
+/// marked — which is what places the whole of it.
+///
+/// This is the join between the two halves of three-point editing. The marks
+/// are kept on the media; the placement operations take a range; until there
+/// was something to turn one into the other, every placement used the whole
+/// source however it had been marked.
+///
+/// One end marked is still a range: the unmarked end is the start or the end of
+/// the source.
+[[nodiscard]] std::optional<PlacementRange> source_range(const Media& media) noexcept;
+
+/// The same for a media named by id, and nothing when the project has no such
+/// media — which is the form the edit commands want, having an id in hand.
+[[nodiscard]] std::optional<PlacementRange> source_range(const Project& p,
+                                                         std::string_view media_id) noexcept;
+
 // ----------------------------------------------------------------- cutting --
 
 /// Razor cut: splits every listed clip that strictly spans `time` into two

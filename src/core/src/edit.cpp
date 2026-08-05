@@ -121,6 +121,18 @@ double placed_length(const Media& media, std::optional<PlacementRange> range) no
   return media.duration;
 }
 
+std::optional<PlacementRange> source_range(const Media& media) noexcept {
+  if (!media.in_point.has_value() && !media.out_point.has_value()) return std::nullopt;
+  return PlacementRange{media.in_point.value_or(0.0),
+                        media.out_point.value_or(media.duration)};
+}
+
+std::optional<PlacementRange> source_range(const Project& p,
+                                           std::string_view media_id) noexcept {
+  const auto it = std::ranges::find_if(p.media, [&](const Media& m) { return m.id == media_id; });
+  return it == p.media.end() ? std::nullopt : source_range(*it);
+}
+
 namespace {
 
 /// Which lanes a placement will use, creating audio lanes when there are too

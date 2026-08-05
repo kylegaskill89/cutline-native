@@ -244,6 +244,17 @@ struct TrackPropsPatch {
 /// The same the other way round: an out before the current in clears the in.
 [[nodiscard]] Project set_out_point(Project p, std::optional<double> time);
 
+/// The same pair, marked on a **source** rather than on the sequence, in source
+/// time. Naming a media that is not in the project changes nothing.
+///
+/// Times are clamped into the source, which the sequence marks have no need of:
+/// a sequence is as long as what is in it, a file is the length it is.
+[[nodiscard]] Project set_source_in_point(Project p, std::string_view media_id,
+                                          std::optional<double> time);
+[[nodiscard]] Project set_source_out_point(Project p, std::string_view media_id,
+                                           std::optional<double> time);
+[[nodiscard]] Project clear_source_marks(Project p, std::string_view media_id);
+
 [[nodiscard]] Project clear_marks(Project p);
 
 /// Whether either mark is set. What greys out "export the marked range".

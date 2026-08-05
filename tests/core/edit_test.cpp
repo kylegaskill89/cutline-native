@@ -95,6 +95,62 @@ TEST(PlacedLength, UsesTheRangeForFootage) {
   EXPECT_DOUBLE_EQ(placed_length(m, PlacementRange{.in = -4.0, .out = 99.0}), 10.0);
 }
 
+TEST(SourceRange, AnUnmarkedSourcePlacesWhole) {
+  EXPECT_FALSE(source_range(footage()).has_value());
+}
+
+TEST(SourceRange, OneEndMarkedIsStillARange) {
+  // An in alone runs to the end of the source, an out alone from its start —
+  // otherwise marking one end would do nothing until the other was marked too.
+  Media m = footage();
+  m.in_point = 3.0;
+  const auto from_in = source_range(m);
+  ASSERT_TRUE(from_in.has_value());
+  EXPECT_DOUBLE_EQ(from_in->in, 3.0);
+  EXPECT_DOUBLE_EQ(from_in->out, 10.0);
+
+  m.in_point.reset();
+  m.out_point = 4.0;
+  const auto to_out = source_range(m);
+  ASSERT_TRUE(to_out.has_value());
+  EXPECT_DOUBLE_EQ(to_out->in, 0.0);
+  EXPECT_DOUBLE_EQ(to_out->out, 4.0);
+}
+
+TEST(SourceRange, LookedUpByIdAndNothingForAStranger) {
+  const Project p = add_media(empty_project(), [] {
+    Media m = footage();
+    m.in_point = 2.0;
+    m.out_point = 5.0;
+    return m;
+  }());
+  const auto range = source_range(p, "m1");
+  ASSERT_TRUE(range.has_value());
+  EXPECT_DOUBLE_EQ(range->in, 2.0);
+  EXPECT_DOUBLE_EQ(range->out, 5.0);
+  EXPECT_FALSE(source_range(p, "nobody").has_value());
+}
+
+TEST(SourceRange, AMarkedSourceIsPlacedAsTheMarkedPartOnly) {
+  // The whole point of the pair: the marks decide how long the clip is and
+  // where in the source it starts.
+  Media m = footage();
+  m.in_point = 2.0;
+  m.out_point = 5.0;
+  Project p = add_media(empty_project(), m);
+  p = place_media(std::move(p), "m1", 0.0, {}, source_range(p, "m1"));
+
+  const Clip& video = track_by_id(p, "v1").clips.at(0);
+  EXPECT_DOUBLE_EQ(video.source_in, 2.0);
+  EXPECT_DOUBLE_EQ(video.source_out, 5.0);
+
+  // The sound is the same part of the same file, or the marked span would mean
+  // one thing for the picture and another for what goes with it.
+  const Clip& audio = track_by_id(p, "a1").clips.at(0);
+  EXPECT_DOUBLE_EQ(audio.source_in, 2.0);
+  EXPECT_DOUBLE_EQ(audio.source_out, 5.0);
+}
+
 TEST(PlacedLength, StillsIgnoreTheRange) {
   Media image;
   image.is_image = true;

@@ -484,6 +484,54 @@ Project clear_marks(Project p) {
   return p;
 }
 
+// ------------------------------------------------------ marks on a source --
+
+namespace {
+
+/// The media to mark, or null when the id names nothing.
+[[nodiscard]] Media* media_to_mark(Project& p, std::string_view media_id) {
+  const auto it = std::ranges::find_if(p.media, [&](const Media& m) { return m.id == media_id; });
+  return it == p.media.end() ? nullptr : &*it;
+}
+
+}  // namespace
+
+Project set_source_in_point(Project p, std::string_view media_id, std::optional<double> time) {
+  Media* media = media_to_mark(p, media_id);
+  if (media == nullptr) return p;
+  if (!time.has_value()) {
+    media->in_point.reset();
+    return p;
+  }
+  // Clamped to the source, which the sequence marks have no equivalent of: a
+  // sequence grows to hold whatever is put in it, a file is the length it is.
+  const double at = std::clamp(*time, 0.0, media->duration);
+  media->in_point = at;
+  if (media->out_point.has_value() && *media->out_point <= at) media->out_point.reset();
+  return p;
+}
+
+Project set_source_out_point(Project p, std::string_view media_id, std::optional<double> time) {
+  Media* media = media_to_mark(p, media_id);
+  if (media == nullptr) return p;
+  if (!time.has_value()) {
+    media->out_point.reset();
+    return p;
+  }
+  const double at = std::clamp(*time, 0.0, media->duration);
+  media->out_point = at;
+  if (media->in_point.has_value() && *media->in_point >= at) media->in_point.reset();
+  return p;
+}
+
+Project clear_source_marks(Project p, std::string_view media_id) {
+  if (Media* media = media_to_mark(p, media_id); media != nullptr) {
+    media->in_point.reset();
+    media->out_point.reset();
+  }
+  return p;
+}
+
 bool has_marks(const Project& p) noexcept {
   return p.in_point.has_value() || p.out_point.has_value();
 }

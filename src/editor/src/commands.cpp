@@ -374,16 +374,18 @@ bool run(Session& session, Command command) {
       if (!can_place(session)) return false;
       core::Project ready = core::match_sequence_to(project, session.source_media());
       const std::string target = edit_target(ready);
+      const auto range = core::source_range(ready, session.source_media());
       return session.apply(core::insert_media_at(std::move(ready), session.source_media(),
-                                                 session.playhead(), target));
+                                                 session.playhead(), target, range));
     }
 
     case Command::Overwrite: {
       if (!can_place(session)) return false;
       core::Project ready = core::match_sequence_to(project, session.source_media());
       const std::string target = edit_target(ready);
+      const auto range = core::source_range(ready, session.source_media());
       return session.apply(core::overwrite_media_at(std::move(ready), session.source_media(),
-                                                    session.playhead(), target));
+                                                    session.playhead(), target, range));
     }
 
     case Command::ClearMarks:

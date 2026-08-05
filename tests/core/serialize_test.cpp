@@ -230,6 +230,39 @@ TEST(Serialize, RefusesANewerSchema) {
   EXPECT_NE(loaded.error().find("newer version"), std::string::npos);
 }
 
+TEST(Serialize, ASourcesMarksSurviveTheFile) {
+  // The reason they live on the media at all: a decision about which part of a
+  // file to use should still be there when the project is opened again.
+  Project p = empty_project();
+  Media m;
+  m.id = "m1";
+  m.duration = 30.0;
+  m.in_point = 4.0;
+  m.out_point = 9.0;
+  p.media = {m};
+
+  const auto loaded = from_json(to_json(p));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  ASSERT_EQ(loaded->project.media.size(), 1u);
+  EXPECT_DOUBLE_EQ(*loaded->project.media[0].in_point, 4.0);
+  EXPECT_DOUBLE_EQ(*loaded->project.media[0].out_point, 9.0);
+}
+
+TEST(Serialize, AnUnmarkedSourceStaysUnmarkedRatherThanGainingZeroes) {
+  // Written only when set, so an older project does not come back marked from
+  // the start of the file to the start of the file.
+  Project p = empty_project();
+  Media m;
+  m.id = "m1";
+  m.duration = 30.0;
+  p.media = {m};
+
+  const auto loaded = from_json(to_json(p));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_FALSE(loaded->project.media[0].in_point.has_value());
+  EXPECT_FALSE(loaded->project.media[0].out_point.has_value());
+}
+
 TEST(Serialize, ReportsMissingMediaWithoutDroppingIt) {
   Project p = empty_project();
   Media m;
