@@ -810,9 +810,20 @@ way to *set* them by eye, which is the panel.
 | ~~Audio-only sources shown as a waveform~~ | yes | **done** — `ui::WaveformView` | — |
 | Display mode, safe margins, zoom | yes | none — and not this section's, since it is both monitors' | audit |
 
-Section 3 is closed but for the last row, which the audit list owns: display
-mode, safe margins and zoom belong to the program monitor as much as to this
-one, and building them here alone would be building them twice.
+**Section 3 is closed but for the last row, which is deferred rather than
+done.** Display mode, safe margins and monitor zoom belong to the program
+monitor as much as to this one, so building them into the source monitor alone
+would be building them twice; they are carried in *Found by audit* below, as
+**Safe margins**, **Monitor zoom level** and **Display mode**, and that list is
+where they will be picked up.
+
+Worth saying plainly what was weighed, so the deferral is a decision rather than
+a thing that quietly did not happen. Safe margins are title-safe and action-safe
+overlays for broadcast delivery, which is not what this application is being
+used for. Display mode — composite, alpha, and the scopes — largely repeats what
+the Scopes panel already offers, and offers it as a dockable panel that can sit
+beside the picture rather than over it. Monitor zoom is the one of the three
+with daily use, and it is the one to do first when they are picked up.
 
 **The picture costs nothing to render.** A source monitor is a sequence of one
 clip, so it can be shown by handing `ProjectPreview` a project built on the spot
@@ -852,7 +863,16 @@ had been written down anywhere:
 | Preview render bar | red/yellow over the ruler, Enter renders it | none, and nothing caches a rendered span | machinery |
 | Safe margins | title-safe and action-safe overlays | none | control |
 | Monitor zoom level | Fit, 10%…400%, and scroll | letterboxed fit only | control |
+| Display mode | composite, alpha, and the scopes, over the picture | the Scopes panel instead, docked | control |
 | Maximise a panel | `~` over any panel | none | control |
+
+**The three monitor rows are §3's last row**, moved here rather than left there:
+they belong to the program monitor as much as to the source one, and doing them
+in one place is doing them once. Of the three, monitor zoom is the one with
+daily use — checking focus, or the edge of a mask — and is the one to start
+with. Safe margins are for broadcast delivery, which is not what this is being
+used for; display mode largely repeats the Scopes panel, which is already
+dockable and can therefore sit *beside* the picture rather than over it.
 
 The first is the only one the *spec* asks for: §18's export dialog says
 "Audio (mix/separate)", and §11 defines separate as one stream per track. The
