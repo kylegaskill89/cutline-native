@@ -231,6 +231,11 @@ int main(int argc, char** argv) {
     std::println("  decoded {}   remembered {}   seeks {} ({} back, {} forward)",
                  stats.frames_decoded, stats.frames_remembered, stats.seeks,
                  stats.backward_seeks, stats.forward_seeks);
+    // The prefetch, which is invisible in the numbers above by design: it turns
+    // seeks into runs taken ahead, and a run that never arrives in time looks
+    // exactly like not having one.
+    std::println("  ahead: decoded {}   runs taken {}", stats.frames_decoded_ahead,
+                 stats.runs_taken_ahead);
   }
   for (const std::string& id : (*renderer)->missing_media()) {
     std::println(stderr, "missing media: {}", id);

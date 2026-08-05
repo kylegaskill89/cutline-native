@@ -11,6 +11,7 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <deque>
@@ -51,6 +52,20 @@ constexpr double kFrameEpsilon = 1e-4;
 /// Assumed source frame interval when a stream does not report a usable rate.
 constexpr double kAssumedFrameGap = 1.0 / 30.0;
 
+/// How much of a turn the prefetch may spend decoding the next run.
+///
+/// The number that matters is not the frame interval but how much has to be
+/// decoded before the run in hand runs out. Reaching the frames wanted means
+/// decoding from the keyframe before them — about 110 frames on this footage,
+/// some 230 ms — and there are only as many turns to do it in as the run has
+/// frames left. Twenty-two frames against 230 ms is a shade over ten each.
+///
+/// Eight was measured and was not enough: the prefetch finished late, the
+/// finish had to happen in one lump after all, and six stalls in ten seconds
+/// survived. Twelve leaves the run comfortably ahead and still fits inside a
+/// 60 fps frame beside the composite and the paint.
+constexpr auto kPrefetchBudget = std::chrono::milliseconds(12);
+
 /// How much memory to spend keeping decoded frames behind the playhead.
 ///
 /// This is the reverse-playback budget. Playing backwards cannot decode
@@ -72,11 +87,15 @@ constexpr double kAssumedFrameGap = 1.0 / 30.0;
 /// picture both needs less and can afford more. A count would have made one of
 /// those two wrong.
 ///
-/// Half a gigabyte is the most this will spend. It is a great deal for a cache
-/// and still not enough to play 4K backwards at full rate — that would want the
-/// whole group of pictures, which is measured above at over a gigabyte for this
-/// footage alone. What it buys is 4K reverse that runs rather than crawls, and
-/// 1080p reverse that is simply smooth.
+/// This is the budget for **one** run, and two are held: the one being played
+/// out and the one being decoded ahead of it. So the real ceiling is twice
+/// this — about 768 MB on 4K footage, and proportionally less on anything
+/// smaller, which is a great deal for a cache and is what buys reverse playback
+/// that does not stop twice a second.
+///
+/// It is still not enough to play 4K backwards with no seeking at all: that
+/// would want the whole group of pictures resident, measured above at over a
+/// gigabyte for this footage alone. What it buys is a seek that nobody sees.
 constexpr std::size_t kRememberedBytes = 384u * 1024u * 1024u;
 
 /// The most and fewest frames to keep, whatever the budget works out to.
@@ -87,6 +106,22 @@ constexpr std::size_t kRememberedBytes = 384u * 1024u * 1024u;
 /// buys nothing and a decoder still has to be told a number.
 constexpr int kMinKeptFrames = 8;
 constexpr int kMaxKeptFrames = 64;
+
+/// The most surfaces to ask a hardware decoder to lend at once, across both
+/// runs and the held frame together.
+///
+/// `extra_hw_frames` is a request, not a guarantee. D3D11 video decoding hands
+/// out slices of one texture array, and the driver stops honouring the number
+/// well before the API's limit — asking for 68 and holding 65 still produced
+///
+///     [AVHWFramesContext] Static surface pool size exceeded.
+///
+/// which is decoding stopping. Found by measuring: with the pool starved, the
+/// same 1240 decodes that should have cost 2.6 s cost 10.3 s, so the prefetch
+/// looked like a five-fold *regression* when what it had actually done was walk
+/// into a ceiling. Forty-eight is comfortably under it and still two runs of
+/// twenty-four.
+constexpr int kMaxPooledFrames = 48;
 
 /// How many frames of this media the budget affords.
 ///
@@ -104,7 +139,10 @@ constexpr int kMaxKeptFrames = 64;
   if (per_frame == 0) return kMinKeptFrames;
 
   const auto afford = static_cast<int>(kRememberedBytes / per_frame);
-  return std::clamp(afford, kMinKeptFrames, kMaxKeptFrames);
+  // Two of these are held at once — the run being played and the run being
+  // decoded ahead of it — so the pool ceiling is halved before it is applied.
+  const int by_pool = (kMaxPooledFrames - 4) / 2;
+  return std::clamp(std::min(afford, by_pool), kMinKeptFrames, kMaxKeptFrames);
 }
 
 [[nodiscard]] BlendMode to_gpu_blend(core::BlendMode mode) noexcept {
@@ -292,33 +330,105 @@ struct Source {
   };
   std::deque<Recent> recent;
 
+  /// The run *before* `recent`, decoded a few frames at a time while the run in
+  /// hand is still being played out.
+  ///
+  /// The cache turned twenty-nine frames of a thirty-frame run into a refcount
+  /// bump and left the whole cost of the thirtieth exactly where it was. Driven
+  /// on screen that reads as a stall of 264 ms arriving every 520 — the run
+  /// being used up, over and over, half the wall clock spent stopped. The
+  /// average frame time said 8 ms and was no help at all: it cannot tell thirty
+  /// even frames from twenty-nine and a stop.
+  ///
+  /// So the work is spread instead of shrunk. Serving a frame from the run
+  /// costs about a millisecond of a thirty-millisecond budget, and there are
+  /// thirty of them before the next seek falls due — which is room enough to
+  /// decode the next run a few frames at a time and have it in hand before it
+  /// is wanted.
+  std::deque<Recent> pending;
+  /// The timestamp `pending` is being decoded up to: the start of the run in
+  /// hand, so the two meet without a gap.
+  double pending_until = -1.0;
+  bool extending = false;
+
+  /// The last time asked for, so the direction of travel can be read off. Only
+  /// reverse gets the prefetch: forwards never leaves the run behind it.
+  double last_request = -1.0;
+
   void remember(const AVFrame* frame, double at) {
     if (frame == nullptr || keep == 0) return;
     std::unique_ptr<AVFrame, FrameDeleter> copy(av_frame_alloc());
     if (!copy) return;
     if (av_frame_ref(copy.get(), frame) < 0) return;
     recent.push_back(Recent{.at = at, .frame = std::move(copy)});
+    trim();
+  }
+
+  /// Keeps the two runs together inside one run's worth of surfaces.
+  ///
+  /// They are drawn from the same pool, which was sized once at `keep`, so
+  /// holding a full run *and* a full prefetch would empty it — and an empty
+  /// pool is decoding stopping, not slowing. What makes room is that reverse
+  /// consumes the run from its newest end: everything above the playhead has
+  /// been shown and been left behind, and dropping it hands the surfaces
+  /// straight to the prefetch.
+  /// Each run is capped on its own, not the pair together, because the pool is
+  /// sized for both. Capping the sum instead starves whichever is growing.
+  void trim() {
     while (recent.size() > keep) recent.pop_front();
+    // A prefetch overruns its cap by everything it had to decode from the
+    // keyframe to reach the frames actually wanted. Those are the oldest, the
+    // furthest from where reverse is heading, and already spent.
+    while (pending.size() > keep) pending.pop_front();
+  }
+
+  /// Nothing decoded ahead, and nothing part-decoded either.
+  void forget_pending() {
+    pending.clear();
+    pending_until = -1.0;
+    extending = false;
   }
 
   /// The remembered frame covering `time`, or null. The last one at or before
   /// it, which is the same rule the decoder follows: a frame is shown from its
   /// own timestamp until the next one.
-  [[nodiscard]] const AVFrame* remembered(double time) const {
-    if (recent.empty()) return nullptr;
+  [[nodiscard]] static const AVFrame* covering(const std::deque<Recent>& run, double time) {
+    if (run.empty()) return nullptr;
     // Before the run began, so whatever covers this was never decoded here.
-    if (time < recent.front().at - kFrameEpsilon) return nullptr;
+    if (time < run.front().at - kFrameEpsilon) return nullptr;
     // And past the end of it. "The last frame at or before t" is only an answer
     // *within* the run: beyond the newest entry the right frame is one nobody
     // has decoded yet, and handing back the newest would freeze the picture
     // there for ever while playing forwards.
-    if (time > recent.back().at + kFrameEpsilon) return nullptr;
+    if (time > run.back().at + kFrameEpsilon) return nullptr;
     const AVFrame* found = nullptr;
-    for (const Recent& entry : recent) {
+    for (const Recent& entry : run) {
       if (entry.at > time + kFrameEpsilon) break;
       found = entry.frame.get();
     }
     return found;
+  }
+
+  [[nodiscard]] const AVFrame* remembered(double time) const { return covering(recent, time); }
+
+  /// Whether the run decoded ahead covers `time`.
+  ///
+  /// Bounded above by where it *meets* the run in hand, not by its own newest
+  /// frame. `covering` refuses anything past the last frame it holds, which is
+  /// right for a run still being decoded — beyond it the answer is a frame
+  /// nobody has produced — and wrong for this one, which was decoded to join a
+  /// run that starts at `pending_until`.
+  ///
+  /// The difference is a rounding width and it cost the whole feature. A
+  /// request at 29.6333 against a newest frame at 29.6330 is the frame covering
+  /// it, but sits 0.3 ms past the guard: every handover was refused, the run
+  /// was thrown away, and the same group of pictures decoded again by the
+  /// ordinary path. Prefetch ran, delivered nothing, and measured three times
+  /// slower than having none.
+  [[nodiscard]] bool pending_covers(double time) const {
+    if (pending.empty() || pending_until < 0.0) return false;
+    if (time < pending.front().at - kFrameEpsilon) return false;
+    return time < pending_until - kFrameEpsilon;
   }
 };
 
@@ -367,6 +477,12 @@ struct FrameRenderer::Impl {
   /// `from` receives the decoder that produced the frame, which is what a
   /// hardware frame needs asking for its texture. Null past the end of a
   /// stream, where the held frame stands in and no decoder owns it.
+  /// Decodes a little of the run before the one in hand, spreading the cost of
+  /// the next seek across the frames still to be shown from this one.
+  /// `budgeted` false runs it to completion, for the case where the playhead
+  /// has already arrived and waiting for the rest is cheaper than starting over.
+  void decode_ahead(Source& source, bool budgeted = true);
+
   [[nodiscard]] const AVFrame* frame_at(const core::Media& media, double time,
                                         const media::VideoDecoder** from = nullptr);
 };
@@ -407,6 +523,82 @@ core::Size FrameRenderer::Impl::measure(const core::Media&) { return {}; }
 
 #endif
 
+/// Decodes a little of the run *before* the one in hand, so that run is ready
+/// before the playhead reaches the end of this one.
+///
+/// A time budget rather than a frame count. What has to be decoded to reach a
+/// given frame is a whole group of pictures, which is a hundred-odd frames on
+/// this footage and a handful on other footage, so counting frames would spend
+/// wildly different amounts of the turn depending on the file. The budget is
+/// the thing that must not be exceeded, so the budget is what is counted.
+void FrameRenderer::Impl::decode_ahead(Source& source, bool budgeted) {
+  if (!source.usable || source.keep == 0 || source.recent.empty()) return;
+
+  // The prefetch has to meet the run in hand exactly: a gap between them reads
+  // as the end of a run, and "the last frame at or before t" would then answer
+  // from the wrong side of the hole.
+  const double meet = source.recent.front().at;
+  if (meet <= kFrameEpsilon) return;  // nothing before the start of the source
+
+  const double fps = source.decoder->stream().fps;
+  const double gap = fps > 0.0 ? 1.0 / fps : kAssumedFrameGap;
+
+  if (source.pending.size() >= source.keep && !source.extending) return;
+  const std::size_t room = source.keep;
+
+  if (!source.extending) {
+    // Far enough back that a seek lands on a keyframe at or before the frames
+    // wanted. Aiming at the frame just before the run in hand would seek to the
+    // keyframe before *that* and decode the same pictures either way, so the
+    // span is chosen to fill the room rather than to be short.
+    const double from_time = std::max(0.0, meet - static_cast<double>(room) * gap);
+    if (!source.decoder->seek(from_time)) {
+      source.usable = false;
+      return;
+    }
+    source.exhausted = false;
+    source.position = -1.0;
+    source.pending_until = meet;
+    source.extending = true;
+  }
+
+  const auto started = std::chrono::steady_clock::now();
+  while (source.extending) {
+    if (budgeted && std::chrono::steady_clock::now() - started >= kPrefetchBudget) return;
+
+    const auto got = source.decoder->next_frame();
+    if (!got) {
+      source.usable = false;
+      return;
+    }
+    if (!*got) {
+      // The source ended before the run did, which means the run in hand is
+      // already at the end of the file. Nothing to decode ahead of it.
+      source.exhausted = true;
+      source.forget_pending();
+      return;
+    }
+    source.position = source.decoder->timestamp();
+
+    // Everything on the way past that belongs before the run in hand. The
+    // frames decoded before the wanted span are what a seek to a keyframe
+    // costs, and they are dropped by `trim` as newer ones arrive.
+    if (source.position < source.pending_until - kFrameEpsilon) {
+      std::unique_ptr<AVFrame, FrameDeleter> copy(av_frame_alloc());
+      if (copy && av_frame_ref(copy.get(), source.decoder->frame()) >= 0) {
+        source.pending.push_back(
+            Source::Recent{.at = source.position, .frame = std::move(copy)});
+        ++stats.frames_decoded_ahead;
+        source.trim();
+      }
+      continue;
+    }
+
+    // Met the run in hand. Done, and the join is exact.
+    source.extending = false;
+  }
+}
+
 const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double time,
                                             const media::VideoDecoder** from) {
   auto found = sources.find(media.id);
@@ -440,10 +632,25 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
     auto opened = VideoDecoder::open(
         media.path,
         {.preferred = media::Acceleration::D3D11Va,
-         // Surfaces for the run kept behind the playhead. Without this the pool
-         // empties the moment reverse starts and decoding stops outright:
-         // "Static surface pool size exceeded", then `get_buffer() failed`.
-         .extra_frames = keeping,
+         // Surfaces for the run kept behind the playhead, and for the one being
+         // decoded ahead of it. Without them the pool empties the moment
+         // reverse starts and decoding stops outright: "Static surface pool
+         // size exceeded", then `get_buffer() failed`.
+         //
+         // **Two** runs and not one, which is what makes the prefetch worth
+         // having. Sized for a single run, the prefetch can only grow into the
+         // surfaces the run in hand has released — so it starts with room for
+         // about three frames, and the run it hands over is three frames long.
+         // That turns one seek per thirty frames into one per three, and
+         // measured five times *worse* than no prefetch at all: 40 ms a frame
+         // against 8. The pool is the constraint, so the pool is what had to
+         // give.
+         //
+         // The slack is not optional either. Both runs can be full at once, and
+         // beside them sit the held last frame and whatever the decoder has in
+         // flight; sized at exactly two runs the pool empties again, which is
+         // the same "Static surface pool size exceeded" and the same stop.
+         .extra_frames = keeping * 2 + 4,
          .d3d12_device = device != nullptr ? device->native_device() : nullptr});
     if (!opened) {
       source.usable = false;
@@ -473,15 +680,47 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
     return answer(source.decoder->frame());
   }
 
+  // Which way we are travelling, read off the requests themselves. Only reverse
+  // wants a prefetch: playing forwards never leaves the run behind it.
+  const double previous = source.last_request;
+  source.last_request = time;
+  const bool reversing = previous >= 0.0 && time < previous - kFrameEpsilon;
+
+  // The playhead has left the run in hand. If a prefetch was on its way to
+  // exactly this frame, finish it rather than throwing it away — the work is
+  // already part done, and abandoning it means seeking back and decoding the
+  // very same group of pictures a second time. That was the whole of why an
+  // early version measured *worse* than no prefetch: 556 frames decoded ahead,
+  // two runs of it ever used, and every abandoned one paid for twice.
+  if (source.remembered(time) == nullptr && source.extending &&
+      time < source.pending_until + kFrameEpsilon) {
+    decode_ahead(source, false);
+  }
+
+  // The run decoded ahead of need has caught up with the playhead. Taking it
+  // whole rather than merging: the two were decoded to meet exactly, and this
+  // is the moment the stall used to happen.
+  if (source.remembered(time) == nullptr && source.pending_covers(time)) {
+    source.recent = std::move(source.pending);
+    source.forget_pending();
+    ++stats.runs_taken_ahead;
+  }
+
   // Decoded a moment ago and kept. This is what makes playing backwards
   // possible at all: every frame of the run behind the playhead is one this
   // decoder already produced on its way forward, and handing it back costs
   // nothing where decoding it again costs a seek and a whole GOP.
   if (const AVFrame* known = source.remembered(time); known != nullptr) {
     ++stats.frames_remembered;
+    if (reversing) decode_ahead(source);
     if (from != nullptr) *from = source.decoder.get();
     return known;
   }
+
+  // Out of cache, so whatever was being decoded ahead is about to be overtaken
+  // by an ordinary seek. Dropping it first returns its surfaces to the pool,
+  // which the decode below is about to want.
+  source.forget_pending();
 
   // Decoding stops at the first frame whose timestamp reaches the request, so
   // the decoder usually sits a little *ahead* of where it was asked for — up to

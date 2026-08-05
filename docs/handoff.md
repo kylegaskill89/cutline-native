@@ -300,6 +300,33 @@ cost it removed from twenty-nine frames it left, whole, on the thirtieth.
 **The fix is to stop doing the work in one lump where it can be seen** — not to
 make the lump smaller.
 
+#### Driven again: the run decoded ahead of need
+
+Same measurement, same footage, after spreading the work across the frames
+still to be shown:
+
+| | one run | + prefetch |
+|---|---|---|
+| distinct frames in 10 s | 241 | 261 |
+| median gap | 30 ms | 36 ms |
+| p95 gap | 187 ms | **84 ms** |
+| worst gap | 424 ms | **297 ms** |
+| gaps over 100 ms | 16 | **7** |
+| gaps over 250 ms | 8 | **1** |
+
+The median went *up* and that is the trade working: every frame now carries a
+slice of the next run's decoding, and in exchange the stalls that were arriving
+twice a second are down to one in ten. Forward is untouched — 315 distinct
+frames against 319, nothing above 50 ms — because the prefetch only runs when
+the requests are moving backwards.
+
+Not finished. One stall of 297 ms survives in ten seconds and seven over 100,
+and the cause is known: a run holds 22 frames at 4K, so there are 22 turns to
+spend the ~230 ms that decoding a group of pictures costs. That is about ten
+milliseconds a turn against a budget of twelve, which leaves no margin when a
+group runs long. Longer runs would fix it and the pool ceiling is what stops
+them (see `kMaxPooledFrames`).
+
 Before those, the last of it — the cursors, the snap line, and the two
 clip-menu framing rows — was driven and is recorded below.
 

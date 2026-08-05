@@ -98,6 +98,14 @@ class FrameRenderer {
     /// it possible — so a reverse pass where this stays near zero means the run
     /// is not being kept or not being found.
     std::int64_t frames_remembered = 0;
+    /// Frames decoded ahead of need, into the run before the one being played,
+    /// and how many times such a run was ready when the playhead reached it.
+    ///
+    /// A reverse pass where `runs_taken_ahead` stays at zero while
+    /// `backward_seeks` climbs is the prefetch never finishing in time, which
+    /// is the stall it exists to remove and looks identical to not having it.
+    std::int64_t frames_decoded_ahead = 0;
+    std::int64_t runs_taken_ahead = 0;
   };
   [[nodiscard]] DecodeStats decode_stats() const noexcept;
 
