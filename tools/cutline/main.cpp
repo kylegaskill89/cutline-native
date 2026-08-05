@@ -852,6 +852,7 @@ void set_theme(App& app, std::size_t index);
 void refresh_timeline(App& app);
 void refresh_busy(App& app);
 void refresh_drop_ghost(App& app);
+void open_from_command_line(App& app, const std::filesystem::path& path);
 void refresh_browser(App& app);
 void refresh_dock(App& app);
 void reconcile_windows(App& app);
@@ -4292,23 +4293,23 @@ void settle_update(App& app) {
   mark_dirty(app);
 }
 
-void open_project(App& app) {
-  // Before the file dialog, so somebody who decides to save first is not asked
-  // to pick a file twice.
-  if (!confirm_discard(app)) return;
+/// Opens a named project, having already established that it is wanted.
+///
+/// Split from the menu command so the same path serves a file named on the
+/// command line — which is what "Open with", a shortcut with an argument, and a
+/// project dragged onto the executable all amount to. Without it the
+/// application read `--check` and `--benchmark` and silently ignored everything
+/// else, so every one of those opened an empty editor.
+void open_project_at(App& app, const std::filesystem::path& path) {
+  if (offer_recovery(app, path)) return;
 
-  const auto path = choose_file(app.main.window, false);
-  if (!path.has_value()) return;
-
-  if (offer_recovery(app, *path)) return;
-
-  const auto loaded = cutline::editor::read_project(*path);
+  const auto loaded = cutline::editor::read_project(path);
   if (!loaded.has_value()) {
     complain(app.main.window, "Could not open that project.\n\n" + loaded.error());
     return;
   }
 
-  app.session.reset(loaded->project, *path);
+  app.session.reset(loaded->project, path);
   refresh_all(app);
 
   // Warnings are not failures: a project whose footage has moved still opens,
@@ -4318,6 +4319,55 @@ void open_project(App& app) {
     for (const std::string& warning : loaded->warnings) message += "\n" + warning;
     complain(app.main.window, message);
   }
+}
+
+void open_project(App& app) {
+  // Before the file dialog, so somebody who decides to save first is not asked
+  // to pick a file twice.
+  if (!confirm_discard(app)) return;
+
+  const auto path = choose_file(app.main.window, false);
+  if (!path.has_value()) return;
+
+  open_project_at(app, *path);
+}
+
+/// Acts on a file named on the command line.
+///
+/// A project opens; anything the importer recognises goes into the pool, which
+/// is what "Open with" on a video should reasonably do and is the same place
+/// importing puts it. Anything else is said out loud rather than ignored — a
+/// mistyped name that opens an empty editor looks exactly like a crash on
+/// startup.
+void open_from_command_line(App& app, const std::filesystem::path& path) {
+  std::error_code ec;
+  if (!std::filesystem::exists(path, ec)) {
+    complain(app.main.window, "There is no file at\n\n" + path.string());
+    return;
+  }
+
+  if (cutline::editor::has_project_extension(path)) {
+    open_project_at(app, path);
+    return;
+  }
+
+#if CUTLINE_HAVE_PREVIEW
+  if (cutline::editor::looks_like_media(path.string())) {
+    const auto source = cutline::app::probe_source(path.string());
+    if (!source.has_value()) {
+      complain(app.main.window, "Could not read that file.\n\n" + source.error());
+      return;
+    }
+    std::string id;
+    app.session.apply(cutline::editor::import_media(app.session.project(), *source, &id));
+    refresh_all(app);
+    if (app.browser != nullptr && !id.empty()) app.browser->select_id(id);
+    return;
+  }
+#endif
+
+  complain(app.main.window,
+           path.filename().string() + " is not a project or a media file.");
 }
 
 /// Returns whether it was written, so a cancelled dialog is not mistaken for
@@ -8831,6 +8881,15 @@ int main(int argc, char** argv) {
   // is offered when that project is opened, which is where somebody is
   // expecting to be asked about it.
   (void)offer_recovery(app, {});
+
+  // A file named on the command line, which is what "Open with", a shortcut
+  // with an argument, and a project dropped on the executable all come through
+  // as. After the recovery offer, so a crashed session is still asked about
+  // first — and after the window is up, because everything here may need to
+  // complain, and a message box with no owner appears behind everything.
+  if (argc > 1 && argv[1] != nullptr && argv[1][0] != '\0') {
+    open_from_command_line(app, std::filesystem::path(argv[1]));
+  }
 
   SetTimer(window, kAutosaveTimer, kAutosaveTickMs, nullptr);
 

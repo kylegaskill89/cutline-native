@@ -1,5 +1,7 @@
 #include "cutline/editor/document.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <ios>
 #include <sstream>
@@ -65,6 +67,15 @@ std::filesystem::path with_project_extension(std::filesystem::path path) {
   if (path.empty() || path.has_extension()) return path;
   path += kProjectExtension;
   return path;
+}
+
+bool has_project_extension(const std::filesystem::path& path) {
+  std::string extension = path.extension().string();
+  // Case-insensitively, because Windows does not care and a project saved from
+  // a shell that upper-cased the name is still a project.
+  std::ranges::transform(extension, extension.begin(),
+                         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return extension == kProjectExtension;
 }
 
 }  // namespace cutline::editor

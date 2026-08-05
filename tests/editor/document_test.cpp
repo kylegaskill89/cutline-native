@@ -166,6 +166,16 @@ TEST(Document, AnEmptyPathStaysEmpty) {
   EXPECT_TRUE(with_project_extension({}).empty());
 }
 
+TEST(Document, ProjectsAreToldFromMediaByTheirExtension) {
+  // What decides whether a file named on the command line is opened or
+  // imported. Getting it wrong puts a project in the media pool.
+  EXPECT_TRUE(has_project_extension("D:/work/edit.cutline"));
+  EXPECT_TRUE(has_project_extension("edit.CUTLINE")) << "Windows does not care about case";
+  EXPECT_FALSE(has_project_extension("D:/footage/clip.mp4"));
+  EXPECT_FALSE(has_project_extension("cutline")) << "a name is not an extension";
+  EXPECT_FALSE(has_project_extension({}));
+}
+
 // --------------------------------------------------- the document's state --
 
 TEST(SessionDocument, ANewSessionHasNothingToSave) {

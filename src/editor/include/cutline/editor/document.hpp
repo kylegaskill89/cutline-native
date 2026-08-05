@@ -39,4 +39,11 @@ inline constexpr std::string_view kProjectExtension = ".cutline";
 /// should be handed when the user typed a bare name.
 [[nodiscard]] std::filesystem::path with_project_extension(std::filesystem::path path);
 
+/// Whether a path names a project, by its extension and case-insensitively.
+///
+/// The counterpart of the above, and what tells a file named on the command
+/// line from a media file named there — which are the two things worth doing
+/// with one and want opposite treatment.
+[[nodiscard]] bool has_project_extension(const std::filesystem::path& path);
+
 }  // namespace cutline::editor
