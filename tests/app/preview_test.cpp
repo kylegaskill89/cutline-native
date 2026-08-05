@@ -86,10 +86,14 @@ TEST_F(WithFootage, AnImportedClipRendersToPixels) {
   ASSERT_TRUE(source.has_value());
 
   core::Project project = core::empty_project(1, 2);
-  project.canvas_w = 640;
-  project.canvas_h = 360;
   project = editor::import_and_place(std::move(project), *source, 0.0);
   ASSERT_FALSE(project.media.empty());
+
+  // After the import, because importing into an empty sequence takes the
+  // footage's shape — setting it first would be setting it only to have the
+  // 4K reference clip overwrite it.
+  project.canvas_w = 640;
+  project.canvas_h = 360;
 
   auto preview = ProjectPreview::create(project.canvas_w, project.canvas_h);
   if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
@@ -120,9 +124,9 @@ TEST_F(WithFootage, DifferentTimesGiveDifferentFrames) {
   ASSERT_GT(source->duration, 2.0) << "the reference clip is too short to test with";
 
   core::Project project = core::empty_project(1, 2);
+  project = editor::import_and_place(std::move(project), *source, 0.0);
   project.canvas_w = 320;
   project.canvas_h = 180;
-  project = editor::import_and_place(std::move(project), *source, 0.0);
 
   auto preview = ProjectPreview::create(project.canvas_w, project.canvas_h);
   if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
@@ -145,9 +149,9 @@ TEST_F(WithFootage, TheRendererFollowsTheSequenceSize) {
   ASSERT_TRUE(source.has_value());
 
   core::Project project = core::empty_project(1, 2);
+  project = editor::import_and_place(std::move(project), *source, 0.0);
   project.canvas_w = 320;
   project.canvas_h = 180;
-  project = editor::import_and_place(std::move(project), *source, 0.0);
 
   auto preview = ProjectPreview::create(1920, 1080);
   if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
