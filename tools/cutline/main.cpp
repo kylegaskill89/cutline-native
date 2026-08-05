@@ -52,6 +52,7 @@
 #include "cutline/ui/meter_view.hpp"
 #include "cutline/ui/monitor.hpp"
 #include "cutline/ui/scopes_view.hpp"
+#include "cutline/ui/scrub_bar.hpp"
 #include "cutline/ui/skia_painter.hpp"
 #include "cutline/ui/skia_window.hpp"
 #include "cutline/ui/theme.hpp"
@@ -147,6 +148,7 @@ using cutline::ui::ProgressBar;
 using cutline::ui::PanelId;
 using cutline::ui::Rect;
 using cutline::ui::ScrollView;
+using cutline::ui::ScrubBar;
 using cutline::ui::SkiaPainter;
 using cutline::ui::Slider;
 using cutline::ui::Spacer;
@@ -231,7 +233,7 @@ using cutline::ui::built_in_themes;
 /// A panel is a name from here plus whatever `make_panel` builds for it. The
 /// layout only ever moves the name around, which is what lets an arrangement be
 /// saved and restored without saving any widgets.
-constexpr std::array<std::pair<std::string_view, std::string_view>, 7> kPanels{{
+constexpr std::array<std::pair<std::string_view, std::string_view>, 8> kPanels{{
     {"project", "Project"},
     {"effects", "Effect Controls"},
     // Premiere's own two names, which are confusingly similar on purpose: this
@@ -241,6 +243,11 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 7> kPanels{{
     // and the buttons ended up drawn over the last letter of each label.
     {"library", "Effects"},
     {"monitor", "Program Monitor"},
+    // The other half of Premiere's two-monitor workflow: what is about to be
+    // used, on its own time, beside what the sequence currently is. An editor
+    // with only the program monitor makes you do on the timeline what should
+    // have been decided before anything was placed.
+    {"source", "Source Monitor"},
     {"timeline", "Timeline"},
     {"audio", "Audio Master"},
     // A panel rather than the overlay on the monitor the spec describes. The
@@ -680,6 +687,31 @@ struct App {
   /// indistinguishable from an editor that has hung.
   Label* busy_label = nullptr;
 
+  // ----------------------------------------------------- the source monitor --
+  //
+  // One source, shown on its own time, so which part of it to use can be
+  // decided before anything is placed. What it shows is `Session::source_media`
+  // — whatever the pool has selected — and the marks it sets live on the media,
+  // where insert, overwrite and a drag from the pool already read them.
+
+  MonitorView* source_monitor = nullptr;
+  ScrubBar* source_scrub = nullptr;
+  Label* source_name = nullptr;
+
+  /// Its own renderer, and so its own decoders.
+  ///
+  /// Sharing the sequence's would put both monitors on one decoder per file,
+  /// and they are almost never looking at the same moment of it — every glance
+  /// at one would seek the other's decoder away and cost a group of pictures to
+  /// get back. Two decoders on one file is the cheaper of the two by a wide
+  /// margin, and this is the case they exist for.
+  std::unique_ptr<cutline::app::ProjectPreview> source_preview;
+  /// Which media the renderer was built for, so it is rebuilt when that changes
+  /// rather than showing the last one at the new one's size.
+  std::string source_built_for;
+  double source_playhead = 0.0;
+  bool source_failed = false;
+
   /// Set when the picture has changed and the measurements no longer describe
   /// it. Deferred like the preview is, so scrubbing across ten frames measures
   /// the one that is finally shown rather than all ten.
@@ -853,6 +885,8 @@ void refresh_timeline(App& app);
 void refresh_busy(App& app);
 void refresh_drop_ghost(App& app);
 void open_from_command_line(App& app, const std::filesystem::path& path);
+void refresh_source(App& app);
+[[nodiscard]] const cutline::core::Media* source_media_of(const App& app);
 void refresh_browser(App& app);
 void refresh_dock(App& app);
 void reconcile_windows(App& app);
@@ -3261,6 +3295,119 @@ void refresh_preview(App& app) {
 #endif
 }
 
+/// The source monitor's sequence: one video track holding one clip, the whole
+/// of the media, at the media's own shape and rate.
+///
+/// A source monitor *is* a sequence of one clip, so it can be shown by handing
+/// the ordinary renderer a project built on the spot. Nothing new decodes,
+/// nothing new composites, and what the source monitor shows is by construction
+/// what the sequence would show — which is the property that makes it worth
+/// trusting when deciding what to place.
+[[nodiscard]] cutline::core::Project source_project(const cutline::core::Media& media) {
+  cutline::core::Project project;
+  project.canvas_w = std::max(1, media.width.value_or(1280));
+  project.canvas_h = std::max(1, media.height.value_or(720));
+  project.fps = media.fps.value_or(30.0) > 0.0 ? *media.fps : 30.0;
+  project.media = {media};
+
+  cutline::core::Track track;
+  track.id = "v1";
+  track.kind = cutline::core::TrackKind::Video;
+
+  cutline::core::Clip clip;
+  clip.id = "c1";
+  clip.media_id = media.id;
+  clip.kind = cutline::core::TrackKind::Video;
+  clip.source_in = 0.0;
+  // The whole of it, marks and all. The marks say what will be *placed*; the
+  // monitor still shows the entire source, because a mark you cannot see past
+  // is one you cannot move.
+  clip.source_out = std::max(media.duration, 1.0 / project.fps);
+  clip.start = 0.0;
+  track.clips.push_back(std::move(clip));
+
+  project.tracks.push_back(std::move(track));
+  return project;
+}
+
+/// The media the source monitor is showing, or null when there is none.
+[[nodiscard]] const cutline::core::Media* source_media_of(const App& app) {
+  const std::string& id = app.session.source_media();
+  if (id.empty()) return nullptr;
+  const cutline::core::Project& project = app.session.project();
+  const auto found = std::ranges::find(project.media, id, &cutline::core::Media::id);
+  return found == project.media.end() ? nullptr : &*found;
+}
+
+/// Renders the source monitor, and keeps its scrub bar in step.
+void refresh_source([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.source_monitor == nullptr) return;
+
+  const cutline::core::Media* media = source_media_of(app);
+  if (media == nullptr || cutline::core::is_generated_media(*media) || media->path.empty()) {
+    // Nothing chosen, or something with no file behind it. The panel keeps its
+    // placeholder rather than showing the last source, which would be a picture
+    // of something nobody is pointing at.
+    app.source_monitor->clear_frame();
+    if (app.source_scrub != nullptr) {
+      app.source_scrub->set_duration(0.0);
+      app.source_scrub->set_marks(std::nullopt, std::nullopt);
+    }
+    if (app.source_name != nullptr) app.source_name->set_text("No source");
+    app.source_built_for.clear();
+    return;
+  }
+
+  if (app.source_name != nullptr) app.source_name->set_text(media->name);
+  if (app.source_scrub != nullptr) {
+    app.source_scrub->set_duration(media->duration);
+    app.source_scrub->set_marks(media->in_point, media->out_point);
+    app.source_scrub->set_playhead(app.source_playhead);
+  }
+
+  if (app.source_failed) return;
+
+  const cutline::core::Project project = source_project(*media);
+  // Rebuilt when the source changes, because the renderer is made at one canvas
+  // size and sources are not all the same shape.
+  if (app.source_preview == nullptr || app.source_built_for != media->id) {
+    auto made =
+        cutline::app::ProjectPreview::create(project.canvas_w, project.canvas_h, app.device);
+    if (!made.has_value()) {
+      app.source_failed = true;
+      complain(app.main.window, "The source monitor is unavailable.\n\n" + made.error());
+      return;
+    }
+    app.source_preview = std::move(*made);
+    app.source_built_for = media->id;
+  }
+
+  const double at = std::clamp(app.source_playhead, 0.0, std::max(0.0, media->duration));
+  if (app.shares_device()) {
+    const auto frame = app.source_preview->texture_at(project, at);
+    if (!frame.has_value()) {
+      app.source_failed = true;
+      complain(app.main.window, "Could not render the source.\n\n" + frame.error());
+      return;
+    }
+    app.source_monitor->set_texture(*frame);
+  } else {
+    const auto frame = app.source_preview->frame_at(project, at);
+    if (!frame.has_value()) {
+      app.source_failed = true;
+      complain(app.main.window, "Could not render the source.\n\n" + frame.error());
+      return;
+    }
+    app.source_monitor->set_frame(*frame);
+  }
+
+  app.source_monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) /
+                                        project.canvas_h);
+  mark_dirty(app);
+#endif
+}
+
 /// Writes the frame at the playhead to a PNG.
 ///
 /// Rendered again rather than read back off the monitor: what is on screen is
@@ -3979,6 +4126,8 @@ void refresh_all(App& app) {
     const cutline::core::Project& project = app.session.project();
     app.monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
   }
+  // After the browser, which is what may have changed which source is chosen.
+  refresh_source(app);
   if (app.main.host != nullptr) app.main.host->request_layout();
 }
 
@@ -4693,9 +4842,14 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   pool.set_on_select([app](std::optional<std::size_t> index) {
     if (app == nullptr || app->browser == nullptr) return;
     const std::vector<cutline::ui::MediaItem>& items = app->browser->items();
-    app->session.set_source_media(index.has_value() && *index < items.size()
-                                      ? items[*index].id
-                                      : std::string{});
+    const std::string chosen =
+        index.has_value() && *index < items.size() ? items[*index].id : std::string{};
+    // Back to the start when the source changes. Keeping the old time would
+    // point the new source's playhead at a moment chosen for a different file,
+    // which for a shorter one is past its end.
+    if (chosen != app->session.source_media()) app->source_playhead = 0.0;
+    app->session.set_source_media(chosen);
+    refresh_source(*app);
     mark_dirty(*app);
   });
   pool.set_on_drop([app](std::size_t index, double x, double y) {
@@ -6273,8 +6427,66 @@ void build_track_strip(App& app, Box& column, const cutline::core::Track& track,
   return panel;
 }
 
+/// The source monitor: one source, its own playhead, and the marks that decide
+/// which part of it gets placed.
+[[nodiscard]] std::unique_ptr<Widget> make_source_panel(App* app) {
+  auto panel = std::make_unique<Panel>();
+
+  auto& name = panel->emplace<Label>("No source");
+  name.set_small(true);
+  if (app != nullptr) app->source_name = &name;
+
+  auto& picture = panel->emplace<MonitorView>();
+  picture.set_placeholder("Select something in the project panel.");
+  if (app != nullptr) app->source_monitor = &picture;
+
+  auto& bar = panel->emplace<ScrubBar>();
+  if (app != nullptr) {
+    app->source_scrub = &bar;
+    // The bar does not move its own playhead. This decides where the playhead
+    // really is — snapped to the source's own frame grid — and sets it back, so
+    // the picture and the mark that follows it agree on which frame is meant.
+    bar.on_scrub = [app](double time) {
+      const cutline::core::Media* media = source_media_of(*app);
+      const double fps = media != nullptr ? media->fps.value_or(0.0) : 0.0;
+      app->source_playhead = fps > 0.0 ? cutline::core::snap_to_frame(time, fps) : time;
+      refresh_source(*app);
+    };
+  }
+
+  auto& row = panel->emplace<Box>(Axis::Horizontal);
+  row.emplace<Button>("Mark In", [app] {
+    if (app == nullptr) return;
+    if (const cutline::core::Media* media = source_media_of(*app); media != nullptr) {
+      app->session.apply(cutline::core::set_source_in_point(app->session.project(), media->id,
+                                                            app->source_playhead));
+      refresh_all(*app);
+    }
+  });
+  row.emplace<Button>("Mark Out", [app] {
+    if (app == nullptr) return;
+    if (const cutline::core::Media* media = source_media_of(*app); media != nullptr) {
+      app->session.apply(cutline::core::set_source_out_point(app->session.project(), media->id,
+                                                             app->source_playhead));
+      refresh_all(*app);
+    }
+  });
+  row.emplace<Button>("Clear", [app] {
+    if (app == nullptr) return;
+    if (const cutline::core::Media* media = source_media_of(*app); media != nullptr) {
+      app->session.apply(
+          cutline::core::clear_source_marks(app->session.project(), media->id));
+      refresh_all(*app);
+    }
+  });
+  row.emplace<Spacer>();
+
+  return panel;
+}
+
 [[nodiscard]] std::unique_ptr<Widget> make_panel(App* app, const PanelId& id) {
   if (id == "scopes") return make_scopes_panel(app);
+  if (id == "source") return make_source_panel(app);
   if (id == "project") return make_project_panel(app);
   if (id == "monitor") return make_monitor_panel(app);
   if (id == "timeline") return make_timeline_panel(app);

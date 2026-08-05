@@ -159,7 +159,23 @@ std::vector<Workspace> built_in_workspaces() {
   editing.layout.root =
       split(Axis::Horizontal,
             {tabs({"project", "effects", "library"}),
-             split(Axis::Vertical, {tabs({"monitor", "scopes", "audio"}), tabs({"timeline"})},
+             split(Axis::Vertical,
+                   {// Source beside program, which is Premiere's arrangement and
+                    // the whole reason for a second monitor: what is about to be
+                    // used and what the sequence currently is, both in view.
+                    // Behind a tab they would never be seen together, which is
+                    // the one thing the panel is for.
+                    split(Axis::Horizontal,
+                          {tabs({"source"}), tabs({"monitor", "scopes", "audio"})},
+                          // Not evenly. The program monitor's row carries seven
+                          // controls to the source's four, and split down the
+                          // middle at the default window size `--check` found
+                          // seven of them squeezed and fourteen cut in half.
+                          // The number is set by Aero, whose chrome is the
+                          // roomiest: three of the four themes fit at 0.40 and
+                          // it did not.
+                          {0.34, 0.66}),
+                    tabs({"timeline"})},
                    {0.58, 0.42})},
             // Wide enough for the widest row the inspector builds: an animated
             // Anchor Point carries a name, two numbers, a stopwatch, a
@@ -180,7 +196,10 @@ std::vector<Workspace> built_in_workspaces() {
   colour.layout.root =
       split(Axis::Horizontal,
             {split(Axis::Vertical, {tabs({"monitor"}), tabs({"timeline"})}, {0.74, 0.26}),
-             split(Axis::Vertical, {tabs({"scopes"}), tabs({"effects", "library", "project", "audio"})},
+             // A tab here rather than a second picture: grading is about the
+             // frame in front of you, and the source is only ever glanced at.
+             split(Axis::Vertical, {tabs({"scopes"}),
+                                    tabs({"effects", "library", "project", "audio", "source"})},
                    {0.5, 0.5})},
             {0.72, 0.28});
 
@@ -193,7 +212,8 @@ std::vector<Workspace> built_in_workspaces() {
   audio.layout.root =
       split(Axis::Vertical,
             {split(Axis::Horizontal,
-                   {tabs({"project", "effects", "library", "scopes"}), tabs({"monitor"}), tabs({"audio"})},
+                   {tabs({"project", "effects", "library", "scopes", "source"}),
+                    tabs({"monitor"}), tabs({"audio"})},
                    {0.32, 0.54, 0.14}),
              tabs({"timeline"})},
             {0.42, 0.58});
