@@ -3162,10 +3162,14 @@ void refresh_browser(App& app) {
 /// `where` is where it was dropped, or nothing for a double-click — which
 /// lands at the playhead on the topmost video track, the way every editor's
 /// "insert" does.
-void place_from_pool(App& app, std::size_t index,
-                     std::optional<cutline::ui::DropPoint> where = std::nullopt) {
-  if (app.browser == nullptr || index >= app.browser->items().size()) return;
-  const std::string media_id = app.browser->items()[index].id;
+/// Puts a named media on the timeline, wherever the drop landed.
+///
+/// Shared by the pool and the source monitor, which are two ways of saying the
+/// same thing about the same media — and a second copy of this arithmetic would
+/// be a second chance for the two to disagree about where a clip goes.
+void place_media_from(App& app, const std::string& media_id,
+                      std::optional<cutline::ui::DropPoint> where = std::nullopt) {
+  if (media_id.empty()) return;
 
   double at = app.session.playhead();
   std::string track_id;
@@ -3190,6 +3194,13 @@ void place_from_pool(App& app, std::size_t index,
   refresh_all(app);
 }
 
+/// The same, named by its row in the pool.
+void place_from_pool(App& app, std::size_t index,
+                     std::optional<cutline::ui::DropPoint> where = std::nullopt) {
+  if (app.browser == nullptr || index >= app.browser->items().size()) return;
+  place_media_from(app, app.browser->items()[index].id, where);
+}
+
 /// Shows where a row dragged out of the pool would land, while it is in the air.
 ///
 /// The same arithmetic `place_from_pool` does on release — snapped to the frame
@@ -3197,29 +3208,45 @@ void place_from_pool(App& app, std::size_t index,
 /// give it — so what is drawn is a promise the drop keeps rather than an
 /// approximation of it.
 void refresh_drop_ghost(App& app) {
-  if (app.timeline == nullptr || app.browser == nullptr) return;
+  if (app.timeline == nullptr) return;
 
   // Worked out first and applied once, so the repaint can be asked for exactly
   // when the answer changed. A ghost that redrew on every mouse move would cost
   // a full repaint per pixel of a gesture that mostly stands still.
   std::optional<cutline::ui::DropGhost> ghost;
 
-  if (const std::optional<std::size_t> row = app.browser->dragging();
-      row.has_value() && *row < app.browser->items().size()) {
+  // Two ways a clip arrives from elsewhere: dragged out of the pool, or out of
+  // the source monitor's picture. Both promise the same thing, so both are
+  // answered here rather than by two nearly identical pieces of code.
+  std::string dragged;
+  double at_x = 0.0;
+  double at_y = 0.0;
+  if (app.browser != nullptr) {
+    if (const std::optional<std::size_t> row = app.browser->dragging();
+        row.has_value() && *row < app.browser->items().size()) {
+      dragged = app.browser->items()[*row].id;
+      at_x = app.browser->drag_x();
+      at_y = app.browser->drag_y();
+    }
+  }
+  if (dragged.empty() && app.source_monitor != nullptr && app.source_monitor->dragging_out()) {
+    dragged = app.session.source_media();
+    at_x = app.source_monitor->drag_x();
+    at_y = app.source_monitor->drag_y();
+  }
+
+  if (!dragged.empty()) {
     // Nothing over the tracks means nothing to promise — over the headers, the
     // ruler, or off the panel entirely.
-    if (const auto where =
-            app.timeline->drop_at(app.browser->drag_x(), app.browser->drag_y());
-        where.has_value()) {
+    if (const auto where = app.timeline->drop_at(at_x, at_y); where.has_value()) {
       const cutline::core::Project& project = app.session.project();
-      const std::string& media_id = app.browser->items()[*row].id;
-      const auto media = std::ranges::find(project.media, media_id, &cutline::core::Media::id);
+      const auto media = std::ranges::find(project.media, dragged, &cutline::core::Media::id);
       if (media != project.media.end()) {
         ghost = cutline::ui::DropGhost{
             .track = where->track,
             .start = cutline::core::snap_to_frame(where->time, project.fps),
             .duration = cutline::core::placed_length(
-                *media, cutline::core::source_range(project, media_id)),
+                *media, cutline::core::source_range(project, dragged)),
             .label = media->name};
       }
     }
@@ -6656,7 +6683,19 @@ void build_track_strip(App& app, Box& column, const cutline::core::Track& track,
 
   auto& picture = panel->emplace<MonitorView>();
   picture.set_placeholder("Select something in the project panel.");
-  if (app != nullptr) app->source_monitor = &picture;
+  if (app != nullptr) {
+    app->source_monitor = &picture;
+    // Premiere's shortest statement of "use this": what is in the monitor is
+    // what is about to be placed, so drag it where it goes. The marked span
+    // comes with it, exactly as it does from the pool.
+    picture.set_on_drag_out([app](double x, double y) {
+      if (app->timeline == nullptr) return;
+      app->timeline->set_drop_ghost(std::nullopt);
+      const auto where = app->timeline->drop_at(x, y);
+      if (!where.has_value()) return;  // released somewhere that means nothing
+      place_media_from(*app, app->session.source_media(), where);
+    });
+  }
 
   auto& bar = panel->emplace<ScrubBar>();
   // So a click on it takes the keyboard, which is what makes the transport and

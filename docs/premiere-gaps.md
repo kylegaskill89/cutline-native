@@ -805,7 +805,7 @@ way to *set* them by eye, which is the panel.
 | ~~Mark in and out **on the source**~~ | `I` and `O` while it is focused | **done** — routed by where the keyboard is | — |
 | ~~Marks that belong to the asset~~ | kept per clip, and saved | **done** | — |
 | ~~Insert and overwrite the marked part~~ | the point of the whole panel | **done** | — |
-| Drag from the picture to the timeline | yes | none | control |
+| ~~Drag from the picture to the timeline~~ | yes | **done** — with the same ghost the pool's drag shows | — |
 | A list of recently opened sources | a dropdown of them | one at a time | control |
 | Audio-only sources shown as a waveform | yes | none | control |
 | Display mode, safe margins, zoom | yes | none — see the audit list | control |

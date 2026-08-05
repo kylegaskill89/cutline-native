@@ -889,5 +889,85 @@ TEST(MonitorMasks, TheLayersCornerHandlesStillWin) {
   EXPECT_EQ(box_commits, 1);
 }
 
+// ------------------------------------------------------ dragging out of it --
+
+namespace {
+
+/// A monitor with a picture in it, sized so the picture has a border around it.
+struct DragOutFixture {
+  Pixels frame{40, 40};
+  MonitorView monitor;
+
+  DragOutFixture() {
+    monitor.set_frame(frame.view());
+    monitor.arrange(Rect{0.0, 0.0, 440.0, 440.0}, flat_context());
+  }
+
+  [[nodiscard]] MouseEvent at(double x, double y) const {
+    return MouseEvent{.x = x, .y = y, .button = MouseButton::Left};
+  }
+};
+
+}  // namespace
+
+TEST(MonitorDragOut, APressThatTravelsIsReportedWhereItLanded) {
+  DragOutFixture test;
+  std::optional<std::pair<double, double>> dropped;
+  test.monitor.set_on_drag_out([&](double x, double y) { dropped = {x, y}; });
+
+  const Rect picture = test.monitor.picture();
+  test.monitor.on_mouse_down(test.at(picture.x + 20.0, picture.y + 20.0));
+  test.monitor.on_mouse_move(test.at(picture.x + 200.0, picture.y + 300.0));
+  EXPECT_TRUE(test.monitor.dragging_out());
+
+  test.monitor.on_mouse_up(test.at(picture.x + 200.0, picture.y + 300.0));
+  ASSERT_TRUE(dropped.has_value());
+  EXPECT_DOUBLE_EQ(dropped->first, picture.x + 200.0);
+  EXPECT_DOUBLE_EQ(dropped->second, picture.y + 300.0);
+  EXPECT_FALSE(test.monitor.dragging_out());
+}
+
+TEST(MonitorDragOut, APressThatDoesNotTravelIsAClick) {
+  // Otherwise the picture could not simply be pressed on.
+  DragOutFixture test;
+  int drops = 0;
+  test.monitor.set_on_drag_out([&](double, double) { ++drops; });
+
+  const Rect picture = test.monitor.picture();
+  test.monitor.on_mouse_down(test.at(picture.x + 20.0, picture.y + 20.0));
+  test.monitor.on_mouse_move(test.at(picture.x + 21.0, picture.y + 21.0));
+  test.monitor.on_mouse_up(test.at(picture.x + 21.0, picture.y + 21.0));
+  EXPECT_EQ(drops, 0);
+}
+
+TEST(MonitorDragOut, WithNobodyListeningThePressIsNotTaken) {
+  // A monitor nothing can be dragged out of must leave the press alone, or the
+  // program monitor would swallow clicks that belong to whatever is under them.
+  DragOutFixture test;
+  const Rect picture = test.monitor.picture();
+  EXPECT_FALSE(test.monitor.on_mouse_down(test.at(picture.x + 20.0, picture.y + 20.0)));
+}
+
+TEST(MonitorDragOut, ALayersHandlesComeFirst) {
+  // The order that keeps both gestures reachable. A drag out taking the press
+  // first would make a selected layer impossible to move.
+  DragOutFixture test;
+  int drops = 0;
+  int moves = 0;
+  test.monitor.set_on_drag_out([&](double, double) { ++drops; });
+  test.monitor.set_on_transform_change([&](const MonitorBox&) { ++moves; });
+  test.monitor.set_transform(MonitorBox{.x = 0.5, .y = 0.5, .width = 0.5, .height = 0.5});
+
+  const Rect picture = test.monitor.picture();
+  const double x = picture.x + picture.width * 0.5;
+  const double y = picture.y + picture.height * 0.5;
+  test.monitor.on_mouse_down(test.at(x, y));
+  test.monitor.on_mouse_move(test.at(x + 40.0, y + 40.0));
+  test.monitor.on_mouse_up(test.at(x + 40.0, y + 40.0));
+
+  EXPECT_EQ(drops, 0) << "the drag out swallowed a move of the layer";
+  EXPECT_GT(moves, 0);
+}
+
 }  // namespace
 }  // namespace cutline::ui

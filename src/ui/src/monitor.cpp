@@ -40,6 +40,11 @@ constexpr double kRotationStep = 15.0;
 /// never back up.
 constexpr double kMinExtent = 0.02;
 
+/// How far a press must travel before it is a drag out of the picture rather
+/// than a click on it. The media pool's own threshold, because it is the same
+/// gesture starting somewhere else.
+constexpr double kMonitorDragThreshold = 4.0;
+
 [[nodiscard]] constexpr double to_radians(double degrees) noexcept {
   return degrees * std::numbers::pi / 180.0;
 }
@@ -579,6 +584,16 @@ bool MonitorView::on_mouse_down(const MouseEvent& event) {
   }
 
   if (handle == TransformHandle::Move) return take_layer();
+
+  // Last, so it can only start where nothing else wanted the press: a layer's
+  // handles and a mask both come first, and a monitor showing neither — the
+  // source monitor, which has no selection to transform — is all picture.
+  if (on_drag_out_ && picture().contains(event.x, event.y)) {
+    pressed_out_ = true;
+    press_x_ = event.x;
+    press_y_ = event.y;
+    return true;
+  }
   return false;
 }
 
@@ -586,6 +601,18 @@ bool MonitorView::on_mouse_move(const MouseEvent& event) {
   if (mask_dragging_.has_value()) {
     drag_mask(event.x, event.y);
     if (on_mask_change_) on_mask_change_(*mask_dragging_, masks_[*mask_dragging_]);
+    return true;
+  }
+
+  if (pressed_out_) {
+    drag_x_ = event.x;
+    drag_y_ = event.y;
+    if (!dragging_out_) {
+      // The same threshold the media pool uses, and for the same reason: a
+      // press that wobbles by a pixel is a click, and treating it as a drag
+      // would make the picture impossible to simply press on.
+      dragging_out_ = std::hypot(event.x - press_x_, event.y - press_y_) >= kMonitorDragThreshold;
+    }
     return true;
   }
 
@@ -634,6 +661,16 @@ bool MonitorView::on_mouse_up(const MouseEvent& event) {
     if (index < masks_.size() && masks_[index] != mask_origin_ && on_mask_commit_) {
       on_mask_commit_(index, masks_[index]);
     }
+    return true;
+  }
+
+  if (pressed_out_) {
+    const bool dragged = dragging_out_;
+    pressed_out_ = false;
+    dragging_out_ = false;
+    // Reported wherever it was released, including outside the monitor — the
+    // press captured the pointer, so a drop on the timeline still arrives here.
+    if (dragged && on_drag_out_) on_drag_out_(event.x, event.y);
     return true;
   }
 

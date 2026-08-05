@@ -1054,16 +1054,22 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
     }
   }
 
-  // Where a clip dragged in from the pool would land. Under the clips, like the
-  // duplicate ghost and for the same reason: it is a promise about the release
-  // and must not hide what is already there.
-  if (const Rect landing = drop_ghost_rect();
-      !landing.empty() && landing.right() >= tracks.x && landing.x <= tracks.right()) {
-    const SurfaceStyle& style = theme.style(Part::Clip, State::Normal);
-    painter.fill(landing.inset(1.0), style.corner_radius, Fill::solid(fade(style.text, 0.14f)));
-    painter.stroke(landing.inset(1.0), style.corner_radius, fade(style.text, 0.55f), 1.0);
+  // Where a clip dragged in from elsewhere would land, drawn *over* the clips.
+  //
+  // Under them was the first answer, on the grounds that a promise should not
+  // hide what is already there — and driving showed what is wrong with it: a
+  // track with a clip across the whole visible span hid the ghost completely,
+  // which is exactly the case where somebody most needs to see where a drop
+  // will go. Over the top and mostly transparent shows both.
+  const auto paint_drop_ghost = [&] {
+    const Rect landing = drop_ghost_rect();
+    if (landing.empty() || landing.right() < tracks.x || landing.x > tracks.right()) return;
 
-    // Both edges picked out, because where it *starts* is the thing being
+    const SurfaceStyle& style = theme.style(Part::Clip, State::Normal);
+    painter.fill(landing.inset(1.0), style.corner_radius, Fill::solid(fade(style.fill.color, 0.55f)));
+    painter.stroke(landing.inset(1.0), style.corner_radius, fade(style.text, 0.75f), 1.0);
+
+    // The leading edge picked out, because where it *starts* is the thing being
     // aimed and a soft-edged rectangle does not say precisely where that is.
     painter.line(landing.x, landing.y, landing.x, landing.bottom(),
                  theme.style(Part::Playhead, State::Normal).fill.color, 1.5);
@@ -1074,7 +1080,7 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
       painter.text(text_run(text, drop_ghost_->label, style, metrics_.small_font_size,
                             TextAlign::Left, false));
     }
-  }
+  };
 
   for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
     const Rect row = track_rect(track);
@@ -1347,6 +1353,10 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
       }
     }
   }
+
+  // Last, and inside the tracks' clip, so it lies over whatever is already
+  // there and stops at the track headers like everything else.
+  paint_drop_ghost();
   painter.pop_clip();
 
   // ---- what the drag has snapped to, over the clips so it can be seen on one

@@ -204,6 +204,29 @@ class MonitorView : public Widget {
     on_mask_commit_ = std::move(on_commit);
   }
 
+  // ---------------------------------------------------------- dragging out --
+
+  /// A drag that began on the picture and was released, at a point in the same
+  /// coordinates as widget bounds — so whoever wired it up can ask the timeline
+  /// what time that was.
+  ///
+  /// The source monitor's way onto the timeline, and Premiere's: what is in the
+  /// monitor is what is about to be placed, so dragging it there is the shortest
+  /// statement of that. Offered last of the gestures on this widget — a layer's
+  /// handles and a mask both come first — so it can only start where nothing
+  /// else wanted the press.
+  ///
+  /// The monitor does not know what it is showing or what dropping it would
+  /// mean. Both are questions about a sequence, and this layer does not know
+  /// sequences exist.
+  void set_on_drag_out(std::function<void(double x, double y)> on_drag_out) {
+    on_drag_out_ = std::move(on_drag_out);
+  }
+  /// Whether a drag out of the picture is in the air, and where it has got to.
+  [[nodiscard]] bool dragging_out() const noexcept { return dragging_out_; }
+  [[nodiscard]] double drag_x() const noexcept { return drag_x_; }
+  [[nodiscard]] double drag_y() const noexcept { return drag_y_; }
+
   /// Which mask a press at this point would take hold of, and whether by its
   /// body or by a corner. Nothing when the press is on no mask.
   [[nodiscard]] std::optional<std::size_t> mask_at(double x, double y) const;
@@ -276,6 +299,15 @@ class MonitorView : public Widget {
   std::function<void(const MonitorBox&)> on_commit_;
   std::function<void(std::size_t, const MaskOverlay&)> on_mask_change_;
   std::function<void(std::size_t, const MaskOverlay&)> on_mask_commit_;
+
+  /// The drag out of the picture. `pressed_out_` is a press that could become
+  /// one; `dragging_out_` is one that has travelled far enough to be a drag
+  /// rather than a click, which is the same threshold the media pool uses.
+  std::function<void(double, double)> on_drag_out_;
+  bool pressed_out_ = false;
+  bool dragging_out_ = false;
+  double drag_x_ = 0.0;
+  double drag_y_ = 0.0;
 
   bool drop_lit_ = false;
   std::vector<MaskOverlay> masks_;
