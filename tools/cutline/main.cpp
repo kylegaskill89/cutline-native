@@ -919,6 +919,7 @@ void set_theme(App& app, std::size_t index);
 void refresh_timeline(App& app);
 void refresh_busy(App& app);
 void refresh_drop_ghost(App& app);
+void relink_pool_entry(App& app);
 void open_from_command_line(App& app, const std::filesystem::path& path);
 void refresh_source(App& app);
 void refresh_source_list(App& app);
@@ -3293,6 +3294,70 @@ void remove_from_pool(App& app) {
 
   app.session.apply(cutline::editor::remove_media(app.session.project(), chosen->id));
   refresh_all(app);
+}
+
+/// Points a pool entry at a file somewhere else.
+///
+/// What repairs a project whose footage has moved — a drive letter that
+/// changed, a folder that was tidied. Clips name media by id, so repointing the
+/// one entry repairs every clip that used it, however many there are.
+void relink_pool_entry([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.browser == nullptr) return;
+  const cutline::ui::MediaItem* chosen = app.browser->selected();
+  // Said rather than ignored. A menu item that does nothing at all is
+  // indistinguishable from one that is broken, and this is reached exactly when
+  // something is already wrong and patience is short.
+  if (chosen == nullptr) {
+    complain(app.main.window,
+             "Choose the media to relink in the project panel first.");
+    return;
+  }
+
+  const cutline::core::Project& project = app.session.project();
+  const auto media =
+      std::ranges::find(project.media, chosen->id, &cutline::core::Media::id);
+  if (media == project.media.end()) return;
+  // Generated media have no file to point anywhere.
+  if (media->path.empty() || cutline::core::is_generated_media(*media)) {
+    complain(app.main.window, media->name + " is made rather than read, so there is no file "
+                                            "to relink it to.");
+    return;
+  }
+
+  std::array<wchar_t, MAX_PATH> buffer{};
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = app.main.window;
+  dialog.lpstrFilter =
+      L"Media\0*.mp4;*.mov;*.mkv;*.avi;*.webm;*.wav;*.mp3;*.flac;*.png;*.jpg\0"
+      L"All files\0*.*\0";
+  dialog.lpstrFile = buffer.data();
+  dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+  dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+  // Named in the title, because a project with several files missing is exactly
+  // when this is used and "Open" would not say which one is being answered.
+  const std::wstring title = L"Relink " + std::filesystem::path(media->name).wstring();
+  dialog.lpstrTitle = title.c_str();
+  if (GetOpenFileNameW(&dialog) == FALSE) return;
+
+  const std::filesystem::path path{buffer.data()};
+  const auto source = cutline::app::probe_source(path.string());
+  if (!source.has_value()) {
+    complain(app.main.window, "Could not read that file.\n\n" + source.error());
+    return;
+  }
+
+  app.session.apply(cutline::editor::relink_media(app.session.project(), chosen->id, *source));
+  // The renderer is holding a decoder for the old path, and the browser is
+  // holding the old file's filmstrip and envelope. All three would go on
+  // describing a file that is no longer what this entry means.
+  if (app.preview != nullptr) app.preview->release_sources();
+  app.filmstrips.clear();
+  app.waveforms.clear();
+  refresh_all(app);
+  invalidate_preview(app);
+#endif
 }
 
 /// Renders the frame under the playhead into the monitor.
@@ -7312,6 +7377,11 @@ void refresh_dock(App& app) {
   });
 
   menu("Project", {
+      // Premiere's "Link Media...", under the same menu and acting on what the
+      // pool has selected. Not a button on the project panel's row: that row is
+      // four controls wide already, and this is a thing wanted rarely and
+      // urgently rather than often.
+      {"Relink Media...", [app] { if (app != nullptr) relink_pool_entry(*app); }},
       {"Project Settings...", [app] {
          if (app == nullptr || app->main.host == nullptr) return;
          app->main.host->open_popup(build_project_settings_popup(*app), settings_anchor());

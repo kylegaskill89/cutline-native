@@ -63,6 +63,29 @@ struct MediaSource {
                                              double at,
                                              std::string_view video_track_id = {});
 
+/// Points a pool entry at a file somewhere else, keeping its id.
+///
+/// What repairs a project whose footage has moved. The id is what clips name,
+/// so repointing one entry repairs every clip that used it — which is the whole
+/// reason media are referred to by id rather than by path, and it has been true
+/// since the model was written without anything taking advantage of it.
+///
+/// The probed facts come with the path. A relink is usually the same file in a
+/// new place, but it is not guaranteed to be, and a source that went on
+/// reporting the old duration and the old size would describe something that is
+/// not there — which is worse than the offline entry it replaced, because
+/// nothing would say so.
+///
+/// The *name* is deliberately kept. It is a property of the project, renameable
+/// in the browser, and somebody who renamed an entry has said what they want it
+/// called; relinking is not the moment to overrule that.
+///
+/// Clips are left exactly as they are. They name times, and a time still means
+/// what it meant — a clip reaching past the end of a shorter replacement is a
+/// thing to see rather than a thing to silently trim.
+[[nodiscard]] core::Project relink_media(core::Project project, std::string_view media_id,
+                                         const MediaSource& source);
+
 /// Whether a path looks like a still image, by its extension.
 ///
 /// A guess, and only used where a probe cannot say — some formats a decoder

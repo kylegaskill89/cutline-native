@@ -880,7 +880,7 @@ fact about the person and are saved beside the presets.
 | | Premiere | Here | Size |
 |---|---|---|---|
 | Bins | folders of media, nested, saved with the project | one flat pool | model |
-| Relinking | point a moved file at its new home, and the clips follow | offline is *shown* and nothing repairs it | wiring |
+| ~~Relinking~~ | point a moved file at its new home, and the clips follow | **done** — Project ▸ Relink Media | — |
 | Proxies | attach a small copy, edit against it, export from the original | none | model + machinery |
 | Metadata columns | a real column view, sortable by clicking a heading | one name and one detail string | control |
 | Icon view | thumbnails, and hover to scrub them | a letter badge | control |

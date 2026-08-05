@@ -85,6 +85,16 @@ class ProjectPreview {
   /// is the only way to find out.
   [[nodiscard]] const std::vector<std::string>& missing_media() const noexcept;
 
+  /// Drops every open decoder, so the next frame opens whatever the project
+  /// names now.
+  ///
+  /// Decoders are kept for as long as the timeline keeps asking for them, and
+  /// they are keyed by media id rather than by path — which is right until a
+  /// media's path changes underneath one. Relinking is the case: without this
+  /// the renderer would go on decoding the file that moved, and the picture
+  /// would be of something the project no longer refers to.
+  void release_sources();
+
  private:
   struct Impl;
   explicit ProjectPreview(std::unique_ptr<Impl> impl);

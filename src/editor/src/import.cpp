@@ -88,6 +88,27 @@ core::Project import_media(core::Project project, const MediaSource& source, std
   return core::add_media(std::move(project), std::move(media));
 }
 
+core::Project relink_media(core::Project project, std::string_view media_id,
+                           const MediaSource& source) {
+  const auto found = std::ranges::find(project.media, media_id, &core::Media::id);
+  if (found == project.media.end() || source.path.empty()) return project;
+
+  found->path = source.path;
+  // Everything the probe found, because a relink is only usually the same file
+  // in a new place. What is not taken is the name: it is a property of the
+  // project rather than of the file, and somebody who renamed the entry has
+  // already said what they want it called.
+  found->duration = source.duration;
+  found->has_video = source.has_video;
+  found->audio_stream_count = source.audio_stream_count;
+  found->is_image = source.is_image;
+  found->is_animated = source.is_animated;
+  found->width = source.width;
+  found->height = source.height;
+  found->fps = source.fps;
+  return project;
+}
+
 core::Project import_and_place(core::Project project, const MediaSource& source, double at,
                                std::string_view video_track_id) {
   std::string id;

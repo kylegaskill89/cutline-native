@@ -6,6 +6,7 @@
 
 #include "cutline/editor/import.hpp"
 
+#include "cutline/core/edit.hpp"
 #include "cutline/core/id.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
@@ -45,6 +46,79 @@ TEST(Import, AFileBecomesMedia) {
   EXPECT_TRUE(project.media[0].has_video);
   EXPECT_EQ(project.media[0].audio_stream_count, 1);
   EXPECT_DOUBLE_EQ(project.media[0].duration, 42.0);
+}
+
+// --------------------------------------------------------------- relinking --
+
+TEST(Relink, TheEntryKeepsItsIdSoEveryClipIsRepaired) {
+  // The whole of why this works: clips name media by id, so one entry
+  // repointed repairs every clip that used it, however many there are.
+  std::string id;
+  Project project = import_media(with_tracks(), a_video(), &id);
+  project = core::place_media(std::move(project), id, 0.0);
+  project = core::place_media(std::move(project), id, 60.0);
+  const std::size_t clips = project.tracks[0].clips.size();
+  ASSERT_EQ(clips, 2u);
+
+  project = relink_media(std::move(project), id, a_video("E:/moved/wide.mp4"));
+
+  EXPECT_EQ(project.media[0].id, id) << "the id changed, so the clips point at nothing";
+  EXPECT_EQ(project.media[0].path, "E:/moved/wide.mp4");
+  EXPECT_EQ(project.tracks[0].clips.size(), clips);
+  for (const core::Clip& clip : project.tracks[0].clips) EXPECT_EQ(clip.media_id, id);
+}
+
+TEST(Relink, TheProbedFactsComeWithTheNewPath) {
+  // A relink is only *usually* the same file in a new place. One that went on
+  // reporting the old duration and size would describe something that is not
+  // there, and nothing would say so.
+  std::string id;
+  Project project = import_media(Project{}, a_video(), &id);
+
+  MediaSource replacement = a_video("E:/moved/tall.mov");
+  replacement.duration = 7.5;
+  replacement.width = 1080;
+  replacement.height = 1920;
+  replacement.audio_stream_count = 2;
+  project = relink_media(std::move(project), id, replacement);
+
+  EXPECT_DOUBLE_EQ(project.media[0].duration, 7.5);
+  EXPECT_EQ(project.media[0].width, 1080);
+  EXPECT_EQ(project.media[0].height, 1920);
+  EXPECT_EQ(project.media[0].audio_stream_count, 2);
+}
+
+TEST(Relink, TheNameIsTheProjectsAndIsKept) {
+  // Renameable in the browser, and somebody who renamed an entry has said what
+  // they want it called. Relinking is not the moment to overrule that.
+  std::string id;
+  MediaSource named = a_video();
+  named.name = "Wide shot, take 3";
+  Project project = import_media(Project{}, named, &id);
+
+  project = relink_media(std::move(project), id, a_video("E:/moved/wide.mp4"));
+  EXPECT_EQ(project.media[0].name, "Wide shot, take 3");
+}
+
+TEST(Relink, MarksOnTheSourceSurviveIt) {
+  // They are a decision about which part of the footage to use, and the
+  // footage has not changed — only where it lives.
+  std::string id;
+  Project project = import_media(Project{}, a_video(), &id);
+  project = core::set_source_in_point(std::move(project), id, 4.0);
+  project = core::set_source_out_point(std::move(project), id, 9.0);
+
+  project = relink_media(std::move(project), id, a_video("E:/moved/wide.mp4"));
+  EXPECT_DOUBLE_EQ(*project.media[0].in_point, 4.0);
+  EXPECT_DOUBLE_EQ(*project.media[0].out_point, 9.0);
+}
+
+TEST(Relink, NamingNothingChangesNothing) {
+  const Project project = import_media(Project{}, a_video());
+  EXPECT_EQ(relink_media(project, "nobody", a_video("E:/moved/wide.mp4")).media,
+            project.media);
+  // And a source with no path, which is what a cancelled dialog would give.
+  EXPECT_EQ(relink_media(project, project.media[0].id, MediaSource{}).media, project.media);
 }
 
 TEST(Import, TheNameFallsBackToTheFilename) {

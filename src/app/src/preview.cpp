@@ -154,4 +154,6 @@ const std::vector<std::string>& ProjectPreview::missing_media() const noexcept {
   return impl_->renderer->missing_media();
 }
 
+void ProjectPreview::release_sources() { impl_->renderer->release_sources(); }
+
 }  // namespace cutline::app
