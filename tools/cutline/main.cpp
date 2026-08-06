@@ -447,8 +447,8 @@ struct App {
   TextField* readout = nullptr;
   /// The media pool down the left, and the button that cycles its order.
   MediaBrowser* browser = nullptr;
-  Button* sort_button = nullptr;
   cutline::editor::BrowserSort browser_sort = cutline::editor::BrowserSort::Pool;
+  bool browser_descending = false;
   /// The bins showing what is inside them.
   ///
   /// Here rather than in the project: which folders happen to be open is about
@@ -3195,17 +3195,54 @@ void refresh_handles(App& app) {
   app.monitor->set_masks(std::move(shapes));
 }
 
-/// What the sort button says, and what pressing it moves to next.
-[[nodiscard]] std::string_view sort_name(cutline::editor::BrowserSort sort) noexcept {
+/// The heading an ordering belongs to, or nothing for pool order — which has no
+/// column, being the order things were imported in rather than a fact about any
+/// of them.
+[[nodiscard]] std::optional<cutline::ui::MediaColumn> sort_column(
+    cutline::editor::BrowserSort sort) noexcept {
   using cutline::editor::BrowserSort;
+  using cutline::ui::MediaColumn;
   switch (sort) {
-    case BrowserSort::Pool: return "Pool";
-    case BrowserSort::Name: return "Name";
-    case BrowserSort::Kind: return "Kind";
-    case BrowserSort::Duration: return "Length";
-    case BrowserSort::Uses: return "Used";
+    case BrowserSort::Pool: return std::nullopt;
+    case BrowserSort::Name: return MediaColumn::Name;
+    case BrowserSort::Kind: return MediaColumn::Kind;
+    case BrowserSort::Duration: return MediaColumn::Duration;
+    case BrowserSort::Uses: return MediaColumn::Uses;
   }
-  return "Pool";
+  return std::nullopt;
+}
+
+/// The ordering a heading asks for.
+[[nodiscard]] cutline::editor::BrowserSort sort_for(cutline::ui::MediaColumn column) noexcept {
+  using cutline::editor::BrowserSort;
+  using cutline::ui::MediaColumn;
+  switch (column) {
+    case MediaColumn::Name: return BrowserSort::Name;
+    case MediaColumn::Duration: return BrowserSort::Duration;
+    case MediaColumn::Uses: return BrowserSort::Uses;
+    case MediaColumn::Kind: return BrowserSort::Kind;
+  }
+  return BrowserSort::Name;
+}
+
+/// A heading clicked: order by it, or reverse it if it is already the one.
+///
+/// The third click on the same heading goes back to pool order rather than
+/// round again. Pool order has no column of its own, so without this there
+/// would be no way back to it once a heading had been touched — and the order
+/// footage was brought in is the one people mean by "how it was".
+void sort_by_column(App& app, cutline::ui::MediaColumn column) {
+  const cutline::editor::BrowserSort wanted = sort_for(column);
+  if (app.browser_sort != wanted) {
+    app.browser_sort = wanted;
+    app.browser_descending = false;
+  } else if (!app.browser_descending) {
+    app.browser_descending = true;
+  } else {
+    app.browser_sort = cutline::editor::BrowserSort::Pool;
+    app.browser_descending = false;
+  }
+  refresh_browser(app);
 }
 
 /// Rebuilds the media pool from the session.
@@ -3218,6 +3255,7 @@ void refresh_browser(App& app) {
 
   cutline::editor::BrowserOptions options;
   options.sort = app.browser_sort;
+  options.descending = app.browser_descending;
   options.expanded = app.expanded_bins;
 #if CUTLINE_HAVE_PREVIEW
   // Whatever the renderer could not open. It only knows once it has tried, so
@@ -3227,9 +3265,7 @@ void refresh_browser(App& app) {
 #endif
 
   app.browser->set_items(cutline::editor::browser_items(app.session.project(), options));
-  if (app.sort_button != nullptr) {
-    app.sort_button->set_text("Sort: " + std::string(sort_name(app.browser_sort)));
-  }
+  app.browser->set_sorted_by(sort_column(app.browser_sort), app.browser_descending);
   mark_dirty(app);
 }
 
@@ -5622,20 +5658,6 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   });
   tools.emplace<Spacer>();
 
-  auto& sort_choice = tools.emplace<Button>("Sort: Pool", [app] {
-    if (app == nullptr) return;
-    using cutline::editor::BrowserSort;
-    // Cycled rather than offered in a menu, because there is no menu yet and a
-    // button that does one useful thing beats a control that does nothing.
-    constexpr std::array kOrder{BrowserSort::Pool, BrowserSort::Name, BrowserSort::Kind,
-                                BrowserSort::Duration, BrowserSort::Uses};
-    const auto found = std::ranges::find(kOrder, app->browser_sort);
-    const auto next =
-        (found == kOrder.end() || found + 1 == kOrder.end()) ? kOrder.begin() : found + 1;
-    app->browser_sort = *next;
-    refresh_browser(*app);
-    app->main.host->request_layout();
-  });
 
   auto& pool = panel->emplace<MediaBrowser>();
 
@@ -5658,6 +5680,12 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     if (!cutline::editor::bin_of_row(id).empty()) return;
     show_source(*app, std::move(id));
   });
+  // The headings order the list now. The button that used to cycle through the
+  // orderings has gone with them: it said what the order was in a place nobody
+  // looks, and the column it applies to is the obvious place to say it.
+  pool.set_on_sort([app](cutline::ui::MediaColumn column) {
+    if (app != nullptr) sort_by_column(*app, column);
+  });
   pool.set_on_toggle([app](std::size_t index) {
     if (app != nullptr) toggle_bin(*app, index);
   });
@@ -5679,7 +5707,6 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
 
   if (app != nullptr) {
     app->browser = &pool;
-    app->sort_button = &sort_choice;
     refresh_browser(*app);
   } else {
     // The headless check builds these with no session behind them. Filling the

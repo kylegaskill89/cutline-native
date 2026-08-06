@@ -75,6 +75,10 @@ struct Fixture {
   }
 
   [[nodiscard]] double row() const { return view->row_height(); }
+  /// The top of the first row. Not zero any more: the column headings take a
+  /// row's height off the top, and every coordinate here is measured from
+  /// below them.
+  [[nodiscard]] double top() const { return view->list_area().y; }
 
   std::unique_ptr<WidgetHost> host;
   MediaBrowser* view = nullptr;
@@ -91,7 +95,7 @@ TEST(Browser, RowsStackFromTheTop) {
   const Fixture fixture;
   const Rect first = fixture.view->row_rect(0);
 
-  EXPECT_DOUBLE_EQ(first.y, 0.0);
+  EXPECT_DOUBLE_EQ(first.y, fixture.top());
   EXPECT_DOUBLE_EQ(first.height, fixture.row());
   EXPECT_DOUBLE_EQ(fixture.view->row_rect(1).y, first.bottom());
 }
@@ -124,7 +128,7 @@ TEST(Browser, ARowHalfWayOffTheTopIsStillARectangle) {
 
   const Rect row = fixture.view->row_rect(0);
   ASSERT_FALSE(row.empty());
-  EXPECT_DOUBLE_EQ(row.y, -fixture.row() * 0.5);
+  EXPECT_DOUBLE_EQ(row.y, fixture.top() - fixture.row() * 0.5);
 }
 
 TEST(Browser, TheScrollbarTakesItsGutterOutOfTheRows) {
@@ -156,25 +160,27 @@ TEST(Browser, TheBadgeIsASquareInsideTheRow) {
 
 TEST(Browser, APointFindsTheRowItIsOver) {
   const Fixture fixture;
-  EXPECT_EQ(fixture.view->row_at(20.0, 1.0), std::optional<std::size_t>{0});
-  EXPECT_EQ(fixture.view->row_at(20.0, fixture.row() + 1.0), std::optional<std::size_t>{1});
+  EXPECT_EQ(fixture.view->row_at(20.0, fixture.top() + 1.0), std::optional<std::size_t>{0});
+  EXPECT_EQ(fixture.view->row_at(20.0, fixture.top() + fixture.row() + 1.0),
+            std::optional<std::size_t>{1});
 }
 
 TEST(Browser, PastTheLastRowIsNothing) {
   const Fixture fixture(3);
-  EXPECT_FALSE(fixture.view->row_at(20.0, fixture.row() * 3.0 + 4.0).has_value());
+  EXPECT_FALSE(
+      fixture.view->row_at(20.0, fixture.top() + fixture.row() * 3.0 + 4.0).has_value());
 }
 
 TEST(Browser, HitTestingFollowsTheScroll) {
   Fixture fixture;
   fixture.view->scroll_by(fixture.row() * 3.0);
-  EXPECT_EQ(fixture.view->row_at(20.0, 1.0), std::optional<std::size_t>{3});
+  EXPECT_EQ(fixture.view->row_at(20.0, fixture.top() + 1.0), std::optional<std::size_t>{3});
 }
 
 TEST(Browser, TheScrollbarGutterIsNotPartOfARow) {
   // Otherwise dragging the scrollbar would also select whatever it passed over.
   const Fixture fixture;
-  EXPECT_FALSE(fixture.view->row_at(299.0, 1.0).has_value());
+  EXPECT_FALSE(fixture.view->row_at(299.0, fixture.top() + 1.0).has_value());
 }
 
 // --------------------------------------------------------------- selection --
@@ -188,7 +194,7 @@ TEST(Browser, AClickSelectsAndReports) {
     ++calls;
   });
 
-  ASSERT_TRUE(fixture.host->mouse_down(press(20.0, fixture.row() * 2.0 + 1.0)));
+  ASSERT_TRUE(fixture.host->mouse_down(press(20.0, fixture.top() + fixture.row() * 2.0 + 1.0)));
 
   EXPECT_EQ(fixture.view->selection(), std::optional<std::size_t>{2});
   EXPECT_EQ(reported, std::optional<std::size_t>{2});
@@ -202,7 +208,7 @@ TEST(Browser, ClickingBelowTheLastRowClearsTheSelection) {
   std::optional<std::size_t> reported{7};
   fixture.view->set_on_select([&](std::optional<std::size_t> index) { reported = index; });
 
-  ASSERT_TRUE(fixture.host->mouse_down(press(20.0, fixture.row() * 3.0 + 4.0)));
+  ASSERT_TRUE(fixture.host->mouse_down(press(20.0, fixture.top() + fixture.row() * 3.0 + 4.0)));
 
   EXPECT_FALSE(fixture.view->selection().has_value());
   EXPECT_FALSE(reported.has_value());
@@ -275,7 +281,7 @@ TEST(Browser, ADoubleClickActivatesTheRow) {
   std::optional<std::size_t> activated;
   fixture.view->set_on_activate([&](std::size_t index) { activated = index; });
 
-  fixture.host->mouse_down(press(20.0, 1.0, 2));
+  fixture.host->mouse_down(press(20.0, fixture.top() + 1.0, 2));
 
   EXPECT_EQ(activated, std::optional<std::size_t>{0});
   EXPECT_EQ(fixture.view->selection(), std::optional<std::size_t>{0});
@@ -286,8 +292,8 @@ TEST(Browser, ASingleClickDoesNotActivate) {
   int activations = 0;
   fixture.view->set_on_activate([&](std::size_t) { ++activations; });
 
-  fixture.host->mouse_down(press(20.0, 1.0));
-  fixture.host->mouse_up(press(20.0, 1.0));
+  fixture.host->mouse_down(press(20.0, fixture.top() + 1.0));
+  fixture.host->mouse_up(press(20.0, fixture.top() + 1.0));
 
   EXPECT_EQ(activations, 0);
 }
@@ -299,7 +305,7 @@ TEST(Browser, ADoubleClickDoesNotAlsoArmADrag) {
   std::optional<std::size_t> dropped;
   fixture.view->set_on_drop([&](std::size_t index, double, double) { dropped = index; });
 
-  fixture.host->mouse_down(press(20.0, 1.0, 2));
+  fixture.host->mouse_down(press(20.0, fixture.top() + 1.0, 2));
   fixture.host->mouse_move(press(60.0, 40.0));
   fixture.host->mouse_up(press(60.0, 40.0));
 
@@ -319,7 +325,7 @@ TEST(Browser, DraggingARowOutReportsWhereItWasDropped) {
     at_y = y;
   });
 
-  fixture.host->mouse_down(press(20.0, fixture.row() + 1.0));
+  fixture.host->mouse_down(press(20.0, fixture.top() + fixture.row() + 1.0));
   fixture.host->mouse_move(press(400.0, 500.0));
   EXPECT_EQ(fixture.view->dragging(), std::optional<std::size_t>{1});
 
@@ -336,10 +342,10 @@ TEST(Browser, AClickIsNotADrop) {
   int drops = 0;
   fixture.view->set_on_drop([&](std::size_t, double, double) { ++drops; });
 
-  fixture.host->mouse_down(press(20.0, 1.0));
+  fixture.host->mouse_down(press(20.0, fixture.top() + 1.0));
   // Inside the threshold: a hand that is not quite still is still a click.
-  fixture.host->mouse_move(press(21.0, 2.0));
-  fixture.host->mouse_up(press(21.0, 2.0));
+  fixture.host->mouse_move(press(21.0, fixture.top() + 2.0));
+  fixture.host->mouse_up(press(21.0, fixture.top() + 2.0));
 
   EXPECT_EQ(drops, 0);
   EXPECT_FALSE(fixture.view->dragging().has_value());
@@ -352,7 +358,7 @@ TEST(Browser, ADragKeepsGoingPastTheEdgeOfTheList) {
   std::optional<std::size_t> dropped;
   fixture.view->set_on_drop([&](std::size_t index, double, double) { dropped = index; });
 
-  fixture.host->mouse_down(press(20.0, 1.0));
+  fixture.host->mouse_down(press(20.0, fixture.top() + 1.0));
   fixture.host->mouse_move(press(900.0, 900.0));
   fixture.host->mouse_up(press(900.0, 900.0));
 
@@ -365,7 +371,7 @@ TEST(Browser, RebuildingTheListCancelsADragInFlight) {
   int drops = 0;
   fixture.view->set_on_drop([&](std::size_t, double, double) { ++drops; });
 
-  fixture.host->mouse_down(press(20.0, 1.0));
+  fixture.host->mouse_down(press(20.0, fixture.top() + 1.0));
   fixture.host->mouse_move(press(400.0, 400.0));
   fixture.view->set_items(sample_items(2));
   fixture.host->mouse_up(press(400.0, 400.0));
@@ -694,7 +700,7 @@ TEST(Browser, ARightClickSelectsWhatItIsOver) {
   fixture.view->set_on_context_menu([&](double x, double) { where_x = x; });
 
   const MouseEvent right{
-      .x = 20.0, .y = fixture.row() * 2.0 + 1.0, .button = MouseButton::Right, .click_count = 1};
+      .x = 20.0, .y = fixture.top() + fixture.row() * 2.0 + 1.0, .button = MouseButton::Right, .click_count = 1};
   ASSERT_TRUE(fixture.host->mouse_down(right));
 
   EXPECT_EQ(fixture.view->selection(), std::optional<std::size_t>{2});
@@ -711,11 +717,206 @@ TEST(Browser, ARightClickOnEmptySpaceClearsTheSelection) {
   fixture.view->set_on_context_menu([&](double, double) { asked = true; });
 
   const MouseEvent right{
-      .x = 20.0, .y = fixture.row() * 3.0 + 4.0, .button = MouseButton::Right, .click_count = 1};
+      .x = 20.0, .y = fixture.top() + fixture.row() * 3.0 + 4.0, .button = MouseButton::Right, .click_count = 1};
   ASSERT_TRUE(fixture.host->mouse_down(right));
 
   EXPECT_FALSE(fixture.view->selection().has_value());
   EXPECT_TRUE(asked) << "the menu should still open, with only what applies to the panel";
+}
+
+// --------------------------------------------------------------- columns --
+
+TEST(Browser, TheHeaderTakesARowOffTheTopOfTheList) {
+  const Fixture fixture;
+  const Rect header = fixture.view->header_rect();
+
+  ASSERT_FALSE(header.empty());
+  EXPECT_DOUBLE_EQ(header.y, 0.0);
+  EXPECT_DOUBLE_EQ(header.height, fixture.row());
+  EXPECT_DOUBLE_EQ(fixture.view->list_area().y, header.bottom());
+  // And the header spans the scrollbar's gutter, so there is no notch in it.
+  EXPECT_DOUBLE_EQ(header.width, 300.0);
+}
+
+TEST(Browser, NoColumnsMeansNoHeader) {
+  Fixture fixture;
+  fixture.view->set_columns({});
+  EXPECT_TRUE(fixture.view->header_rect().empty());
+  EXPECT_DOUBLE_EQ(fixture.view->list_area().y, 0.0);
+}
+
+TEST(Browser, EveryColumnHasAHeading) {
+  // One added to the enumeration without one here would draw a blank heading
+  // that still sorts, which is a control nobody can find.
+  for (const MediaColumn column : {MediaColumn::Name, MediaColumn::Duration, MediaColumn::Uses,
+                                   MediaColumn::Kind}) {
+    EXPECT_FALSE(column_heading(column).empty());
+  }
+}
+
+TEST(Browser, ColumnsAreDrawnInTheOrderTheyWereGiven) {
+  const Fixture fixture;
+  const std::vector<MediaColumn> shown = fixture.view->visible_columns();
+  ASSERT_FALSE(shown.empty());
+  EXPECT_EQ(shown.front(), MediaColumn::Name);
+
+  double previous = -1.0;
+  for (const MediaColumn column : shown) {
+    const Rect heading = fixture.view->heading_rect(column);
+    ASSERT_FALSE(heading.empty()) << to_string(MediaKind::Video);
+    EXPECT_GT(heading.x, previous);
+    previous = heading.x;
+  }
+}
+
+TEST(Browser, ANarrowPanelDropsColumnsFromTheEndRatherThanSqueezingThem) {
+  // A column narrow enough to cut its own heading in half says less than no
+  // column at all, and Kind is last because the badge already says it.
+  Fixture fixture;
+  fixture.host->resize(Rect{0.0, 0.0, 180.0, 260.0}, flat_context());
+
+  const std::vector<MediaColumn> shown = fixture.view->visible_columns();
+  EXPECT_LT(shown.size(), default_columns().size());
+  EXPECT_EQ(shown.front(), MediaColumn::Name) << "the name is never the one dropped";
+  EXPECT_EQ(std::ranges::find(shown, MediaColumn::Kind), shown.end());
+}
+
+TEST(Browser, TheNameKeepsAReadableWidthHoweverNarrowThePanelIs) {
+  Fixture fixture;
+  fixture.host->resize(Rect{0.0, 0.0, 120.0, 260.0}, flat_context());
+
+  const Rect name = fixture.view->heading_rect(MediaColumn::Name);
+  ASSERT_FALSE(name.empty()) << "the name column was dropped";
+  EXPECT_GE(name.width, kBrowserNameFloor * 0.5)
+      << "the name was squeezed rather than a column being dropped";
+}
+
+TEST(Browser, ColumnsLineUpWithTheirHeadings) {
+  // The thing that goes wrong when the arithmetic is done twice: a column of
+  // durations that drifts a pixel out of line with the word above it.
+  const Fixture fixture;
+  for (const MediaColumn column : fixture.view->visible_columns()) {
+    const Rect heading = fixture.view->heading_rect(column);
+    const Rect cell = fixture.view->column_rect(0, column);
+    ASSERT_FALSE(cell.empty());
+    EXPECT_DOUBLE_EQ(cell.x, heading.x);
+    EXPECT_DOUBLE_EQ(cell.width, heading.width);
+  }
+}
+
+TEST(Browser, ClickingAHeadingAsksForThatOrder) {
+  Fixture fixture;
+  std::optional<MediaColumn> asked;
+  fixture.view->set_on_sort([&](MediaColumn column) { asked = column; });
+
+  const Rect heading = fixture.view->heading_rect(MediaColumn::Duration);
+  ASSERT_FALSE(heading.empty());
+  ASSERT_TRUE(fixture.host->mouse_down(
+      press(heading.x + heading.width * 0.5, heading.y + heading.height * 0.5)));
+
+  ASSERT_TRUE(asked.has_value());
+  EXPECT_EQ(*asked, MediaColumn::Duration);
+}
+
+TEST(Browser, ClickingTheHeaderNeverSelectsARow) {
+  // The rows scroll underneath it, so treating a press there as a press on a
+  // row would select whatever happened to be beneath the headings.
+  Fixture fixture;
+  fixture.view->set_on_sort([](MediaColumn) {});
+  bool selected = false;
+  fixture.view->set_on_select([&](std::optional<std::size_t>) { selected = true; });
+
+  const Rect header = fixture.view->header_rect();
+  ASSERT_TRUE(fixture.host->mouse_down(press(20.0, header.y + header.height * 0.5)));
+
+  EXPECT_FALSE(selected);
+  EXPECT_FALSE(fixture.view->selection().has_value());
+}
+
+TEST(Browser, TheSortedColumnIsMarkedAndTheOthersAreNot) {
+  Fixture fixture;
+  fixture.view->set_sorted_by(MediaColumn::Duration, false);
+
+  RecordingPainter painter;
+  fixture.host->paint(painter, default_theme());
+  const std::vector<std::string> texts = drawn_text(painter);
+
+  // The headings are all drawn; the mark beside one of them is two strokes,
+  // which is what tells a sorted column from an unsorted one.
+  EXPECT_TRUE(contains(texts, "Name"));
+  EXPECT_TRUE(contains(texts, "Duration"));
+
+  int lines = 0;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::Line) ++lines;
+  }
+  EXPECT_GE(lines, 2) << "no arrow was drawn on the sorted column";
+}
+
+TEST(Browser, ARowShowsSomethingInEveryColumnItHas) {
+  Fixture fixture;
+  std::vector<MediaItem> items = sample_items(1);
+  items[0].uses = 3;
+  fixture.view->set_items(items);
+
+  RecordingPainter painter;
+  fixture.host->paint(painter, default_theme());
+  const std::vector<std::string> texts = drawn_text(painter);
+
+  EXPECT_TRUE(contains(texts, "Clip 0"));
+  EXPECT_TRUE(contains(texts, "00:00:04:00"));
+  EXPECT_TRUE(contains(texts, "3")) << "the uses column drew nothing";
+  EXPECT_TRUE(contains(texts, "video")) << "the kind column drew nothing";
+}
+
+TEST(Browser, ABinDoesNotClaimADurationOrACountOfClips) {
+  // A folder saying "0" in the used column reads as a fault rather than as a
+  // question that does not apply.
+  Fixture fixture(0);
+  fixture.view->set_items(
+      {MediaItem{.id = "bin:b1", .name = "Interviews", .detail = "2 items", .is_bin = true}});
+
+  RecordingPainter painter;
+  fixture.host->paint(painter, default_theme());
+  const std::vector<std::string> texts = drawn_text(painter);
+
+  EXPECT_TRUE(contains(texts, "Interviews"));
+  EXPECT_TRUE(contains(texts, "2 items")) << "a bin should say what is in it";
+  EXPECT_FALSE(contains(texts, "0")) << "a bin claimed a clip count";
+}
+
+TEST(Browser, ALongNameIsClippedToItsColumn) {
+  // Found by driving: text is drawn *from* a rectangle but not bounded by one,
+  // so a camera file whose name is half a sentence ran straight over the
+  // duration beside it.
+  Fixture fixture(0);
+  fixture.view->set_items({MediaItem{.id = "m0",
+                                     .name = "Replay 07-23-2026 10PM-59-02 second unit.mkv",
+                                     .detail = "00:09:58:17",
+                                     .duration = 598.0}});
+
+  RecordingPainter painter;
+  fixture.host->paint(painter, default_theme());
+
+  const Rect name = fixture.view->heading_rect(MediaColumn::Name);
+  ASSERT_FALSE(name.empty());
+
+  // The clip stack, walked alongside the calls: what bounds a piece of text is
+  // whatever was pushed last when it was drawn.
+  std::vector<Rect> clips;
+  bool found = false;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::PushClip) clips.push_back(call.bounds);
+    if (call.kind == DrawCall::Kind::PopClip && !clips.empty()) clips.pop_back();
+    if (!call.run.has_value() || call.run->text.find("Replay") == std::string::npos) continue;
+
+    found = true;
+    ASSERT_FALSE(clips.empty()) << "the name was drawn with nothing holding it in";
+    EXPECT_LE(clips.back().right(), name.right() + 0.001)
+        << "the name could run over the column beside it";
+  }
+  EXPECT_TRUE(found) << "the name was never drawn";
+  EXPECT_TRUE(painter.clips_balanced());
 }
 
 TEST(Browser, EveryKindHasABadge) {

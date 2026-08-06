@@ -30,6 +30,62 @@ std::string_view to_string(MediaKind kind) noexcept {
   return "video";
 }
 
+std::string_view column_heading(MediaColumn column) noexcept {
+  switch (column) {
+    case MediaColumn::Name: return "Name";
+    case MediaColumn::Duration: return "Duration";
+    case MediaColumn::Uses: return "Used";
+    case MediaColumn::Kind: return "Kind";
+  }
+  return "Name";
+}
+
+std::vector<MediaColumn> default_columns() {
+  return {MediaColumn::Name, MediaColumn::Duration, MediaColumn::Uses, MediaColumn::Kind};
+}
+
+namespace {
+
+/// How wide a column is, or zero for the name — which takes what is left.
+[[nodiscard]] double fixed_width(MediaColumn column) noexcept {
+  switch (column) {
+    case MediaColumn::Name: return 0.0;
+    case MediaColumn::Duration: return kBrowserDurationColumn;
+    case MediaColumn::Uses: return kBrowserUsesColumn;
+    case MediaColumn::Kind: return kBrowserKindColumn;
+  }
+  return 0.0;
+}
+
+/// What a row shows in a column. Everything comes from what the row already
+/// carries, which is why a column costs no extra field.
+[[nodiscard]] std::string cell_text(const MediaItem& item, MediaColumn column) {
+  switch (column) {
+    case MediaColumn::Name: return item.name;
+    case MediaColumn::Duration:
+      // A file that will not open says so where its length would be. That is
+      // the column somebody scanning for what is broken is already looking at.
+      if (item.offline) return "offline";
+      return item.is_bin ? std::string{} : item.detail;
+    case MediaColumn::Uses:
+      // Bins have no clips, and a folder claiming "0" reads as a fault.
+      return item.is_bin ? std::string{} : std::to_string(item.uses);
+    case MediaColumn::Kind:
+      // A bin's own count instead, which is the only thing it has to say.
+      return item.is_bin ? item.detail : std::string(to_string(item.kind));
+  }
+  return {};
+}
+
+[[nodiscard]] TextAlign cell_align(MediaColumn column) noexcept {
+  // Numbers to the right, words to the left, which is how every list of files
+  // is read.
+  return column == MediaColumn::Duration || column == MediaColumn::Uses ? TextAlign::Right
+                                                                        : TextAlign::Left;
+}
+
+}  // namespace
+
 std::string_view badge_text(MediaKind kind) noexcept {
   switch (kind) {
     case MediaKind::Video: return "V";
@@ -98,8 +154,85 @@ bool MediaBrowser::select_id(std::string_view id) {
 
 double MediaBrowser::row_height() const noexcept { return std::max(1.0, metrics_.list_row_height); }
 
+void MediaBrowser::set_columns(std::vector<MediaColumn> columns) {
+  columns_ = std::move(columns);
+  refresh_columns();
+  refresh_bounds();
+}
+
+void MediaBrowser::set_sorted_by(std::optional<MediaColumn> column, bool descending) {
+  sorted_by_ = column;
+  sorted_descending_ = descending;
+}
+
+void MediaBrowser::refresh_columns() {
+  spans_.clear();
+  if (columns_.empty()) return;
+
+  Rect area = bounds();
+  if (vertical_.scrollable()) area.width = std::max(0.0, area.width - metrics_.scrollbar_width);
+  if (area.width <= 0.0) return;
+
+  // Trailing columns are dropped until the name has room to be read. Dropped
+  // from the end rather than proportionally squeezed, because a column narrow
+  // enough to cut its own heading in half says less than no column at all —
+  // and the order they are given in is what decides which one goes first.
+  std::vector<MediaColumn> keeping = columns_;
+  const auto fixed_total = [](const std::vector<MediaColumn>& list) {
+    double total = 0.0;
+    for (const MediaColumn column : list) total += fixed_width(column);
+    return total;
+  };
+  const bool has_name = std::ranges::find(keeping, MediaColumn::Name) != keeping.end();
+  const double floor = has_name ? kBrowserNameFloor : 0.0;
+  while (keeping.size() > 1 && area.width - fixed_total(keeping) < floor) {
+    keeping.pop_back();
+  }
+
+  double x = area.x;
+  const double flexible = std::max(0.0, area.width - fixed_total(keeping));
+  for (const MediaColumn column : keeping) {
+    const double width = column == MediaColumn::Name ? flexible : fixed_width(column);
+    spans_.push_back(Span{.column = column, .x = x, .width = width});
+    x += width;
+  }
+}
+
+std::vector<MediaColumn> MediaBrowser::visible_columns() const {
+  std::vector<MediaColumn> out;
+  out.reserve(spans_.size());
+  for (const Span& span : spans_) out.push_back(span.column);
+  return out;
+}
+
+Rect MediaBrowser::header_rect() const {
+  if (spans_.empty()) return {};
+  return Rect{bounds().x, bounds().y, bounds().width, row_height()};
+}
+
+Rect MediaBrowser::heading_rect(MediaColumn column) const {
+  const Rect header = header_rect();
+  if (header.empty()) return {};
+  const auto found = std::ranges::find(spans_, column, &Span::column);
+  if (found == spans_.end()) return {};
+  return Rect{found->x, header.y, found->width, header.height};
+}
+
+Rect MediaBrowser::column_rect(std::size_t index, MediaColumn column) const {
+  const Rect row = row_rect(index);
+  if (row.empty()) return {};
+  const auto found = std::ranges::find(spans_, column, &Span::column);
+  if (found == spans_.end()) return {};
+  return Rect{found->x, row.y, found->width, row.height};
+}
+
 Rect MediaBrowser::list_area() const {
   Rect area = bounds();
+  // Below the header, which is not part of the list: a row scrolled up under it
+  // would otherwise draw over the headings.
+  const double header = header_rect().height;
+  area.y += header;
+  area.height = std::max(0.0, area.height - header);
   if (vertical_.scrollable()) area.width = std::max(0.0, area.width - metrics_.scrollbar_width);
   return area;
 }
@@ -192,7 +325,7 @@ void MediaBrowser::scroll_to(double offset) { vertical_.scroll_to(offset); }
 void MediaBrowser::scroll_by(double delta) { vertical_.scroll_by(delta); }
 
 void MediaBrowser::refresh_bounds() {
-  vertical_.visible = bounds().height;
+  vertical_.visible = std::max(0.0, bounds().height - header_rect().height);
   vertical_.content = static_cast<double>(items_.size()) * row_height();
   vertical_.clamp();
 }
@@ -201,7 +334,14 @@ void MediaBrowser::refresh_bounds() {
 
 void MediaBrowser::layout(const LayoutContext& context) {
   metrics_ = context.metrics();
+  // Twice, and in this order. The columns need to know whether a scrollbar is
+  // taking a gutter, and whether one is depends on how much room the header
+  // leaves — which the columns decide. One pass settles it either way; the
+  // second only matters when adding the scrollbar changed which columns fit.
   refresh_bounds();
+  refresh_columns();
+  refresh_bounds();
+  refresh_columns();
 }
 
 // ----------------------------------------------------------------- paint --
@@ -276,29 +416,43 @@ void MediaBrowser::paint_content(Painter& painter, const Theme& theme) const {
     const SurfaceStyle& text_style =
         item.offline ? theme.style(Part::Panel, State::Disabled)
                      : theme.style(Part::Clip, chosen ? State::Selected : State::Normal);
+    const SurfaceStyle& quiet = theme.style(Part::Panel, State::Disabled);
 
-    // The detail column is measured rather than guessed at, so a long name is
-    // cut off before it runs into the duration rather than over it.
-    const std::string detail = item.offline ? "offline" : item.detail;
-    const double detail_width = detail.empty() ? 0.0 : painter.measure(detail, small, false) + pad;
+    for (const Span& span : spans_) {
+      const std::string text = cell_text(item, span.column);
+      if (text.empty()) continue;
 
-    const double name_x = !twist.empty()  ? twist.right() + pad * 0.5
-                          : badge.empty() ? row.x + pad
-                                          : badge.right() + pad;
-    const Rect name_area{name_x, row.y, std::max(0.0, row.right() - name_x - detail_width),
-                         row.height};
-    if (!name_area.empty()) {
+      // The name starts past whatever is at the leading edge of its row — the
+      // chevron on a bin, the badge on media, the indent on both. Every other
+      // column starts where its heading does, which is what makes a column of
+      // durations line up whatever depth the rows are at.
+      double x = span.x;
+      double width = span.width;
+      if (span.column == MediaColumn::Name) {
+        const double from = !twist.empty()  ? twist.right() + pad * 0.5
+                            : badge.empty() ? span.x + pad
+                                            : badge.right() + pad;
+        width = std::max(0.0, span.x + span.width - from - pad * 0.5);
+        x = from;
+      } else {
+        // Inset, so a right-aligned number does not touch the column after it.
+        width = std::max(0.0, width - pad * 0.5);
+      }
+      if (width <= 0.0) continue;
+
+      const bool is_name = span.column == MediaColumn::Name;
+      // Clipped to its own cell. Text is drawn from a rectangle but not bounded
+      // by one, so a name longer than its column ran straight over the duration
+      // beside it — found by driving, with a camera file whose name is half a
+      // sentence. Every cell rather than only the name: a right-aligned number
+      // in a column too narrow would spill the other way.
+      painter.push_clip(Rect{x, row.y, width, row.height}, 0.0);
       // Bins in bold, so a folder reads as a heading rather than as another
       // entry that happens to have no duration.
-      painter.text(text_run(name_area, item.name, text_style, font, TextAlign::Left,
-                            chosen || item.is_bin));
-    }
-
-    if (!detail.empty()) {
-      const Rect detail_area{row.right() - detail_width, row.y, detail_width - pad * 0.5,
-                             row.height};
-      painter.text(text_run(detail_area, detail, theme.style(Part::Panel, State::Disabled), small,
-                            TextAlign::Right));
+      painter.text(text_run(Rect{x, row.y, width, row.height}, text,
+                            is_name ? text_style : quiet, is_name ? font : small,
+                            cell_align(span.column), is_name && (chosen || item.is_bin)));
+      painter.pop_clip();
     }
   }
 
@@ -309,6 +463,43 @@ void MediaBrowser::paint_content(Painter& painter, const Theme& theme) const {
     paint_surface(painter, bar, theme.style(Part::Scrollbar, State::Normal));
     paint_surface(painter, scroll_thumb(),
                   theme.style(Part::ScrollThumb, scrolling_ ? State::Pressed : State::Normal));
+  }
+
+  // The header last, over the rows rather than under them: `list_area` already
+  // keeps them apart, and drawing it after means a row scrolled to the very top
+  // can never leave a pixel above the headings.
+  if (const Rect header = header_rect(); !header.empty()) {
+    paint_surface(painter, header, theme.style(Part::ToolButton, State::Normal));
+    const SurfaceStyle& heading_style = theme.style(Part::Panel, State::Normal);
+
+    for (const Span& span : spans_) {
+      const bool sorting = sorted_by_.has_value() && *sorted_by_ == span.column;
+      // The arrow takes room from the heading rather than overlapping it, so a
+      // narrow column shortens its word instead of drawing over the mark.
+      const double arrow = sorting ? small : 0.0;
+      const bool right = cell_align(span.column) == TextAlign::Right;
+      const double text_x = span.x + (right ? pad * 0.5 : pad * 0.5 + arrow);
+      const double text_width = std::max(0.0, span.width - pad - arrow);
+      if (text_width > 0.0) {
+        const Rect where{text_x, header.y, text_width, header.height};
+        painter.push_clip(where, 0.0);
+        painter.text(text_run(where, std::string(column_heading(span.column)), heading_style,
+                              small, cell_align(span.column), sorting));
+        painter.pop_clip();
+      }
+
+      if (sorting) {
+        // The same two strokes as the bin chevron, pointed up or down. A word
+        // saying "ascending" would not fit in forty pixels and a mark does not
+        // need to.
+        const double cx = right ? span.x + pad * 0.4 : span.x + pad * 0.5 + arrow * 0.5;
+        const double cy = header.y + header.height * 0.5;
+        constexpr double reach = 3.0;
+        const double tip = sorted_descending_ ? reach * 0.5 : -reach * 0.5;
+        painter.line(cx - reach, cy - tip, cx, cy + tip, heading_style.text, 1.0);
+        painter.line(cx, cy + tip, cx + reach, cy - tip, heading_style.text, 1.0);
+      }
+    }
   }
 
   // The empty pool says so. A blank panel is indistinguishable from one that
@@ -323,6 +514,20 @@ void MediaBrowser::paint_content(Painter& painter, const Theme& theme) const {
 // ----------------------------------------------------------------- input --
 
 bool MediaBrowser::on_mouse_down(const MouseEvent& event) {
+  // Before anything else, and for either button: a press on the headings is
+  // never a press on a row, and treating it as one would select whatever was
+  // scrolled underneath.
+  if (const Rect header = header_rect();
+      !header.empty() && header.contains(event.x, event.y)) {
+    if (event.button != MouseButton::Left) return true;
+    for (const Span& span : spans_) {
+      if (event.x < span.x || event.x >= span.x + span.width) continue;
+      if (on_sort_) on_sort_(span.column);
+      return true;
+    }
+    return true;
+  }
+
   if (event.button == MouseButton::Right) {
     // The row is selected first, the same as on the timeline: a menu that acted
     // on something other than what was clicked would be a trap. Empty space

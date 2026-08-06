@@ -41,6 +41,28 @@ enum class MediaKind {
 /// square the height of a row.
 [[nodiscard]] std::string_view badge_text(MediaKind kind) noexcept;
 
+/// A column of the list, and the heading that sorts by it.
+///
+/// Every one of these is drawn from what a `MediaItem` already carries, so
+/// adding a column costs a case in two switches rather than another field on
+/// every row. What the *duration* column shows is the row's `detail`, because
+/// turning seconds into timecode needs the sequence's frame rate and this layer
+/// has never known one.
+enum class MediaColumn {
+  Name,
+  Duration,
+  Uses,
+  Kind,
+};
+
+[[nodiscard]] std::string_view column_heading(MediaColumn column) noexcept;
+
+/// The columns a pool shows, in order, when nothing else is asked for.
+///
+/// Kind is last because the badge already says it — so it is the first to go
+/// when the panel is too narrow to hold them all, and losing it costs nothing.
+[[nodiscard]] std::vector<MediaColumn> default_columns();
+
 /// One entry in the pool, as far as drawing is concerned.
 struct MediaItem {
   /// Opaque to the browser, which never looks inside it. The editor puts a
@@ -108,6 +130,34 @@ class MediaBrowser : public Widget {
   /// rebuilding after a sort or a filter does not silently select whatever
   /// happens to have moved into the old row.
   void set_items(std::vector<MediaItem> items);
+
+  // --------------------------------------------------------------- columns --
+
+  /// Replaces the columns. An empty list means no header and no columns, which
+  /// is what a panel too narrow for even a name should fall back to.
+  void set_columns(std::vector<MediaColumn> columns);
+  [[nodiscard]] const std::vector<MediaColumn>& columns() const noexcept { return columns_; }
+
+  /// The columns that actually fit, in order. Never empty while `columns` is
+  /// not: the name is always drawn, however narrow the panel gets, because a
+  /// list of durations with no names is not a list of anything.
+  [[nodiscard]] std::vector<MediaColumn> visible_columns() const;
+
+  /// Which column the list is ordered by, for the arrow on its heading. The
+  /// browser does not sort — that is a question about media, and answering it
+  /// here would mean knowing what a clip is.
+  void set_sorted_by(std::optional<MediaColumn> column, bool descending);
+
+  /// A heading clicked. Sorting by the same one again is the caller's cue to
+  /// reverse it, which is what every list of files anywhere does.
+  void set_on_sort(std::function<void(MediaColumn)> on_sort) { on_sort_ = std::move(on_sort); }
+
+  /// The header strip, or empty when there are no columns.
+  [[nodiscard]] Rect header_rect() const;
+  /// A column's rectangle inside a row, or empty when it does not fit.
+  [[nodiscard]] Rect column_rect(std::size_t index, MediaColumn column) const;
+  /// The same, in the header.
+  [[nodiscard]] Rect heading_rect(MediaColumn column) const;
 
   // ------------------------------------------------------------- selection --
 
@@ -247,7 +297,31 @@ class MediaBrowser : public Widget {
   std::function<void(std::size_t)> on_toggle_;
   std::function<void(std::size_t, std::size_t)> on_file_;
   std::function<void(double, double)> on_context_menu_;
+
+  std::vector<MediaColumn> columns_ = default_columns();
+  std::optional<MediaColumn> sorted_by_;
+  bool sorted_descending_ = false;
+  std::function<void(MediaColumn)> on_sort_;
+
+  /// Where each visible column starts and how wide it is, worked out once per
+  /// layout. Held rather than recomputed per row: the arithmetic is the same for
+  /// every row, and doing it in the paint loop is where the header and the rows
+  /// would eventually stop lining up.
+  struct Span {
+    MediaColumn column = MediaColumn::Name;
+    double x = 0.0;
+    double width = 0.0;
+  };
+  std::vector<Span> spans_;
+  void refresh_columns();
 };
+
+/// How wide each fixed column is. The name takes whatever is left.
+inline constexpr double kBrowserDurationColumn = 84.0;
+inline constexpr double kBrowserUsesColumn = 40.0;
+inline constexpr double kBrowserKindColumn = 64.0;
+/// The narrowest the name may be squeezed to before a column is dropped.
+inline constexpr double kBrowserNameFloor = 90.0;
 
 /// How far one level of bin indents a row.
 inline constexpr double kBrowserIndent = 14.0;
