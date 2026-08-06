@@ -21,6 +21,7 @@
 #include "cutline/core/version.hpp"
 #include "cutline/core/effects.hpp"
 #include "cutline/core/model.hpp"
+#include "cutline/core/pool.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/core/time.hpp"
@@ -205,6 +206,14 @@ using cutline::ui::built_in_themes;
             .audio_stream_count = 1},
       Media{.id = "score", .name = "score.wav", .duration = 120.0, .audio_stream_count = 1},
   };
+  // Two levels of bin with something filed in each, so the headless check
+  // paints an indented tree in every theme rather than the flat list it would
+  // otherwise only ever see. A row too tall or a name cut off by an indent is
+  // exactly what this catches and nothing else would.
+  project.bins = {Bin{.id = "bin_pictures", .name = "Pictures"},
+                  Bin{.id = "bin_sound", .name = "Sound", .parent = "bin_pictures"}};
+  project.media[0].bin = "bin_pictures";
+  project.media[3].bin = "bin_sound";
 
   const auto clip = [](std::string id, std::string media, double start, double length,
                        TrackKind kind = TrackKind::Video) {
@@ -438,6 +447,12 @@ struct App {
   MediaBrowser* browser = nullptr;
   Button* sort_button = nullptr;
   cutline::editor::BrowserSort browser_sort = cutline::editor::BrowserSort::Pool;
+  /// The bins showing what is inside them.
+  ///
+  /// Here rather than in the project: which folders happen to be open is about
+  /// the looking rather than about the cut, and saving it would mean two people
+  /// opening the same file argue about it through the version control.
+  std::vector<std::string> expanded_bins;
 
   /// What a press on a clip does. Held here rather than only on the view,
   /// because the timeline panel is rebuilt whenever the arrangement or the theme
@@ -933,6 +948,11 @@ void refresh_timeline(App& app);
 void refresh_busy(App& app);
 void refresh_drop_ghost(App& app);
 void relink_pool_entry(App& app);
+void rename_pool_entry(App& app);
+void add_bin(App& app);
+void toggle_bin(App& app, std::size_t row);
+void file_into_bin(App& app, std::size_t from, std::size_t onto);
+void open_pool_menu(App& app, double x, double y);
 void make_proxies(App& app);
 void collect_proxies(App& app);
 void toggle_use_proxies(App& app);
@@ -3195,6 +3215,7 @@ void refresh_browser(App& app) {
 
   cutline::editor::BrowserOptions options;
   options.sort = app.browser_sort;
+  options.expanded = app.expanded_bins;
 #if CUTLINE_HAVE_PREVIEW
   // Whatever the renderer could not open. It only knows once it has tried, so
   // a file that has moved shows as offline after the first render rather than
@@ -3250,7 +3271,11 @@ void place_media_from(App& app, const std::string& media_id,
 void place_from_pool(App& app, std::size_t index,
                      std::optional<cutline::ui::DropPoint> where = std::nullopt) {
   if (app.browser == nullptr || index >= app.browser->items().size()) return;
-  place_media_from(app, app.browser->items()[index].id, where);
+  const std::string& id = app.browser->items()[index].id;
+  // A bin has nothing to put in a sequence. Reached by dragging a folder onto
+  // the timeline, which is a thing somebody will do once.
+  if (!cutline::editor::bin_of_row(id).empty()) return;
+  place_media_from(app, id, where);
 }
 
 /// Shows where a row dragged out of the pool would land, while it is in the air.
@@ -3310,10 +3335,136 @@ void refresh_drop_ghost(App& app) {
 }
 
 /// Takes an entry out of the pool, and every clip that used it with it.
+/// The bin a row names, or empty when the row is media or there is no row.
+[[nodiscard]] std::string bin_of_selection(const App& app) {
+  if (app.browser == nullptr) return {};
+  const cutline::ui::MediaItem* chosen = app.browser->selected();
+  return chosen == nullptr ? std::string{} : cutline::editor::bin_of_row(chosen->id);
+}
+
+/// Shows or hides what is in a bin.
+void toggle_bin(App& app, std::size_t row) {
+  if (app.browser == nullptr || row >= app.browser->items().size()) return;
+  const std::string bin = cutline::editor::bin_of_row(app.browser->items()[row].id);
+  if (bin.empty()) return;
+
+  const auto found = std::ranges::find(app.expanded_bins, bin);
+  if (found == app.expanded_bins.end()) {
+    app.expanded_bins.push_back(bin);
+  } else {
+    app.expanded_bins.erase(found);
+  }
+  // Not `refresh_all`: nothing about the project changed, so redrawing the
+  // timeline and re-rendering the frame would be work for a folder opening.
+  refresh_browser(app);
+}
+
+/// Puts a new bin inside whichever one is selected, or at the top level.
+///
+/// Inside the selection because that is where somebody who has just opened a
+/// bin and pressed New expects it, and it is the only way to make a nested one
+/// without dragging.
+void add_bin(App& app) {
+  const std::string parent = bin_of_selection(app);
+  app.session.apply(cutline::core::create_bin(app.session.project(), "New Bin", parent));
+
+  const std::string made = app.session.project().bins.back().id;
+  // Opened, so that filing something into it is possible without a second
+  // click — and so a bin made inside another is visible at all.
+  if (!parent.empty() && std::ranges::find(app.expanded_bins, parent) == app.expanded_bins.end()) {
+    app.expanded_bins.push_back(parent);
+  }
+  app.expanded_bins.push_back(made);
+
+  refresh_browser(app);
+  if (app.browser != nullptr) app.browser->select_id(cutline::editor::bin_row_id(made));
+  // Straight into the rename, because "New Bin" is never the name anybody
+  // wanted and a folder called that is worse than no folder.
+  rename_pool_entry(app);
+}
+
+/// Renames whatever the pool has selected, bin or media.
+///
+/// A field in a popup rather than a modal prompt, which is the idiom every
+/// other rename here already uses — the track headers and the effect bins.
+void rename_pool_entry(App& app) {
+  if (app.browser == nullptr || app.main.host == nullptr) return;
+  const cutline::ui::MediaItem* chosen = app.browser->selected();
+  if (chosen == nullptr) {
+    complain(app.main.window, "Choose something in the project panel to rename first.");
+    return;
+  }
+
+  const std::string row_id = chosen->id;
+  const std::string bin = cutline::editor::bin_of_row(row_id);
+  const std::optional<std::size_t> at = app.browser->selection();
+  const Rect anchor = at.has_value() ? app.browser->row_rect(*at) : app.browser->bounds();
+
+  auto popup = std::make_unique<Panel>();
+  auto& row = popup->emplace<Box>(Axis::Horizontal);
+  auto& field = row.emplace<TextField>(chosen->name);
+
+  const auto commit = [&app, row_id, bin, control = &field] {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    const std::string name = control->text();
+    if (name.empty()) return;
+
+    app.session.apply(bin.empty()
+                          ? cutline::editor::rename_media(app.session.project(), row_id, name)
+                          : cutline::core::rename_bin(app.session.project(), bin, name));
+    // The whole lot: a media entry's name is on its clips as well as its row.
+    refresh_all(app);
+  };
+  field.set_on_commit([commit](const std::string&) { commit(); });
+  row.emplace<Button>("Rename", commit);
+
+  app.main.host->open_popup(std::move(popup), anchor);
+  app.main.host->set_focus(&field);
+}
+
+/// Files a dragged row into a bin, or moves a bin inside another.
+void file_into_bin(App& app, std::size_t from, std::size_t onto) {
+  if (app.browser == nullptr) return;
+  const std::vector<cutline::ui::MediaItem>& items = app.browser->items();
+  if (from >= items.size() || onto >= items.size()) return;
+
+  const std::string into = cutline::editor::bin_of_row(items[onto].id);
+  if (into.empty()) return;
+
+  const std::string moving = cutline::editor::bin_of_row(items[from].id);
+  app.session.apply(moving.empty()
+                        ? cutline::core::file_media(app.session.project(), items[from].id, into)
+                        : cutline::core::move_bin(app.session.project(), moving, into));
+  // Opened, or what was just filed disappears and reads as having been lost.
+  if (std::ranges::find(app.expanded_bins, into) == app.expanded_bins.end()) {
+    app.expanded_bins.push_back(into);
+  }
+  refresh_browser(app);
+}
+
 void remove_from_pool(App& app) {
   if (app.browser == nullptr) return;
   const cutline::ui::MediaItem* chosen = app.browser->selected();
   if (chosen == nullptr) return;
+
+  if (const std::string bin = cutline::editor::bin_of_row(chosen->id); !bin.empty()) {
+    // Premiere's behaviour, and the destructive one, so anything holding
+    // something is asked about. An empty bin goes without a question — there is
+    // nothing to lose and asking would train somebody to click through it.
+    if (!cutline::core::bin_is_empty(app.session.project(), bin)) {
+      const std::string message =
+          chosen->name + " is not empty.\n\nDeleting it removes what is inside it, and any "
+                         "clips of that media in the sequence.";
+      if (MessageBoxA(app.main.window, message.c_str(), "Cutline",
+                      MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
+        return;
+      }
+    }
+    app.session.apply(cutline::editor::remove_bin(app.session.project(), bin));
+    std::erase(app.expanded_bins, bin);
+    refresh_all(app);
+    return;
+  }
 
   // Asked rather than assumed. Removing media the sequence is built from is
   // undoable, but it is still not something to do on a mis-click.
@@ -3329,6 +3480,56 @@ void remove_from_pool(App& app) {
 
   app.session.apply(cutline::editor::remove_media(app.session.project(), chosen->id));
   refresh_all(app);
+}
+
+/// The pool's own menu, from a right-click.
+///
+/// What a panel this narrow cannot hold as buttons. The row under the pointer is
+/// already selected by the time this runs, so every entry acts on what was
+/// clicked — and on empty space it acts on nothing, which is why New Bin is
+/// first and always available.
+void open_pool_menu(App& app, double x, double y) {
+  if (app.main.host == nullptr || app.browser == nullptr) return;
+
+  struct Item {
+    std::string label;
+    std::function<void()> act;
+  };
+  std::vector<Item> items;
+  items.push_back(Item{"New Bin", [&app] { add_bin(app); }});
+
+  if (const cutline::ui::MediaItem* chosen = app.browser->selected(); chosen != nullptr) {
+    const bool is_bin = !cutline::editor::bin_of_row(chosen->id).empty();
+    items.push_back(Item{"Rename...", [&app] { rename_pool_entry(app); }});
+    items.push_back(Item{is_bin ? "Delete Bin" : "Remove", [&app] { remove_from_pool(app); }});
+    if (!is_bin) {
+      items.push_back(Item{"Relink Media...", [&app] { relink_pool_entry(app); }});
+      // Only where a row is already inside one. "Move to Top Level" on
+      // something already there is an entry that cannot do anything.
+      const auto media = std::ranges::find(app.session.project().media, chosen->id,
+                                           &cutline::core::Media::id);
+      const bool filed = media != app.session.project().media.end() &&
+                         cutline::core::find_bin(app.session.project(), media->bin) != nullptr;
+      if (filed) {
+        items.push_back(Item{"Move to Top Level", [&app, id = chosen->id] {
+                               app.session.apply(
+                                   cutline::core::file_media(app.session.project(), id, ""));
+                               refresh_browser(app);
+                             }});
+      }
+    }
+  }
+
+  std::vector<std::string> labels;
+  labels.reserve(items.size());
+  for (const Item& item : items) labels.push_back(item.label);
+
+  auto list = std::make_unique<MenuList>(std::move(labels));
+  list->set_on_choose([&app, items](std::size_t index) {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    if (index < items.size() && items[index].act) items[index].act();
+  });
+  app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
 }
 
 /// Points a pool entry at a file somewhere else.
@@ -3352,7 +3553,12 @@ void relink_pool_entry([[maybe_unused]] App& app) {
   const cutline::core::Project& project = app.session.project();
   const auto media =
       std::ranges::find(project.media, chosen->id, &cutline::core::Media::id);
-  if (media == project.media.end()) return;
+  if (media == project.media.end()) {
+    // A bin, most likely. Said rather than ignored, for the same reason as
+    // above: this is reached when something is already wrong.
+    complain(app.main.window, "Choose the media to relink in the project panel first.");
+    return;
+  }
   // Generated media have no file to point anywhere.
   if (media->path.empty() || cutline::core::is_generated_media(*media)) {
     complain(app.main.window, media->name + " is made rather than read, so there is no file "
@@ -5359,13 +5565,16 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     if (app == nullptr || app->main.host == nullptr) return;
 
     auto list = std::make_unique<MenuList>(
-        std::vector<std::string>{"Title", "Colour Matte", "Adjustment Layer"});
+        std::vector<std::string>{"Bin", "Title", "Colour Matte", "Adjustment Layer"});
     list->set_on_choose([app](std::size_t index) {
       if (app->main.host != nullptr) app->main.host->close_popup();
       switch (index) {
-        case 0: add_title(*app); break;
-        case 1: add_matte(*app); break;
-        case 2: add_adjustment(*app); break;
+        // First, because it is the one wanted often and the others are wanted
+        // once a project.
+        case 0: add_bin(*app); break;
+        case 1: add_title(*app); break;
+        case 2: add_matte(*app); break;
+        case 3: add_adjustment(*app); break;
         default: break;
       }
     });
@@ -5402,8 +5611,21 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   pool.set_on_select([app](std::optional<std::size_t> index) {
     if (app == nullptr || app->browser == nullptr) return;
     const std::vector<cutline::ui::MediaItem>& items = app->browser->items();
-    show_source(*app, index.has_value() && *index < items.size() ? items[*index].id
-                                                                : std::string{});
+    std::string id = index.has_value() && *index < items.size() ? items[*index].id : std::string{};
+    // Selecting a bin leaves the source monitor showing whatever it had, rather
+    // than clearing it: a folder is not a source, and emptying the monitor
+    // because somebody clicked a folder loses the thing they were about to cut.
+    if (!cutline::editor::bin_of_row(id).empty()) return;
+    show_source(*app, std::move(id));
+  });
+  pool.set_on_toggle([app](std::size_t index) {
+    if (app != nullptr) toggle_bin(*app, index);
+  });
+  pool.set_on_file([app](std::size_t from, std::size_t onto) {
+    if (app != nullptr) file_into_bin(*app, from, onto);
+  });
+  pool.set_on_context_menu([app](double x, double y) {
+    if (app != nullptr) open_pool_menu(*app, x, y);
   });
   pool.set_on_drop([app](std::size_t index, double x, double y) {
     if (app == nullptr) return;
@@ -5424,7 +5646,10 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     // pool anyway is what makes it lay out and paint real rows in every theme,
     // which is the only thing that would catch a row too tall for the one
     // theme whose lists are roomier.
-    pool.set_items(cutline::editor::browser_items(check_project()));
+    // Both bins open, so the check sees the deepest indent the panel can draw
+    // rather than two closed folders.
+    const std::vector<std::string> open{"bin_pictures", "bin_sound"};
+    pool.set_items(cutline::editor::browser_items(check_project(), {.expanded = open}));
   }
 
   // Under the pool rather than in the toolbar above it. It was in the toolbar

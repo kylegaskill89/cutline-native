@@ -154,6 +154,14 @@ class MediaBrowser : public Widget {
   /// what happens cannot disagree.
   [[nodiscard]] std::optional<std::size_t> file_target() const noexcept;
 
+  /// A right-click, at a point in the same coordinates as widget bounds.
+  ///
+  /// The row under it is selected first, exactly as the timeline does: a menu
+  /// that acted on something other than what was clicked would be a trap.
+  void set_on_context_menu(std::function<void(double, double)> on_context_menu) {
+    on_context_menu_ = std::move(on_context_menu);
+  }
+
   /// The row being dragged out, once the pointer has moved far enough for the
   /// gesture to be a drag rather than a click.
   [[nodiscard]] std::optional<std::size_t> dragging() const noexcept { return drag_; }
@@ -230,6 +238,7 @@ class MediaBrowser : public Widget {
   std::function<void(std::size_t, double, double)> on_drop_;
   std::function<void(std::size_t)> on_toggle_;
   std::function<void(std::size_t, std::size_t)> on_file_;
+  std::function<void(double, double)> on_context_menu_;
 };
 
 /// How far one level of bin indents a row.

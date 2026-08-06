@@ -685,6 +685,39 @@ TEST(Browser, ARowIsNotFiledIntoItself) {
   EXPECT_FALSE(fixture.view->file_target().has_value());
 }
 
+TEST(Browser, ARightClickSelectsWhatItIsOver) {
+  // A menu that acted on something other than what was clicked would be a trap.
+  Fixture fixture(4);
+  std::optional<std::size_t> reported;
+  double where_x = 0.0;
+  fixture.view->set_on_select([&](std::optional<std::size_t> index) { reported = index; });
+  fixture.view->set_on_context_menu([&](double x, double) { where_x = x; });
+
+  const MouseEvent right{
+      .x = 20.0, .y = fixture.row() * 2.0 + 1.0, .button = MouseButton::Right, .click_count = 1};
+  ASSERT_TRUE(fixture.host->mouse_down(right));
+
+  EXPECT_EQ(fixture.view->selection(), std::optional<std::size_t>{2});
+  EXPECT_EQ(reported, std::optional<std::size_t>{2});
+  EXPECT_DOUBLE_EQ(where_x, 20.0);
+}
+
+TEST(Browser, ARightClickOnEmptySpaceClearsTheSelection) {
+  // Found by driving: a right-click below the last row offered Remove, and
+  // would have removed a row the pointer was nowhere near.
+  Fixture fixture(3);
+  fixture.view->select(1);
+  bool asked = false;
+  fixture.view->set_on_context_menu([&](double, double) { asked = true; });
+
+  const MouseEvent right{
+      .x = 20.0, .y = fixture.row() * 3.0 + 4.0, .button = MouseButton::Right, .click_count = 1};
+  ASSERT_TRUE(fixture.host->mouse_down(right));
+
+  EXPECT_FALSE(fixture.view->selection().has_value());
+  EXPECT_TRUE(asked) << "the menu should still open, with only what applies to the panel";
+}
+
 TEST(Browser, EveryKindHasABadge) {
   // A kind added to the model without one here would draw an empty square.
   for (const MediaKind kind :

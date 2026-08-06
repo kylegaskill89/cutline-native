@@ -313,6 +313,21 @@ void MediaBrowser::paint_content(Painter& painter, const Theme& theme) const {
 // ----------------------------------------------------------------- input --
 
 bool MediaBrowser::on_mouse_down(const MouseEvent& event) {
+  if (event.button == MouseButton::Right) {
+    // The row is selected first, the same as on the timeline: a menu that acted
+    // on something other than what was clicked would be a trap. Empty space
+    // clears the selection for exactly that reason — found by driving, where a
+    // right-click below the last row offered Remove and would have removed
+    // something the pointer was nowhere near.
+    const auto row = row_at(event.x, event.y);
+    if (row != selection_) {
+      select(row);
+      if (on_select_) on_select_(selection_);
+    }
+    if (on_context_menu_) on_context_menu_(event.x, event.y);
+    return true;
+  }
+
   if (event.button != MouseButton::Left) return false;
 
   const Rect thumb = scroll_thumb();
