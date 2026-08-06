@@ -1042,17 +1042,17 @@ Settings — and are not gaps. What is left, with an honest size on each:
 | ~~Auto Save interval~~ | Auto Save ▸ every N minutes | **done** — Settings ▸ Defaults | — |
 | Auto Save versions kept | Auto Save ▸ maximum versions | one copy per document, no history | control |
 | Undo depth | historically a preference | `History` limit, 100, fixed | wiring |
-| Label colours and names | Labels ▸ eight named colours, editable | a fixed palette, names not editable | control |
-| Default label per media type | Labels ▸ per kind | none | wiring |
-| Audio device | Audio Hardware ▸ device, latency | default output device only | control |
+| ~~Label names~~ | Labels ▸ eight named colours, editable | **done** — names only; the colours cannot move, see below | — |
+| ~~Default label per media type~~ | Labels ▸ per kind | **done** — applied at import | — |
+| ~~Audio device~~ | Audio Hardware ▸ device, latency | **done** — device; latency is still WASAPI's | — |
 | Playback preroll / postroll | Playback | none | wiring |
 | Media cache location | Media Cache | no disk cache exists | machinery |
-| Proxy settings | Ingest Settings ▸ preset, location | `kProxyHeight` and friends, fixed | wiring |
+| ~~Proxy settings~~ | Ingest Settings ▸ preset, location | **done** — size and location | — |
 | Memory / RAM reserved | Memory | none — the caches have fixed budgets | control |
 | Renderer choice | Graphics ▸ GPU or software | always the GPU, falls back on its own | wiring |
 | Appearance brightness | Appearance ▸ a slider | four discrete themes | control |
 | Keyboard shortcuts | fully editable, with presets | `kApplicationKeys` and `kTransportKeys`, fixed | **machinery** |
-| Timecode display format | Project Settings ▸ display format | timecode only, no drop-frame | model |
+| ~~Timecode display format~~ | Project Settings ▸ display format | **done** — drop-frame, and the counting under it fixed | — |
 | Scratch disks | Project Settings ▸ Scratch Disks | proxies go beside the footage, nothing else is written | wiring |
 
 Premiere keeps a *separate* default duration for video and for audio
@@ -1082,6 +1082,19 @@ a worse answer than the measured one is a control that only creates bad
 sessions. The ones worth exposing are the ones where there is no right answer —
 durations, the autosave interval, the label palette — and those are exactly the
 ones Premiere exposes.
+
+**The label colours are deliberately not editable**, which is where this parts
+company with Premiere. A clip stores its label as a hex rather than as a
+position in the palette, so recolouring Violet would leave every clip already
+wearing it holding the old colour — a palette and a timeline that disagree.
+Premiere can offer it because its labels are stored by position and follow.
+Changing that here means changing what a project file holds.
+
+**Drop-frame turned up a bug beneath it.** The frame index was counted at the
+nominal rate, so 29.97 skipped a timecode number about every thousand frames
+and the readout stuttered while the picture did not. The index comes from the
+actual rate now — which means non-drop at 29.97 correctly falls behind the
+clock, about 3.6 seconds an hour, and an hour of sequence reads 00:59:56:12.
 
 **Keyboard shortcuts are the largest single item in this section** and probably
 larger than the rest of it together: a command table with stable names, a

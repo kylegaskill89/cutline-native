@@ -4,11 +4,15 @@ Everything someone picking this up needs: where it is, how to build it, the rule
 it is written to, what works, what is left, and the traps that have already cost
 a day each.
 
+**If you are picking this up to carry on, read §9 first** — it says exactly
+where the work stands and what to do next. The rest is reference.
+
 Read `README.md` for the story and the numbers, `docs/architecture.md` for the
 native decisions, `docs/spec.md` for the product — it is the authority on exact
-numeric behaviour, carried over from the TypeScript version — and
-`docs/releasing.md` for how a tag becomes an installer somebody can run, and
-`docs/premiere-gaps.md` for where this still falls short of Premiere.
+numeric behaviour, carried over from the TypeScript version — `docs/releasing.md`
+for how a tag becomes an installer somebody can run, and **`docs/premiere-gaps.md`
+for the live plan**. That last one is the one that matters day to day: the spec
+is met, and Premiere is the target now.
 
 ---
 
@@ -27,12 +31,12 @@ measurements and the one correction they forced.
 | | |
 |---|---|
 | Repo | `github.com/kylegaskill89/cutline-native`, branch `main`, GPL-3.0-or-later |
-| Released | **0.2.1**, as an unsigned NSIS installer. `docs/releasing.md` |
+| Released | **0.3.0**, as an unsigned NSIS installer. `docs/releasing.md`. 24 commits since the tag, unreleased |
 | Local | `d:\Videos\cutline-native` |
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
-| Size | ~32k lines of source, ~22k of tests |
-| Tests | **2438** under the `ui` preset; 2176 of them need no GPU, no window, no FFmpeg |
+| Size | ~61k lines of source, ~39k of tests |
+| Tests | **2714** under the `ui` preset; 2368 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -53,7 +57,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 1632 of the 1895 tests.
+binding between them — 2368 of the 2714 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -129,14 +133,14 @@ ui       widgets, layout, themes, painters. Depends on core (for time) and
 editor   bindings: turns a project into what a panel shows, and a gesture into
          an operation. Depends on core and ui. Pure.
 engine   frame renderer, exporter, player. Joins render + media + gpu.
-app      preview, and the waveform and thumbnail caches: the whole stack, and
-         the work the interface waits on without doing itself.
+app      preview, the waveform and thumbnail caches, and the proxy builder: the
+         whole stack, and the work the interface waits on without doing itself.
 tools    executables.
 ```
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 1632 tests run with
+place that knows both, and it is pure too. That is what makes 2368 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -155,7 +159,13 @@ break would be silly.
   composition root.
 - *Something the interface needs but must not wait for* → `app`, as a cache with
   a worker behind it. `WaveformCache` is the one to copy; `ThumbnailCache` is
-  what copying it looks like.
+  what copying it looks like, and `ProxyBuilder` is what copying it looks like
+  when the job takes minutes and its result outlives the session.
+- *A preference* → `editor/settings.hpp` and a row on a page in `main.cpp`. §9
+  has the recipe and the rule for deciding whether it is a preference at all.
+- *A per-sequence setting* → `core::Project`, serialised, with a control in
+  Project Settings. `drop_frame` is the most recent one and the shortest to
+  read.
 
 ---
 
@@ -216,9 +226,19 @@ inset when pressed" is an ordinary assertion, not a screenshot to squint at.
 **2. `cutline --check`.** Builds the real interface in all four themes with
 a real Skia painter, activates every panel in turn, builds an inspector with a
 clip selected and all eleven effects on it, animates two parameters, selects a
-title, opens the colour picker, and asserts every widget landed somewhere real
-and inside the window. Then it fingerprints the pixels and fails if two themes
+title, opens the colour picker, opens the Window menu, and lays out **every page
+of both settings windows** in a host of its own at the width the dialog opens
+at. It asserts every widget landed somewhere real, inside the window, and with
+the room it asked for. Then it fingerprints the pixels and fails if two themes
 painted identically.
+
+It has earned its place repeatedly and recently: seven frame-rate buttons that
+fitted in a popup and not in a window, an explanatory sentence forty points
+wider than its pane, a folder path sharing a row with two buttons, and a
+dropdown as wide as the longest audio device name on the machine. **Run it
+before every commit.** Its project is deliberately awkward — two levels of bin,
+a labelled entry, 29.97 so the drop-frame control exists at all — because a page
+checked in its emptiest state is a page checked where nothing goes wrong.
 
 **3. Driving the actual window.** Synthetic clicks and screenshots. This has
 found things the other two could not, every single time:
@@ -235,7 +255,35 @@ found things the other two could not, every single time:
 
 The driver lives in the session scratchpad, not the repo. It is about forty lines
 of PowerShell: `ClientToScreen` for the origin, `SetCursorPos` + `mouse_event`,
-`CopyFromScreen` cropped to the client rect. **Watch the DPI.** Whether
+`CopyFromScreen` cropped to the client rect.
+
+Four things about it that each cost a run to learn:
+
+**Clear the state first, or a run inherits the last one.** Recovery copies put a
+modal on top at startup; `workspaces.json` wins over the built-in arrangement;
+and `settings.json` now carries the theme, which is the dangerous one — every
+theme has its own metrics, so a click computed against one lands somewhere else
+under another. `launch.ps1` in the scratchpad clears all three and dismisses
+whatever modal comes up; `-KeepSettings` skips the third, for the one case where
+the point of the run is that a preference survived a restart.
+
+**`PrintWindow` can return a stale frame.** A status label updating four times a
+second looked frozen and blank for a whole session before the tool was
+suspected. `CopyFromScreen` showed it working. Use `CopyFromScreen` for anything
+that changes without input — a progress line, a count coming down, a playhead
+moving on its own — and for popups, which are drawn over the window.
+
+**The dialogs are their own top-level windows.** Points computed against the
+main window will not land on Preferences or Project Settings, and the helper is
+right to refuse them: find the dialog's `HWND` by title with `EnumWindows` and
+drive it in its own client coordinates.
+
+**Check `WindowFromPoint` is the app before pressing.** A blind screen-coordinate
+click during this stretch went to a background application because the editor did
+not have the foreground. Nothing was harmed, and the helper that asserts the
+target is ours is the reason it is knowable.
+
+**Watch the DPI.** Whether
 PowerShell launches DPI-aware varies between invocations; when
 `[System.Windows.Forms.Screen]::PrimaryScreen.Bounds` reports 3840×2160 you are
 in physical pixels and when it reports 3072×1728 you are in logical ones, and a
@@ -254,12 +302,18 @@ deciding it is probably fine.
 
 **Waiting now:**
 
-- **A source placed as it is marked** — the marks themselves cannot be set by
-  eye yet, so this is only reachable through a saved project for now. What to
-  look for is that insert, overwrite and a drag from the pool all put down the
-  same span.
-- **`--check`** for the scrub bar, once anything places it. It is in no panel
-  yet, so the four themes currently have nothing new to lay out.
+- **The audio device actually carrying sound.** The page lists this machine's
+  real outputs and stores a choice by id; what was *not* driven is pressing play
+  through a chosen one, because that moves somebody's monitoring to another
+  device to prove a thing a test can prove. The fallback (an id no machine has
+  still opens a working player) and open-by-id are covered in
+  `tests/engine/player_test.cpp` instead. If you have the machine to yourself,
+  this is ten seconds of work and worth closing.
+- **A source placed as it is marked** — that insert, overwrite and a drag from
+  the pool all put down the same span.
+- **The icon view against a large pool.** It was driven with two sources. Forty
+  is the case where the filmstrip requests and the eviction budget meet, and
+  nobody has looked at that on screen.
 
 #### Driven: playback, and the hitch the average hid
 
@@ -370,74 +424,139 @@ every single-letter shortcut.
 
 ## 6. Status
 
-All eight phases are complete. The parity checklist in `docs/spec.md` §21 is
-done, the UI specification in §18 is done **bar two items** — Composite (Blend)
-and Reverse, both of which are in the model and reachable from nowhere, see
-`docs/premiere-gaps.md` §1.0 — and there is an installer and a release workflow
-that publishes it. Concretely:
+All eight phases are complete, `docs/spec.md` §21 and §18 are done, and there is
+an installer and a release workflow that publishes it. **The spec stopped being
+the target some time ago**; `docs/premiere-gaps.md` is the live plan, and it is
+walked section by section.
+
+| Gaps section | State |
+|---|---|
+| §1 Effects | done |
+| §2 Timeline | done |
+| §3 Monitors | done bar a deferred row (see the audit list at the foot of that file) |
+| §4 Project panel | done bar "new sequence from a clip", which needs more than one sequence |
+| §5 Application settings | **in progress — this is what you are picking up**, see §10 below |
+| Audio, titles, colour, export, sequences, keyboard customisation | not started |
 
 **Works end to end.** Import, place, move, trim, split, ripple, undo/redo. Eleven
 video effects as shaders, stackable, reorderable, keyframeable. Titles, drawn
 with Skia and composited as premultiplied RGBA. Playback at rate against the
-audio clock (57 fps, 95%, on a 4K60 project). Export with hardware encode, chosen
-at runtime — NVENC, QSV, AMF, then x264/x265 — with progress and cancel. Project
-save/load. Four themes, dockable panels that tear out into their own windows and
-remember where they were.
+audio clock. Export with hardware encode, chosen at runtime — NVENC, QSV, AMF,
+then x264/x265 — with progress and cancel. Project save/load. Four themes,
+dockable panels that tear out into their own windows and remember where they
+were.
 
-Scopes, a master fader with a metered bus, transform handles on the picture
-with snapping and guides, a preview that renders at a half or a quarter for
-speed, effect stacks copied from one clip to another, and a recovery copy of
-anything unsaved. Snap and Fit, loop over the marked range, J/K/L shuttle,
-canvas presets, renaming a track, and an update check that verifies what it
-downloads before running it.
+Scopes, a master fader with a metered bus, transform handles on the picture with
+snapping and guides, a preview that renders at a half or a quarter for speed,
+effect stacks copied from one clip to another, and a recovery copy of anything
+unsaved. Snap and Fit, loop over the marked range, J/K/L shuttle, canvas presets,
+renaming a track, and an update check that verifies what it downloads before
+running it.
 
-**The interface** is one window drawn on the GPU with Skia, sharing the
-compositor's Direct3D device so a decoded frame reaches the screen without a copy
-through system memory. The tool palette (select, razor, rate stretch, slip,
-slide), the effect controls with stopwatches and keyframes, a colour picker, and
-track header switches all work.
+**Since 0.3.0** — the 24 unreleased commits, which are most of what this handoff
+is about:
+
+- **Proxies, whole.** `media::write_proxy` transcodes; `app::ProxyBuilder` runs
+  them one at a time on a worker; `Project ▸ Make Proxies / Use Proxies / Stop`
+  reach it. Size and destination folder are preferences. The renderer defaults
+  to *not* using proxies so the exporter cannot pick one up by forgetting.
+- **Relinking** — `Project ▸ Relink Media`, repointing one pool entry repairs
+  every clip that used it.
+- **Bins** — nested folders in the project, saved with it, dragged into,
+  renamed, deleted. `core/pool.hpp` is the model, `MediaBrowser` draws the tree.
+- **The project panel, rebuilt** — sortable column headings, an icon view whose
+  tiles scrub as the pointer crosses them, labels on sources that clips inherit
+  at placement, and a right-click menu.
+- **`settings.json`** — the preferences file, and everything that now persists.
+- **The settings windows** — Preferences and Project Settings as real modal
+  windows with categories down the side.
+- **Audio device selection**, and **drop-frame timecode** (which fixed a real
+  counting bug beneath it).
 
 ---
 
 ## 7. What is left
 
-Checked against `docs/spec.md` §21 (the parity checklist) and §18 (the UI spec).
-§21 is done. §18 is done bar two items that were recorded as finished and were
-not: **Composite (Blend)** and **Reverse**. Both are in the core, tested, and
-have no control anywhere — the same "unreachable from the interface" shape this
-section used to be full of, and a reminder that a checklist ticked from memory
-is a checklist ticked wrongly.
-
-Beyond the two specifications, `docs/premiere-gaps.md` is the comparison with
-Premiere itself, which is the target that actually matters now.
+`docs/premiere-gaps.md` is the authority. The items below are the ones that are
+not in any section's table because they are not Premiere comparisons — they are
+things about this codebase.
 
 ### A. Would be missed by somebody using this every day
 
-- **Dragging keyframes in time.** They can be added, removed, retimed by
-  changing the clip's speed, and given a curve — but not slid along the clip.
-  The diamonds are drawn; the gesture is not.
-- **A menu bar.** Every command is on a button or a key, and a few are on
-  neither — there is no way to reach "reset this workspace" without knowing the
-  Reset button does it.
+- **A menu bar entry for everything.** The bar exists and is a real menu bar now,
+  but a few commands are still only on a button or a key.
+- **More than one sequence.** A `Project` holds its tracks directly; there is no
+  `Sequence` type. Section 4 ran into this and stopped, and it is written up at
+  the end of that section. It is the largest single piece of unbuilt model.
 
 ### B. Worth doing, and nobody will notice until it is done
 
 - **Keeping hardware-decoded frames on the GPU** instead of uploading them from
-  system memory. The decoder can already produce D3D12 textures; nothing
-  samples them yet. This is the last large win left in the preview.
-- **Streaming audio decode.** `AudioMixer` decodes whole ranges eagerly, which
-  is roughly 230 MB per ten minutes of stereo. A long timeline of long sources
-  is the case that will eventually need it.
-- **Nothing in the test suite ever resizes a real window** — see below.
+  system memory. The decoder can already produce D3D12 textures; nothing samples
+  them yet. This is the last large win left in the preview.
+- **Streaming audio decode.** `AudioMixer` decodes whole ranges eagerly, roughly
+  230 MB per ten minutes of stereo.
+- **Reverse playback still hitches** about once every two to four seconds, down
+  from twice a second. What is left is a group of pictures occasionally running
+  longer than the run has turns to pay for; the honest next step is measuring GOP
+  length rather than guessing at the budget again.
+- **Forward playback runs at about 40 fps on 4K60** rather than 60. Even, not
+  stuttering, but not the rate either.
+- **Nothing in the test suite ever resizes a real window.** The pixel tests draw
+  on a fixed CPU raster surface and `--check` lays out at one size, so the whole
+  `WM_SIZE` → recreate-the-swapchain path had never been exercised until somebody
+  dragged the window under a driver — which is how the crash in *Traps* was
+  found, after it had been shipping happily past a green suite for weeks.
 
-And one thing worth doing whatever comes next: **nothing in the test suite ever
-resizes a real window.** The pixel tests draw on a fixed CPU raster surface and
-`--check` lays out at one size, so the whole `WM_SIZE` → recreate-the-swapchain
-path had never been exercised until somebody dragged the window under a driver —
-which is how the crash in *Traps* was found, after it had been shipping happily
-past a green suite for weeks.
+### C. Patterns worth reading before writing anything new
 
-Eleven are already done and are worth reading as the pattern for the rest:
+These are finished features, kept here because each one is the shape the next
+thing of its kind should take.
+
+- **Proxies** — `media/transcode.hpp` writes one, `app/proxies.hpp` runs them.
+  Three things in it are load bearing. A proxy is *the same footage*: same
+  length, same frames at the same times, so frames are held to the source's rate
+  by repeating and dropping rather than emitted one for one — without that a
+  variable-rate source produces a proxy at the wrong speed and every cut made
+  against it moves when the original comes back. Anything that fails or is
+  cancelled **removes the file it was writing**, because a proxy that exists is
+  one something attaches and cuts against. And `FrameRenderer::set_use_proxies`
+  defaults to *off*, so the exporter ignores the switch by doing nothing rather
+  than by remembering to turn it off.
+
+- **Bins** — `core/pool.hpp`. A bin holds nothing: it is a name and a place in a
+  tree, and what is in it is whatever names it, which is one field on the media
+  entry. That is the only arrangement where filing a clip cannot leave two
+  containers disagreeing, and it is why deleting a folder cannot lose footage —
+  media naming a bin that has gone reads as top level. The destructive half
+  (`editor::remove_bin`, which takes the contents and their clips, as Premiere
+  does) is deliberately a *different function* from the structural one.
+
+- **The settings file** — `editor/settings.hpp`. The fourth thing under
+  `%APPDATA%\Cutline`, beside the workspaces, the effect bins and the presets,
+  and those three were the template: a struct, a read that treats absence as
+  "nobody has set anything yet", and a write through a staging file. Two rules
+  in it are worth keeping: **an absent key takes its default rather than reading
+  as false** (absent booleans read as "off" would have switched snapping off for
+  everybody on their first upgrade), and **the theme is stored by name, not by
+  index** (the list is ordered for reading, so an index would quietly mean
+  another theme the first time one was inserted).
+
+- **The settings windows** — `open_settings_dialog` in `tools/cutline/main.cpp`.
+  Two windows, not one: preferences belong to the person and project settings
+  travel with the cut, and a single window would write half its contents to a
+  different place from the other half. Each page fills a container the dialog
+  owns rather than being a widget tree of its own, so switching category rebuilds
+  one box. They are modal, which on Windows means disabling the owner — and the
+  owner is re-enabled *before* the dialog is destroyed, so the system has an
+  enabled window to give the foreground to.
+
+- **Drop-frame timecode** — `core/time.hpp`. Read the comment on
+  `seconds_to_timecode` before touching anything here. The frame index comes
+  from the *actual* rate and the fields are counted at the nominal one; counting
+  the index at the nominal rate skips a number about every thousand frames at
+  29.97, which is what it used to do. Non-drop therefore falls behind the clock
+  and that is correct.
 
 - **The monitor's transform handles** — `ui/monitor.hpp` for the gesture and
   `editor/monitor_binding.hpp` for the conversion. The conversion is the part
@@ -530,6 +649,49 @@ Eleven are already done and are worth reading as the pattern for the rest:
 
 Each of these cost real time. They are documented in the code as well, but they
 are the sort of thing that bites twice.
+
+**A "gather the state and save it" function drops every field it does not
+name.** `save_settings` built a fresh `Settings` from the live fields and copied
+three others back by hand, so the labels were wiped on every save — found by
+renaming one and watching it not stick. It starts from what is already held now,
+which makes the *next* setting added safe by default rather than safe if
+somebody remembers. Any function shaped like "build a new one from the parts I
+can see" has this bug waiting in it.
+
+**`ScrollView` used to make its content narrower than it asked for.** Across the
+scrolling axis it reported the content's width and then took the scrollbar's
+gutter out of that same width. Fixed in the widget — it reserves the gutter
+whether or not a bar is showing — but the shape of the bug is worth remembering:
+a container that reports one size and then hands its child less is a squeeze in
+everything the child holds, and `--check` reports it as several unrelated
+widgets rather than as the container.
+
+**`Box::sizing` deliberately does not inherit a child's flexibility across its
+own axis**, so a row of things stays as tall as its contents however flexible
+they are. `set_fills_cross(true)` is the opt-in. The comment beside it says why
+the default is the other way: a toolbar that inherited a spacer's flexibility
+would swallow the window.
+
+**A window not in `App::shells()` paints once and never again.** The settings
+window was missing from it, so its category buttons worked perfectly and nothing
+on screen ever said so — which reads as a dead control and is a dead repaint.
+Anything that makes a window has to add it there.
+
+**A name from outside has no length you can plan for.** A device called
+"Speakers (High Definition Audio Device)", a folder six levels deep, a camera
+file called `A001_C003_0410XX_001.R3D`. Each of these has squeezed a layout in
+some theme. Elide it, give it a row of its own, or both — and make `--check`
+build the page with a *real* one in it, because a page checked in its emptiest
+state is a page checked where nothing goes wrong.
+
+**A page that shows project state has to be rebuilt when the project changes.**
+Setting the rate to 29.97 is what makes the drop-frame control appear, and it
+appeared nowhere until `apply_fps` marked the page stale. The same applies to
+anything a settings page reads.
+
+**`refresh_timeline` deliberately does not repaint the playhead readout**, since
+it is a field somebody may be typing into. Anything that changes how a time is
+*written* — the frame rate, drop-frame — has to call `show_playhead` itself.
 
 **A press that moves the focus has it taken straight back.** `mouse_down` walks
 up from the widget that was pressed and focuses the first thing that can take
@@ -675,7 +837,126 @@ a backwards move smaller than one frame took compositing from 23 ms to 2 ms.
 
 ---
 
-## 9. Working with the person who owns this
+## 9. Where the work is right now
+
+**You are part-way through `docs/premiere-gaps.md` §5, application settings.**
+Read that section before anything else here — it is the plan, it says what was
+audited and why, and its tables are struck through as rows close.
+
+### What the section is
+
+Premiere keeps three things apart and so does this, deliberately:
+
+| | Belongs to | Stored in | Reached by |
+|---|---|---|---|
+| **Preferences** | the person | `%APPDATA%\Cutline\settings.json` | Settings ▸ Preferences… |
+| **Project settings** | the cut | inside the `.cutline` file | Project ▸ Project Settings… |
+| **Keyboard shortcuts** | the person | nothing yet | nothing yet |
+
+The rule that decides which a new setting is: **if opening somebody else's
+project should change it, it is not a preference.** Do not merge the two
+windows. The mistake to avoid is one Settings window that quietly writes half
+its contents to a different place from the other half.
+
+### What is done
+
+Preferences has six pages — Appearance, Audio Hardware, Labels, Timeline,
+Proxies, Auto Save — and everything on them persists. Project Settings has one,
+General, which grows a Timecode section at 29.97 and 59.94.
+
+Persisted preferences: theme (by name), snapping, looping, aspect lock, preview
+quality, pool ordering and view, still and transition durations, autosave
+interval, label names, default label per media kind, proxy height, proxy folder,
+audio output device.
+
+### What is left in §5, smallest first
+
+The table in `premiere-gaps.md` §5.4 is the list. What is not struck through:
+
+1. **Undo depth** — `History` takes a limit in its constructor and it is fixed at
+   100. One field, one control. An afternoon at most.
+2. **Auto Save versions kept** — one recovery copy per document today. Premiere
+   keeps N. Needs a naming scheme and a prune, in `editor/autosave.hpp`.
+3. **Playback preroll / postroll** — no machinery at all; the player seeks and
+   plays. Needs the player to start early and stop late around a marked range.
+4. **Renderer choice (GPU / software)** — the compositor already falls back on
+   its own; this is exposing the choice, and is mostly useful for diagnosing.
+5. **Appearance brightness** — four discrete themes today. A slider means themes
+   generated rather than declared, which is a bigger change than it sounds and
+   probably not worth it. Consider closing this row as "won't do" with a reason.
+6. **Scratch disks** — proxies have a folder now; nothing else this application
+   writes has one. Small, and worth doing when there is a second thing to place.
+7. **Media cache location** — *no disk cache exists.* Filmstrips and waveforms
+   are in memory only. This is a subsystem, not a setting; do not put a control
+   on it until there is something to point at.
+8. **Memory / RAM reserved** — the caches have fixed budgets chosen against
+   measurements. **Think hard before exposing this**; see the principle below.
+
+### The principle this section has been run on
+
+**Expose what has no right answer. Leave what was measured.**
+
+The thread counts (`kThumbnailThreads`, `kProxyThreads`), the surface pool
+sizes, the cache budgets and the proxy *quality* were each chosen against a
+measurement written down beside them in the code. A control offering somebody a
+worse answer than the measured one only creates bad sessions. What is worth
+exposing is what genuinely varies by person or by machine: durations, the
+autosave interval, the label palette, the proxy size, the output device — which
+is, not coincidentally, close to what Premiere exposes.
+
+Say so in the commit when you decline a row. A row closed with a reason is worth
+more than a row left open.
+
+### How to add a preference
+
+Twenty minutes, and every step has a reason:
+
+1. **A field on `editor::Settings`** with a default equal to what the
+   application already does. A fresh install must behave identically.
+2. **Read and write it** in `settings_from_json` / `to_json`, clamping on the way
+   in. A hand-edited file is not hostile, but it is not careful either — every
+   number in there is clamped and the enums are read by name.
+3. **A row on a page** in `tools/cutline/main.cpp` — `build_*_page`. Use
+   `duration_row` for a number; a `Dropdown` for an exclusive choice of more than
+   three; a `TextField` with `set_columns` when several must line up.
+4. **Call `save_settings(app)`** from the control's `on_commit`, not
+   `on_change` — a dragged number would otherwise write the file once a pixel.
+5. **Feed it to whatever uses it.** Prefer threading it as a parameter over
+   reading a global: `still_length`, `transition_length` and the proxy height all
+   pass through the call, so there is still exactly one decision point.
+6. **Run `--check`.** It lays out every page of both windows in all four themes.
+   If your row has a name from outside in it, make the check pass build it with a
+   real one — see the trap about lengths.
+
+### The next thing, if you want a recommendation
+
+**Close §5 with the two cheap rows (undo depth, autosave versions), write the
+"won't do" reasons for the rows that should not be built, and move to the next
+section.** §5 has no teeth left in it; the remaining rows are either trivial or
+need machinery that does not exist.
+
+Of the sections still to walk, **sequences** is the one that keeps coming up:
+section 4 could not close "new sequence from a clip" without it, and it is the
+largest piece of unbuilt model in the application. **Keyboard customisation** is
+the other substantial one, and it was pulled out of §5 for being larger than the
+rest of that section put together.
+
+### State of the tree
+
+Everything is committed and green. Nothing is half-finished, no branch is open,
+and there is no work in progress to reconstruct. The last commit is
+`9beffaa Count timecode the way broadcast does, and fix what it was counting`.
+
+- 2714 tests pass under the `ui` preset.
+- `--check` reports 2525 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
+  all four themes.
+- 24 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
+  the owner's standing instruction is that releases happen after major features,
+  not per commit.
+
+---
+
+## 10. Working with the person who owns this
 
 - **They write the direction; you write the code.** They review lightly and
   expect the tests to be the proof. Do not ask for approval on ordinary
@@ -689,5 +970,9 @@ a backwards move smaller than one frame took compositing from 23 ms to 2 ms.
   Ordinary commits to `main` are expected and fine.
 - **Correct the README as you go.** It is the status document, and it has
   claimed things that were not true more than once.
+- **`docs/buglist.md` is their channel, not yours.** They put faults in it in
+  their own words; you tick them off and write underneath what the cause turned
+  out to be. Everything in it is currently fixed. Do not use it as a to-do list
+  of your own — that is what `premiere-gaps.md` is for.
 - Be direct about what did not get done and why. A list of remaining gaps is
   more useful than a summary that reads as finished.
