@@ -919,6 +919,225 @@ TEST(Browser, ALongNameIsClippedToItsColumn) {
   EXPECT_TRUE(painter.clips_balanced());
 }
 
+// ------------------------------------------------------------- icon view --
+
+namespace {
+
+/// A filmstrip whose frames are flat colours, so which one was drawn can be
+/// told from the pixels.
+[[nodiscard]] std::shared_ptr<const Filmstrip> striped(int count) {
+  auto strip = std::make_shared<Filmstrip>();
+  for (int i = 0; i < count; ++i) {
+    FilmFrame frame;
+    frame.t = static_cast<double>(i);
+    frame.width = 2;
+    frame.height = 2;
+    frame.rgba.assign(2 * 2 * 4, static_cast<std::uint8_t>(10 + i * 20));
+    strip->frames.push_back(std::move(frame));
+  }
+  return strip;
+}
+
+/// An icon view with `count` entries, each ten seconds long with frames.
+[[nodiscard]] Fixture icon_fixture(std::size_t count) {
+  Fixture fixture(0);
+  std::vector<MediaItem> items = sample_items(count);
+  for (MediaItem& item : items) {
+    item.duration = 10.0;
+    item.filmstrip = striped(10);
+  }
+  fixture.view->set_items(std::move(items));
+  fixture.view->set_view(BrowserView::Icons);
+  return fixture;
+}
+
+}  // namespace
+
+TEST(Browser, TheIconViewLaysTilesAcrossAndThenDown) {
+  const Fixture fixture = icon_fixture(9);
+  const int across = fixture.view->tiles_across();
+  ASSERT_GT(across, 1) << "the panel should hold more than one tile at 300 wide";
+
+  const Rect first = fixture.view->row_rect(0);
+  const Rect second = fixture.view->row_rect(1);
+  EXPECT_DOUBLE_EQ(second.y, first.y) << "the second tile started a new row";
+  EXPECT_GT(second.x, first.x);
+
+  const Rect wrapped = fixture.view->row_rect(static_cast<std::size_t>(across));
+  EXPECT_DOUBLE_EQ(wrapped.x, first.x) << "the row did not wrap back to the left";
+  EXPECT_GT(wrapped.y, first.y);
+}
+
+TEST(Browser, TheListViewIsOneTileAcross) {
+  const Fixture fixture;
+  EXPECT_EQ(fixture.view->tiles_across(), 1);
+}
+
+TEST(Browser, ATileIsTallerThanARow) {
+  // It has to hold a picture and a name under it. Everything else — scrolling,
+  // hit testing, selection — is the same arithmetic with a taller row.
+  Fixture fixture = icon_fixture(4);
+  const double tall = fixture.view->row_height();
+  fixture.view->set_view(BrowserView::List);
+  EXPECT_GT(tall, fixture.view->row_height());
+}
+
+TEST(Browser, ThereAreNoHeadingsOverAGrid) {
+  const Fixture fixture = icon_fixture(4);
+  EXPECT_TRUE(fixture.view->header_rect().empty());
+  EXPECT_DOUBLE_EQ(fixture.view->list_area().y, 0.0);
+}
+
+TEST(Browser, APointFindsTheTileItIsOver) {
+  const Fixture fixture = icon_fixture(9);
+  for (std::size_t i = 0; i < 5; ++i) {
+    const Rect tile = fixture.view->row_rect(i);
+    if (tile.empty()) continue;
+    EXPECT_EQ(fixture.view->row_at(tile.x + tile.width * 0.5, tile.y + tile.height * 0.5),
+              std::optional<std::size_t>{i});
+  }
+}
+
+TEST(Browser, EmptySpaceBesideAPartFilledLastRowIsNothing) {
+  // Otherwise a click in the gap after the last tile selects the first tile of
+  // a row that does not exist.
+  const Fixture fixture = icon_fixture(1);
+  const Rect tile = fixture.view->row_rect(0);
+  ASSERT_FALSE(tile.empty());
+  EXPECT_FALSE(fixture.view->row_at(tile.right() + tile.width * 0.5,
+                                    tile.y + tile.height * 0.5)
+                   .has_value());
+}
+
+TEST(Browser, TheGridScrollsByRowsRatherThanByEntries) {
+  // Nine entries three across is three rows, not nine — and a scroll extent
+  // that counted entries would let the grid scroll six rows past its end.
+  const Fixture fixture = icon_fixture(9);
+  const int across = fixture.view->tiles_across();
+  const auto rows = static_cast<double>((9 + across - 1) / across);
+  EXPECT_DOUBLE_EQ(fixture.view->vertical().content, rows * fixture.view->row_height());
+}
+
+TEST(Browser, MovingAcrossATileScrubsIt) {
+  // The whole point of looking at a pool as pictures: running the pointer along
+  // one walks the source.
+  Fixture fixture = icon_fixture(3);
+  const Rect tile = fixture.view->row_rect(0);
+  ASSERT_FALSE(tile.empty());
+
+  fixture.host->mouse_move(press(tile.x + tile.width * 0.1, tile.y + tile.height * 0.5));
+  ASSERT_EQ(fixture.view->hovered_item(), std::optional<std::size_t>{0});
+  const double early = fixture.view->hovered_fraction();
+
+  fixture.host->mouse_move(press(tile.x + tile.width * 0.9, tile.y + tile.height * 0.5));
+  EXPECT_GT(fixture.view->hovered_fraction(), early);
+  EXPECT_LE(fixture.view->hovered_fraction(), 1.0);
+  EXPECT_GE(early, 0.0);
+}
+
+TEST(Browser, ScrubbingShowsADifferentFrame) {
+  // Asserted through the pixels, because "the fraction changed" would pass
+  // just as well against a tile that always draws the same picture.
+  Fixture fixture = icon_fixture(1);
+  const Rect tile = fixture.view->row_rect(0);
+
+  const auto drawn_image = [](const RecordingPainter& painter) -> std::uint8_t {
+    for (const DrawCall& call : painter.calls()) {
+      if (call.kind == DrawCall::Kind::Image && call.image.pixels != nullptr) {
+        return call.image.pixels[0];
+      }
+    }
+    return 0;
+  };
+
+  fixture.host->mouse_move(press(tile.x + tile.width * 0.05, tile.y + tile.height * 0.4));
+  RecordingPainter early;
+  fixture.host->paint(early, default_theme());
+
+  fixture.host->mouse_move(press(tile.x + tile.width * 0.95, tile.y + tile.height * 0.4));
+  RecordingPainter late;
+  fixture.host->paint(late, default_theme());
+
+  EXPECT_NE(drawn_image(early), 0) << "no frame was drawn at all";
+  EXPECT_NE(drawn_image(early), drawn_image(late))
+      << "the tile showed the same frame wherever the pointer was";
+}
+
+TEST(Browser, LeavingThePanelStopsTheScrub) {
+  // Or the last tile crossed keeps showing whichever frame it was left on,
+  // which reads as a picture changing on its own.
+  Fixture fixture = icon_fixture(3);
+  const Rect tile = fixture.view->row_rect(0);
+  fixture.host->mouse_move(press(tile.x + tile.width * 0.5, tile.y + tile.height * 0.5));
+  ASSERT_TRUE(fixture.view->hovered_item().has_value());
+
+  fixture.host->mouse_exit();
+  EXPECT_FALSE(fixture.view->hovered_item().has_value());
+}
+
+TEST(Browser, ATileWithNoFramesYetDrawsItsBadgeInstead) {
+  // Filmstrips arrive on a worker, so a pool always starts without them. A
+  // blank tile is indistinguishable from one that failed to draw.
+  Fixture fixture(0);
+  std::vector<MediaItem> items = sample_items(1);
+  items[0].kind = MediaKind::Audio;
+  fixture.view->set_items(std::move(items));
+  fixture.view->set_view(BrowserView::Icons);
+
+  RecordingPainter painter;
+  fixture.host->paint(painter, default_theme());
+  const std::vector<std::string> texts = drawn_text(painter);
+
+  EXPECT_TRUE(contains(texts, "A")) << "a tile with no frames drew nothing in their place";
+  EXPECT_TRUE(contains(texts, "Clip 0")) << "the name is under the picture either way";
+  EXPECT_TRUE(painter.clips_balanced());
+}
+
+TEST(Browser, ALongTileCaptionKeepsItsStartRatherThanItsMiddle) {
+  // Found by driving. Clipping a centred name cuts both ends, and the end it
+  // must not cut is the front: a camera file is told from its neighbours by how
+  // it starts, and "07-23-2026 10PM-59-" says nothing that "Replay 07-23-2026"
+  // does not say better.
+  const auto alignment_of = [](const RecordingPainter& painter,
+                               std::string_view needle) -> std::optional<TextAlign> {
+    for (const DrawCall& call : painter.calls()) {
+      if (call.run.has_value() && call.run->text.find(needle) != std::string::npos) {
+        return call.run->align;
+      }
+    }
+    return std::nullopt;
+  };
+
+  Fixture fixture(0);
+  fixture.view->set_items({MediaItem{.id = "m0", .name = "A.mp4"},
+                           MediaItem{.id = "m1",
+                                     .name = "Replay 07-23-2026 10PM-59-02 second unit.mkv"}});
+  fixture.view->set_view(BrowserView::Icons);
+
+  RecordingPainter painter;
+  fixture.host->paint(painter, default_theme());
+
+  EXPECT_EQ(alignment_of(painter, "A.mp4"), std::optional<TextAlign>{TextAlign::Center})
+      << "a name that fits should sit under the middle of its picture";
+  EXPECT_EQ(alignment_of(painter, "Replay"), std::optional<TextAlign>{TextAlign::Left})
+      << "a name too long to fit lost its beginning";
+}
+
+TEST(Browser, SelectingAndActivatingWorkTheSameInEitherView) {
+  // The one thing that would make the icon view a second implementation to keep
+  // in step. It is the same rows at a different shape.
+  Fixture fixture = icon_fixture(6);
+  std::optional<std::size_t> activated;
+  fixture.view->set_on_activate([&](std::size_t index) { activated = index; });
+
+  const Rect tile = fixture.view->row_rect(2);
+  ASSERT_FALSE(tile.empty());
+  fixture.host->mouse_down(press(tile.x + tile.width * 0.5, tile.y + tile.height * 0.5, 2));
+
+  EXPECT_EQ(fixture.view->selection(), std::optional<std::size_t>{2});
+  EXPECT_EQ(activated, std::optional<std::size_t>{2});
+}
+
 TEST(Browser, EveryKindHasABadge) {
   // A kind added to the model without one here would draw an empty square.
   for (const MediaKind kind :

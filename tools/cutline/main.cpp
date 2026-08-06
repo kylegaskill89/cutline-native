@@ -447,6 +447,8 @@ struct App {
   TextField* readout = nullptr;
   /// The media pool down the left, and the button that cycles its order.
   MediaBrowser* browser = nullptr;
+  /// The button that swaps the pool between a list and a grid of pictures.
+  Button* view_button = nullptr;
   cutline::editor::BrowserSort browser_sort = cutline::editor::BrowserSort::Pool;
   bool browser_descending = false;
   /// The bins showing what is inside them.
@@ -3250,6 +3252,25 @@ void sort_by_column(App& app, cutline::ui::MediaColumn column) {
 /// Through the binding every time rather than being patched, for the same
 /// reason the timeline is: an undo can put media back that no incremental
 /// update would know to restore.
+/// Asks for a frame or two of every source the icon view is showing.
+///
+/// Only in the icon view, and only for a short stretch of each source: the tile
+/// scrubs across the whole file, but a handful of frames spread over it is what
+/// a 108-pixel picture can distinguish anyway — and a pool of forty sources
+/// asking for the whole of each would be the hundred seconds of processor time
+/// that the filmstrips were already cut back to avoid.
+void request_pool_pictures([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.browser == nullptr || app.browser->view() != cutline::ui::BrowserView::Icons) return;
+
+  for (const cutline::core::Media& media : app.session.project().media) {
+    if (!media.has_video || cutline::core::is_generated_media(media) || media.is_image) continue;
+    if (media.path.empty() || media.duration <= 0.0) continue;
+    app.filmstrips.request(media.id, media.path, 0.0, media.duration);
+  }
+#endif
+}
+
 void refresh_browser(App& app) {
   if (app.browser == nullptr) return;
 
@@ -3264,8 +3285,22 @@ void refresh_browser(App& app) {
   if (app.preview != nullptr) options.offline = app.preview->missing_media();
 #endif
 
-  app.browser->set_items(cutline::editor::browser_items(app.session.project(), options));
+  std::vector<cutline::ui::MediaItem> rows =
+      cutline::editor::browser_items(app.session.project(), options);
+#if CUTLINE_HAVE_PREVIEW
+  // Attached here rather than in the binding, because a filmstrip is a fact
+  // about what has been decoded so far rather than about the project — and the
+  // binding is tested without a decoder anywhere near it.
+  if (app.browser->view() == cutline::ui::BrowserView::Icons) {
+    for (cutline::ui::MediaItem& row : rows) {
+      if (row.is_bin) continue;
+      row.filmstrip = app.filmstrips.find(row.id);
+    }
+  }
+#endif
+  app.browser->set_items(std::move(rows));
   app.browser->set_sorted_by(sort_column(app.browser_sort), app.browser_descending);
+  request_pool_pictures(app);
   mark_dirty(app);
 }
 
@@ -5658,6 +5693,22 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   });
   tools.emplace<Spacer>();
 
+  // Premiere puts this at the bottom of the panel as two small icons. A button
+  // saying which view it would switch to is one control instead of two, and it
+  // reads without anybody having to learn what the icons mean.
+  auto& view_choice = tools.emplace<Button>("Icons", [app] {
+    if (app == nullptr || app->browser == nullptr) return;
+    const bool icons = app->browser->view() == cutline::ui::BrowserView::Icons;
+    app->browser->set_view(icons ? cutline::ui::BrowserView::List
+                                 : cutline::ui::BrowserView::Icons);
+    // Named for what it would do next, so the button says where pressing it
+    // goes rather than where you already are.
+    if (app->view_button != nullptr) app->view_button->set_text(icons ? "Icons" : "List");
+    refresh_browser(*app);
+    if (app->main.host != nullptr) app->main.host->request_layout();
+  });
+  view_choice.set_tooltip("Show the pool as pictures or as a list");
+
 
   auto& pool = panel->emplace<MediaBrowser>();
 
@@ -5707,6 +5758,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
 
   if (app != nullptr) {
     app->browser = &pool;
+    app->view_button = &view_choice;
     refresh_browser(*app);
   } else {
     // The headless check builds these with no session behind them. Filling the
@@ -9209,6 +9261,13 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       const bool waves = app->waveforms.take_arrival();
       const bool strips = app->filmstrips.take_arrival();
       if (waves || strips) refresh_timeline(*app);
+      // And the pool, which draws from the same cache when it is showing
+      // pictures. Without this a tile stays blank until something else happens
+      // to rebuild the panel.
+      if (strips && app->browser != nullptr &&
+          app->browser->view() == cutline::ui::BrowserView::Icons) {
+        refresh_browser(*app);
+      }
       // Outside the test as well: the last arrival of a burst brings the count
       // to zero, and a label still saying "Reading media (1)" over an idle
       // machine is worse than no label at all.

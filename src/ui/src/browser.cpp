@@ -152,7 +152,15 @@ bool MediaBrowser::select_id(std::string_view id) {
 
 // -------------------------------------------------------------- geometry --
 
-double MediaBrowser::row_height() const noexcept { return std::max(1.0, metrics_.list_row_height); }
+double MediaBrowser::row_height() const noexcept {
+  // A tile is its picture plus one line for the name beneath it, so an icon
+  // grid is the same arithmetic as a list with taller rows — which is what lets
+  // scrolling, hit testing and selection stay one implementation.
+  if (view_ == BrowserView::Icons) {
+    return kBrowserTilePicture + std::max(1.0, metrics_.list_row_height);
+  }
+  return std::max(1.0, metrics_.list_row_height);
+}
 
 void MediaBrowser::set_columns(std::vector<MediaColumn> columns) {
   columns_ = std::move(columns);
@@ -206,7 +214,9 @@ std::vector<MediaColumn> MediaBrowser::visible_columns() const {
 }
 
 Rect MediaBrowser::header_rect() const {
-  if (spans_.empty()) return {};
+  // No headings over a grid: there are no columns to head, and a row of words
+  // saying "Name" above a wall of pictures heads nothing.
+  if (view_ == BrowserView::Icons || spans_.empty()) return {};
   return Rect{bounds().x, bounds().y, bounds().width, row_height()};
 }
 
@@ -237,11 +247,42 @@ Rect MediaBrowser::list_area() const {
   return area;
 }
 
+int MediaBrowser::tiles_across() const noexcept {
+  if (view_ != BrowserView::Icons) return 1;
+  Rect area = bounds();
+  if (vertical_.scrollable()) area.width = std::max(0.0, area.width - metrics_.scrollbar_width);
+  // At least one, however narrow: a tile clipped at the edge is worse to look
+  // at than one, but no tiles at all is a panel that draws nothing.
+  return std::max(1, static_cast<int>(area.width / kBrowserTileWidth));
+}
+
+void MediaBrowser::set_view(BrowserView view) {
+  if (view_ == view) return;
+  view_ = view;
+  hover_.reset();
+  // Both, and in this order: the columns depend on whether there is a header,
+  // and in the icon view there is not one.
+  refresh_bounds();
+  refresh_columns();
+  refresh_bounds();
+}
+
 Rect MediaBrowser::row_rect(std::size_t index) const {
   if (index >= items_.size()) return {};
 
   const Rect area = list_area();
   const double height = row_height();
+
+  if (view_ == BrowserView::Icons) {
+    const int across = tiles_across();
+    const double width = area.width / across;
+    const auto row = static_cast<double>(index / static_cast<std::size_t>(across));
+    const auto column = static_cast<double>(index % static_cast<std::size_t>(across));
+    const double top = area.y + row * height - vertical_.offset;
+    if (top + height <= area.y || top >= area.bottom()) return {};
+    return Rect{area.x + column * width, top, width, height};
+  }
+
   const double top = area.y + static_cast<double>(index) * height - vertical_.offset;
 
   // Rows outside the window report nothing, so painting and hit testing can
@@ -303,7 +344,15 @@ std::optional<std::size_t> MediaBrowser::row_at(double x, double y) const {
   const double at = (y - area.y + vertical_.offset) / row_height();
   if (at < 0.0) return std::nullopt;
 
-  const auto index = static_cast<std::size_t>(at);
+  std::size_t index = static_cast<std::size_t>(at);
+  if (view_ == BrowserView::Icons) {
+    const int across = tiles_across();
+    const auto column = static_cast<std::size_t>((x - area.x) / (area.width / across));
+    // Past the last tile of a part-filled final row is empty space, not the
+    // first tile of the row after it.
+    if (column >= static_cast<std::size_t>(across)) return std::nullopt;
+    index = index * static_cast<std::size_t>(across) + column;
+  }
   if (index >= items_.size()) return std::nullopt;
   return index;
 }
@@ -326,7 +375,9 @@ void MediaBrowser::scroll_by(double delta) { vertical_.scroll_by(delta); }
 
 void MediaBrowser::refresh_bounds() {
   vertical_.visible = std::max(0.0, bounds().height - header_rect().height);
-  vertical_.content = static_cast<double>(items_.size()) * row_height();
+  const auto across = static_cast<std::size_t>(std::max(1, tiles_across()));
+  const std::size_t rows = (items_.size() + across - 1) / across;
+  vertical_.content = static_cast<double>(rows) * row_height();
   vertical_.clamp();
 }
 
@@ -346,9 +397,115 @@ void MediaBrowser::layout(const LayoutContext& context) {
 
 // ----------------------------------------------------------------- paint --
 
+void MediaBrowser::paint_tiles(Painter& painter, const Theme& theme) const {
+  const Rect area = list_area();
+  const SurfaceStyle& panel = theme.style(Part::Panel, State::Normal);
+  const double small = theme.metrics.small_font_size;
+
+  painter.push_clip(area, 0.0);
+
+  for (std::size_t i = 0; i < items_.size(); ++i) {
+    const Rect tile = row_rect(i);
+    if (tile.empty()) continue;
+
+    const MediaItem& item = items_[i];
+    const bool chosen = selection_.has_value() && *selection_ == i;
+    if (chosen) paint_surface(painter, tile, theme.style(Part::Clip, State::Selected));
+
+    const Rect picture{tile.x + 3.0, tile.y + 3.0, std::max(0.0, tile.width - 6.0),
+                       std::max(0.0, kBrowserTilePicture - 6.0)};
+
+    // A well behind the picture, so a tile whose frames have not arrived is
+    // still a tile rather than a hole, and a picture narrower than its slot is
+    // letterboxed rather than floating.
+    paint_surface(painter, picture, theme.style(Part::ToolButton, State::Normal));
+
+    const FilmFrame* frame = nullptr;
+    if (item.filmstrip != nullptr && !item.filmstrip->empty()) {
+      // Where the pointer is across the tile, in source seconds. This is the
+      // scrub: running the pointer along a picture walks the source, which is
+      // the whole reason to look at a pool as pictures.
+      const bool scrubbing = hover_.has_value() && *hover_ == i;
+      const double at = scrubbing ? hover_fraction_ * item.duration : item.duration * 0.5;
+      frame = item.filmstrip->nearest(at);
+    }
+    if (frame != nullptr && !frame->rgba.empty()) {
+      painter.push_clip(picture, 0.0);
+      // Fitted rather than stretched: a 4:3 source squeezed into a 16:9 tile
+      // looks like a fault in the decoder rather than like a choice.
+      const double scale = std::min(picture.width / std::max(1, frame->width),
+                                    picture.height / std::max(1, frame->height));
+      const double w = frame->width * scale;
+      const double h = frame->height * scale;
+      painter.image(Rect{picture.x + (picture.width - w) * 0.5,
+                         picture.y + (picture.height - h) * 0.5, w, h},
+                    ImageView{.pixels = frame->rgba.data(),
+                              .width = frame->width,
+                              .height = frame->height});
+      painter.pop_clip();
+    } else {
+      // The badge, in the middle, where the picture would be. A bin says what
+      // it is the same way, since a folder has no frames to show.
+      const SurfaceStyle& quiet = theme.style(Part::Panel, State::Disabled);
+      painter.text(text_run(picture, item.is_bin ? "BIN" : std::string(badge_text(item.kind)),
+                            quiet, small, TextAlign::Center, true));
+    }
+
+    if (!item.label_color.empty()) {
+      painter.fill(Rect{picture.x, picture.y, picture.width, kBrowserLabelStripe}, 0.0,
+                   Fill::solid(parse_color(item.label_color, panel.text)));
+    }
+
+    const SurfaceStyle& text_style =
+        item.offline ? theme.style(Part::Panel, State::Disabled)
+                     : theme.style(Part::Clip, chosen ? State::Selected : State::Normal);
+    const Rect caption{tile.x + 2.0, picture.bottom(), std::max(0.0, tile.width - 4.0),
+                       std::max(0.0, tile.bottom() - picture.bottom())};
+    if (!caption.empty()) {
+      // Clipped for the same reason the list's cells are: a name is drawn from
+      // a rectangle rather than bounded by one, and a tile is narrow.
+      painter.push_clip(caption, 0.0);
+      // Centred while it fits and left-aligned once it does not. Clipping a
+      // centred name cuts both ends, and the end it must not cut is the front:
+      // a camera file is told from its neighbours by how it starts, and
+      // "07-23-2026 10PM-59-" says nothing that "Replay 07-23-2026" does not
+      // say better. Found by driving, with exactly that file.
+      const bool fits = painter.measure(item.name, small, false) <= caption.width;
+      painter.text(text_run(caption, item.name, text_style, small,
+                            fits ? TextAlign::Center : TextAlign::Left,
+                            chosen || item.is_bin));
+      painter.pop_clip();
+    }
+
+    if (const auto target = file_target(); target.has_value() && *target == i) {
+      painter.stroke(tile, 0.0, theme.accent, 2.0);
+    }
+  }
+
+  painter.pop_clip();
+
+  const Rect bar = scrollbar();
+  if (!bar.empty()) {
+    paint_surface(painter, bar, theme.style(Part::Scrollbar, State::Normal));
+    paint_surface(painter, scroll_thumb(),
+                  theme.style(Part::ScrollThumb, scrolling_ ? State::Pressed : State::Normal));
+  }
+
+  if (items_.empty()) {
+    const Rect message = area.inset(theme.metrics.panel_padding);
+    painter.text(text_run(message, "No media. Ctrl+I imports a file.", panel, small,
+                          TextAlign::Center));
+  }
+}
+
 void MediaBrowser::paint_content(Painter& painter, const Theme& theme) const {
   const Rect area = list_area();
   if (area.empty()) return;
+
+  if (view_ == BrowserView::Icons) {
+    paint_tiles(painter, theme);
+    return;
+  }
 
   const SurfaceStyle& panel = theme.style(Part::Panel, State::Normal);
   const double font = theme.metrics.font_size;
@@ -608,6 +765,28 @@ bool MediaBrowser::on_mouse_move(const MouseEvent& event) {
     return true;
   }
 
+  // Where the pointer is, whether or not a button is down. This is what an icon
+  // scrubs from, and it is tracked in both views because the cost is one hit
+  // test and the alternative is two code paths that drift.
+  if (const auto over = row_at(event.x, event.y); over != hover_ || over.has_value()) {
+    const std::optional<std::size_t> was = hover_;
+    const double fraction_was = hover_fraction_;
+    hover_ = over;
+    hover_fraction_ = 0.0;
+    if (over.has_value()) {
+      const Rect tile = row_rect(*over);
+      if (tile.width > 0.0) {
+        hover_fraction_ = std::clamp((event.x - tile.x) / tile.width, 0.0, 1.0);
+      }
+    }
+    // Repainted only when it would look different. A pointer crossing a list
+    // moves every few milliseconds, and asking for a paint on each one would
+    // make hovering the pool the most expensive thing on screen.
+    const bool moved_frame = view_ == BrowserView::Icons &&
+                             std::abs(hover_fraction_ - fraction_was) > 0.01;
+    if ((was != hover_ || moved_frame) && host() != nullptr) host()->request_paint();
+  }
+
   if (!pressed_row_.has_value()) return false;
 
   if (!drag_.has_value()) {
@@ -647,6 +826,15 @@ bool MediaBrowser::on_mouse_up(const MouseEvent& event) {
   // press captured the pointer, so a drop on the timeline still arrives here.
   if (on_drop_) on_drop_(*dropped, event.x, event.y);
   return true;
+}
+
+void MediaBrowser::on_mouse_leave() {
+  // Or the last tile the pointer crossed keeps showing whichever frame it was
+  // left on, which reads as a picture that changed on its own.
+  if (!hover_.has_value()) return;
+  hover_.reset();
+  hover_fraction_ = 0.0;
+  if (host() != nullptr) host()->request_paint();
 }
 
 bool MediaBrowser::on_wheel(const WheelEvent& event) {

@@ -13,6 +13,7 @@
 /// timeline draws its clips instead of building them.
 
 #include "cutline/ui/layout.hpp"
+#include "cutline/ui/timeline.hpp"
 #include "cutline/ui/widget.hpp"
 
 #include <cstddef>
@@ -40,6 +41,15 @@ enum class MediaKind {
 /// The letters on an entry's badge. Two at most, because it is drawn in a
 /// square the height of a row.
 [[nodiscard]] std::string_view badge_text(MediaKind kind) noexcept;
+
+/// How the pool is laid out.
+enum class BrowserView {
+  /// One row an entry, with columns. What a large pool is worked in.
+  List,
+  /// A grid of pictures. What a pool is *looked* at in — the point of it is
+  /// recognising a shot rather than reading its name.
+  Icons,
+};
 
 /// A column of the list, and the heading that sorts by it.
 ///
@@ -108,6 +118,15 @@ struct MediaItem {
   /// Whether a bin is showing what is inside it. Meaningless on anything else.
   bool expanded = false;
 
+  /// Frames from across the source, for the icon view to draw one of.
+  ///
+  /// Shared rather than copied: these are megabytes, the same cache the
+  /// timeline draws its filmstrips from owns them, and a pool of forty entries
+  /// rebuilding after every gesture cannot afford to copy any of it. Null is
+  /// ordinary — it means the worker has not got there yet, and the tile draws a
+  /// placeholder until it does.
+  std::shared_ptr<const Filmstrip> filmstrip;
+
   /// The colour this row is labelled with, as "#rrggbb", or empty for none.
   ///
   /// Drawn as a stripe down the leading edge rather than as a wash over the
@@ -130,6 +149,24 @@ class MediaBrowser : public Widget {
   /// rebuilding after a sort or a filter does not silently select whatever
   /// happens to have moved into the old row.
   void set_items(std::vector<MediaItem> items);
+
+  // ------------------------------------------------------------------ view --
+
+  void set_view(BrowserView view);
+  [[nodiscard]] BrowserView view() const noexcept { return view_; }
+
+  /// Which entry the pointer is over, and how far across it — from 0 at the
+  /// left edge to 1 at the right.
+  ///
+  /// The second is what makes an icon scrub: the tile shows the frame that far
+  /// through the source, so running the pointer across a picture plays it. Only
+  /// meaningful in the icon view, where a whole tile is worth scrubbing across;
+  /// a row twenty pixels tall is not.
+  [[nodiscard]] std::optional<std::size_t> hovered_item() const noexcept { return hover_; }
+  [[nodiscard]] double hovered_fraction() const noexcept { return hover_fraction_; }
+
+  /// How many tiles fit across. One in the list view, where a row is a row.
+  [[nodiscard]] int tiles_across() const noexcept;
 
   // --------------------------------------------------------------- columns --
 
@@ -254,6 +291,8 @@ class MediaBrowser : public Widget {
 
   // ------------------------------------------------------------- behaviour --
 
+  void on_mouse_leave() override;
+
   [[nodiscard]] Part part() const noexcept override { return Part::Panel; }
   [[nodiscard]] bool paints_surface() const noexcept override { return true; }
 
@@ -314,7 +353,20 @@ class MediaBrowser : public Widget {
   };
   std::vector<Span> spans_;
   void refresh_columns();
+  void paint_tiles(Painter& painter, const Theme& theme) const;
+
+  BrowserView view_ = BrowserView::List;
+  std::optional<std::size_t> hover_;
+  double hover_fraction_ = 0.0;
 };
+
+/// How wide a tile is in the icon view, and how tall its picture is.
+///
+/// Wide enough that a face is recognisable, which is the entire purpose — a
+/// thumbnail too small to tell two takes apart is a slower list. Three fit
+/// across the project panel at its usual width.
+inline constexpr double kBrowserTileWidth = 108.0;
+inline constexpr double kBrowserTilePicture = 61.0;  ///< 16:9 of the width
 
 /// How wide each fixed column is. The name takes whatever is left.
 inline constexpr double kBrowserDurationColumn = 84.0;
