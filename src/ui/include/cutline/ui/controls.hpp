@@ -464,6 +464,15 @@ class MenuList : public Widget {
     on_choose_ = std::move(on_choose);
   }
 
+  /// Whether the list takes all the height it is given rather than only what
+  /// its rows need.
+  ///
+  /// Off for a menu, which is as tall as what is in it. On for a list used as a
+  /// column of categories down the side of a window, where a panel that stops
+  /// half way down reads as unfinished rather than as compact.
+  void set_fills_height(bool fills) noexcept { fills_height_ = fills; }
+  [[nodiscard]] bool fills_height() const noexcept { return fills_height_; }
+
   [[nodiscard]] double row_height() const noexcept { return row_height_; }
   /// Where row `index` is. Empty when it is not one.
   [[nodiscard]] Rect row_rect(std::size_t index) const;
@@ -491,6 +500,7 @@ class MenuList : public Widget {
   /// Taken at layout, where the metrics are, because painting and hit-testing
   /// both need it and neither has them.
   double row_height_ = 22.0;
+  bool fills_height_ = false;
   double font_size_ = 13.0;
   double padding_ = 4.0;
 

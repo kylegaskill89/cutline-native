@@ -75,11 +75,21 @@ class Button : public Widget {
   void set_on_click(std::function<void()> on_click) { on_click_ = std::move(on_click); }
 
   /// `Part::ToolButton` for the icon-sized ones in a toolbar, which the theme
-  /// styles differently and which lay out square.
+  /// styles differently and which lay out square. `Part::MenuItem` for the ones
+  /// along a menu bar and down a settings window's side, which are buttons in
+  /// behaviour and menu rows in appearance.
   void set_part(Part part) noexcept { part_ = part; }
 
   [[nodiscard]] Part part() const noexcept override { return part_; }
-  [[nodiscard]] bool paints_surface() const noexcept override { return true; }
+
+  /// Everything except a resting menu item, which draws nothing at all.
+  ///
+  /// A menu bar is a row of words until the pointer is over one — that is what
+  /// makes it a menu bar rather than a row of buttons — and `MenuList` skips
+  /// the resting surface on its own rows for the same reason.
+  [[nodiscard]] bool paints_surface() const noexcept override {
+    return part_ != Part::MenuItem || state() != State::Normal;
+  }
 
   [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
   void paint_content(Painter& painter, const Theme& theme) const override;

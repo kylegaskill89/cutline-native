@@ -602,7 +602,11 @@ LayoutItem MenuList::sizing(Axis axis, const LayoutContext& context) const {
   const Metrics& metrics = context.metrics();
   if (axis == Axis::Vertical) {
     const double rows = static_cast<double>(items_.size()) * metrics.list_row_height;
-    return LayoutItem::fixed(rows + 2.0 * padding_);
+    const double needed = rows + 2.0 * padding_;
+    // A category column takes the height it is given; a menu is as tall as what
+    // is in it. Never *shorter* than its rows either way, so filling can only
+    // add room and cannot hide the last entry.
+    return fills_height_ ? LayoutItem::flexible(1.0, needed) : LayoutItem::fixed(needed);
   }
 
   double widest = 0.0;

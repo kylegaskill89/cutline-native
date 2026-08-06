@@ -643,9 +643,9 @@ struct App {
   /// Which category is showing, and the box its page fills.
   std::size_t settings_page = 0;
   Box* settings_body = nullptr;
-  /// The category buttons, so the chosen one can be lit without rebuilding the
-  /// list — which would destroy the button whose click is still running.
-  std::vector<Button*> settings_tabs;
+  /// The category list, so the chosen row can be lit without rebuilding it —
+  /// which would destroy the widget whose click is still running.
+  MenuList* settings_tabs = nullptr;
 
   /// The preferences, as read and as written.
   ///
@@ -4441,18 +4441,35 @@ constexpr std::array<double, 7> kFrameRates{23.976, 24.0, 25.0, 29.97, 30.0, 50.
 
 /// The sequence's shape. Premiere's Project Settings ▸ General.
 void build_sequence_page(App& app, Box& into) {
-  // The current size in the heading, because the presets below only show which
-  // one is chosen and a sequence at a typed size matches none of them.
-  into.emplace<Label>("Sequence size — " + canvas_label(app.session.project())).set_bold(true);
+  into.emplace<Label>("Sequence size").set_bold(true);
 
-  for (const CanvasPreset& preset : kCanvasPresets) {
-    auto& row = into.emplace<Button>(
-        std::string(preset.name) + "  " + std::to_string(preset.width) + "x" +
-            std::to_string(preset.height),
-        [&app, preset] { apply_canvas(app, preset.width, preset.height); });
-    row.set_selected(preset.width == app.session.project().canvas_w &&
-                     preset.height == app.session.project().canvas_h);
+  // A dropdown, for the same reason the frame rates are one: seven presets are
+  // one choice with seven answers rather than seven things to do, and seven
+  // buttons down a settings window is a wall.
+  auto& presets = into.emplace<Box>(Axis::Horizontal);
+  presets.emplace<Label>("Preset").set_small(true);
+  presets.emplace<Spacer>();
+
+  std::vector<std::string> sizes;
+  // Past the end when the sequence is at a size nobody preset, which is a state
+  // the typed row below can reach and the dropdown has to be able to show.
+  std::size_t chosen_size = kCanvasPresets.size();
+  for (std::size_t i = 0; i < kCanvasPresets.size(); ++i) {
+    const CanvasPreset& preset = kCanvasPresets[i];
+    sizes.push_back(std::string(preset.name) + "  " + std::to_string(preset.width) + "x" +
+                    std::to_string(preset.height));
+    if (preset.width == app.session.project().canvas_w &&
+        preset.height == app.session.project().canvas_h) {
+      chosen_size = i;
+    }
   }
+  if (chosen_size == kCanvasPresets.size()) sizes.push_back(canvas_label(app.session.project()));
+
+  auto& size_choice = presets.emplace<Dropdown>(std::move(sizes), chosen_size);
+  size_choice.set_on_change([&app](std::size_t index) {
+    if (index >= kCanvasPresets.size()) return;  // the "custom" row it was showing
+    apply_canvas(app, kCanvasPresets[index].width, kCanvasPresets[index].height);
+  });
 
   auto& custom = into.emplace<Box>(Axis::Horizontal);
   auto& width = custom.emplace<TextField>(std::to_string(app.session.project().canvas_w));
@@ -4508,12 +4525,19 @@ void build_sequence_page(App& app, Box& into) {
 
 /// The theme. Premiere's Preferences ▸ Appearance.
 void build_appearance_page(App& app, Box& into) {
-  into.emplace<Label>("Theme").set_bold(true);
-  for (std::size_t i = 0; i < built_in_themes().size(); ++i) {
-    auto& choice =
-        into.emplace<Button>(built_in_themes()[i].name, [&app, i] { set_theme(app, i); });
-    choice.set_selected(i == app.theme);
-  }
+  // A dropdown rather than a button per theme. Four buttons in a column read as
+  // four things to do; this is one choice with four answers, and a settings
+  // window is built out of the control that says so.
+  auto& row = into.emplace<Box>(Axis::Horizontal);
+  row.emplace<Label>("Theme").set_small(true);
+  row.emplace<Spacer>();
+
+  std::vector<std::string> names;
+  names.reserve(built_in_themes().size());
+  for (const Theme& theme : built_in_themes()) names.emplace_back(theme.name);
+
+  auto& choice = row.emplace<Dropdown>(std::move(names), app.theme);
+  choice.set_on_change([&app](std::size_t index) { set_theme(app, index); });
 }
 
 /// One labelled number on a settings page.
@@ -4592,9 +4616,7 @@ void refresh_settings_page(App& app) {
   if (app.settings_page < pages.size() && pages[app.settings_page].build != nullptr) {
     pages[app.settings_page].build(app, *app.settings_body);
   }
-  for (std::size_t i = 0; i < app.settings_tabs.size(); ++i) {
-    if (app.settings_tabs[i] != nullptr) app.settings_tabs[i]->set_selected(i == app.settings_page);
-  }
+  if (app.settings_tabs != nullptr) app.settings_tabs->set_current(app.settings_page);
 
   if (app.settings_window != nullptr && app.settings_window->host != nullptr) {
     app.settings_window->host->request_layout();
@@ -4622,24 +4644,34 @@ void close_settings_dialog(App& app);
   auto& split = root->emplace<Box>(Axis::Horizontal);
   split.set_padding(Edges{12.0, 12.0, 12.0, 12.0});
   split.set_spacing(12.0);
+  // Takes the height under the title bar rather than only what its contents
+  // need. Without this the category list stops wherever its last row does and
+  // the rest of the window is empty background, which reads as unfinished
+  // rather than as compact.
+  split.set_fills_cross(true);
 
-  app.settings_tabs.clear();
+  app.settings_tabs = nullptr;
   // Only when there is a choice to make. A list of one is a heading pretending
   // to be a control, and Project Settings has one page until Scratch Disks
   // gives it a second.
   if (pages.size() > 1) {
-    auto& tabs = split.emplace<Box>(Axis::Vertical);
-    tabs.set_spacing(2.0);
-    for (std::size_t i = 0; i < pages.size(); ++i) {
-      auto& tab = tabs.emplace<Button>(pages[i].name, [&app, i] {
-        if (app.settings_page == i) return;
-        app.settings_page = i;
-        refresh_settings_page(app);
-      });
-      tab.set_selected(i == app.settings_page);
-      app.settings_tabs.push_back(&tab);
-    }
-    tabs.emplace<Spacer>();
+    // A list rather than a column of buttons, which is what Premiere's is and
+    // what it should always have been: the categories are one exclusive choice
+    // among several, and that is the shape `MenuList` already draws — flat
+    // rows, the chosen one lit, nothing pretending each name is pressable.
+    std::vector<std::string> names;
+    names.reserve(pages.size());
+    for (const SettingsPage& page : pages) names.push_back(page.name);
+
+    auto& tabs = split.emplace<MenuList>(std::move(names));
+    tabs.set_fills_height(true);
+    tabs.set_current(app.settings_page);
+    tabs.set_on_choose([&app](std::size_t index) {
+      if (app.settings_page == index) return;
+      app.settings_page = index;
+      refresh_settings_page(app);
+    });
+    app.settings_tabs = &tabs;
   }
 
   auto& body = split.emplace<Box>(Axis::Vertical);
@@ -4712,7 +4744,7 @@ void close_settings_dialog(App& app) {
   if (app.settings_window == nullptr) return;
 
   app.settings_body = nullptr;
-  app.settings_tabs.clear();
+  app.settings_tabs = nullptr;
 
   const HWND window = app.settings_window->window;
   app.settings_window.reset();
@@ -8127,6 +8159,10 @@ void refresh_dock(App& app) {
   };
   const auto menu = [app, &bar](const char* title, std::vector<MenuEntry> entries) {
     auto& button = bar.emplace<Button>(title);
+    // A menu bar, not a row of buttons: words until the pointer is over one,
+    // which is what every menu bar on the platform looks like and what
+    // Premiere's looks like too.
+    button.set_part(cutline::ui::Part::MenuItem);
     button.set_on_click([app, control = &button, entries = std::move(entries)] {
       if (app == nullptr || app->main.host == nullptr) return;
 
@@ -8230,6 +8266,7 @@ void refresh_dock(App& app) {
   // close button that can throw a panel away for good is a trap.
   {
     auto& windows = bar.emplace<Button>("Window");
+    windows.set_part(cutline::ui::Part::MenuItem);
     windows.set_on_click([app, control = &windows] {
       if (app == nullptr || app->main.host == nullptr) return;
       app->main.host->open_popup(build_window_menu(*app), control->bounds());
@@ -10272,7 +10309,7 @@ template <typename T>
         }
       }
       app.settings_body = nullptr;
-      app.settings_tabs.clear();
+      app.settings_tabs = nullptr;
     }
 
     // And the theme has to reach the pixels. Sampling a scatter of points
