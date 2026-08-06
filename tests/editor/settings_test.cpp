@@ -57,6 +57,9 @@ class TempSettings {
   settings.pool_sort = BrowserSort::Duration;
   settings.pool_descending = true;
   settings.pool_view = ui::BrowserView::Icons;
+  settings.still_length = 3.0;
+  settings.transition_length = 0.5;
+  settings.autosave_seconds = 120;
   return settings;
 }
 
@@ -74,6 +77,9 @@ TEST(Settings, TheDefaultsAreWhatTheApplicationAlreadyDid) {
   EXPECT_EQ(settings.pool_sort, BrowserSort::Pool);
   EXPECT_FALSE(settings.pool_descending);
   EXPECT_EQ(settings.pool_view, ui::BrowserView::List);
+  EXPECT_DOUBLE_EQ(settings.still_length, kStillLength);
+  EXPECT_DOUBLE_EQ(settings.transition_length, kPreferredTransitionLength);
+  EXPECT_EQ(settings.autosave_seconds, static_cast<int>(kAutosaveInterval.count()));
 }
 
 TEST(Settings, AFileThatIsNotThereIsNotAnError) {
@@ -161,6 +167,33 @@ TEST(Settings, APreviewScaleIsClampedRatherThanTrusted) {
   const auto huge = settings_from_json(R"({"preview_scale":8.0})");
   ASSERT_TRUE(huge.has_value()) << huge.error();
   EXPECT_DOUBLE_EQ(huge->preview_scale, kMaxPreviewScale);
+}
+
+TEST(Settings, TheDurationsAreClampedRatherThanTrusted) {
+  // Zero is the one answer that has to be refused: a still of no length is the
+  // bug this whole feature was born from, and a hand-edited file is exactly how
+  // it would come back.
+  const auto none = settings_from_json(
+      R"({"still_length":0.0,"transition_length":0.0,"autosave_seconds":0})");
+  ASSERT_TRUE(none.has_value()) << none.error();
+  EXPECT_GE(none->still_length, kMinStillLength);
+  EXPECT_GE(none->transition_length, kMinTransitionLength);
+  EXPECT_GE(none->autosave_seconds, kMinAutosaveSeconds);
+
+  const auto silly = settings_from_json(
+      R"({"still_length":1e9,"transition_length":1e9,"autosave_seconds":999999})");
+  ASSERT_TRUE(silly.has_value()) << silly.error();
+  EXPECT_DOUBLE_EQ(silly->still_length, kMaxStillLength);
+  EXPECT_DOUBLE_EQ(silly->transition_length, kMaxTransitionLength);
+  EXPECT_EQ(silly->autosave_seconds, kMaxAutosaveSeconds);
+}
+
+TEST(Settings, ANegativeDurationCannotSurvive) {
+  // Reachable by hand, and a negative still would place a clip that ends before
+  // it starts.
+  const auto loaded = settings_from_json(R"({"still_length":-5.0})");
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_GT(loaded->still_length, 0.0);
 }
 
 TEST(Settings, AnUnknownSortReadsAsPoolOrder) {

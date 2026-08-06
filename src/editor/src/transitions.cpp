@@ -12,10 +12,6 @@
 namespace cutline::editor {
 namespace {
 
-/// How long a transition is when one is first added, before the join gets a
-/// say. A second is Premiere's default and reads clearly at any zoom.
-constexpr double kPreferredLength = 1.0;
-
 /// The clip and the one abutting its out-edge, or nulls when there is no join.
 ///
 /// Abutting is the model's own test — a transition between clips with a gap
@@ -158,8 +154,8 @@ core::Project set_transition(core::Project project, std::string_view clip_id,
 }
 
 double default_transition_length(const core::Project& project, std::string_view clip_id,
-                                 core::TransitionKind kind) {
-  return std::min(kPreferredLength, longest_transition(project, clip_id, kind));
+                                 core::TransitionKind kind, double preferred) {
+  return std::min(preferred, longest_transition(project, clip_id, kind));
 }
 
 }  // namespace cutline::editor

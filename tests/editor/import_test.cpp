@@ -325,6 +325,28 @@ TEST(Import, AStillPlacesAsSomethingYouCanSee) {
   EXPECT_DOUBLE_EQ(clip.source_out - clip.source_in, kStillLength);
 }
 
+TEST(Import, AChosenStillLengthIsWhatGetsPlaced) {
+  // The preference reaching the clip, which is the only part of it anybody
+  // sees. Threaded as a parameter rather than read from a global, so the
+  // decision stays in one place and this test can make it.
+  MediaSource source = a_video("D:/stills/card.png");
+  source.is_image = true;
+  source.duration = 0.04;
+  source.audio_stream_count = 0;
+
+  const Project project = import_and_place(with_tracks(), source, 0.0, {}, 2.5);
+  ASSERT_FALSE(project.tracks.front().clips.empty());
+  const core::Clip& clip = project.tracks.front().clips.front();
+  EXPECT_DOUBLE_EQ(clip.source_out - clip.source_in, 2.5);
+}
+
+TEST(Import, AChosenLengthDoesNotTouchVideo) {
+  // It is the *still* length. A video asked for with one still runs as long as
+  // it runs.
+  MediaSource source = a_video();
+  EXPECT_DOUBLE_EQ(placement_duration(source, 2.5), 42.0);
+}
+
 TEST(Import, RelinkingAStillGivesItAPlaceableLengthToo) {
   // Relinking rewrites the probed facts, so a still repointed at a moved file
   // would otherwise come back a fortieth of a second long.

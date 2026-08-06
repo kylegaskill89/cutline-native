@@ -61,10 +61,16 @@ inline constexpr double kStillLength = 5.0;
 
 /// What a source's media duration should be, given what the probe found.
 ///
-/// Everything but a still gets what the file says. A still gets `kStillLength`,
+/// Everything but a still gets what the file says. A still gets `still_length`,
 /// and an *animated* one is not a still for this purpose — a GIF has a real
 /// running time and overriding it would make it loop at the wrong speed.
-[[nodiscard]] double placement_duration(const MediaSource& source) noexcept;
+///
+/// The length is a parameter rather than the constant, because it is a
+/// preference; the constant is what a caller with no opinion gets, and every
+/// caller that has one passes it. One decision point either way, which is the
+/// point — the bug this replaced came from there being none.
+[[nodiscard]] double placement_duration(const MediaSource& source,
+                                        double still_length = kStillLength) noexcept;
 
 /// The media in `project` that already refers to this path, or null.
 [[nodiscard]] const core::Media* find_media_by_path(const core::Project& project,
@@ -78,13 +84,15 @@ inline constexpr double kStillLength = 5.0;
 ///
 /// The id is reported through `id` when one is wanted.
 [[nodiscard]] core::Project import_media(core::Project project, const MediaSource& source,
-                                         std::string* id = nullptr);
+                                         std::string* id = nullptr,
+                                         double still_length = kStillLength);
 
 /// Imports and places it on the timeline: one video clip plus one clip per
 /// audio stream, linked, exactly as `core::place_media` does it.
 [[nodiscard]] core::Project import_and_place(core::Project project, const MediaSource& source,
                                              double at,
-                                             std::string_view video_track_id = {});
+                                             std::string_view video_track_id = {},
+                                             double still_length = kStillLength);
 
 /// Points a pool entry at a file somewhere else, keeping its id.
 ///
@@ -107,7 +115,8 @@ inline constexpr double kStillLength = 5.0;
 /// what it meant — a clip reaching past the end of a shorter replacement is a
 /// thing to see rather than a thing to silently trim.
 [[nodiscard]] core::Project relink_media(core::Project project, std::string_view media_id,
-                                         const MediaSource& source);
+                                         const MediaSource& source,
+                                         double still_length = kStillLength);
 
 /// Whether a path looks like a still image, by its extension.
 ///

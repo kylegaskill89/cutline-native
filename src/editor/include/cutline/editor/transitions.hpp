@@ -89,10 +89,19 @@ struct TransitionRow {
                                            std::optional<core::TransitionKind> kind,
                                            double duration);
 
-/// How long a transition should be when one is first added: a second, or as
-/// much of one as the join can manage.
+/// How long a transition is when one is first added, before the join gets a
+/// say. A second is Premiere's default and reads clearly at any zoom.
+inline constexpr double kPreferredTransitionLength = 1.0;
+
+/// How long a transition should be when one is first added: `preferred`, or as
+/// much of it as the join can manage.
+///
+/// The preferred length is a parameter because it is a preference — Premiere
+/// keeps one for video and one for audio — and a constant that somebody can
+/// change is a constant that has to be passed rather than read.
 [[nodiscard]] double default_transition_length(const core::Project& project,
                                                std::string_view clip_id,
-                                               core::TransitionKind kind);
+                                               core::TransitionKind kind,
+                                               double preferred = kPreferredTransitionLength);
 
 }  // namespace cutline::editor

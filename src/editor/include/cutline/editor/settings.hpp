@@ -19,7 +19,10 @@
 /// existed, so a fresh install behaves exactly as it always has and a missing
 /// file is not a special case.
 
+#include "cutline/editor/autosave.hpp"
 #include "cutline/editor/browser_binding.hpp"
+#include "cutline/editor/import.hpp"
+#include "cutline/editor/transitions.hpp"
 #include "cutline/ui/browser.hpp"
 
 #include <expected>
@@ -60,8 +63,37 @@ struct Settings {
   bool pool_descending = false;
   ui::BrowserView pool_view = ui::BrowserView::List;
 
+  // ------------------------------------------------------------- defaults --
+  //
+  // The three settings with no right answer, which is what makes them worth
+  // exposing at all. The thread counts and cache budgets elsewhere in this
+  // application were each chosen against a measurement written down beside
+  // them, and a control offering somebody a worse answer than the measured one
+  // only creates bad sessions.
+
+  /// How long a still is placed for. Premiere's "Still image default duration".
+  double still_length = kStillLength;
+  /// How long a transition is when first added, before the join gets a say.
+  double transition_length = kPreferredTransitionLength;
+  /// How often a recovery copy is written, in seconds.
+  int autosave_seconds = static_cast<int>(kAutosaveInterval.count());
+
   friend bool operator==(const Settings&, const Settings&) = default;
 };
+
+/// The bounds each of those is clamped into, on the way in from a file and on
+/// the way in from a field somebody typed.
+///
+/// Generous rather than tight: these exist to keep a typing mistake from
+/// producing a length nothing can be done with, not to argue with somebody who
+/// wants a ten-minute still. Zero is the one answer that has to be refused —
+/// a still of no length is the bug this feature was born from.
+inline constexpr double kMinStillLength = 0.1;
+inline constexpr double kMaxStillLength = 600.0;
+inline constexpr double kMinTransitionLength = 0.04;
+inline constexpr double kMaxTransitionLength = 60.0;
+inline constexpr int kMinAutosaveSeconds = 15;
+inline constexpr int kMaxAutosaveSeconds = 3600;
 
 /// The smallest and largest preview scales a file may ask for.
 inline constexpr double kMinPreviewScale = 0.1;

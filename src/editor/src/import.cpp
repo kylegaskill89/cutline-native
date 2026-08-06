@@ -53,10 +53,10 @@ bool looks_like_media(const std::filesystem::path& path) {
          contains(kAudioExtensions, extension);
 }
 
-double placement_duration(const MediaSource& source) noexcept {
+double placement_duration(const MediaSource& source, double still_length) noexcept {
   // An animated still is not a still here: a GIF has a real running time, and
   // replacing it would make it loop at the wrong speed.
-  if (source.is_image && !source.is_animated) return kStillLength;
+  if (source.is_image && !source.is_animated) return still_length;
   return source.duration;
 }
 
@@ -67,7 +67,8 @@ const core::Media* find_media_by_path(const core::Project& project,
   return found == project.media.end() ? nullptr : &*found;
 }
 
-core::Project import_media(core::Project project, const MediaSource& source, std::string* id) {
+core::Project import_media(core::Project project, const MediaSource& source, std::string* id,
+                           double still_length) {
   // Already in the pool: hand back what is there. Adding it again would give
   // the browser two entries for one file, and two ids that can drift apart as
   // soon as either is edited.
@@ -82,7 +83,7 @@ core::Project import_media(core::Project project, const MediaSource& source, std
   media.path = source.path;
   media.name = source.name.empty() ? std::filesystem::path(source.path).filename().string()
                                    : source.name;
-  media.duration = placement_duration(source);
+  media.duration = placement_duration(source, still_length);
   media.has_video = source.has_video;
   media.audio_stream_count = source.audio_stream_count;
   media.is_image = source.is_image;
@@ -96,7 +97,7 @@ core::Project import_media(core::Project project, const MediaSource& source, std
 }
 
 core::Project relink_media(core::Project project, std::string_view media_id,
-                           const MediaSource& source) {
+                           const MediaSource& source, double still_length) {
   const auto found = std::ranges::find(project.media, media_id, &core::Media::id);
   if (found == project.media.end() || source.path.empty()) return project;
 
@@ -105,7 +106,7 @@ core::Project relink_media(core::Project project, std::string_view media_id,
   // in a new place. What is not taken is the name: it is a property of the
   // project rather than of the file, and somebody who renamed the entry has
   // already said what they want it called.
-  found->duration = placement_duration(source);
+  found->duration = placement_duration(source, still_length);
   found->has_video = source.has_video;
   found->audio_stream_count = source.audio_stream_count;
   found->is_image = source.is_image;
@@ -117,9 +118,9 @@ core::Project relink_media(core::Project project, std::string_view media_id,
 }
 
 core::Project import_and_place(core::Project project, const MediaSource& source, double at,
-                               std::string_view video_track_id) {
+                               std::string_view video_track_id, double still_length) {
   std::string id;
-  project = import_media(std::move(project), source, &id);
+  project = import_media(std::move(project), source, &id, still_length);
   if (id.empty()) return project;
   // Before it lands, because the rule is about an *empty* sequence and this is
   // the moment it stops being one. A 4K60 clip dropped into a 1080p30 sequence

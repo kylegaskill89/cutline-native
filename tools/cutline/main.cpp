@@ -618,6 +618,14 @@ struct App {
   /// Where the settings file is, so a test or a portable copy can point
   /// somewhere else without the writing having to be told twice.
   std::filesystem::path settings_file = cutline::editor::default_settings_path();
+
+  /// The preferences, as read and as written.
+  ///
+  /// The ones with a live field of their own — snapping, the theme, the pool's
+  /// order — are read out of this at startup and back into it on every save,
+  /// because those fields are what the rest of the application already asks.
+  /// The durations have no such field and live here alone.
+  cutline::editor::Settings settings;
   Button* workspace_button = nullptr;
   /// Set when the arrangement has changed and the views need rebuilding.
   ///
@@ -2465,7 +2473,8 @@ void build_transition_controls(App& app, const std::string& clip_id) {
         was.present && kind.has_value()
             ? was.duration
             : (kind.has_value() ? cutline::editor::default_transition_length(
-                                      app.session.project(), clip_id, *kind)
+                                      app.session.project(), clip_id, *kind,
+                                      app.settings.transition_length)
                                 : 0.0);
 
     app.session.apply(
@@ -3711,7 +3720,8 @@ void relink_pool_entry([[maybe_unused]] App& app) {
     return;
   }
 
-  app.session.apply(cutline::editor::relink_media(app.session.project(), chosen->id, *source));
+  app.session.apply(cutline::editor::relink_media(app.session.project(), chosen->id, *source,
+                                                 app.settings.still_length));
   // The renderer is holding a decoder for the old path, and the browser is
   // holding the old file's filmstrip and envelope. All three would go on
   // describing a file that is no longer what this entry means.
@@ -4469,6 +4479,51 @@ constexpr std::array<double, 7> kFrameRates{23.976, 24.0, 25.0, 29.97, 30.0, 50.
     });
     choice.set_selected(i == app.theme);
   }
+
+  // The three with no right answer. Everything else fixed in this application
+  // was chosen against a measurement written down beside it, and a control
+  // offering somebody a worse answer than the measured one only makes bad
+  // sessions.
+  panel->emplace<Label>("Defaults").set_bold(true);
+
+  /// One labelled number. Written once because three rows of the same shape
+  /// copied out three times is three places for the units to drift apart.
+  const auto duration_row = [&app, &panel](const char* label, double value, double smallest,
+                                           double largest, const char* suffix,
+                                           std::function<void(double)> keep) {
+    auto& row = panel->emplace<Box>(Axis::Horizontal);
+    row.emplace<Label>(label).set_small(true);
+    row.emplace<Spacer>();
+
+    auto& number = row.emplace<cutline::ui::NumericField>(
+        cutline::ui::ValueRange{.minimum = smallest, .maximum = largest}, value);
+    number.set_decimals(suffix == std::string_view("s") ? 2 : 0);
+    number.set_suffix(suffix);
+    // Committed rather than changed, so dragging the number does not write the
+    // file once per pixel.
+    number.set_on_commit([&app, keep = std::move(keep)](double set) {
+      keep(set);
+      save_settings(app);
+    });
+    return &number;
+  };
+
+  duration_row("Still image", app.settings.still_length, cutline::editor::kMinStillLength,
+               cutline::editor::kMaxStillLength, "s",
+               [&app](double set) { app.settings.still_length = set; });
+  duration_row("Transition", app.settings.transition_length,
+               cutline::editor::kMinTransitionLength, cutline::editor::kMaxTransitionLength,
+               "s", [&app](double set) { app.settings.transition_length = set; });
+  duration_row("Recovery copy every",
+               static_cast<double>(app.settings.autosave_seconds),
+               cutline::editor::kMinAutosaveSeconds, cutline::editor::kMaxAutosaveSeconds, "sec",
+               [&app](double set) { app.settings.autosave_seconds = static_cast<int>(set); });
+
+  // Said rather than left to be discovered. A still already on the timeline
+  // keeps the length it was given, and somebody who changes this expecting the
+  // sequence to rearrange itself has to be told it will not.
+  auto& note = panel->emplace<Label>("These apply to what you place next.");
+  note.set_small(true);
   return panel;
 }
 
@@ -4994,7 +5049,8 @@ void import_media(App& app) {
   // read is one that has to be undone before the sequence can be looked at.
   // Placing it is a gesture of its own: a drag onto a track, or a drop.
   std::string id;
-  app.session.apply(cutline::editor::import_media(app.session.project(), *source, &id));
+  app.session.apply(cutline::editor::import_media(app.session.project(), *source, &id,
+                                                 app.settings.still_length));
   refresh_all(app);
 
   // Selected in the pool, so it is obvious where it went — a browser that has
@@ -5122,7 +5178,8 @@ void complain(HWND owner, const std::string& message) {
 void poll_autosave(App& app) {
   const std::uint64_t revision = app.session.revision();
   if (!cutline::editor::autosave_due(app.autosave, app.session.modified(), revision,
-                                     std::chrono::steady_clock::now())) {
+                                     std::chrono::steady_clock::now(),
+                                     std::chrono::seconds(app.settings.autosave_seconds))) {
     return;
   }
 
@@ -5349,7 +5406,8 @@ void open_from_command_line(App& app, const std::filesystem::path& path) {
       return;
     }
     std::string id;
-    app.session.apply(cutline::editor::import_media(app.session.project(), *source, &id));
+    app.session.apply(cutline::editor::import_media(app.session.project(), *source, &id,
+                                                   app.settings.still_length));
     refresh_all(app);
     if (app.browser != nullptr && !id.empty()) app.browser->select_id(id);
     show_source(app, id);
@@ -7773,6 +7831,12 @@ void save_settings(App& app) {
   settings.pool_descending = app.browser_descending;
   settings.pool_view =
       app.browser == nullptr ? cutline::ui::BrowserView::List : app.browser->view();
+  // Straight through: nothing else holds these, so what was read or typed is
+  // what goes back.
+  settings.still_length = app.settings.still_length;
+  settings.transition_length = app.settings.transition_length;
+  settings.autosave_seconds = app.settings.autosave_seconds;
+  app.settings = settings;
 
   // Quietly. Losing a preference is not worth a dialog in the middle of an
   // edit, and the one place it would matter — a settings directory that cannot
@@ -10106,7 +10170,8 @@ int main(int argc, char** argv) {
   // afterwards would mean laying the whole window out twice — and the first of
   // those would be visible.
   if (auto read = cutline::editor::read_settings(app.settings_file); read.has_value()) {
-    const cutline::editor::Settings& settings = *read;
+    app.settings = *read;
+    const cutline::editor::Settings& settings = app.settings;
     // By name, and quietly ignored when it names one this build does not have.
     const auto theme = std::ranges::find(built_in_themes(), settings.theme, &Theme::name);
     if (theme != built_in_themes().end()) {

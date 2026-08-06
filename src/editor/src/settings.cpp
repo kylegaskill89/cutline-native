@@ -64,6 +64,9 @@ std::string to_json(const Settings& settings, int indent) {
   out["pool_sort"] = name_of(settings.pool_sort);
   out["pool_descending"] = settings.pool_descending;
   out["pool_view"] = name_of(settings.pool_view);
+  out["still_length"] = settings.still_length;
+  out["transition_length"] = settings.transition_length;
+  out["autosave_seconds"] = settings.autosave_seconds;
   return out.dump(indent);
 }
 
@@ -92,6 +95,14 @@ std::expected<Settings, std::string> settings_from_json(std::string_view text) {
   // nothing and render a frame with no pixels in it.
   settings.preview_scale = std::clamp(document.value("preview_scale", settings.preview_scale),
                                       kMinPreviewScale, kMaxPreviewScale);
+  settings.still_length = std::clamp(document.value("still_length", settings.still_length),
+                                     kMinStillLength, kMaxStillLength);
+  settings.transition_length =
+      std::clamp(document.value("transition_length", settings.transition_length),
+                 kMinTransitionLength, kMaxTransitionLength);
+  settings.autosave_seconds =
+      std::clamp(document.value("autosave_seconds", settings.autosave_seconds),
+                 kMinAutosaveSeconds, kMaxAutosaveSeconds);
   return settings;
 }
 
