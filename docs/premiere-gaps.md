@@ -955,24 +955,26 @@ belong to the person and are a thing people carry between machines.
 | | Where | What it does |
 |---|---|---|
 | Theme | Settings ▸ Application Settings | Four built-in themes |
+| Still / transition / autosave | Settings ▸ Application Settings | The three durations with no right answer |
 | Sequence size | Project ▸ Project Settings | Presets and a typed size |
 | Frame rate | Project ▸ Project Settings | Presets and a typed rate |
 | Use proxies | Project ▸ Use Proxies | A tick |
 
-That is the whole of it. Four controls across two popups.
+**And all of it is remembered**, which was the finding this section turned on.
 
-### 5.2 The finding that matters more than the list
+### 5.2 The finding that mattered more than the list — **done**
 
-**Nothing in either popup is remembered.** There is no settings file. `App`
-holds the theme as a plain member, it is written by `set_theme` and read by
-nothing else, and every launch starts on theme zero.
+**Nothing in either popup was remembered.** There was no settings file. `App`
+held the theme as a plain member, written by `set_theme` and read by nothing
+else, and every launch started on theme zero.
 
-`%APPDATA%\Cutline` holds four things today — `recovery`, `workspaces.json`,
-`presets.json`, `bins.json` — and the pattern for writing a fifth is already
-established three times over in `editor::read_workspaces`, `read_presets` and
-`read_bins`. What is missing is the file, not the machinery.
+`settings.json` is now the fifth thing under `%APPDATA%\Cutline`, beside
+`recovery`, `workspaces.json`, `presets.json` and `bins.json`. The pattern was
+already established three times over; what was missing was the file, not the
+machinery.
 
-It is not only the theme. Every one of these resets on every launch:
+It was not only the theme. Every one of these used to reset on every launch and
+now does not:
 
 | Setting | Where it lives now |
 |---|---|
@@ -983,17 +985,32 @@ It is not only the theme. Every one of these resets on every launch:
 | Preview quality | `App::preview_scale` — the Full/Half/Quarter dropdown |
 | Pool ordering and direction | `App::browser_sort`, `App::browser_descending` |
 | Pool view | list or icons |
-| Export codec and quality | `App::export_setup` |
+| Export codec and quality | `App::export_setup` — **still not saved**, see below |
 
-The workspace is the odd one out and the proof that this is a gap rather than a
-decision: arrangements *are* saved, because somebody sat down and wrote
-`workspaces.json`. Everything else was left where it was first put.
+The workspace was the odd one out and the proof that this was a gap rather than
+a decision: arrangements *were* saved, because somebody sat down and wrote
+`workspaces.json`. Everything else had been left where it was first put.
 
-### 5.3 A bug found while auditing this
+Two things learned in the building, both worth keeping:
 
-**A still image places as a clip with no length.** Imported, `cutline.png`
-shows in the pool as `still`, dragging it to the timeline reports `Used 1` — and
-nothing is drawn on the track, at any zoom.
+**The theme is stored by name.** The list is ordered for reading rather than
+for stability, so an index would quietly mean a different theme the first time
+one was inserted. The sorts are written as names for the same reason.
+
+**An absent key takes its default rather than reading as false.** That is the
+trap this shape invites: absent booleans read as "off" would have switched
+snapping off for everybody the first time they upgraded.
+
+The export codec and quality are deliberately still not saved. They are a
+property of an *export* rather than of the person, and the export dialog is
+section 8's business — remembering them here would mean deciding in this
+section what the export presets should be.
+
+### 5.3 A bug found while auditing this — **fixed**
+
+**A still image placed as a clip with no length.** Imported, `cutline.png`
+showed in the pool as `still`, dragging it to the timeline reported `Used 1` —
+and nothing was drawn on the track, at any zoom.
 
 `probe_source` sets `duration` from what libavformat reports, and libavformat
 calls a PNG a one-frame video at its own default rate. `is_image` is set
@@ -1003,10 +1020,13 @@ then uses `media.duration` as the clip's `source_out`, and the clip is a
 fortieth of a second long.
 
 Premiere calls the fix "Still image default duration" and puts it in
-Preferences ▸ Timeline, at five seconds. Here it is not a missing preference so
+Preferences ▸ Timeline, at five seconds. Here it was not a missing preference so
 much as a missing default — the preference is what makes it adjustable
-afterwards. `kDefaultGeneratorLength` is already 5.0 for titles and mattes,
+afterwards. `kDefaultGeneratorLength` was already 5.0 for titles and mattes,
 which is the same question answered correctly one layer along.
+
+Both halves are done: `kStillLength` is the default, and Settings ▸ Defaults is
+where it is changed.
 
 ### 5.4 What Premiere has that we do not
 
@@ -1016,10 +1036,10 @@ Settings — and are not gaps. What is left, with an honest size on each:
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| **Anything is remembered at all** | every preference persists | nothing does | **model** — one file, one struct |
-| Still image duration | Timeline ▸ default duration | none, and broken (§5.3) | wiring |
-| Transition durations | Timeline ▸ video and audio defaults | `kPreferredLength`, 1.0 s, fixed | wiring |
-| Auto Save interval | Auto Save ▸ every N minutes | `kAutosaveInterval`, 60 s, fixed | wiring |
+| ~~**Anything is remembered at all**~~ | every preference persists | **done** — `settings.json` | — |
+| ~~Still image duration~~ | Timeline ▸ default duration | **done** — Settings ▸ Defaults | — |
+| ~~Transition durations~~ | Timeline ▸ video and audio defaults | **done** — one length, not two | — |
+| ~~Auto Save interval~~ | Auto Save ▸ every N minutes | **done** — Settings ▸ Defaults | — |
 | Auto Save versions kept | Auto Save ▸ maximum versions | one copy per document, no history | control |
 | Undo depth | historically a preference | `History` limit, 100, fixed | wiring |
 | Label colours and names | Labels ▸ eight named colours, editable | a fixed palette, names not editable | control |
@@ -1035,13 +1055,19 @@ Settings — and are not gaps. What is left, with an honest size on each:
 | Timecode display format | Project Settings ▸ display format | timecode only, no drop-frame | model |
 | Scratch disks | Project Settings ▸ Scratch Disks | proxies go beside the footage, nothing else is written | wiring |
 
-### 5.5 The shape this should take
+Premiere keeps a *separate* default duration for video and for audio
+transitions. There is one here, because there is one `default_transition_length`
+and nothing yet distinguishes an audio join from a video one at the moment a
+transition is added. Splitting it is a row's worth of work whenever somebody
+wants different lengths; nobody has.
 
-**One file, `settings.json`, beside the other three**, holding what belongs to
-the person. The three existing readers are the template: a struct, a read that
-treats absence as "nobody has set anything yet", and a write on change. That
-single commit closes the row that matters most and makes every other row here a
-matter of adding a field.
+### 5.5 The shape this took, and what is left
+
+**One file, `settings.json`, beside the other three.** The three existing
+readers were the template: a struct, a read that treats absence as "nobody has
+set anything yet", and a write on change. That commit closed the row that
+mattered most and made every other row here a matter of adding a field — which
+is exactly how the durations went in, one commit later.
 
 **Preferences and per-project settings must not end up in one dialog.** The
 sequence size belongs to the cut and travels with it; the theme does not. They
