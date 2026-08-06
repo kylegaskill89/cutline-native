@@ -385,6 +385,23 @@ constexpr UINT kUpdateChanged = WM_APP + 2;
 /// into the media rebuild would mean a filmstrip arriving could apply one.
 constexpr UINT kProxyChanged = WM_APP + 3;
 
+/// Which settings window: the person's, or the cut's.
+enum class SettingsKind {
+  /// Premiere's Preferences. Belongs to the person, saved in `settings.json`.
+  Application,
+  /// Premiere's Project Settings. Belongs to the cut, saved inside it.
+  Project,
+};
+
+struct App;
+
+/// One category down the side of a settings window, and what it fills the pane
+/// with when it is chosen.
+struct SettingsPage {
+  std::string name;
+  void (*build)(App& app, cutline::ui::Box& into) = nullptr;
+};
+
 /// One real window: its widgets, its pixels, and where the two meet.
 ///
 /// The main window is one of these and every torn-out panel is another. Kept as
@@ -618,6 +635,17 @@ struct App {
   /// Where the settings file is, so a test or a portable copy can point
   /// somewhere else without the writing having to be told twice.
   std::filesystem::path settings_file = cutline::editor::default_settings_path();
+
+  /// The settings window, when one is open. One at a time, whichever kind:
+  /// they are modal, and two modals would each be waiting for the other.
+  std::unique_ptr<Shell> settings_window;
+  SettingsKind settings_kind = SettingsKind::Application;
+  /// Which category is showing, and the box its page fills.
+  std::size_t settings_page = 0;
+  Box* settings_body = nullptr;
+  /// The category buttons, so the chosen one can be lit without rebuilding the
+  /// list — which would destroy the button whose click is still running.
+  std::vector<Button*> settings_tabs;
 
   /// The preferences, as read and as written.
   ///
@@ -933,10 +961,13 @@ struct App {
   [[nodiscard]] std::vector<Shell*> shells() {
     std::vector<Shell*> all{&main};
     for (const std::unique_ptr<Shell>& shell : floats) all.push_back(shell.get());
-#if CUTLINE_HAVE_PREVIEW
     // Included so it is painted and invalidated with the rest, and kept out of
     // `floats` so the layout reconciler does not treat it as a torn-out panel
-    // and close it.
+    // and close it. Leaving it out is what made the settings window draw once
+    // and then never again: its category buttons worked, and nothing on screen
+    // ever said so.
+    if (settings_window != nullptr) all.push_back(settings_window.get());
+#if CUTLINE_HAVE_PREVIEW
     if (export_window != nullptr) all.push_back(export_window.get());
 #endif
     return all;
@@ -1010,6 +1041,9 @@ void toggle_snapping(App& app);
 void choose_preview_scale(App& app, double scale);
 void invalidate_playback(App& app);
 void open_export_dialog(App& app);
+void open_settings_dialog(App& app, SettingsKind kind);
+void close_settings_dialog(App& app);
+void refresh_settings_page(App& app);
 void poll_export(App& app);
 void settle_export(App& app);
 void toggle_playback(App& app);
@@ -4388,26 +4422,39 @@ constexpr std::array<double, 7> kFrameRates{23.976, 24.0, 25.0, 29.97, 30.0, 50.
 /// `open_popup` takes any widget, and a second real window would bring its own
 /// message loop, its own close path and its own way of being left open behind
 /// the editor.
-[[nodiscard]] std::unique_ptr<Widget> build_project_settings_popup(App& app) {
-  auto panel = std::make_unique<Panel>();
+/// Where a popup opens under the menu bar, at its left edge.
+///
+/// Not at the pointer, and not over the bar it came from — a panel that covers
+/// the menu it was opened from hides the thing you would click to close it.
+[[nodiscard]] constexpr Rect settings_anchor() noexcept { return Rect{8.0, 72.0, 0.0, 0.0}; }
+
+// --------------------------------------------------------------- settings --
+//
+// Premiere keeps preferences and project settings in two separate windows, and
+// so does this: one belongs to the person and outlives every project, the other
+// travels with the cut and is saved inside it. A single Settings window would
+// quietly write half its contents to one place and half to another, which is
+// the one arrangement nobody could reason about.
+//
+// Each page fills a container the dialog owns rather than being a widget tree
+// of its own, so switching category rebuilds one box instead of the window.
+
+/// The sequence's shape. Premiere's Project Settings ▸ General.
+void build_sequence_page(App& app, Box& into) {
   // The current size in the heading, because the presets below only show which
   // one is chosen and a sequence at a typed size matches none of them.
-  panel->emplace<Label>("Sequence size — " + canvas_label(app.session.project()))
-      .set_bold(true);
+  into.emplace<Label>("Sequence size — " + canvas_label(app.session.project())).set_bold(true);
 
   for (const CanvasPreset& preset : kCanvasPresets) {
-    auto& row = panel->emplace<Button>(
+    auto& row = into.emplace<Button>(
         std::string(preset.name) + "  " + std::to_string(preset.width) + "x" +
             std::to_string(preset.height),
-        [&app, preset] {
-          if (app.main.host != nullptr) app.main.host->close_popup();
-          apply_canvas(app, preset.width, preset.height);
-        });
+        [&app, preset] { apply_canvas(app, preset.width, preset.height); });
     row.set_selected(preset.width == app.session.project().canvas_w &&
                      preset.height == app.session.project().canvas_h);
   }
 
-  auto& custom = panel->emplace<Box>(Axis::Horizontal);
+  auto& custom = into.emplace<Box>(Axis::Horizontal);
   auto& width = custom.emplace<TextField>(std::to_string(app.session.project().canvas_w));
   custom.emplace<Label>("x").set_small(true);
   auto& height = custom.emplace<TextField>(std::to_string(app.session.project().canvas_h));
@@ -4423,108 +4470,259 @@ constexpr std::array<double, 7> kFrameRates{23.976, 24.0, 25.0, 29.97, 30.0, 50.
             std::errc{}) {
       return;
     }
-    if (app.main.host != nullptr) app.main.host->close_popup();
     apply_canvas(app, wide, tall);
   });
 
-  panel->emplace<Label>("Frame rate").set_bold(true);
-  auto& rates = panel->emplace<Box>(Axis::Horizontal);
-  for (const double rate : kFrameRates) {
-    auto& choice = rates.emplace<Button>(fps_label(rate), [&app, rate] {
-      if (app.main.host != nullptr) app.main.host->close_popup();
-      apply_fps(app, rate);
-    });
-    // Compared with a tolerance: 23.976 is not the number the file holds, and
-    // a preset that never looks chosen is one nobody trusts they pressed.
-    choice.set_selected(std::abs(app.session.project().fps - rate) < 0.005);
-  }
+  into.emplace<Label>("Frame rate").set_bold(true);
 
-  auto& own = panel->emplace<Box>(Axis::Horizontal);
-  auto& typed = own.emplace<TextField>(fps_label(app.session.project().fps));
-  own.emplace<Button>("Set", [&app, field = &typed] {
+  // A dropdown rather than a row of seven buttons. Seven abreast fitted while
+  // this was a popup that grew to its contents, and `--check` found four of
+  // them squeezed the moment it became a window with a width — and a
+  // seven-way exclusive choice is what a dropdown is for anyway, which is what
+  // Premiere uses here.
+  auto& rates = into.emplace<Box>(Axis::Horizontal);
+  std::vector<std::string> names;
+  std::size_t chosen = 0;
+  for (std::size_t i = 0; i < kFrameRates.size(); ++i) {
+    names.push_back(fps_label(kFrameRates[i]));
+    // Compared with a tolerance: 23.976 is not the number the file holds, and a
+    // preset that never looks chosen is one nobody trusts they pressed.
+    if (std::abs(app.session.project().fps - kFrameRates[i]) < 0.005) chosen = i;
+  }
+  auto& choice = rates.emplace<Dropdown>(std::move(names), chosen);
+  choice.set_on_change([&app](std::size_t index) {
+    if (index < kFrameRates.size()) apply_fps(app, kFrameRates[index]);
+  });
+
+  rates.emplace<Spacer>();
+  auto& typed = rates.emplace<TextField>(fps_label(app.session.project().fps));
+  rates.emplace<Button>("Set", [&app, field = &typed] {
     double rate = 0.0;
-    if (std::from_chars(field->text().data(), field->text().data() + field->text().size(),
-                        rate)
+    if (std::from_chars(field->text().data(), field->text().data() + field->text().size(), rate)
             .ec != std::errc{}) {
       return;
     }
-    if (app.main.host != nullptr) app.main.host->close_popup();
     apply_fps(app, rate);
   });
-
-  return panel;
 }
 
-/// Where a settings popup opens: under the menu bar, at its left edge.
-///
-/// Not at the pointer, and not over the bar it came from — a panel that covers
-/// the menu it was opened from hides the thing you would click to close it.
-[[nodiscard]] constexpr Rect settings_anchor() noexcept { return Rect{8.0, 72.0, 0.0, 0.0}; }
-
-/// The application's own settings, which belong to the person rather than to
-/// the project: the theme, and whatever else is a preference rather than a
-/// property of what is being edited.
-[[nodiscard]] std::unique_ptr<Widget> build_application_settings_popup(App& app) {
-  auto panel = std::make_unique<Panel>();
-  panel->emplace<Label>("Theme").set_bold(true);
-
+/// The theme. Premiere's Preferences ▸ Appearance.
+void build_appearance_page(App& app, Box& into) {
+  into.emplace<Label>("Theme").set_bold(true);
   for (std::size_t i = 0; i < built_in_themes().size(); ++i) {
-    auto& choice = panel->emplace<Button>(built_in_themes()[i].name, [&app, i] {
-      // Closed on the way, so nothing here outlives the popup. The theme
-      // buttons used to be kept in a list on `App` and set from `set_theme`;
-      // in a popup that list would be a set of pointers into a widget tree
-      // that has already been destroyed.
-      if (app.main.host != nullptr) app.main.host->close_popup();
-      set_theme(app, i);
-    });
+    auto& choice =
+        into.emplace<Button>(built_in_themes()[i].name, [&app, i] { set_theme(app, i); });
     choice.set_selected(i == app.theme);
   }
+}
 
-  // The three with no right answer. Everything else fixed in this application
-  // was chosen against a measurement written down beside it, and a control
-  // offering somebody a worse answer than the measured one only makes bad
-  // sessions.
-  panel->emplace<Label>("Defaults").set_bold(true);
+/// One labelled number on a settings page.
+///
+/// Written once because rows of the same shape copied out three times are three
+/// places for the units to drift apart.
+void duration_row(App& app, Box& into, const char* label, double value, double smallest,
+                  double largest, const char* suffix, std::function<void(double)> keep) {
+  auto& row = into.emplace<Box>(Axis::Horizontal);
+  row.emplace<Label>(label).set_small(true);
+  row.emplace<Spacer>();
 
-  /// One labelled number. Written once because three rows of the same shape
-  /// copied out three times is three places for the units to drift apart.
-  const auto duration_row = [&app, &panel](const char* label, double value, double smallest,
-                                           double largest, const char* suffix,
-                                           std::function<void(double)> keep) {
-    auto& row = panel->emplace<Box>(Axis::Horizontal);
-    row.emplace<Label>(label).set_small(true);
-    row.emplace<Spacer>();
+  auto& number = row.emplace<cutline::ui::NumericField>(
+      cutline::ui::ValueRange{.minimum = smallest, .maximum = largest}, value);
+  number.set_decimals(suffix == std::string_view("s") ? 2 : 0);
+  number.set_suffix(suffix);
+  // Committed rather than changed, so dragging the number does not write the
+  // file once per pixel.
+  number.set_on_commit([&app, keep = std::move(keep)](double set) {
+    keep(set);
+    save_settings(app);
+  });
+}
 
-    auto& number = row.emplace<cutline::ui::NumericField>(
-        cutline::ui::ValueRange{.minimum = smallest, .maximum = largest}, value);
-    number.set_decimals(suffix == std::string_view("s") ? 2 : 0);
-    number.set_suffix(suffix);
-    // Committed rather than changed, so dragging the number does not write the
-    // file once per pixel.
-    number.set_on_commit([&app, keep = std::move(keep)](double set) {
-      keep(set);
-      save_settings(app);
-    });
-    return &number;
-  };
-
-  duration_row("Still image", app.settings.still_length, cutline::editor::kMinStillLength,
-               cutline::editor::kMaxStillLength, "s",
+/// How long the things with no length of their own last. Premiere's
+/// Preferences ▸ Timeline.
+void build_timeline_page(App& app, Box& into) {
+  into.emplace<Label>("Default durations").set_bold(true);
+  duration_row(app, into, "Still image", app.settings.still_length,
+               cutline::editor::kMinStillLength, cutline::editor::kMaxStillLength, "s",
                [&app](double set) { app.settings.still_length = set; });
-  duration_row("Transition", app.settings.transition_length,
-               cutline::editor::kMinTransitionLength, cutline::editor::kMaxTransitionLength,
-               "s", [&app](double set) { app.settings.transition_length = set; });
-  duration_row("Recovery copy every",
-               static_cast<double>(app.settings.autosave_seconds),
-               cutline::editor::kMinAutosaveSeconds, cutline::editor::kMaxAutosaveSeconds, "sec",
-               [&app](double set) { app.settings.autosave_seconds = static_cast<int>(set); });
+  duration_row(app, into, "Transition", app.settings.transition_length,
+               cutline::editor::kMinTransitionLength, cutline::editor::kMaxTransitionLength, "s",
+               [&app](double set) { app.settings.transition_length = set; });
 
   // Said rather than left to be discovered. A still already on the timeline
   // keeps the length it was given, and somebody who changes this expecting the
   // sequence to rearrange itself has to be told it will not.
-  auto& note = panel->emplace<Label>("These apply to what you place next.");
-  note.set_small(true);
-  return panel;
+  into.emplace<Label>("These apply to what you place next.").set_small(true);
+}
+
+/// The recovery copy. Premiere's Preferences ▸ Auto Save.
+void build_autosave_page(App& app, Box& into) {
+  into.emplace<Label>("Recovery").set_bold(true);
+  duration_row(app, into, "Write a copy every",
+               static_cast<double>(app.settings.autosave_seconds),
+               cutline::editor::kMinAutosaveSeconds, cutline::editor::kMaxAutosaveSeconds, "sec",
+               [&app](double set) { app.settings.autosave_seconds = static_cast<int>(set); });
+  into.emplace<Label>("Copies are written beside the application's own data.").set_small(true);
+}
+
+/// The pages a settings window offers, in the order they are listed.
+[[nodiscard]] std::vector<SettingsPage> pages_for(SettingsKind kind) {
+  if (kind == SettingsKind::Project) {
+    // One for now. Premiere's Project Settings also has Scratch Disks and
+    // Ingest Settings, and neither has anything to say here yet — the list down
+    // the side appears on its own once a second page does.
+    return {SettingsPage{"General", build_sequence_page}};
+  }
+  return {SettingsPage{"Appearance", build_appearance_page},
+          SettingsPage{"Timeline", build_timeline_page},
+          SettingsPage{"Auto Save", build_autosave_page}};
+}
+
+/// Fills the pane with whichever category is chosen, and lights that one.
+void refresh_settings_page(App& app) {
+  if (app.settings_body == nullptr) return;
+
+  // `clear_children` drops the host's own references on the way, which is what
+  // makes this safe from inside a category button's click: the button that
+  // asked is not in the pane, but a control the pointer was resting on might
+  // be.
+  app.settings_body->clear_children();
+
+  const std::vector<SettingsPage> pages = pages_for(app.settings_kind);
+  if (app.settings_page < pages.size() && pages[app.settings_page].build != nullptr) {
+    pages[app.settings_page].build(app, *app.settings_body);
+  }
+  for (std::size_t i = 0; i < app.settings_tabs.size(); ++i) {
+    if (app.settings_tabs[i] != nullptr) app.settings_tabs[i]->set_selected(i == app.settings_page);
+  }
+
+  if (app.settings_window != nullptr && app.settings_window->host != nullptr) {
+    app.settings_window->host->request_layout();
+    app.settings_window->dirty = true;
+  }
+}
+
+void close_settings_dialog(App& app);
+
+/// The settings window: a list of categories down the side, a pane beside it.
+[[nodiscard]] std::unique_ptr<Widget> build_settings_interface(App& app, Shell* shell,
+                                                               SettingsKind kind) {
+  const std::vector<SettingsPage> pages = pages_for(kind);
+  const std::string title =
+      kind == SettingsKind::Project ? "Project Settings" : "Preferences";
+
+  auto root = std::make_unique<Box>(Axis::Vertical);
+  root->set_spacing(0.0);
+
+  auto& caption = root->emplace<TitleBar>(title);
+  if (shell != nullptr) shell->title_bar = &caption;
+  caption.emplace<CaptionButton>(CaptionButton::Kind::Close,
+                                 [&app] { close_settings_dialog(app); });
+
+  auto& split = root->emplace<Box>(Axis::Horizontal);
+  split.set_padding(Edges{12.0, 12.0, 12.0, 12.0});
+  split.set_spacing(12.0);
+
+  app.settings_tabs.clear();
+  // Only when there is a choice to make. A list of one is a heading pretending
+  // to be a control, and Project Settings has one page until Scratch Disks
+  // gives it a second.
+  if (pages.size() > 1) {
+    auto& tabs = split.emplace<Box>(Axis::Vertical);
+    tabs.set_spacing(2.0);
+    for (std::size_t i = 0; i < pages.size(); ++i) {
+      auto& tab = tabs.emplace<Button>(pages[i].name, [&app, i] {
+        if (app.settings_page == i) return;
+        app.settings_page = i;
+        refresh_settings_page(app);
+      });
+      tab.set_selected(i == app.settings_page);
+      app.settings_tabs.push_back(&tab);
+    }
+    tabs.emplace<Spacer>();
+  }
+
+  auto& body = split.emplace<Box>(Axis::Vertical);
+  body.set_spacing(8.0);
+  app.settings_body = &body;
+  return root;
+}
+
+/// Opens one, or brings the open one forward.
+void open_settings_dialog(App& app, SettingsKind kind) {
+  if (app.settings_window != nullptr) {
+    // Already open. Switching kind rather than opening a second window: two
+    // modals would each be waiting for the other to be answered.
+    if (app.settings_kind != kind) {
+      close_settings_dialog(app);
+    } else {
+      SetForegroundWindow(app.settings_window->window);
+      return;
+    }
+  }
+
+  auto shell = std::make_unique<Shell>();
+  shell->app = &app;
+  shell->is_dialog = true;
+  app.settings_kind = kind;
+  app.settings_page = 0;
+  shell->host = std::make_unique<WidgetHost>(build_settings_interface(app, shell.get(), kind));
+
+  // Centred on the main window, which is where a dialog belongs and where the
+  // eye already is.
+  RECT owner{};
+  GetWindowRect(app.main.window, &owner);
+  // Wide enough for the widest page, which `--check` measures rather than
+  // anybody guessing: at 460 it found the pane short of the sentence under the
+  // durations by forty pixels, in every theme.
+  const int width = kind == SettingsKind::Project ? 460 : 540;
+  const int height = kind == SettingsKind::Project ? 430 : 330;
+  const int x = owner.left + ((owner.right - owner.left) - width) / 2;
+  const int y = owner.top + ((owner.bottom - owner.top) - height) / 2;
+
+  const std::wstring title =
+      kind == SettingsKind::Project ? L"Project Settings" : L"Preferences";
+  const HWND window =
+      CreateWindowExW(WS_EX_TOOLWINDOW, kWindowClass, title.c_str(), WS_POPUP | WS_THICKFRAME, x,
+                      y, width, height, app.main.window, nullptr, GetModuleHandleW(nullptr),
+                      nullptr);
+  if (window == nullptr) return;
+
+  shell->window = window;
+  SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(shell.get()));
+
+  const MARGINS shadow{0, 0, 1, 0};
+  DwmExtendFrameIntoClientArea(window, &shadow);
+  SetWindowPos(window, nullptr, 0, 0, 0, 0,
+               SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+
+  app.settings_window = std::move(shell);
+  refresh_settings_page(app);
+
+  // Modal, the way Premiere's Preferences is. Disabling the owner is what makes
+  // it one on Windows, and every path out of here goes through
+  // `close_settings_dialog` so the owner cannot be left disabled — an editor
+  // that ignores every click is a far worse fault than a dialog left open.
+  EnableWindow(app.main.window, FALSE);
+  ShowWindow(window, SW_SHOW);
+  SetForegroundWindow(window);
+}
+
+void close_settings_dialog(App& app) {
+  if (app.settings_window == nullptr) return;
+
+  app.settings_body = nullptr;
+  app.settings_tabs.clear();
+
+  const HWND window = app.settings_window->window;
+  app.settings_window.reset();
+  // The owner comes back *before* the dialog goes, so the system has an enabled
+  // window to give the foreground to. Re-enabling afterwards leaves the focus
+  // on some other application, which reads as the editor disappearing.
+  EnableWindow(app.main.window, TRUE);
+  SetForegroundWindow(app.main.window);
+  if (window != nullptr) DestroyWindow(window);
+  mark_dirty(app);
 }
 
 void choose_preview_scale(App& app, double scale) {
@@ -8013,15 +8211,13 @@ void refresh_dock(App& app) {
       // this the only way to stop it is to close the application.
       {"Stop Making Proxies", [app] { if (app != nullptr) stop_making_proxies(*app); }},
       {"Project Settings...", [app] {
-         if (app == nullptr || app->main.host == nullptr) return;
-         app->main.host->open_popup(build_project_settings_popup(*app), settings_anchor());
+         if (app != nullptr) open_settings_dialog(*app, SettingsKind::Project);
        }},
   });
 
   menu("Settings", {
-      {"Application Settings...", [app] {
-         if (app == nullptr || app->main.host == nullptr) return;
-         app->main.host->open_popup(build_application_settings_popup(*app), settings_anchor());
+      {"Preferences...", [app] {
+         if (app != nullptr) open_settings_dialog(*app, SettingsKind::Application);
        }},
   });
 
@@ -9195,6 +9391,15 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       const Widget* typing = shell->host->focused();
       const bool editing = typing != nullptr && typing->wants_text();
 
+      // Escape closes the settings window, which is what every modal on the
+      // platform does — and this one is genuinely modal, so without it the only
+      // way out is the one small button in its corner. Not while a field has
+      // the keyboard: there, Escape abandons the edit.
+      if (wparam == VK_ESCAPE && !editing && app->settings_window.get() == shell) {
+        close_settings_dialog(*app);
+        return 0;
+      }
+
       if (!editing && wparam >= '1' && wparam <= '9') {
         set_theme(*app, static_cast<std::size_t>(wparam - '1'));
         return 0;
@@ -9394,9 +9599,15 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
 
     case WM_CLOSE:
 #if CUTLINE_HAVE_PREVIEW
-      // A dialog holds nothing but itself, so it simply goes.
+      // A dialog holds nothing but itself, so it simply goes. Which one it is
+      // decides what has to be undone with it — the settings window leaves the
+      // main window disabled until it is closed properly.
       if (shell->is_dialog) {
-        close_export_dialog(*app);
+        if (app->settings_window.get() == shell) {
+          close_settings_dialog(*app);
+        } else {
+          close_export_dialog(*app);
+        }
         return 0;
       }
 #endif
@@ -10026,29 +10237,42 @@ template <typename T>
         ++failures;
       }
 
-      // The settings popups, for the same reason: they live on the popup layer
-      // and nothing else would ever lay them out. Both are rows of numbers and
-      // presets, which is exactly the shape that gets squeezed in a theme with
-      // a wider font.
-      // The Window menu is here too: it is the one menu whose rows carry ticks,
-      // and a tick gutter that a theme's wider font pushes the labels out of
-      // would show up nowhere else.
-      for (int which = 0; which < 3; ++which) {
-        app.main.host->close_popup();
-        app.main.host->open_popup(which == 0   ? build_project_settings_popup(app)
-                                  : which == 1 ? build_application_settings_popup(app)
-                                               : build_window_menu(app),
-                                  settings_anchor());
-        app.main.host->update_layout(context);
-        app.main.host->paint(*painter, theme);
-        if (Widget* settings = app.main.host->popup(); settings != nullptr) {
-          walk(*settings);
-        } else {
-          std::println("{}: a settings popup did not open", theme.id);
-          ++failures;
-        }
+      // The Window menu, which is the one menu whose rows carry ticks — a tick
+      // gutter that a theme's wider font pushes the labels out of would show up
+      // nowhere else.
+      app.main.host->close_popup();
+      app.main.host->open_popup(build_window_menu(app), settings_anchor());
+      app.main.host->update_layout(context);
+      app.main.host->paint(*painter, theme);
+      if (Widget* menu = app.main.host->popup(); menu != nullptr) {
+        walk(*menu);
+      } else {
+        std::println("{}: the window menu did not open", theme.id);
+        ++failures;
       }
       app.main.host->close_popup();
+
+      // The settings windows, every page of both. They are real windows now and
+      // nothing else here would ever lay one out — and they are rows of numbers
+      // and presets, which is exactly the shape a theme with a wider font
+      // squeezes. Laid out in a host of their own at the size the dialog opens
+      // at, since that is the only width they ever have.
+      for (const SettingsKind kind : {SettingsKind::Application, SettingsKind::Project}) {
+        const std::vector<SettingsPage> pages = pages_for(kind);
+        for (std::size_t page = 0; page < pages.size(); ++page) {
+          app.settings_kind = kind;
+          app.settings_page = page;
+          WidgetHost dialog(build_settings_interface(app, nullptr, kind));
+          refresh_settings_page(app);
+          dialog.resize(Rect{0.0, 0.0, kind == SettingsKind::Project ? 460.0 : 540.0,
+                             kind == SettingsKind::Project ? 430.0 : 330.0},
+                        context);
+          dialog.paint(*painter, theme);
+          walk(dialog.root());
+        }
+      }
+      app.settings_body = nullptr;
+      app.settings_tabs.clear();
     }
 
     // And the theme has to reach the pixels. Sampling a scatter of points
