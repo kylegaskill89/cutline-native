@@ -164,6 +164,18 @@ struct Media {
   std::optional<int> height;
   std::optional<double> fps;
 
+  /// A small copy of the same footage, to edit against.
+  ///
+  /// Empty when there is none, which is the normal state — a proxy is made
+  /// deliberately and for the sources that need one.
+  ///
+  /// It is the *same footage*: the same length, the same frames at the same
+  /// times, differing only in how much work a frame costs. That is what lets it
+  /// stand in for the original without a clip knowing, and it is why nothing
+  /// but the path is kept here. A file that is not the same footage is not a
+  /// proxy, and no amount of bookkeeping would make it safe to cut against.
+  std::string proxy_path;
+
   /// In and out marked on the source itself, in source time.
   ///
   /// These belong to the asset rather than to whatever panel is showing it, so
@@ -505,6 +517,18 @@ struct Project {
   /// before the limiter. Ahead of the limiter so that turning the master down
   /// gets a project *out* of limiting rather than quietly leaving it in.
   double master_gain = 1.0;
+
+  /// Whether to cut against proxies where a source has one.
+  ///
+  /// Premiere's "Toggle Proxies", and a property of the *project* rather than
+  /// of the machine, because it is a thing you turn on to work and off to
+  /// check. Sources with no proxy are unaffected either way, so a project part
+  /// way through making them shows the small ones and the originals side by
+  /// side and behaves the same.
+  ///
+  /// Export ignores it entirely — see `FrameRenderer::set_use_proxies`, which
+  /// defaults to off so that nothing has to remember to turn it off.
+  bool use_proxies = false;
 
   std::vector<Media> media;
   /// Video tracks first (topmost), then audio. Note that video tracks composite

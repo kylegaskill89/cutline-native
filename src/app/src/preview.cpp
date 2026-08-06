@@ -107,6 +107,13 @@ std::expected<ui::ImageView, std::string> ProjectPreview::frame_at(const core::P
     return std::unexpected(matched.error());
   }
 
+  // The preview is the one thing that asks for proxies, and it asks every
+  // frame from the project's own setting — so turning them on or off takes
+  // effect at once rather than at whatever moment something remembers to push
+  // it. Export never asks, which is what keeps the small copy out of the file
+  // it writes.
+  impl_->renderer->set_use_proxies(project.use_proxies);
+
   if (const auto rendered = impl_->renderer->render(project, t); !rendered.has_value()) {
     return std::unexpected(rendered.error());
   }
@@ -127,6 +134,13 @@ std::expected<ui::TextureView, std::string> ProjectPreview::texture_at(
   if (const auto matched = resize(project.canvas_w, project.canvas_h); !matched.has_value()) {
     return std::unexpected(matched.error());
   }
+
+  // The preview is the one thing that asks for proxies, and it asks every
+  // frame from the project's own setting — so turning them on or off takes
+  // effect at once rather than at whatever moment something remembers to push
+  // it. Export never asks, which is what keeps the small copy out of the file
+  // it writes.
+  impl_->renderer->set_use_proxies(project.use_proxies);
 
   if (const auto rendered = impl_->renderer->render(project, t); !rendered.has_value()) {
     return std::unexpected(rendered.error());

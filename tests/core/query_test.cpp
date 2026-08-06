@@ -28,6 +28,27 @@ Track make_track(std::string id, TrackKind kind) {
 
 // ------------------------------------------------------------ clip timing --
 
+// ----------------------------------------------------------------- proxies --
+
+TEST(SourcePath, WithoutAProxyItIsAlwaysTheOriginal) {
+  Media m;
+  m.path = "D:/footage/wide.mp4";
+  EXPECT_EQ(source_path(m, false), "D:/footage/wide.mp4");
+  EXPECT_EQ(source_path(m, true), "D:/footage/wide.mp4")
+      << "asking for a proxy that does not exist must not give nothing";
+}
+
+TEST(SourcePath, TheProxyIsUsedOnlyWhenItIsAskedFor) {
+  Media m;
+  m.path = "D:/footage/wide.mp4";
+  m.proxy_path = "D:/proxies/wide.mp4";
+
+  EXPECT_EQ(source_path(m, true), "D:/proxies/wide.mp4");
+  // The one mistake this feature must never make.
+  EXPECT_EQ(source_path(m, false), "D:/footage/wide.mp4")
+      << "the small copy was chosen when nobody asked for it";
+}
+
 TEST(ClipTiming, DurationFollowsSourceSpanAndSpeed) {
   Clip c = make_clip();
   EXPECT_DOUBLE_EQ(source_span(c), 4.0);

@@ -144,6 +144,41 @@ TEST_F(WithFootage, DifferentTimesGiveDifferentFrames) {
   EXPECT_NE(first, second) << "the preview showed the same frame at two different times";
 }
 
+TEST_F(WithFootage, ProxiesAreReadFromOnlyWhenTheProjectAsks) {
+  // Asserted through a proxy path that is deliberately not there: with proxies
+  // on the source cannot be opened and is reported missing, and with them off
+  // it renders. That says which file was opened without needing a second real
+  // one — and it says the switch is honoured *per render*, since the same
+  // renderer answers both ways.
+  const auto source = probe_source(path_);
+  ASSERT_TRUE(source.has_value());
+
+  core::Project project = editor::import_and_place(core::empty_project(1, 2), *source, 0.0);
+  project.canvas_w = 320;
+  project.canvas_h = 180;
+  ASSERT_FALSE(project.media.empty());
+  ASSERT_FALSE(project.tracks.front().clips.empty()) << "nothing was placed to decode";
+
+  auto preview = ProjectPreview::create(project.canvas_w, project.canvas_h);
+  if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
+
+  ASSERT_TRUE((*preview)->frame_at(project, 0.5).has_value());
+  EXPECT_TRUE((*preview)->missing_media().empty()) << "the original would not open";
+
+  project.media[0].proxy_path = "Z:/definitely/not/here.mp4";
+  project.use_proxies = true;
+  ASSERT_TRUE((*preview)->frame_at(project, 0.5).has_value());
+  EXPECT_FALSE((*preview)->missing_media().empty())
+      << "the proxy was not read from, so the switch does nothing";
+
+  // And back, which is the case that needs the open decoder dropped: it is
+  // holding the wrong file.
+  project.use_proxies = false;
+  ASSERT_TRUE((*preview)->frame_at(project, 0.5).has_value());
+  EXPECT_TRUE((*preview)->missing_media().empty())
+      << "turning proxies off left the renderer on the proxy";
+}
+
 TEST_F(WithFootage, TheRendererFollowsTheSequenceSize) {
   const auto source = probe_source(path_);
   ASSERT_TRUE(source.has_value());

@@ -1,5 +1,6 @@
 #include "cutline/engine/frame_renderer.hpp"
 
+#include "cutline/core/query.hpp"
 #include "cutline/media/av_headers.hpp"
 #include "cutline/media/decoder.hpp"
 #include "cutline/render/effect_passes.hpp"
@@ -470,6 +471,10 @@ struct FrameRenderer::Impl {
   /// so they live as long as the timeline keeps asking for them.
   std::map<std::string, Source> sources;
 
+  /// Whether to read from proxies. Off unless somebody asks, so that export —
+  /// which never asks — cannot write the small copy by forgetting something.
+  bool use_proxies = false;
+
   std::vector<std::string> missing;
 
   /// Frame views must outlive the compose call that reads them, and they point
@@ -705,7 +710,21 @@ void FrameRenderer::Impl::decode_ahead(Source& source, bool budgeted) {
 
 const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double time,
                                             const media::VideoDecoder** from) {
+  const std::string& wanted = core::source_path(media, use_proxies);
+
   auto found = sources.find(media.id);
+  // Open on a different file from the one this source now means. Proxies being
+  // switched on or off is the case, and a relink is the other; sources are kept
+  // by media id, which is right until the file behind that id changes.
+  //
+  // Dropped rather than reported, because the answer is simply to open the
+  // right one — and left to the caller it would be a rule somebody has to
+  // remember, which is the same rule that would be forgotten.
+  if (found != sources.end() && found->second.path != wanted) {
+    sources.erase(found);
+    found = sources.end();
+  }
+
   if (found == sources.end()) {
     Source source;
     // Decided here because the decoder's surface pool is sized when it opens
@@ -733,8 +752,8 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
     //
     // Software is still the floor, and `open` falls to it on its own when
     // neither works.
-    source.path = media.path;
-    auto opened = open_decoder(media.path, keeping);
+    source.path = wanted;
+    auto opened = open_decoder(wanted, keeping);
     if (!opened.has_value()) {
       source.usable = false;
     } else {
@@ -893,6 +912,9 @@ const std::vector<std::string>& FrameRenderer::missing_media() const noexcept {
 FrameRenderer::DecodeStats FrameRenderer::decode_stats() const noexcept { return impl_->stats; }
 
 void FrameRenderer::release_sources() { impl_->sources.clear(); }
+
+void FrameRenderer::set_use_proxies(bool use_proxies) { impl_->use_proxies = use_proxies; }
+bool FrameRenderer::use_proxies() const noexcept { return impl_->use_proxies; }
 
 std::expected<std::unique_ptr<FrameRenderer>, std::string> FrameRenderer::create(
     std::shared_ptr<gpu::Device> device, int canvas_width, int canvas_height) {

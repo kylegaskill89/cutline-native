@@ -21,6 +21,15 @@ namespace cutline::core {
 /// True when a media has no real timeline source — a still, GIF, or generated.
 [[nodiscard]] bool is_still_like(const Media& m) noexcept;
 
+/// Which file to read this source from: the proxy when one exists and proxies
+/// are wanted, and the original otherwise.
+///
+/// One function so there is one answer. A renderer that asked "is there a
+/// proxy" in one place and "are proxies on" in another would eventually
+/// disagree with itself, and disagreeing means exporting the small copy — which
+/// is the one mistake this feature must never make.
+[[nodiscard]] const std::string& source_path(const Media& m, bool prefer_proxy) noexcept;
+
 // ------------------------------------------------------------- clip timing --
 
 /// Playback speed, guarded to always be positive.

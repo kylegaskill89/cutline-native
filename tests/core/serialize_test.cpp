@@ -263,6 +263,29 @@ TEST(Serialize, AnUnmarkedSourceStaysUnmarkedRatherThanGainingZeroes) {
   EXPECT_FALSE(loaded->project.media[0].out_point.has_value());
 }
 
+TEST(Serialize, AProxyAndTheSwitchForItSurviveTheFile) {
+  Project p = empty_project();
+  p.use_proxies = true;
+  Media m;
+  m.id = "m1";
+  m.path = "D:/footage/wide.mp4";
+  m.proxy_path = "D:/proxies/wide.mp4";
+  p.media = {m};
+
+  const auto loaded = from_json(to_json(p));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_TRUE(loaded->project.use_proxies);
+  EXPECT_EQ(loaded->project.media[0].proxy_path, "D:/proxies/wide.mp4");
+}
+
+TEST(Serialize, AProjectWrittenBeforeProxiesReadsAsHavingNone) {
+  // The default has to be off, or an older project would come back cutting
+  // against small copies that do not exist.
+  const auto loaded = from_json(to_json(empty_project()));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_FALSE(loaded->project.use_proxies);
+}
+
 TEST(Serialize, ReportsMissingMediaWithoutDroppingIt) {
   Project p = empty_project();
   Media m;

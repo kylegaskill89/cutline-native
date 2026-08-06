@@ -113,6 +113,16 @@ class FrameRenderer {
   /// that the cached sources are no longer the ones being asked for.
   void release_sources();
 
+  /// Whether to read from proxies where a source has one.
+  ///
+  /// **Off by default, and that is the whole design.** Export must never write
+  /// the small copy, and the way to be sure of that is for the exporter to do
+  /// nothing at all rather than to remember to turn something off. The preview
+  /// opts in, from the project's own setting; everything else gets originals
+  /// because it never asked.
+  void set_use_proxies(bool use_proxies);
+  [[nodiscard]] bool use_proxies() const noexcept;
+
   [[nodiscard]] gpu::Compositor& compositor() noexcept;
 
   /// Changes the canvas size, discarding the current contents.

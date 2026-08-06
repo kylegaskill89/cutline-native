@@ -16,6 +16,10 @@ bool is_still_like(const Media& m) noexcept {
   return m.is_image || m.is_text || m.is_color || m.is_adjustment;
 }
 
+const std::string& source_path(const Media& m, bool prefer_proxy) noexcept {
+  return prefer_proxy && !m.proxy_path.empty() ? m.proxy_path : m.path;
+}
+
 double clip_speed(const Clip& c) noexcept { return c.speed > 0.0 ? c.speed : 1.0; }
 
 double source_span(const Clip& c) noexcept { return c.source_out - c.source_in; }

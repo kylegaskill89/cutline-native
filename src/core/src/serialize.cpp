@@ -193,6 +193,7 @@ json write(const Media& m) {
   put_if_set(j, "fps", m.fps);
   put_if_set(j, "in_point", m.in_point);
   put_if_set(j, "out_point", m.out_point);
+  if (!m.proxy_path.empty()) j["proxy_path"] = m.proxy_path;
   return j;
 }
 
@@ -274,7 +275,8 @@ json write(const Project& p) {
   json j{{"canvas_w", p.canvas_w},
          {"canvas_h", p.canvas_h},
          {"fps", p.fps},
-         {"master_gain", p.master_gain}};
+         {"master_gain", p.master_gain},
+         {"use_proxies", p.use_proxies}};
 
   json media = json::array();
   for (const Media& m : p.media) media.push_back(write(m));
@@ -449,6 +451,7 @@ Media read_media(const json& j) {
   m.fps = read_optional<double>(j, "fps");
   m.in_point = read_optional<double>(j, "in_point");
   m.out_point = read_optional<double>(j, "out_point");
+  m.proxy_path = read_or(j, "proxy_path", std::string{});
   return m;
 }
 
@@ -541,6 +544,7 @@ Project read_project(const json& j) {
   p.canvas_h = read_or(j, "canvas_h", p.canvas_h);
   p.fps = read_or(j, "fps", p.fps);
   p.master_gain = read_or(j, "master_gain", p.master_gain);
+  p.use_proxies = read_or(j, "use_proxies", p.use_proxies);
 
   const auto media = j.find("media");
   if (media != j.end() && media->is_array()) {
