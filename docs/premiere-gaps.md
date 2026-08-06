@@ -942,6 +942,128 @@ notion of which one is open, a tab strip to switch them) and a much larger
 piece of work than the rest of this section put together. It belongs in a
 section of its own rather than as the last row of this one.
 
+## 5. Application settings
+
+Premiere keeps three separate things here and it is worth keeping them apart,
+because they have different lifetimes and belong in different files:
+**Preferences** belong to the person and outlive every project; **Project
+Settings** belong to the cut and travel with the file; **Keyboard Shortcuts**
+belong to the person and are a thing people carry between machines.
+
+### 5.1 What is here now
+
+| | Where | What it does |
+|---|---|---|
+| Theme | Settings ▸ Application Settings | Four built-in themes |
+| Sequence size | Project ▸ Project Settings | Presets and a typed size |
+| Frame rate | Project ▸ Project Settings | Presets and a typed rate |
+| Use proxies | Project ▸ Use Proxies | A tick |
+
+That is the whole of it. Four controls across two popups.
+
+### 5.2 The finding that matters more than the list
+
+**Nothing in either popup is remembered.** There is no settings file. `App`
+holds the theme as a plain member, it is written by `set_theme` and read by
+nothing else, and every launch starts on theme zero.
+
+`%APPDATA%\Cutline` holds four things today — `recovery`, `workspaces.json`,
+`presets.json`, `bins.json` — and the pattern for writing a fifth is already
+established three times over in `editor::read_workspaces`, `read_presets` and
+`read_bins`. What is missing is the file, not the machinery.
+
+It is not only the theme. Every one of these resets on every launch:
+
+| Setting | Where it lives now |
+|---|---|
+| Theme | `App::theme` |
+| Snapping | `App::snapping` — the toolbar's Snap button |
+| Looping | `App::looping` |
+| Aspect lock | `App::aspect_locked` |
+| Preview quality | `App::preview_scale` — the Full/Half/Quarter dropdown |
+| Pool ordering and direction | `App::browser_sort`, `App::browser_descending` |
+| Pool view | list or icons |
+| Export codec and quality | `App::export_setup` |
+
+The workspace is the odd one out and the proof that this is a gap rather than a
+decision: arrangements *are* saved, because somebody sat down and wrote
+`workspaces.json`. Everything else was left where it was first put.
+
+### 5.3 A bug found while auditing this
+
+**A still image places as a clip with no length.** Imported, `cutline.png`
+shows in the pool as `still`, dragging it to the timeline reports `Used 1` — and
+nothing is drawn on the track, at any zoom.
+
+`probe_source` sets `duration` from what libavformat reports, and libavformat
+calls a PNG a one-frame video at its own default rate. `is_image` is set
+correctly and `is_still_like` is honoured everywhere it matters, but nothing
+ever replaces that duration with a length worth placing. `core::place_media`
+then uses `media.duration` as the clip's `source_out`, and the clip is a
+fortieth of a second long.
+
+Premiere calls the fix "Still image default duration" and puts it in
+Preferences ▸ Timeline, at five seconds. Here it is not a missing preference so
+much as a missing default — the preference is what makes it adjustable
+afterwards. `kDefaultGeneratorLength` is already 5.0 for titles and mattes,
+which is the same question answered correctly one layer along.
+
+### 5.4 What Premiere has that we do not
+
+Premiere's Preferences has nineteen panes. Most are for things this application
+does not do — Capture, Device Control, Control Surface, Collaboration, Sync
+Settings — and are not gaps. What is left, with an honest size on each:
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| **Anything is remembered at all** | every preference persists | nothing does | **model** — one file, one struct |
+| Still image duration | Timeline ▸ default duration | none, and broken (§5.3) | wiring |
+| Transition durations | Timeline ▸ video and audio defaults | `kPreferredLength`, 1.0 s, fixed | wiring |
+| Auto Save interval | Auto Save ▸ every N minutes | `kAutosaveInterval`, 60 s, fixed | wiring |
+| Auto Save versions kept | Auto Save ▸ maximum versions | one copy per document, no history | control |
+| Undo depth | historically a preference | `History` limit, 100, fixed | wiring |
+| Label colours and names | Labels ▸ eight named colours, editable | a fixed palette, names not editable | control |
+| Default label per media type | Labels ▸ per kind | none | wiring |
+| Audio device | Audio Hardware ▸ device, latency | default output device only | control |
+| Playback preroll / postroll | Playback | none | wiring |
+| Media cache location | Media Cache | no disk cache exists | machinery |
+| Proxy settings | Ingest Settings ▸ preset, location | `kProxyHeight` and friends, fixed | wiring |
+| Memory / RAM reserved | Memory | none — the caches have fixed budgets | control |
+| Renderer choice | Graphics ▸ GPU or software | always the GPU, falls back on its own | wiring |
+| Appearance brightness | Appearance ▸ a slider | four discrete themes | control |
+| Keyboard shortcuts | fully editable, with presets | `kApplicationKeys` and `kTransportKeys`, fixed | **machinery** |
+| Timecode display format | Project Settings ▸ display format | timecode only, no drop-frame | model |
+| Scratch disks | Project Settings ▸ Scratch Disks | proxies go beside the footage, nothing else is written | wiring |
+
+### 5.5 The shape this should take
+
+**One file, `settings.json`, beside the other three**, holding what belongs to
+the person. The three existing readers are the template: a struct, a read that
+treats absence as "nobody has set anything yet", and a write on change. That
+single commit closes the row that matters most and makes every other row here a
+matter of adding a field.
+
+**Preferences and per-project settings must not end up in one dialog.** The
+sequence size belongs to the cut and travels with it; the theme does not. They
+are already two popups and should stay two — the mistake to avoid is a single
+"Settings" window that quietly saves half its contents to a different place
+from the other half.
+
+**The fixed constants are not all worth exposing.** `kThumbnailThreads`,
+`kProxyThreads` and the cache budgets were each chosen against a measurement
+and written down with the measurement beside them; a control offering somebody
+a worse answer than the measured one is a control that only creates bad
+sessions. The ones worth exposing are the ones where there is no right answer —
+durations, the autosave interval, the label palette — and those are exactly the
+ones Premiere exposes.
+
+**Keyboard shortcuts are the largest single item in this section** and probably
+larger than the rest of it together: a command table with stable names, a
+binding store, a resolver that runs before the widget tree, a conflict check,
+and a panel to edit it in. The bindings are already two tables of structs, which
+is the right starting shape, but they are `constexpr` and matched by hand in two
+places. Worth its own section rather than a row in this one.
+
 ---
 
 ## Found by audit, listed nowhere else
@@ -1004,11 +1126,16 @@ becomes too slow to work with.
 The rest of the application, in the order it seems worth walking:
 
 - ~~**Project panel**~~ — audited, and written up as section 4 above.
+- ~~**Application settings**~~ — audited, and written up as section 5 above.
 - **Audio** — the Audio Track Mixer, submixes, sends, the essential sound panel,
   loudness normalisation.
 - **Titles and graphics** — the Essential Graphics panel, layered graphics,
   responsive design, styles.
 - **Colour** — the Lumetri Color panel and its scopes workflow.
 - **Export** — presets, queue, and the media encoder relationship.
-- **Everything else** — markers with durations and comments, sequence settings,
-  keyboard customisation, workspaces beyond four, undo history panel.
+- **Sequences** — more than one per project, which section 4 ran into and
+  section 5 did not need. A list of them, which one is open, and a tab strip.
+- **Keyboard customisation** — pulled out of section 5, where it was the single
+  largest row: a command table, a binding store, a conflict check and a panel.
+- **Everything else** — markers with durations and comments, workspaces beyond
+  four, undo history panel.
