@@ -53,6 +53,13 @@ bool looks_like_media(const std::filesystem::path& path) {
          contains(kAudioExtensions, extension);
 }
 
+double placement_duration(const MediaSource& source) noexcept {
+  // An animated still is not a still here: a GIF has a real running time, and
+  // replacing it would make it loop at the wrong speed.
+  if (source.is_image && !source.is_animated) return kStillLength;
+  return source.duration;
+}
+
 const core::Media* find_media_by_path(const core::Project& project,
                                       std::string_view path) noexcept {
   if (path.empty()) return nullptr;
@@ -75,7 +82,7 @@ core::Project import_media(core::Project project, const MediaSource& source, std
   media.path = source.path;
   media.name = source.name.empty() ? std::filesystem::path(source.path).filename().string()
                                    : source.name;
-  media.duration = source.duration;
+  media.duration = placement_duration(source);
   media.has_video = source.has_video;
   media.audio_stream_count = source.audio_stream_count;
   media.is_image = source.is_image;
@@ -98,7 +105,7 @@ core::Project relink_media(core::Project project, std::string_view media_id,
   // in a new place. What is not taken is the name: it is a property of the
   // project rather than of the file, and somebody who renamed the entry has
   // already said what they want it called.
-  found->duration = source.duration;
+  found->duration = placement_duration(source);
   found->has_video = source.has_video;
   found->audio_stream_count = source.audio_stream_count;
   found->is_image = source.is_image;

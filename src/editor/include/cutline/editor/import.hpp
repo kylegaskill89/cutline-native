@@ -43,6 +43,29 @@ struct MediaSource {
   friend bool operator==(const MediaSource&, const MediaSource&) = default;
 };
 
+/// How long a still is placed for.
+///
+/// A still has no length of its own, so somebody has to choose one, and until
+/// this existed nobody had: libavformat calls a PNG a one-frame video at its
+/// own default rate, that duration went straight into the model, and a picture
+/// dragged onto the timeline arrived a fortieth of a second long — placed,
+/// counted as used, and invisible at every zoom.
+///
+/// Five seconds is Premiere's default and matches `kDefaultGeneratorLength`,
+/// which is the same question already answered correctly for titles and
+/// mattes. Kept as its own constant rather than shared with it because
+/// Premiere keeps them as two preferences and they are two decisions: how long
+/// a photograph should sit on screen and how long a title should are not
+/// obliged to agree.
+inline constexpr double kStillLength = 5.0;
+
+/// What a source's media duration should be, given what the probe found.
+///
+/// Everything but a still gets what the file says. A still gets `kStillLength`,
+/// and an *animated* one is not a still for this purpose — a GIF has a real
+/// running time and overriding it would make it loop at the wrong speed.
+[[nodiscard]] double placement_duration(const MediaSource& source) noexcept;
+
 /// The media in `project` that already refers to this path, or null.
 [[nodiscard]] const core::Media* find_media_by_path(const core::Project& project,
                                                     std::string_view path) noexcept;

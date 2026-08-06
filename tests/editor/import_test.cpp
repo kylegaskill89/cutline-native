@@ -274,5 +274,73 @@ TEST(Import, AStillCarriesThatThroughToTheMedia) {
   EXPECT_TRUE(project.media[0].is_image);
 }
 
+// ------------------------------------------------- how long a still lasts --
+
+TEST(Import, AStillIsGivenALengthWorthPlacing) {
+  // The bug this exists for: libavformat calls a PNG a one-frame video at its
+  // own default rate, and taking that at face value put a clip a fortieth of a
+  // second long on the timeline — placed, counted as used, and invisible at
+  // every zoom.
+  MediaSource source = a_video("D:/stills/card.png");
+  source.is_image = true;
+  source.duration = 0.04;
+
+  const Project project = import_media(Project{}, source);
+  EXPECT_DOUBLE_EQ(project.media[0].duration, kStillLength);
+}
+
+TEST(Import, AnAnimatedStillKeepsItsOwnRunningTime) {
+  // A GIF is a still by extension and not by nature. Overriding its length
+  // would make it loop at the wrong speed.
+  MediaSource source = a_video("D:/stills/spin.gif");
+  source.is_image = true;
+  source.is_animated = true;
+  source.duration = 2.5;
+
+  const Project project = import_media(Project{}, source);
+  EXPECT_DOUBLE_EQ(project.media[0].duration, 2.5);
+}
+
+TEST(Import, VideoAndAudioAreLeftAlone) {
+  EXPECT_DOUBLE_EQ(placement_duration(a_video()), 42.0);
+
+  MediaSource sound = a_video("D:/audio/take.wav");
+  sound.has_video = false;
+  sound.duration = 7.5;
+  EXPECT_DOUBLE_EQ(placement_duration(sound), 7.5);
+}
+
+TEST(Import, AStillPlacesAsSomethingYouCanSee) {
+  // End to end, because the fault was only visible once a clip existed: the
+  // duration reached the model correctly and the clip was still too short to
+  // draw.
+  MediaSource source = a_video("D:/stills/card.png");
+  source.is_image = true;
+  source.duration = 0.04;
+  source.audio_stream_count = 0;
+
+  const Project project = import_and_place(with_tracks(), source, 0.0);
+  ASSERT_FALSE(project.tracks.front().clips.empty()) << "nothing was placed";
+  const core::Clip& clip = project.tracks.front().clips.front();
+  EXPECT_DOUBLE_EQ(clip.source_out - clip.source_in, kStillLength);
+}
+
+TEST(Import, RelinkingAStillGivesItAPlaceableLengthToo) {
+  // Relinking rewrites the probed facts, so a still repointed at a moved file
+  // would otherwise come back a fortieth of a second long.
+  MediaSource source = a_video("D:/stills/card.png");
+  source.is_image = true;
+  source.duration = 0.04;
+
+  std::string id;
+  Project project = import_media(Project{}, source, &id);
+  MediaSource moved = source;
+  moved.path = "E:/stills/card.png";
+  project = relink_media(std::move(project), id, moved);
+
+  EXPECT_EQ(project.media[0].path, "E:/stills/card.png");
+  EXPECT_DOUBLE_EQ(project.media[0].duration, kStillLength);
+}
+
 }  // namespace
 }  // namespace cutline::editor
