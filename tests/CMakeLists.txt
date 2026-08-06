@@ -104,7 +104,8 @@ if(CUTLINE_WITH_MEDIA)
   add_executable(cutline_media_tests
     media/audio_test.cpp
     media/encoder_test.cpp
-    media/probe_test.cpp)
+    media/probe_test.cpp
+    media/transcode_test.cpp)
   target_link_libraries(cutline_media_tests PRIVATE
     cutline::media
     GTest::gtest

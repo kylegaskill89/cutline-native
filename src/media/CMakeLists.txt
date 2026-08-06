@@ -6,7 +6,8 @@ add_library(cutline_media
   src/decoder.cpp
   src/encoder.cpp
   src/probe.cpp
-  src/thumbnail.cpp)
+  src/thumbnail.cpp
+  src/transcode.cpp)
 add_library(cutline::media ALIAS cutline_media)
 
 # FFmpeg's headers do not compile warning-free at /W4, and they are not ours to
