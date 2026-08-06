@@ -68,6 +68,24 @@ struct MediaItem {
   /// zero: unused media is otherwise impossible to find in a large pool.
   int uses = 0;
 
+  /// How far this row is indented, with the top level at zero.
+  ///
+  /// A number rather than a tree, for the same reason the rows are drawn rather
+  /// than built: the browser is handed a list already flattened in the order it
+  /// should appear, and nesting is arithmetic in `row_rect` instead of a
+  /// structure to walk on every paint.
+  int depth = 0;
+
+  /// This row is a bin rather than a piece of media.
+  ///
+  /// Bins are rows in the same list because that is what they look like on
+  /// screen and what the arrow keys should walk through. Whoever builds the
+  /// list decides what a bin's `id` means; the browser only ever hands it back.
+  bool is_bin = false;
+
+  /// Whether a bin is showing what is inside it. Meaningless on anything else.
+  bool expanded = false;
+
   friend bool operator==(const MediaItem&, const MediaItem&) = default;
 };
 
@@ -112,6 +130,30 @@ class MediaBrowser : public Widget {
     on_drop_ = std::move(on_drop);
   }
 
+  /// A bin's chevron clicked, or a bin activated: show or hide what is in it.
+  ///
+  /// Which of those it currently is stays here rather than in the widget,
+  /// because what is inside a bin is a question about the project — the browser
+  /// is handed a flattened list and cannot know what a collapsed bin is hiding.
+  void set_on_toggle(std::function<void(std::size_t)> on_toggle) {
+    on_toggle_ = std::move(on_toggle);
+  }
+
+  /// A row dragged onto a bin row and released there: file it in that bin.
+  ///
+  /// Reported instead of `on_drop`, never as well as it. A release inside the
+  /// browser is a filing and a release outside is a placement, and a gesture
+  /// that did both would put a clip on the timeline every time somebody tidied
+  /// the pool.
+  void set_on_file(std::function<void(std::size_t, std::size_t)> on_file) {
+    on_file_ = std::move(on_file);
+  }
+
+  /// The bin row a drag is currently over, or nothing. What the highlight is
+  /// drawn from, and the same answer the release acts on — so what is shown and
+  /// what happens cannot disagree.
+  [[nodiscard]] std::optional<std::size_t> file_target() const noexcept;
+
   /// The row being dragged out, once the pointer has moved far enough for the
   /// gesture to be a drag rather than a click.
   [[nodiscard]] std::optional<std::size_t> dragging() const noexcept { return drag_; }
@@ -129,8 +171,11 @@ class MediaBrowser : public Widget {
   [[nodiscard]] Rect list_area() const;
   /// A row's rectangle, or empty when it is scrolled out of sight.
   [[nodiscard]] Rect row_rect(std::size_t index) const;
-  /// The square badge at the leading edge of a row.
+  /// The square badge at the leading edge of a row, past its indent. Empty for
+  /// a bin, whose chevron stands in that place instead.
   [[nodiscard]] Rect badge_rect(std::size_t index) const;
+  /// The chevron's square on a bin row, and empty on anything else.
+  [[nodiscard]] Rect twist_rect(std::size_t index) const;
   [[nodiscard]] std::optional<std::size_t> row_at(double x, double y) const;
 
   /// Empty when everything fits.
@@ -183,7 +228,14 @@ class MediaBrowser : public Widget {
   std::function<void(std::optional<std::size_t>)> on_select_;
   std::function<void(std::size_t)> on_activate_;
   std::function<void(std::size_t, double, double)> on_drop_;
+  std::function<void(std::size_t)> on_toggle_;
+  std::function<void(std::size_t, std::size_t)> on_file_;
 };
+
+/// How far one level of bin indents a row.
+inline constexpr double kBrowserIndent = 14.0;
+/// The chevron's square on a bin row.
+inline constexpr double kBrowserTwist = 14.0;
 
 /// How far a press has to move before it counts as dragging an entry out.
 inline constexpr double kBrowserDragThreshold = 4.0;

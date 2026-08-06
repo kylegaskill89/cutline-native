@@ -17,6 +17,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -521,6 +522,167 @@ TEST(Browser, AnOfflineEntrySaysSoInPlaceOfItsDuration) {
 
   EXPECT_TRUE(contains(texts, "offline"));
   EXPECT_FALSE(contains(texts, "00:00:04:00"));
+}
+
+// ------------------------------------------------------------------ bins --
+
+namespace {
+
+/// A bin with two entries inside it and one outside, already flattened the way
+/// the binding hands it over.
+[[nodiscard]] std::vector<MediaItem> tree_items() {
+  return {
+      MediaItem{.id = "bin:b1", .name = "Interviews", .detail = "2 items", .is_bin = true,
+                .expanded = true},
+      MediaItem{.id = "m0", .name = "Clip 0", .detail = "00:00:04:00", .depth = 1},
+      MediaItem{.id = "m1", .name = "Clip 1", .detail = "00:00:04:00", .depth = 1},
+      MediaItem{.id = "m2", .name = "Clip 2", .detail = "00:00:04:00"},
+  };
+}
+
+[[nodiscard]] Fixture tree_fixture() {
+  Fixture fixture(0);
+  fixture.view->set_items(tree_items());
+  return fixture;
+}
+
+}  // namespace
+
+TEST(Browser, ABinHasAChevronWhereMediaHasABadge) {
+  const Fixture fixture = tree_fixture();
+  EXPECT_FALSE(fixture.view->twist_rect(0).empty()) << "the bin drew no chevron";
+  EXPECT_TRUE(fixture.view->badge_rect(0).empty()) << "a bin should not also carry a badge";
+
+  EXPECT_TRUE(fixture.view->twist_rect(1).empty()) << "media drew a chevron";
+  EXPECT_FALSE(fixture.view->badge_rect(1).empty());
+}
+
+TEST(Browser, DepthMovesTheBadgeAcross) {
+  // The whole visible difference between a tree and a list. Without it a nested
+  // entry starts where its folder does and the panel reads as flat.
+  const Fixture fixture = tree_fixture();
+  EXPECT_GT(fixture.view->badge_rect(1).x, fixture.view->badge_rect(3).x)
+      << "a row inside a bin was not indented past one outside it";
+}
+
+TEST(Browser, ClickingTheChevronOpensWithoutSelecting) {
+  // Looking inside a folder must not move what a menu item would act on.
+  Fixture fixture = tree_fixture();
+  fixture.view->select(3);
+
+  std::optional<std::size_t> toggled;
+  fixture.view->set_on_toggle([&](std::size_t index) { toggled = index; });
+
+  const Rect twist = fixture.view->twist_rect(0);
+  ASSERT_FALSE(twist.empty());
+  fixture.host->mouse_down(press(twist.x + twist.width * 0.5, twist.y + twist.height * 0.5));
+
+  ASSERT_TRUE(toggled.has_value());
+  EXPECT_EQ(*toggled, 0u);
+  ASSERT_TRUE(fixture.view->selection().has_value());
+  EXPECT_EQ(*fixture.view->selection(), 3u) << "opening a bin moved the selection";
+}
+
+TEST(Browser, DoubleClickingABinOpensItRatherThanPlacingIt) {
+  Fixture fixture = tree_fixture();
+  bool activated = false;
+  std::optional<std::size_t> toggled;
+  fixture.view->set_on_activate([&](std::size_t) { activated = true; });
+  fixture.view->set_on_toggle([&](std::size_t index) { toggled = index; });
+
+  const Rect row = fixture.view->row_rect(0);
+  // Past the chevron, so this is the row itself rather than the chevron again.
+  fixture.host->mouse_down(press(row.right() - 40.0, row.y + row.height * 0.5, 2));
+
+  EXPECT_FALSE(activated) << "a bin was put in the sequence";
+  ASSERT_TRUE(toggled.has_value());
+  EXPECT_EQ(*toggled, 0u);
+}
+
+TEST(Browser, EnterOnABinOpensItToo) {
+  Fixture fixture = tree_fixture();
+  bool activated = false;
+  bool toggled = false;
+  fixture.view->set_on_activate([&](std::size_t) { activated = true; });
+  fixture.view->set_on_toggle([&](std::size_t) { toggled = true; });
+
+  fixture.view->select(0);
+  fixture.host->key_down(key(Key::Enter));
+
+  EXPECT_TRUE(toggled);
+  EXPECT_FALSE(activated);
+}
+
+TEST(Browser, DraggingOntoABinFilesItRatherThanPlacingIt) {
+  // A gesture that did both would put a clip on the timeline every time
+  // somebody tidied the pool.
+  Fixture fixture = tree_fixture();
+  std::optional<std::pair<std::size_t, std::size_t>> filed;
+  bool dropped = false;
+  fixture.view->set_on_file([&](std::size_t from, std::size_t onto) { filed = {from, onto}; });
+  fixture.view->set_on_drop([&](std::size_t, double, double) { dropped = true; });
+
+  const Rect from = fixture.view->row_rect(3);
+  const Rect onto = fixture.view->row_rect(0);
+  fixture.host->mouse_down(press(from.x + 100.0, from.y + from.height * 0.5));
+  fixture.host->mouse_move(press(onto.x + 100.0, onto.y + onto.height * 0.5));
+  fixture.host->mouse_up(press(onto.x + 100.0, onto.y + onto.height * 0.5));
+
+  ASSERT_TRUE(filed.has_value());
+  EXPECT_EQ(filed->first, 3u);
+  EXPECT_EQ(filed->second, 0u);
+  EXPECT_FALSE(dropped) << "the same gesture also placed a clip";
+}
+
+TEST(Browser, DraggingOntoMediaFilesNothing) {
+  // There is nowhere for it to go: the pool's order is the order it was
+  // imported in, so there is no position to insert at.
+  Fixture fixture = tree_fixture();
+  bool filed = false;
+  bool dropped = false;
+  fixture.view->set_on_file([&](std::size_t, std::size_t) { filed = true; });
+  fixture.view->set_on_drop([&](std::size_t, double, double) { dropped = true; });
+
+  const Rect from = fixture.view->row_rect(3);
+  const Rect onto = fixture.view->row_rect(1);
+  fixture.host->mouse_down(press(from.x + 100.0, from.y + from.height * 0.5));
+  fixture.host->mouse_move(press(onto.x + 100.0, onto.y + onto.height * 0.5));
+  fixture.host->mouse_up(press(onto.x + 100.0, onto.y + onto.height * 0.5));
+
+  EXPECT_FALSE(filed);
+  EXPECT_TRUE(dropped) << "a release inside the list should still be a placement";
+}
+
+TEST(Browser, ABinCannotBeDraggedIntoItself) {
+  // Knowable from the flattened list alone: what is inside a row is the run of
+  // rows after it with a greater depth. Refused here so the highlight never
+  // offers something that would then quietly not happen.
+  Fixture fixture(0);
+  fixture.view->set_items({
+      MediaItem{.id = "bin:outer", .name = "Day 1", .is_bin = true, .expanded = true},
+      MediaItem{.id = "bin:inner", .name = "Cameras", .depth = 1, .is_bin = true},
+      MediaItem{.id = "bin:other", .name = "Elsewhere", .is_bin = true},
+  });
+
+  const Rect from = fixture.view->row_rect(0);
+  const Rect onto = fixture.view->row_rect(1);
+  fixture.host->mouse_down(press(from.right() - 20.0, from.y + from.height * 0.5));
+  fixture.host->mouse_move(press(onto.right() - 20.0, onto.y + onto.height * 0.5));
+  EXPECT_FALSE(fixture.view->file_target().has_value()) << "a bin was offered its own child";
+
+  // And into an unrelated bin, which is allowed.
+  const Rect other = fixture.view->row_rect(2);
+  fixture.host->mouse_move(press(other.right() - 20.0, other.y + other.height * 0.5));
+  ASSERT_TRUE(fixture.view->file_target().has_value());
+  EXPECT_EQ(*fixture.view->file_target(), 2u);
+}
+
+TEST(Browser, ARowIsNotFiledIntoItself) {
+  Fixture fixture = tree_fixture();
+  const Rect row = fixture.view->row_rect(0);
+  fixture.host->mouse_down(press(row.right() - 20.0, row.y + row.height * 0.5));
+  fixture.host->mouse_move(press(row.right() - 30.0, row.y + row.height * 0.5));
+  EXPECT_FALSE(fixture.view->file_target().has_value());
 }
 
 TEST(Browser, EveryKindHasABadge) {

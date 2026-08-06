@@ -120,10 +120,47 @@ Rect MediaBrowser::row_rect(std::size_t index) const {
 Rect MediaBrowser::badge_rect(std::size_t index) const {
   const Rect row = row_rect(index);
   if (row.empty()) return {};
+  // A bin has a chevron where a badge would go. Both would leave the name
+  // starting further right on a folder than on the media inside it, which reads
+  // as the tree being indented the wrong way round.
+  if (items_[index].is_bin) return {};
 
   const double inset = badge_inset(metrics_);
   const double size = std::max(0.0, row.height - 2.0 * inset);
-  return Rect{row.x + inset, row.y + inset, size, size};
+  const double step = static_cast<double>(items_[index].depth) * kBrowserIndent;
+  return Rect{row.x + inset + step, row.y + inset, size, size};
+}
+
+Rect MediaBrowser::twist_rect(std::size_t index) const {
+  const Rect row = row_rect(index);
+  if (row.empty() || !items_[index].is_bin) return {};
+
+  const double inset = badge_inset(metrics_);
+  const double step = static_cast<double>(items_[index].depth) * kBrowserIndent;
+  return Rect{row.x + inset + step, row.y, kBrowserTwist, row.height};
+}
+
+std::optional<std::size_t> MediaBrowser::file_target() const noexcept {
+  if (!drag_.has_value()) return std::nullopt;
+
+  const auto over = row_at(drag_x_, drag_y_);
+  if (!over.has_value() || *over == *drag_) return std::nullopt;
+  // Only onto a bin. Dropping media onto other media means nothing here — there
+  // is no order to insert into, since the pool's order is the order it was
+  // imported in.
+  if (!items_[*over].is_bin) return std::nullopt;
+
+  // A bin cannot go inside itself, and the browser can tell without knowing the
+  // tree: what is inside a row is the unbroken run of rows after it with a
+  // greater depth. Refused here as well as in the model so the highlight never
+  // offers something that would then quietly not happen.
+  if (items_[*drag_].is_bin && *over > *drag_) {
+    for (std::size_t i = *drag_ + 1; i < items_.size(); ++i) {
+      if (items_[i].depth <= items_[*drag_].depth) break;
+      if (i == *over) return std::nullopt;
+    }
+  }
+  return over;
 }
 
 std::optional<std::size_t> MediaBrowser::row_at(double x, double y) const {
@@ -191,6 +228,30 @@ void MediaBrowser::paint_content(Painter& painter, const Theme& theme) const {
     // with bevelled selection gets one.
     if (chosen) paint_surface(painter, row, theme.style(Part::Clip, State::Selected));
 
+    // The bin a drag would file into, drawn the same way a row being hovered
+    // for a drop is drawn everywhere else here.
+    if (const auto target = file_target(); target.has_value() && *target == i) {
+      painter.stroke(row, 0.0, theme.accent, 2.0);
+    }
+
+    const Rect twist = twist_rect(i);
+    if (!twist.empty()) {
+      // The same chevron as the effects browser's folders, for the same reason:
+      // a tree drawn two different ways in two panels reads as two different
+      // kinds of thing.
+      const double cx = twist.x + twist.width * 0.5;
+      const double cy = twist.y + twist.height * 0.5;
+      constexpr double reach = 3.0;
+      const Color& ink = theme.style(Part::Panel, chosen ? State::Selected : State::Normal).text;
+      if (item.expanded) {
+        painter.line(cx - reach, cy - reach * 0.5, cx, cy + reach * 0.5, ink, 1.0);
+        painter.line(cx, cy + reach * 0.5, cx + reach, cy - reach * 0.5, ink, 1.0);
+      } else {
+        painter.line(cx - reach * 0.5, cy - reach, cx + reach * 0.5, cy, ink, 1.0);
+        painter.line(cx + reach * 0.5, cy, cx - reach * 0.5, cy + reach, ink, 1.0);
+      }
+    }
+
     // The badge borrows the tool button's surface: it is the small square
     // themed thing every theme already describes.
     const Rect badge = badge_rect(i);
@@ -211,11 +272,16 @@ void MediaBrowser::paint_content(Painter& painter, const Theme& theme) const {
     const std::string detail = item.offline ? "offline" : item.detail;
     const double detail_width = detail.empty() ? 0.0 : painter.measure(detail, small, false) + pad;
 
-    const double name_x = badge.empty() ? row.x + pad : badge.right() + pad;
+    const double name_x = !twist.empty()  ? twist.right() + pad * 0.5
+                          : badge.empty() ? row.x + pad
+                                          : badge.right() + pad;
     const Rect name_area{name_x, row.y, std::max(0.0, row.right() - name_x - detail_width),
                          row.height};
     if (!name_area.empty()) {
-      painter.text(text_run(name_area, item.name, text_style, font, TextAlign::Left, chosen));
+      // Bins in bold, so a folder reads as a heading rather than as another
+      // entry that happens to have no duration.
+      painter.text(text_run(name_area, item.name, text_style, font, TextAlign::Left,
+                            chosen || item.is_bin));
     }
 
     if (!detail.empty()) {
@@ -271,8 +337,24 @@ bool MediaBrowser::on_mouse_down(const MouseEvent& event) {
     return true;
   }
 
+  // The chevron before the selection, so opening a bin does not also make it
+  // the selected thing — which would move whatever a menu item acts on out from
+  // under somebody merely looking inside a folder.
+  if (const Rect twist = twist_rect(*row); !twist.empty() && twist.contains(event.x, event.y)) {
+    if (on_toggle_) on_toggle_(*row);
+    return true;
+  }
+
   select(row);
   if (on_select_) on_select_(selection_);
+
+  if (event.click_count >= 2 && items_[*row].is_bin) {
+    // A bin has nothing to put in a sequence, so the gesture that places media
+    // opens it instead. Premiere does the same.
+    pressed_row_.reset();
+    if (on_toggle_) on_toggle_(*row);
+    return true;
+  }
 
   if (event.click_count >= 2) {
     // A double-click is not the start of a drag: the press that opened it has
@@ -318,10 +400,19 @@ bool MediaBrowser::on_mouse_up(const MouseEvent& event) {
   }
 
   const std::optional<std::size_t> dropped = drag_;
+  // Asked before the drag is forgotten, since that is what it is computed from.
+  const std::optional<std::size_t> onto = file_target();
   pressed_row_.reset();
   drag_.reset();
 
   if (!dropped.has_value()) return false;
+
+  // Filing or placing, never both. A release over a bin is somebody tidying the
+  // pool; a release anywhere else is somebody putting a clip down.
+  if (onto.has_value()) {
+    if (on_file_) on_file_(*dropped, *onto);
+    return true;
+  }
   // Reported wherever it was released, including outside the browser — the
   // press captured the pointer, so a drop on the timeline still arrives here.
   if (on_drop_) on_drop_(*dropped, event.x, event.y);
@@ -366,6 +457,12 @@ bool MediaBrowser::on_key_down(const KeyEvent& event) {
     }
     case Key::Enter:
       if (!selection_.has_value()) return false;
+      // The same split as the double-click it stands in for: a bin opens, media
+      // is placed.
+      if (items_[*selection_].is_bin) {
+        if (on_toggle_) on_toggle_(*selection_);
+        return true;
+      }
       if (on_activate_) on_activate_(*selection_);
       return true;
     default: return false;

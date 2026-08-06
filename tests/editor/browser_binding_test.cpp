@@ -9,9 +9,11 @@
 
 #include "cutline/core/edit.hpp"
 #include "cutline/core/model.hpp"
+#include "cutline/core/pool.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/time.hpp"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -306,6 +308,157 @@ TEST(BrowserBinding, AnEmptyNameIsRefused) {
 TEST(BrowserBinding, RenamingSomethingThatIsNotThereChangesNothing) {
   const core::Project before = sample_project();
   EXPECT_EQ(rename_media(before, "nowhere", "Whatever"), before);
+}
+
+// ------------------------------------------------------------------ bins --
+
+namespace {
+
+/// Every row's name, which is what a tree is easiest to assert against.
+[[nodiscard]] std::vector<std::string> names_of(const std::vector<ui::MediaItem>& rows) {
+  std::vector<std::string> out;
+  for (const ui::MediaItem& row : rows) out.push_back(row.name);
+  return out;
+}
+
+/// The sample project with `m1` filed in a bin called Interviews.
+[[nodiscard]] core::Project filed_project(std::string& bin_out) {
+  core::Project project = core::create_bin(sample_project(), "Interviews");
+  bin_out = project.bins.back().id;
+  return core::file_media(std::move(project), "m1", bin_out);
+}
+
+}  // namespace
+
+TEST(BrowserBinding, AClosedBinShowsNothingInside) {
+  std::string bin;
+  const core::Project project = filed_project(bin);
+
+  const std::vector<ui::MediaItem> rows = browser_items(project);
+  const std::vector<std::string> names = names_of(rows);
+  EXPECT_NE(std::ranges::find(names, "Interviews"), names.end());
+  EXPECT_EQ(std::ranges::find(names, "Boiler.mp4"), names.end())
+      << "a closed bin showed what was inside it";
+
+  ASSERT_FALSE(rows.empty());
+  EXPECT_TRUE(rows.front().is_bin);
+  EXPECT_FALSE(rows.front().expanded);
+  EXPECT_EQ(rows.front().detail, "1 item");
+}
+
+TEST(BrowserBinding, AnOpenBinShowsItsContentsIndentedBeneathIt) {
+  std::string bin;
+  const core::Project project = filed_project(bin);
+
+  const std::string open[] = {bin};
+  const std::vector<ui::MediaItem> rows = browser_items(project, {.expanded = open});
+
+  ASSERT_GE(rows.size(), 2u);
+  EXPECT_TRUE(rows[0].is_bin);
+  EXPECT_TRUE(rows[0].expanded);
+  EXPECT_EQ(rows[1].name, "Boiler.mp4");
+  EXPECT_EQ(rows[1].depth, 1) << "what is in a bin was not indented under it";
+  EXPECT_EQ(rows[0].depth, 0);
+}
+
+TEST(BrowserBinding, BinsComeBeforeMediaAtEveryLevel) {
+  // Where Premiere puts them, and what stops the folders of a large pool being
+  // scattered down a list of files.
+  std::string bin;
+  const core::Project project = filed_project(bin);
+
+  const std::vector<ui::MediaItem> rows = browser_items(project);
+  ASSERT_FALSE(rows.empty());
+  EXPECT_TRUE(rows.front().is_bin);
+  for (std::size_t i = 1; i < rows.size(); ++i) {
+    EXPECT_FALSE(rows[i].is_bin) << "a bin appeared after media at row " << i;
+  }
+}
+
+TEST(BrowserBinding, ABinRowIsToldApartFromMediaByItsId) {
+  // Both kinds share one list, so their ids share one namespace. Without a
+  // prefix "the selected row" would be ambiguous the moment a bin and a media
+  // entry were given the same id by two different id counters.
+  std::string bin;
+  const core::Project project = filed_project(bin);
+
+  const std::vector<ui::MediaItem> rows = browser_items(project);
+  ASSERT_FALSE(rows.empty());
+  EXPECT_EQ(bin_of_row(rows.front().id), bin);
+  EXPECT_TRUE(bin_of_row("m1").empty()) << "a media id read as a bin";
+  EXPECT_EQ(bin_of_row(bin_row_id("bin_7")), "bin_7");
+}
+
+TEST(BrowserBinding, SearchingFlattensTheTree) {
+  // A match hidden inside a closed bin is the one thing a search must not do.
+  std::string bin;
+  const core::Project project = filed_project(bin);
+
+  const std::vector<ui::MediaItem> rows = browser_items(project, {.search = "boiler"});
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows.front().name, "Boiler.mp4");
+  EXPECT_EQ(rows.front().depth, 0) << "a search result was indented under a bin it did not show";
+  EXPECT_FALSE(rows.front().is_bin);
+}
+
+TEST(BrowserBinding, SortingHappensInsideABinRatherThanAcrossThePool) {
+  // Sorting across bins would take entries out of the folders they were put in,
+  // which is the one thing filing them was for.
+  std::string bin;
+  core::Project project = filed_project(bin);
+  project = core::file_media(std::move(project), "m2", bin);
+
+  const std::string open[] = {bin};
+  const std::vector<ui::MediaItem> rows =
+      browser_items(project, {.sort = BrowserSort::Name, .expanded = open});
+
+  const std::vector<std::string> names = names_of(rows);
+  ASSERT_GE(names.size(), 3u);
+  EXPECT_EQ(names[0], "Interviews");
+  EXPECT_EQ(names[1], "Beach.mov") << "the bin's contents were not ordered by name";
+  EXPECT_EQ(names[2], "Boiler.mp4");
+  // And the still, which is outside the bin, is still after everything in it.
+  EXPECT_EQ(names.back(), "Logo.png");
+}
+
+TEST(BrowserBinding, MediaNamingABinThatHasGoneStillShows) {
+  // The reason bins hold nothing: a folder that vanished cannot take footage
+  // out of the panel with it.
+  std::string bin;
+  core::Project project = filed_project(bin);
+  project = core::remove_bins(std::move(project), bin);
+
+  const std::vector<std::string> names = names_of(browser_items(project));
+  EXPECT_NE(std::ranges::find(names, "Boiler.mp4"), names.end())
+      << "media was lost with the bin that held it";
+}
+
+TEST(BrowserBinding, DeletingABinTakesItsMediaAndTheClipsThatUsedIt) {
+  // The destructive one, and Premiere's behaviour. Both halves or neither: a
+  // sequence naming media that is gone cannot be repaired.
+  std::string bin;
+  core::Project project = filed_project(bin);
+  ASSERT_GT(media_uses(project, "m1"), 0) << "the fixture stopped placing m1";
+
+  const core::Project after = remove_bin(std::move(project), bin);
+  EXPECT_TRUE(after.bins.empty());
+  EXPECT_EQ(std::ranges::find(after.media, "m1", &core::Media::id), after.media.end());
+  EXPECT_EQ(media_uses(after, "m1"), 0) << "clips were left naming media that is gone";
+  // And nothing outside the bin went with it.
+  EXPECT_NE(std::ranges::find(after.media, "m2", &core::Media::id), after.media.end());
+}
+
+TEST(BrowserBinding, DeletingABinReachesTheBinsInsideIt) {
+  std::string bin;
+  core::Project project = filed_project(bin);
+  project = core::create_bin(std::move(project), "Cameras", bin);
+  const std::string inner = project.bins.back().id;
+  project = core::file_media(std::move(project), "m2", inner);
+
+  const core::Project after = remove_bin(std::move(project), bin);
+  EXPECT_TRUE(after.bins.empty());
+  EXPECT_EQ(std::ranges::find(after.media, "m2", &core::Media::id), after.media.end())
+      << "media inside a nested bin survived its grandparent being deleted";
 }
 
 }  // namespace

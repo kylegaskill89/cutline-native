@@ -56,11 +56,38 @@ struct BrowserOptions {
   /// them alive across the call — `ProjectPreview::missing_media()` owns the
   /// usual one.
   std::span<const std::string> offline;
+
+  /// The bins showing what is inside them, by id. Everything else is closed.
+  ///
+  /// Open ones rather than closed ones, so a project opens with its bins shut
+  /// and a pool of two hundred entries does not arrive as a wall. It is also the
+  /// list that stays short: somebody working has a few bins open, not all but a
+  /// few closed.
+  ///
+  /// Kept by whoever draws the panel rather than in the project, because which
+  /// folders happen to be open is about the looking and not about the cut.
+  std::span<const std::string> expanded;
 };
 
-/// Rows for the browser, filtered and ordered.
+/// Rows for the browser, filtered and ordered, with bins flattened in the order
+/// they should be drawn.
+///
+/// A search flattens the tree entirely: what somebody typing wants is every
+/// match, and a match hidden inside a closed bin is the one thing a search must
+/// not do. Bins are dropped from the rows while it is running for the same
+/// reason — a folder is not a thing anybody searched for.
 [[nodiscard]] std::vector<ui::MediaItem> browser_items(const core::Project& project,
                                                        const BrowserOptions& options = {});
+
+/// The row id of a bin, as the browser sees it.
+///
+/// Bins and media share one list, so their ids share one namespace and could
+/// collide. Prefixing is what keeps "the selected row" answerable without the
+/// panel having to remember which kind it last put there.
+[[nodiscard]] std::string bin_row_id(std::string_view bin_id);
+
+/// The bin a row id names, or empty when the row is not a bin.
+[[nodiscard]] std::string bin_of_row(std::string_view row_id);
 
 /// Removes an entry from the pool, along with every clip that used it.
 ///
@@ -73,5 +100,14 @@ struct BrowserOptions {
 /// in the browser and on the clips, which is a property of the project.
 [[nodiscard]] core::Project rename_media(core::Project project, std::string_view media_id,
                                          std::string name);
+
+/// Removes a bin, the bins inside it, and everything filed in any of them —
+/// clips included, as Premiere does.
+///
+/// Lives here rather than in `core::remove_bins` because taking the media means
+/// taking the clips that used it, and that is the same "both halves or neither"
+/// rule `remove_media` exists for. Ask `core::bin_is_empty` first if this should
+/// be confirmed, which for anything holding footage it should.
+[[nodiscard]] core::Project remove_bin(core::Project project, std::string_view bin_id);
 
 }  // namespace cutline::editor
