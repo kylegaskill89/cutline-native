@@ -22,6 +22,7 @@
 #include "cutline/editor/autosave.hpp"
 #include "cutline/editor/browser_binding.hpp"
 #include "cutline/editor/import.hpp"
+#include "cutline/editor/timeline_binding.hpp"
 #include "cutline/editor/transitions.hpp"
 #include "cutline/ui/browser.hpp"
 
@@ -29,6 +30,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace cutline::editor {
 
@@ -78,8 +80,37 @@ struct Settings {
   /// How often a recovery copy is written, in seconds.
   int autosave_seconds = static_cast<int>(kAutosaveInterval.count());
 
+  // -------------------------------------------------------------- labels --
+
+  /// What each label is called, in `clip_labels()` order.
+  ///
+  /// Empty, or an empty entry, keeps the built-in name. A label is something
+  /// people say out loud — "the violet ones are the interview" — and the whole
+  /// value of renaming one is that the menu then says *Interview*. Premiere
+  /// keeps these as a preference for the same reason.
+  ///
+  /// The colours stay where they are: they are the model's, they are written
+  /// into every project that uses one, and a colour renamed on one machine
+  /// would otherwise mean something different on another.
+  std::vector<std::string> label_names;
+
+  /// The label given to media of each kind as it is imported, by colour, in
+  /// `ui::MediaKind` order. An empty entry means no label, which is the
+  /// default for every kind.
+  ///
+  /// Premiere's "Label Defaults", and the half of this feature that does
+  /// something on its own: a project where every still is already Rose and
+  /// every title Mango was not coloured by anybody, and reads at a glance.
+  std::vector<std::string> label_defaults;
+
   friend bool operator==(const Settings&, const Settings&) = default;
 };
+
+/// What a label is called: the chosen name, or the built-in one.
+[[nodiscard]] std::string_view label_name(const Settings& settings, std::size_t index);
+
+/// The colour media of this kind should be labelled with, or empty for none.
+[[nodiscard]] std::string_view label_default(const Settings& settings, ui::MediaKind kind);
 
 /// The bounds each of those is clamped into, on the way in from a file and on
 /// the way in from a field somebody typed.

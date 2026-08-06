@@ -60,6 +60,8 @@ class TempSettings {
   settings.still_length = 3.0;
   settings.transition_length = 0.5;
   settings.autosave_seconds = 120;
+  settings.label_names = {"Interview", "", "", "", "", "", "", "B-roll"};
+  settings.label_defaults = {"#8f7bb8", "", "", "", "", "#c07a92"};
   return settings;
 }
 
@@ -80,6 +82,78 @@ TEST(Settings, TheDefaultsAreWhatTheApplicationAlreadyDid) {
   EXPECT_DOUBLE_EQ(settings.still_length, kStillLength);
   EXPECT_DOUBLE_EQ(settings.transition_length, kPreferredTransitionLength);
   EXPECT_EQ(settings.autosave_seconds, static_cast<int>(kAutosaveInterval.count()));
+}
+
+// ------------------------------------------------------------------ labels --
+
+TEST(Settings, ALabelKeepsItsBuiltInNameUntilSomebodyChangesIt) {
+  const Settings settings;
+  EXPECT_EQ(label_name(settings, 0), clip_labels()[0].name);
+  EXPECT_EQ(label_name(settings, 7), clip_labels()[7].name);
+  EXPECT_TRUE(label_name(settings, 99).empty()) << "there is no ninth label to name";
+}
+
+TEST(Settings, ARenamedLabelIsWhatTheMenusSay) {
+  // The whole point of the feature: a label is something people say out loud,
+  // and renaming Violet to Interview is what makes the menu say Interview.
+  Settings settings;
+  settings.label_names.resize(clip_labels().size());
+  settings.label_names[0] = "Interview";
+
+  EXPECT_EQ(label_name(settings, 0), "Interview");
+  EXPECT_EQ(label_name(settings, 1), clip_labels()[1].name) << "the others were not touched";
+}
+
+TEST(Settings, AnEmptyNameFallsBackRatherThanBlanking) {
+  // A label with no name at all is a row of the menu nobody can ask for.
+  Settings settings;
+  settings.label_names.resize(clip_labels().size());
+  settings.label_names[2] = "";
+  EXPECT_EQ(label_name(settings, 2), clip_labels()[2].name);
+}
+
+TEST(Settings, NoKindIsLabelledByDefault) {
+  const Settings settings;
+  for (std::size_t kind = 0; kind < ui::kMediaKindCount; ++kind) {
+    EXPECT_TRUE(label_default(settings, static_cast<ui::MediaKind>(kind)).empty());
+  }
+}
+
+TEST(Settings, ADefaultIsFoundByKind) {
+  Settings settings;
+  settings.label_defaults.resize(ui::kMediaKindCount);
+  settings.label_defaults[static_cast<std::size_t>(ui::MediaKind::Image)] = "#c07a92";
+
+  EXPECT_EQ(label_default(settings, ui::MediaKind::Image), "#c07a92");
+  EXPECT_TRUE(label_default(settings, ui::MediaKind::Video).empty());
+}
+
+TEST(Settings, LabelListsFromAFileAreSizedToThisBuild) {
+  // A file from a version with more labels would otherwise reach past the
+  // palette, and one from a version with fewer would leave the last name
+  // unreadable. Both are read as far as they go and no further.
+  const auto short_file = settings_from_json(R"({"label_names":["Interview"]})");
+  ASSERT_TRUE(short_file.has_value()) << short_file.error();
+  EXPECT_EQ(short_file->label_names.size(), clip_labels().size());
+  EXPECT_EQ(label_name(*short_file, 0), "Interview");
+  EXPECT_EQ(label_name(*short_file, 3), clip_labels()[3].name);
+
+  const auto long_file = settings_from_json(
+      R"({"label_defaults":["a","b","c","d","e","f","g","h","i","j","k","l"]})");
+  ASSERT_TRUE(long_file.has_value()) << long_file.error();
+  EXPECT_EQ(long_file->label_defaults.size(), ui::kMediaKindCount);
+}
+
+TEST(Settings, LabelsAreOnlyWrittenWhenSomebodyHasChangedOne) {
+  // A fresh file saying "every label is called what it is already called" is
+  // eight lines of nothing.
+  EXPECT_EQ(to_json(Settings{}).find("label_names"), std::string::npos);
+  EXPECT_EQ(to_json(Settings{}).find("label_defaults"), std::string::npos);
+
+  Settings renamed;
+  renamed.label_names.resize(clip_labels().size());
+  renamed.label_names[0] = "Interview";
+  EXPECT_NE(to_json(renamed).find("label_names"), std::string::npos);
 }
 
 TEST(Settings, AFileThatIsNotThereIsNotAnError) {

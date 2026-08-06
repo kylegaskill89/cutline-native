@@ -646,6 +646,13 @@ struct App {
   /// The category list, so the chosen row can be lit without rebuilding it —
   /// which would destroy the widget whose click is still running.
   MenuList* settings_tabs = nullptr;
+  /// Set when the page needs rebuilding, and acted on at the next frame.
+  ///
+  /// Deferred for the same reason the inspector is: what asks for it is a
+  /// control *inside* the page — a label being renamed, which the dropdowns
+  /// below it list by name — and rebuilding on the spot would destroy that
+  /// control while its own callback was still running.
+  bool settings_page_stale = false;
 
   /// The preferences, as read and as written.
   ///
@@ -1006,6 +1013,7 @@ void toggle_bin(App& app, std::size_t row);
 void file_into_bin(App& app, std::size_t from, std::size_t onto);
 void open_pool_menu(App& app, double x, double y);
 void open_media_label_menu(App& app, double x, double y);
+void label_new_media(App& app, const std::string& media_id);
 void make_proxies(App& app);
 void collect_proxies(App& app);
 void toggle_use_proxies(App& app);
@@ -3610,6 +3618,24 @@ void remove_from_pool(App& app) {
   refresh_all(app);
 }
 
+/// Gives a freshly imported entry the label its kind defaults to.
+///
+/// Only what has none already: importing the same file twice hands back the
+/// entry that is there, and re-labelling it would undo a colour somebody set by
+/// hand the first time.
+void label_new_media(App& app, const std::string& media_id) {
+  if (media_id.empty()) return;
+  const auto media = std::ranges::find(app.session.project().media, media_id,
+                                       &cutline::core::Media::id);
+  if (media == app.session.project().media.end() || !media->label_color.empty()) return;
+
+  const std::string_view colour =
+      cutline::editor::label_default(app.settings, cutline::editor::media_kind(*media));
+  if (colour.empty()) return;
+  app.session.apply(
+      cutline::core::set_media_label(app.session.project(), media_id, std::string(colour)));
+}
+
 /// The colours a pool entry can be labelled with.
 ///
 /// The same palette a clip's label uses, because a label put on the source is
@@ -3626,10 +3652,11 @@ void open_media_label_menu(App& app, double x, double y) {
   std::vector<std::string> labels{"None"};
   std::vector<bool> ticks{current.empty()};
   std::vector<std::string> colors{std::string{}};
-  for (const cutline::editor::ClipLabel& label : cutline::editor::clip_labels()) {
-    labels.emplace_back(label.name);
-    colors.emplace_back(label.color);
-    ticks.push_back(current == label.color);
+  const std::span<const cutline::editor::ClipLabel> palette = cutline::editor::clip_labels();
+  for (std::size_t i = 0; i < palette.size(); ++i) {
+    labels.emplace_back(cutline::editor::label_name(app.settings, i));
+    colors.emplace_back(palette[i].color);
+    ticks.push_back(current == palette[i].color);
   }
 
   auto list = std::make_unique<MenuList>(std::move(labels));
@@ -4589,6 +4616,98 @@ void build_autosave_page(App& app, Box& into) {
   into.emplace<Label>("Copies are written beside the application's own data.").set_small(true);
 }
 
+/// What a kind of media is called on the Labels page.
+///
+/// `ui::to_string` is the file format's spelling — lower case, and "color"
+/// rather than "colour" because that is what the model writes. This is the one
+/// somebody reads.
+[[nodiscard]] std::string kind_label(cutline::ui::MediaKind kind) {
+  switch (kind) {
+    case cutline::ui::MediaKind::Video: return "Video";
+    case cutline::ui::MediaKind::Audio: return "Audio";
+    case cutline::ui::MediaKind::Image: return "Still";
+    case cutline::ui::MediaKind::Title: return "Title";
+    case cutline::ui::MediaKind::Color: return "Colour matte";
+    case cutline::ui::MediaKind::Adjustment: return "Adjustment layer";
+  }
+  return "Video";
+}
+
+/// The eight labels, their names, and what each kind of media arrives wearing.
+/// Premiere's Preferences ▸ Labels.
+void build_labels_page(App& app, Box& into) {
+  const std::span<const cutline::editor::ClipLabel> palette = cutline::editor::clip_labels();
+  app.settings.label_names.resize(palette.size());
+
+  into.emplace<Label>("Label names").set_bold(true);
+  for (std::size_t i = 0; i < palette.size(); ++i) {
+    auto& row = into.emplace<Box>(Axis::Horizontal);
+    // The built-in name stands where Premiere puts a colour swatch, and says
+    // the same thing: *which* label this row renames. There is no swatch
+    // because there is no read-only one — `ColorSwatch` opens a picker, and a
+    // picker here would be a control that lies.
+    //
+    // The colours themselves are deliberately not editable. A clip stores its
+    // label as a hex rather than as an index into the palette, so recolouring
+    // Violet would leave every clip already wearing it holding the old colour —
+    // a palette and a timeline that disagree, which is worse than Premiere,
+    // where labels are stored by position and follow.
+    auto& which = row.emplace<Label>(std::string(palette[i].name));
+    which.set_small(true);
+    which.set_tooltip(std::string(palette[i].color));
+    row.emplace<Spacer>();
+
+    auto& field = row.emplace<TextField>(std::string(cutline::editor::label_name(app.settings, i)));
+    // A fixed width, so eight fields make a column rather than a ragged edge —
+    // a flexible field takes what the row's label leaves it, and the labels are
+    // not the same length. Wide enough for the longest built-in name and a
+    // little more, since a renamed one is usually longer than "Iris".
+    field.set_columns(16);
+    field.set_on_commit([&app, i, built_in = std::string(palette[i].name)](
+                            const std::string& typed) {
+      if (i >= app.settings.label_names.size()) return;
+      // Cleared back to the built-in name rather than left blank: a label with
+      // no name at all is a row of the menu nobody can ask for.
+      app.settings.label_names[i] = typed == built_in ? std::string{} : typed;
+      save_settings(app);
+      // The whole page, because the defaults below list the labels by name and
+      // would otherwise go on offering the old one. Deferred, since this is a
+      // field inside the page that is about to be rebuilt.
+      app.settings_page_stale = true;
+      refresh_all(app);
+    });
+  }
+
+  into.emplace<Label>("Label defaults").set_bold(true);
+  app.settings.label_defaults.resize(cutline::ui::kMediaKindCount);
+
+  // "None" first, because arriving unlabelled is what every kind does now and
+  // getting a default off again is as ordinary as putting one on.
+  std::vector<std::string> choices{"None"};
+  std::vector<std::string> colours{std::string{}};
+  for (std::size_t i = 0; i < palette.size(); ++i) {
+    choices.emplace_back(cutline::editor::label_name(app.settings, i));
+    colours.emplace_back(palette[i].color);
+  }
+
+  for (std::size_t kind = 0; kind < cutline::ui::kMediaKindCount; ++kind) {
+    auto& row = into.emplace<Box>(Axis::Horizontal);
+    row.emplace<Label>(kind_label(static_cast<cutline::ui::MediaKind>(kind))).set_small(true);
+    row.emplace<Spacer>();
+
+    const auto at = std::ranges::find(colours, app.settings.label_defaults[kind]);
+    auto& choice = row.emplace<Dropdown>(
+        choices, at == colours.end() ? 0 : static_cast<std::size_t>(at - colours.begin()));
+    choice.set_on_change([&app, kind, colours](std::size_t index) {
+      if (index >= colours.size()) return;
+      app.settings.label_defaults[kind] = colours[index];
+      save_settings(app);
+    });
+  }
+
+  into.emplace<Label>("These apply to what you import next.").set_small(true);
+}
+
 /// The pages a settings window offers, in the order they are listed.
 [[nodiscard]] std::vector<SettingsPage> pages_for(SettingsKind kind) {
   if (kind == SettingsKind::Project) {
@@ -4598,6 +4717,7 @@ void build_autosave_page(App& app, Box& into) {
     return {SettingsPage{"General", build_sequence_page}};
   }
   return {SettingsPage{"Appearance", build_appearance_page},
+          SettingsPage{"Labels", build_labels_page},
           SettingsPage{"Timeline", build_timeline_page},
           SettingsPage{"Auto Save", build_autosave_page}};
 }
@@ -4618,6 +4738,11 @@ void refresh_settings_page(App& app) {
   }
   if (app.settings_tabs != nullptr) app.settings_tabs->set_current(app.settings_page);
 
+  // Back to the top: a page arrived at half way down because the last one was
+  // long is a page that looks like it starts in the middle of itself.
+  if (auto* scroller = dynamic_cast<ScrollView*>(app.settings_body->parent())) {
+    scroller->scroll_to(0.0);
+  }
   if (app.settings_window != nullptr && app.settings_window->host != nullptr) {
     app.settings_window->host->request_layout();
     app.settings_window->dirty = true;
@@ -4674,9 +4799,15 @@ void close_settings_dialog(App& app);
     app.settings_tabs = &tabs;
   }
 
-  auto& body = split.emplace<Box>(Axis::Vertical);
-  body.set_spacing(8.0);
-  app.settings_body = &body;
+  // Scrolled, because the pages are not the same height and never will be:
+  // Labels is sixteen rows and Auto Save is two. A window sized to the tallest
+  // would be mostly empty on every other page, and one sized to the shortest
+  // would hide half of Labels with nothing saying so.
+  auto& scroller = split.emplace<ScrollView>(Axis::Vertical);
+  auto body = std::make_unique<Box>(Axis::Vertical);
+  body->set_spacing(8.0);
+  app.settings_body = body.get();
+  scroller.set_content(std::move(body));
   return root;
 }
 
@@ -4707,8 +4838,8 @@ void open_settings_dialog(App& app, SettingsKind kind) {
   // Wide enough for the widest page, which `--check` measures rather than
   // anybody guessing: at 460 it found the pane short of the sentence under the
   // durations by forty pixels, in every theme.
-  const int width = kind == SettingsKind::Project ? 460 : 540;
-  const int height = kind == SettingsKind::Project ? 430 : 330;
+  const int width = kind == SettingsKind::Project ? 470 : 580;
+  const int height = kind == SettingsKind::Project ? 430 : 420;
   const int x = owner.left + ((owner.right - owner.left) - width) / 2;
   const int y = owner.top + ((owner.bottom - owner.top) - height) / 2;
 
@@ -5281,6 +5412,7 @@ void import_media(App& app) {
   std::string id;
   app.session.apply(cutline::editor::import_media(app.session.project(), *source, &id,
                                                  app.settings.still_length));
+  label_new_media(app, id);
   refresh_all(app);
 
   // Selected in the pool, so it is obvious where it went — a browser that has
@@ -5638,6 +5770,7 @@ void open_from_command_line(App& app, const std::filesystem::path& path) {
     std::string id;
     app.session.apply(cutline::editor::import_media(app.session.project(), *source, &id,
                                                    app.settings.still_length));
+    label_new_media(app, id);
     refresh_all(app);
     if (app.browser != nullptr && !id.empty()) app.browser->select_id(id);
     show_source(app, id);
@@ -6278,10 +6411,11 @@ void open_label_menu(App& app, std::span<const std::string> clips, double x, dou
   std::vector<std::string> labels{"None"};
   std::vector<bool> ticks{agreed && current.empty()};
   std::vector<std::string> colors{std::string{}};
-  for (const cutline::editor::ClipLabel& label : cutline::editor::clip_labels()) {
-    labels.emplace_back(label.name);
-    colors.emplace_back(label.color);
-    ticks.push_back(agreed && current == label.color);
+  const std::span<const cutline::editor::ClipLabel> palette = cutline::editor::clip_labels();
+  for (std::size_t i = 0; i < palette.size(); ++i) {
+    labels.emplace_back(cutline::editor::label_name(app.settings, i));
+    colors.emplace_back(palette[i].color);
+    ticks.push_back(agreed && current == palette[i].color);
   }
 
   auto list = std::make_unique<MenuList>(std::move(labels));
@@ -8051,7 +8185,13 @@ void save_workspaces(App& app, bool complain_on_failure) {
 /// every crash, and the file is a few hundred bytes — the cost of writing it on
 /// each change is nothing next to a preference that does not stick.
 void save_settings(App& app) {
-  cutline::editor::Settings settings;
+  // Started from what is already held rather than from a fresh struct, so a
+  // setting with no live field of its own — the labels, the durations — is
+  // carried through instead of being dropped. Building this from scratch and
+  // naming the fields to copy back is a bug waiting for the next setting: the
+  // labels were wiped on every save for exactly that reason until it was found
+  // by renaming one and watching it not stick.
+  cutline::editor::Settings settings = app.settings;
   settings.theme = std::string(built_in_themes()[app.theme].name);
   settings.snapping = app.snapping;
   settings.looping = app.looping;
@@ -8061,11 +8201,6 @@ void save_settings(App& app) {
   settings.pool_descending = app.browser_descending;
   settings.pool_view =
       app.browser == nullptr ? cutline::ui::BrowserView::List : app.browser->view();
-  // Straight through: nothing else holds these, so what was read or typed is
-  // what goes back.
-  settings.still_length = app.settings.still_length;
-  settings.transition_length = app.settings.transition_length;
-  settings.autosave_seconds = app.settings.autosave_seconds;
   app.settings = settings;
 
   // Quietly. Losing a preference is not worth a dialog in the middle of an
@@ -8993,6 +9128,10 @@ void settle(App& app) {
   if (app.inspector_stale) {
     app.inspector_stale = false;
     refresh_inspector(app);
+  }
+  if (app.settings_page_stale) {
+    app.settings_page_stale = false;
+    refresh_settings_page(app);
   }
 #if CUTLINE_HAVE_PREVIEW
   // Once per frame at most, however many mouse moves a scrub produced. A
@@ -10301,8 +10440,8 @@ template <typename T>
           app.settings_page = page;
           WidgetHost dialog(build_settings_interface(app, nullptr, kind));
           refresh_settings_page(app);
-          dialog.resize(Rect{0.0, 0.0, kind == SettingsKind::Project ? 460.0 : 540.0,
-                             kind == SettingsKind::Project ? 430.0 : 330.0},
+          dialog.resize(Rect{0.0, 0.0, kind == SettingsKind::Project ? 470.0 : 580.0,
+                             kind == SettingsKind::Project ? 430.0 : 420.0},
                         context);
           dialog.paint(*painter, theme);
           walk(dialog.root());

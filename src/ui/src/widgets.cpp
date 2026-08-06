@@ -512,7 +512,24 @@ LayoutItem ScrollView::sizing(Axis axis, const LayoutContext& context) const {
   if (axis == axis_) return LayoutItem::flexible();
   const Widget* inner = content();
   if (inner == nullptr) return LayoutItem::flexible();
-  return inner->sizing(axis, context);
+
+  // Across it, the content's own size *plus the gutter the bar will take out of
+  // it*. Asking for the content's width alone and then giving the content that
+  // width minus a scrollbar leaves it short by exactly the bar — which is a
+  // squeeze in everything it holds, and it was one: the settings pages were
+  // ten points narrow in every theme until this was written down.
+  //
+  // Reserved whether or not a bar is showing. Whether one is depends on how
+  // much room this gets along the *other* axis, which is not known while its
+  // size is being asked for, and a view that changed width when its content
+  // grew a row would shuffle everything beside it.
+  const LayoutItem wanted = inner->sizing(axis, context);
+  const double gutter = context.metrics().scrollbar_width;
+  return LayoutItem{.basis = wanted.basis + gutter,
+                    .grow = wanted.grow,
+                    .shrink = wanted.shrink,
+                    .min = wanted.min + gutter,
+                    .max = wanted.max};
 }
 
 void ScrollView::scroll_to(double offset) {

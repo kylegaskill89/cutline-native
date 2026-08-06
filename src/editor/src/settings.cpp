@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <span>
 #include <cstdlib>
 #include <fstream>
 #include <ios>
@@ -51,7 +52,32 @@ using nlohmann::json;
   return text == "icons" ? ui::BrowserView::Icons : ui::BrowserView::List;
 }
 
+/// Written and read as an array of colours in `ui::MediaKind` order, padded to
+/// the kinds this build has. A map keyed by name would survive a kind being
+/// inserted; an array keyed by position would not, so the reader pads and
+/// truncates rather than trusting the length.
+[[nodiscard]] std::vector<std::string> sized_to(std::vector<std::string> list,
+                                                std::size_t count) {
+  list.resize(count);
+  return list;
+}
+
 }  // namespace
+
+std::string_view label_name(const Settings& settings, std::size_t index) {
+  const std::span<const ClipLabel> labels = clip_labels();
+  if (index >= labels.size()) return {};
+  if (index < settings.label_names.size() && !settings.label_names[index].empty()) {
+    return settings.label_names[index];
+  }
+  return labels[index].name;
+}
+
+std::string_view label_default(const Settings& settings, ui::MediaKind kind) {
+  const auto at = static_cast<std::size_t>(kind);
+  if (at >= settings.label_defaults.size()) return {};
+  return settings.label_defaults[at];
+}
 
 std::string to_json(const Settings& settings, int indent) {
   json out;
@@ -67,6 +93,15 @@ std::string to_json(const Settings& settings, int indent) {
   out["still_length"] = settings.still_length;
   out["transition_length"] = settings.transition_length;
   out["autosave_seconds"] = settings.autosave_seconds;
+  // Only when somebody has changed one. A fresh file saying "every label is
+  // called what it is already called" is eight lines of nothing.
+  if (std::ranges::any_of(settings.label_names, [](const std::string& n) { return !n.empty(); })) {
+    out["label_names"] = settings.label_names;
+  }
+  if (std::ranges::any_of(settings.label_defaults,
+                          [](const std::string& c) { return !c.empty(); })) {
+    out["label_defaults"] = settings.label_defaults;
+  }
   return out.dump(indent);
 }
 
@@ -103,6 +138,14 @@ std::expected<Settings, std::string> settings_from_json(std::string_view text) {
   settings.autosave_seconds =
       std::clamp(document.value("autosave_seconds", settings.autosave_seconds),
                  kMinAutosaveSeconds, kMaxAutosaveSeconds);
+
+  // Sized to what this build has rather than to what the file says. A file from
+  // a version with one more label would otherwise reach past the palette, and
+  // one from a version with fewer would leave the last name unreadable.
+  settings.label_names =
+      sized_to(document.value("label_names", std::vector<std::string>{}), clip_labels().size());
+  settings.label_defaults = sized_to(document.value("label_defaults", std::vector<std::string>{}),
+                                     ui::kMediaKindCount);
   return settings;
 }
 
