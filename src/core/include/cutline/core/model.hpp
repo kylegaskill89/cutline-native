@@ -188,7 +188,32 @@ struct Media {
   std::optional<double> in_point;
   std::optional<double> out_point;
 
+  /// The bin this entry is filed in, or empty for the top level.
+  ///
+  /// A name here rather than the entry living inside a bin's own list, so that
+  /// filing something is one field changing rather than two containers being
+  /// kept in step. A bin that no longer exists reads as the top level, which is
+  /// what makes deleting one impossible to get wrong.
+  std::string bin;
+
   friend bool operator==(const Media&, const Media&) = default;
+};
+
+// --------------------------------------------------------------------- bin --
+
+/// A folder in the project panel.
+///
+/// Holds nothing. A bin is a name and a place in a tree; what is *in* it is
+/// whatever names it, which is the only arrangement where filing a clip cannot
+/// leave two lists disagreeing about where it is. The tree is flat here and
+/// nested by `parent`, so reparenting is one assignment and saving is a list.
+struct Bin {
+  std::string id;
+  std::string name;
+  /// The bin this one sits inside, or empty for the top level.
+  std::string parent;
+
+  friend bool operator==(const Bin&, const Bin&) = default;
 };
 
 // -------------------------------------------------------------------- clip --
@@ -531,6 +556,8 @@ struct Project {
   bool use_proxies = false;
 
   std::vector<Media> media;
+  /// Folders the pool is filed into. Flat, and nested by `Bin::parent`.
+  std::vector<Bin> bins;
   /// Video tracks first (topmost), then audio. Note that video tracks composite
   /// bottom-first, so the render order is the reverse of the storage order.
   std::vector<Track> tracks;

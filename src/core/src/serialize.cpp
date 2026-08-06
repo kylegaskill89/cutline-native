@@ -194,6 +194,15 @@ json write(const Media& m) {
   put_if_set(j, "in_point", m.in_point);
   put_if_set(j, "out_point", m.out_point);
   if (!m.proxy_path.empty()) j["proxy_path"] = m.proxy_path;
+  if (!m.bin.empty()) j["bin"] = m.bin;
+  return j;
+}
+
+json write(const Bin& b) {
+  json j{{"id", b.id}, {"name", b.name}};
+  // Omitted at the top level, which is where most bins are: a key saying
+  // "parent: nothing" on every one of them says less than its absence.
+  if (!b.parent.empty()) j["parent"] = b.parent;
   return j;
 }
 
@@ -281,6 +290,10 @@ json write(const Project& p) {
   json media = json::array();
   for (const Media& m : p.media) media.push_back(write(m));
   put_unless_empty(j, "media", media);
+
+  json bins = json::array();
+  for (const Bin& b : p.bins) bins.push_back(write(b));
+  put_unless_empty(j, "bins", bins);
 
   json tracks = json::array();
   for (const Track& t : p.tracks) tracks.push_back(write(t));
@@ -452,6 +465,7 @@ Media read_media(const json& j) {
   m.in_point = read_optional<double>(j, "in_point");
   m.out_point = read_optional<double>(j, "out_point");
   m.proxy_path = read_or(j, "proxy_path", std::string{});
+  m.bin = read_or(j, "bin", std::string{});
   return m;
 }
 
@@ -551,6 +565,17 @@ Project read_project(const json& j) {
     for (const json& m : *media) p.media.push_back(read_media(m));
   }
 
+  const auto bins = j.find("bins");
+  if (bins != j.end() && bins->is_array()) {
+    for (const json& b : *bins) {
+      p.bins.push_back(Bin{
+          .id = read_or(b, "id", std::string{}),
+          .name = read_or(b, "name", std::string{}),
+          .parent = read_or(b, "parent", std::string{}),
+      });
+    }
+  }
+
   const auto tracks = j.find("tracks");
   if (tracks != j.end() && tracks->is_array()) {
     for (const json& t : *tracks) p.tracks.push_back(read_track(t));
@@ -579,6 +604,7 @@ Project read_project(const json& j) {
 /// them. Group ids count: a paste remaps groups through freshly minted ones.
 void note_ids(const Project& p) {
   for (const Media& m : p.media) note_id(m.id);
+  for (const Bin& b : p.bins) note_id(b.id);
   for (const Marker& m : p.markers) note_id(m.id);
   for (const Track& t : p.tracks) {
     note_id(t.id);

@@ -286,6 +286,49 @@ TEST(Serialize, AProjectWrittenBeforeProxiesReadsAsHavingNone) {
   EXPECT_FALSE(loaded->project.use_proxies);
 }
 
+TEST(Serialize, BinsAndWhatIsFiledInThemSurviveTheFile) {
+  Project p = empty_project();
+  p.bins = {Bin{.id = "bin_1", .name = "Day 1"},
+            Bin{.id = "bin_2", .name = "Cameras", .parent = "bin_1"}};
+  Media m;
+  m.id = "m1";
+  m.path = "D:/footage/wide.mp4";
+  m.bin = "bin_2";
+  p.media = {m};
+
+  const auto loaded = from_json(to_json(p));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  ASSERT_EQ(loaded->project.bins.size(), 2u);
+  EXPECT_EQ(loaded->project.bins[1].name, "Cameras");
+  EXPECT_EQ(loaded->project.bins[1].parent, "bin_1");
+  EXPECT_TRUE(loaded->project.bins[0].parent.empty());
+  EXPECT_EQ(loaded->project.media[0].bin, "bin_2");
+}
+
+TEST(Serialize, AProjectWrittenBeforeBinsReadsAsOneFlatPool) {
+  Media m;
+  m.id = "m1";
+  Project p = empty_project();
+  p.media = {m};
+
+  const auto loaded = from_json(to_json(p));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_TRUE(loaded->project.bins.empty());
+  EXPECT_TRUE(loaded->project.media[0].bin.empty());
+}
+
+TEST(Serialize, ABinIdFromAFileIsNotHandedOutAgain) {
+  // The same hazard as clip ids: the counter starts at zero every run, so a
+  // project holding bin_4 would otherwise get a second bin_4 from the next
+  // "New Bin" — and every operation that finds a bin by id would hit both.
+  Project p = empty_project();
+  p.bins = {Bin{.id = "bin_9", .name = "Day 1"}};
+
+  const auto loaded = from_json(to_json(p));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_NE(new_id("bin"), "bin_9");
+}
+
 TEST(Serialize, ReportsMissingMediaWithoutDroppingIt) {
   Project p = empty_project();
   Media m;
