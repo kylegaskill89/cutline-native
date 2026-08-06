@@ -879,13 +879,13 @@ fact about the person and are saved beside the presets.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| Bins | folders of media, nested, saved with the project | one flat pool | model |
+| ~~Bins~~ | folders of media, nested, saved with the project | **done** — New Bin, nested, drag to file | — |
 | ~~Relinking~~ | point a moved file at its new home, and the clips follow | **done** — Project ▸ Relink Media | — |
 | ~~Proxies~~ | attach a small copy, edit against it, export from the original | **done** — Project ▸ Make Proxies / Use Proxies | — |
-| Metadata columns | a real column view, sortable by clicking a heading | one name and one detail string | control |
-| Icon view | thumbnails, and hover to scrub them | a letter badge | control |
-| Labels | a colour per entry, carried onto its clips | none | model |
-| New sequence from a clip | drag onto "New Item", or the menu | none | wiring |
+| ~~Metadata columns~~ | a real column view, sortable by clicking a heading | **done** — Name, Duration, Used, Kind | — |
+| ~~Icon view~~ | thumbnails, and hover to scrub them | **done** — the List/Icons button | — |
+| ~~Labels~~ | a colour per entry, carried onto its clips | **done** — the pool's Label menu | — |
+| New sequence from a clip | drag onto "New Item", or the menu | **needs sequences**, see below | model |
 
 **Relinking is the smallest of these and the one that loses work without it.**
 Everything needed is present: a source knows its path, `missing_media` says
@@ -910,15 +910,37 @@ transcode for an hour uninvited), and no proxy for audio, which is decoded from
 the original wherever it is wanted and cheap enough that a smaller copy would
 buy nothing.
 
-**Bins are a model change and a drawing change at once.** A tree of folders in
-the project, and a browser that draws a tree rather than a list. The browser
-already draws rather than builds, so nesting is arithmetic in `row_rect` rather
-than a new widget.
+**Bins are done**, and the shape of them is worth recording: a bin holds
+nothing. It is a name and a place in a tree, and what is *in* it is whatever
+names it — one field on the media entry rather than a list on the bin. That is
+the only arrangement where filing a clip cannot leave two containers
+disagreeing about where it is, and it is why deleting a folder cannot lose
+footage: media naming a bin that has gone reads as top level.
 
-**Columns and icon view are the same feature seen twice** — both are "show more
-about each entry than a name" — and both are worth less than they look while
-the pool is flat, because the thing that makes a large pool workable is
-somewhere to put things rather than more to read about them.
+Deleting a bin from the panel *does* take its contents, which is Premiere's
+behaviour and the destructive one, so anything holding something asks first.
+The structural half (`core::remove_bins`) and the destructive half
+(`editor::remove_bin`) are separate functions for that reason.
+
+**Columns and the icon view were the same feature seen twice** and both are
+done. The columns replaced the button that cycled through the orderings — the
+order belongs on the column it applies to. The icon view is a grid of tiles
+where the pointer's position across a tile picks the frame, so running along a
+picture walks the source; that is the part worth having, and a grid of stills
+from the middles of files would not have been.
+
+**New sequence from a clip needs something this project does not have yet: more
+than one sequence.** A `Project` holds its tracks directly — there is no
+`Sequence` type — so "new sequence from this clip" has nowhere to put the
+sequence it would make. The audit called this row "wiring" and that was wrong.
+
+The useful half of it already happens: `match_sequence_to` sets the canvas and
+frame rate from the first thing imported, so a project started from 4K footage
+is a 4K project without anybody being asked. What is missing is the ability to
+have a second sequence at all, which is a model change (a list of sequences, a
+notion of which one is open, a tab strip to switch them) and a much larger
+piece of work than the rest of this section put together. It belongs in a
+section of its own rather than as the last row of this one.
 
 ---
 
