@@ -244,5 +244,35 @@ TEST(Proxy, TheDefaultPathSitsBesideTheFootage) {
   EXPECT_EQ(std::filesystem::path(path).stem(), "A001");
 }
 
+TEST(Proxy, AChosenFolderIsWhereItGoesInstead) {
+  const std::string path = default_proxy_path("D:/Footage/Card 1/A001.MXF", "E:/Fast/Proxies");
+  EXPECT_EQ(std::filesystem::path(path).parent_path(), "E:/Fast/Proxies");
+  EXPECT_EQ(std::filesystem::path(path).extension(), ".mp4");
+  EXPECT_NE(std::filesystem::path(path).stem().string().find("A001"), std::string::npos)
+      << "the name should still read as the file it stands for";
+}
+
+TEST(Proxy, TwoCardsWithTheSameFilenameDoNotCollideInAChosenFolder) {
+  // The hazard a folder introduces and beside-the-footage cannot have: two
+  // cards both holding A001.MXF are two files beside their own footage and one
+  // file in a folder somebody chose, and the second would silently be the
+  // first — a proxy showing the wrong shot, which is the worst thing this
+  // feature could do.
+  const std::string first = default_proxy_path("D:/Card 1/A001.MXF", "E:/Proxies");
+  const std::string second = default_proxy_path("D:/Card 2/A001.MXF", "E:/Proxies");
+  EXPECT_NE(first, second);
+
+  // And the same source twice is the same proxy, or nothing would ever be
+  // found again after it was made.
+  EXPECT_EQ(default_proxy_path("D:/Card 1/A001.MXF", "E:/Proxies"), first);
+}
+
+TEST(Proxy, TheSameSourceIsTheSameProxyHoweverThePathIsWritten) {
+  // Windows takes either slash, and a proxy made through one and looked for
+  // through the other would be transcoded twice.
+  EXPECT_EQ(default_proxy_path("D:/Card 1/A001.MXF", "E:/Proxies"),
+            default_proxy_path(R"(D:\Card 1\A001.MXF)", "E:/Proxies"));
+}
+
 }  // namespace
 }  // namespace cutline::media

@@ -33,6 +33,9 @@ target_link_libraries(cutline PRIVATE
   dwmapi
   # The open and save dialogs.
   comdlg32
+  # `IFileDialog`, which is the folder picker. `SHBrowseForFolder` would need
+  # only shell32, and draws a tree nobody can type a path into.
+  ole32
   # timeBeginPeriod, so the playback loop can pace itself to a frame rather
   # than to Windows' default 15.6 ms scheduler tick.
   winmm)

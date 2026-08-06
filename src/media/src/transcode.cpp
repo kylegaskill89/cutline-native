@@ -6,6 +6,7 @@
 #include <cmath>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <vector>
 
 namespace cutline::media {
@@ -87,10 +88,23 @@ struct Encode {
 
 }  // namespace
 
-std::string default_proxy_path(std::string_view source) {
-  std::filesystem::path path(source);
-  std::filesystem::path folder = path.parent_path() / "Proxies";
-  return (folder / path.filename()).replace_extension(".mp4").string();
+std::string default_proxy_path(std::string_view source, std::string_view folder) {
+  const std::filesystem::path path(source);
+  if (folder.empty()) {
+    const std::filesystem::path beside = path.parent_path() / "Proxies";
+    return (beside / path.filename()).replace_extension(".mp4").string();
+  }
+
+  // A digest of the whole source path, because two cards both holding
+  // `A001.MXF` are two files beside their own footage and one file in a folder
+  // somebody chose — and the second of them would silently be the first.
+  // Enough of the hash to make a collision a curiosity rather than a risk, and
+  // short enough that the name still reads as the file it stands for.
+  const std::size_t digest = std::hash<std::string>{}(path.generic_string());
+  const std::string tag = std::format("{:08x}", static_cast<std::uint32_t>(digest));
+  std::filesystem::path named = path.filename();
+  named.replace_extension();
+  return (std::filesystem::path(folder) / (named.string() + "-" + tag + ".mp4")).string();
 }
 
 std::expected<ProxyResult, std::string> write_proxy(std::string_view source,

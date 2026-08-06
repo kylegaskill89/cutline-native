@@ -77,13 +77,21 @@ enum class ProxyResult {
                                                                   std::string_view destination,
                                                                   const ProxyOptions& options = {});
 
-/// Where a proxy for `source` is written by default: alongside it, in a
-/// `Proxies` folder, with the same name and an `.mp4` extension.
+/// Where a proxy for `source` goes: in `folder` when there is one, and
+/// otherwise alongside the footage in a `Proxies` folder. Either way it takes
+/// the source's name and an `.mp4` extension.
 ///
-/// Beside the footage rather than in the project, because footage outlives
-/// projects — the same card cut twice should not be transcoded twice — and
-/// because a drive fast enough to hold the original is fast enough to read the
-/// proxy from.
-[[nodiscard]] std::string default_proxy_path(std::string_view source);
+/// Beside the footage by default, because footage outlives projects — the same
+/// card cut twice should not be transcoded twice — and because a drive fast
+/// enough to hold the original is fast enough to read the proxy from. A folder
+/// is offered because that is often not true: a card mounted read-only has
+/// nowhere beside it to put anything, and a slow drive is exactly the case
+/// proxies exist for.
+///
+/// Names collide in a chosen folder where they could not beside the footage —
+/// two cards both holding `A001.MXF` are one file there — so a proxy written
+/// somewhere else carries a short digest of the source's path.
+[[nodiscard]] std::string default_proxy_path(std::string_view source,
+                                             std::string_view folder = {});
 
 }  // namespace cutline::media

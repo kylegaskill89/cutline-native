@@ -21,7 +21,7 @@ ProxyBuilder::~ProxyBuilder() {
 }
 
 void ProxyBuilder::request(std::string media_id, std::string name, std::string source,
-                           std::string destination) {
+                           std::string destination, int height) {
   // Generated media has no file behind it, and neither does a source whose
   // proxy has nowhere to go.
   if (source.empty() || destination.empty()) return;
@@ -34,8 +34,8 @@ void ProxyBuilder::request(std::string media_id, std::string name, std::string s
     for (const Job& job : queue_) {
       if (already(job)) return;
     }
-    queue_.push_back(
-        Job{std::move(media_id), std::move(name), std::move(source), std::move(destination)});
+    queue_.push_back(Job{std::move(media_id), std::move(name), std::move(source),
+                         std::move(destination), height});
   }
   ensure_worker();
   wake_.notify_one();
@@ -125,6 +125,7 @@ void ProxyBuilder::run() {
     constexpr auto kTellEvery = std::chrono::milliseconds(250);
 
     media::ProxyOptions options;
+    options.height = job.height;
     options.on_progress = [&, this](double done) {
       // `stopping_` is read under the lock and `cancelling_` is not, because
       // only one of them is written by a thread that could be inside this

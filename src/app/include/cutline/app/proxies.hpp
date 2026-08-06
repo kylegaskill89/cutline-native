@@ -68,8 +68,13 @@ class ProxyBuilder {
   /// nothing, so a button pressed twice does not transcode twice. Asking again
   /// after one finished *does* run again — footage can be replaced, and refusing
   /// would leave no way to rebuild a proxy that no longer matches.
+  /// `height` is how tall to write it; the width follows the source's aspect.
+  /// Taken per request rather than held on the builder, so a queue started at
+  /// 540 finishes at 540 however the preference is changed while it runs — a
+  /// batch that came out half one size and half another would be a pool nobody
+  /// could reason about.
   void request(std::string media_id, std::string name, std::string source,
-               std::string destination);
+               std::string destination, int height = media::kProxyHeight);
 
   /// Proxies finished since this was last called, and clears them.
   ///
@@ -105,6 +110,7 @@ class ProxyBuilder {
     std::string name;
     std::string source;
     std::string destination;
+    int height = media::kProxyHeight;
   };
 
   void ensure_worker();

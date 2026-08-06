@@ -80,6 +80,9 @@
 #include <dwmapi.h>
 // For `ShellExecuteW`, which is what starts the downloaded installer.
 #include <shellapi.h>
+// For `IFileDialog`, the only folder picker on this platform that can be typed
+// into. The old `SHBrowseForFolder` draws a tree from Windows 2000 and cannot.
+#include <shobjidl.h>
 // For `timeBeginPeriod`: the default 15.6 ms scheduler tick is most of a frame
 // at 60 Hz, and the playback loop cannot pace itself with one that coarse.
 #include <timeapi.h>
@@ -1064,6 +1067,7 @@ void add_matte(App& app);
 void add_adjustment(App& app);
 void complain(HWND owner, const std::string& message);
 [[nodiscard]] std::optional<std::filesystem::path> choose_image_file(HWND owner);
+[[nodiscard]] std::optional<std::filesystem::path> choose_folder(HWND owner);
 void take_snapshot(App& app);
 void check_for_updates(App& app);
 void settle_update(App& app);
@@ -3813,7 +3817,9 @@ void make_proxies([[maybe_unused]] App& app) {
     if (!media.has_video) continue;  // audio is read from the original either way
 
     app.proxies.request(media.id, media.name, media.path,
-                        cutline::media::default_proxy_path(media.path));
+                        cutline::media::default_proxy_path(media.path,
+                                                           app.settings.proxy_folder),
+                        app.settings.proxy_height);
     ++asked;
   }
 
@@ -4708,6 +4714,77 @@ void build_labels_page(App& app, Box& into) {
   into.emplace<Label>("These apply to what you import next.").set_small(true);
 }
 
+/// The two layers agree about what a proxy's height defaults to. `editor` is
+/// built without FFmpeg and cannot name `media::kProxyHeight`, so this is the
+/// one place both spellings are visible at once.
+static_assert(cutline::editor::kDefaultProxyHeight == cutline::media::kProxyHeight,
+              "the settings default and the transcode default have drifted apart");
+
+/// How big proxies are and where they go. Premiere's Ingest Settings.
+void build_proxies_page(App& app, Box& into) {
+  into.emplace<Label>("Proxy size").set_bold(true);
+
+  auto& size_row = into.emplace<Box>(Axis::Horizontal);
+  size_row.emplace<Label>("Height").set_small(true);
+  size_row.emplace<Spacer>();
+
+  // A short list of the sizes anybody would pick rather than a free number.
+  // What a machine can keep up with is a fact about the desk this is running
+  // on, so it has to be adjustable — but the useful answers are four, and a
+  // field inviting 437 would only make one bad session.
+  constexpr std::array<int, 4> kProxyHeights{360, 540, 720, 1080};
+  std::vector<std::string> sizes;
+  std::size_t chosen = 1;
+  for (std::size_t i = 0; i < kProxyHeights.size(); ++i) {
+    sizes.push_back(std::to_string(kProxyHeights[i]) + "p");
+    if (kProxyHeights[i] == app.settings.proxy_height) chosen = i;
+  }
+  auto& size_choice = size_row.emplace<Dropdown>(std::move(sizes), chosen);
+  size_choice.set_on_change([&app](std::size_t index) {
+    if (index >= kProxyHeights.size()) return;
+    app.settings.proxy_height = kProxyHeights[index];
+    save_settings(app);
+  });
+
+  into.emplace<Label>("Where they go").set_bold(true);
+
+  // The path on its own row and the buttons under it. A path has no length
+  // anybody can plan for, and sharing a row with two buttons is what `--check`
+  // found overflowing in the roomiest theme the moment there was a real one.
+  //
+  // Elided from the front, because the end of a path is the part that says
+  // where it is: "…/Fast Scratch/Cutline Proxies" is useful and "E:/Fast
+  // Scratch/Cutli…" is not.
+  constexpr std::size_t kLongestPath = 44;
+  std::string shown = app.settings.proxy_folder.empty() ? std::string("Beside the footage")
+                                                        : app.settings.proxy_folder;
+  if (shown.size() > kLongestPath) shown = "..." + shown.substr(shown.size() - kLongestPath + 3);
+  into.emplace<Label>(shown).set_small(true);
+
+  auto& where = into.emplace<Box>(Axis::Horizontal);
+  where.emplace<Button>("Choose...", [&app] {
+    const auto folder = choose_folder(app.settings_window == nullptr ? app.main.window
+                                                                    : app.settings_window->window);
+    if (!folder.has_value()) return;
+    app.settings.proxy_folder = folder->string();
+    save_settings(app);
+    app.settings_page_stale = true;
+  });
+  // Only when there is something to go back from. A button offering the state
+  // the label beside it already reports is a control that cannot do anything,
+  // and two of them saying the same words is worse than one.
+  if (!app.settings.proxy_folder.empty()) {
+    where.emplace<Button>("Use the footage's folder", [&app] {
+      app.settings.proxy_folder.clear();
+      save_settings(app);
+      app.settings_page_stale = true;
+    });
+  }
+
+  into.emplace<Label>("Proxies already made keep the size and place they were made at.")
+      .set_small(true);
+}
+
 /// The pages a settings window offers, in the order they are listed.
 [[nodiscard]] std::vector<SettingsPage> pages_for(SettingsKind kind) {
   if (kind == SettingsKind::Project) {
@@ -4719,6 +4796,7 @@ void build_labels_page(App& app, Box& into) {
   return {SettingsPage{"Appearance", build_appearance_page},
           SettingsPage{"Labels", build_labels_page},
           SettingsPage{"Timeline", build_timeline_page},
+          SettingsPage{"Proxies", build_proxies_page},
           SettingsPage{"Auto Save", build_autosave_page}};
 }
 
@@ -5486,6 +5564,62 @@ void add_adjustment(App& app) {
   const BOOL chosen = saving ? GetSaveFileNameW(&dialog) : GetOpenFileNameW(&dialog);
   if (chosen == FALSE) return std::nullopt;
   return std::filesystem::path(buffer.data());
+}
+
+/// The system's folder picker, for the one setting that names a directory.
+///
+/// `IFileDialog` with `FOS_PICKFOLDERS` rather than the old
+/// `SHBrowseForFolder`, which draws a tree from Windows 2000 and cannot be
+/// typed into.
+///
+/// COM is initialised here rather than at startup because this is the only
+/// thing on this thread that needs it, and it is undone on the way out unless
+/// somebody else had already claimed the thread for another apartment — in
+/// which case the dialog still works and the claim is not ours to release.
+[[nodiscard]] std::optional<std::filesystem::path> choose_folder(HWND owner) {
+  const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  const bool ours = SUCCEEDED(com);
+  const auto finish = [ours] {
+    if (ours) CoUninitialize();
+  };
+
+  IFileDialog* dialog = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&dialog)))) {
+    finish();
+    return std::nullopt;
+  }
+  const auto release = [&] {
+    dialog->Release();
+    finish();
+  };
+
+  DWORD options = 0;
+  if (SUCCEEDED(dialog->GetOptions(&options))) {
+    dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM);
+  }
+  dialog->SetTitle(L"Where proxies go");
+
+  if (FAILED(dialog->Show(owner))) {
+    release();
+    return std::nullopt;
+  }
+
+  IShellItem* item = nullptr;
+  if (FAILED(dialog->GetResult(&item))) {
+    release();
+    return std::nullopt;
+  }
+
+  PWSTR path = nullptr;
+  std::optional<std::filesystem::path> chosen;
+  if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path != nullptr) {
+    chosen = std::filesystem::path(path);
+    CoTaskMemFree(path);
+  }
+  item->Release();
+  release();
+  return chosen;
 }
 
 /// Where an export should go. Its own dialog rather than a parameter on the
@@ -10433,6 +10567,11 @@ template <typename T>
       // and presets, which is exactly the shape a theme with a wider font
       // squeezes. Laid out in a host of their own at the size the dialog opens
       // at, since that is the only width they ever have.
+      // A chosen proxy folder, so the page is measured in its fuller state: it
+      // grows a button and a much longer label there, and that is the shape
+      // that can overflow. A page checked only in its emptiest arrangement is a
+      // page checked where nothing goes wrong.
+      app.settings.proxy_folder = "E:/Fast Scratch/Cutline Proxies";
       for (const SettingsKind kind : {SettingsKind::Application, SettingsKind::Project}) {
         const std::vector<SettingsPage> pages = pages_for(kind);
         for (std::size_t page = 0; page < pages.size(); ++page) {
@@ -10447,6 +10586,7 @@ template <typename T>
           walk(dialog.root());
         }
       }
+      app.settings.proxy_folder.clear();
       app.settings_body = nullptr;
       app.settings_tabs = nullptr;
     }

@@ -102,6 +102,8 @@ std::string to_json(const Settings& settings, int indent) {
                           [](const std::string& c) { return !c.empty(); })) {
     out["label_defaults"] = settings.label_defaults;
   }
+  out["proxy_height"] = settings.proxy_height;
+  if (!settings.proxy_folder.empty()) out["proxy_folder"] = settings.proxy_folder;
   return out.dump(indent);
 }
 
@@ -146,6 +148,10 @@ std::expected<Settings, std::string> settings_from_json(std::string_view text) {
       sized_to(document.value("label_names", std::vector<std::string>{}), clip_labels().size());
   settings.label_defaults = sized_to(document.value("label_defaults", std::vector<std::string>{}),
                                      ui::kMediaKindCount);
+
+  settings.proxy_height = std::clamp(document.value("proxy_height", settings.proxy_height),
+                                     kMinProxyHeight, kMaxProxyHeight);
+  settings.proxy_folder = document.value("proxy_folder", settings.proxy_folder);
   return settings;
 }
 

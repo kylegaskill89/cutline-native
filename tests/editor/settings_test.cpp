@@ -62,6 +62,8 @@ class TempSettings {
   settings.autosave_seconds = 120;
   settings.label_names = {"Interview", "", "", "", "", "", "", "B-roll"};
   settings.label_defaults = {"#8f7bb8", "", "", "", "", "#c07a92"};
+  settings.proxy_height = 720;
+  settings.proxy_folder = "E:/Fast/Proxies";
   return settings;
 }
 
@@ -82,6 +84,8 @@ TEST(Settings, TheDefaultsAreWhatTheApplicationAlreadyDid) {
   EXPECT_DOUBLE_EQ(settings.still_length, kStillLength);
   EXPECT_DOUBLE_EQ(settings.transition_length, kPreferredTransitionLength);
   EXPECT_EQ(settings.autosave_seconds, static_cast<int>(kAutosaveInterval.count()));
+  EXPECT_EQ(settings.proxy_height, kDefaultProxyHeight);
+  EXPECT_TRUE(settings.proxy_folder.empty()) << "beside the footage is the default";
 }
 
 // ------------------------------------------------------------------ labels --
@@ -268,6 +272,27 @@ TEST(Settings, ANegativeDurationCannotSurvive) {
   const auto loaded = settings_from_json(R"({"still_length":-5.0})");
   ASSERT_TRUE(loaded.has_value()) << loaded.error();
   EXPECT_GT(loaded->still_length, 0.0);
+}
+
+TEST(Settings, AProxyHeightIsClampedRatherThanTrusted) {
+  // A hand-edited zero would ask the encoder for a picture with no rows in it.
+  const auto none = settings_from_json(R"({"proxy_height":0})");
+  ASSERT_TRUE(none.has_value()) << none.error();
+  EXPECT_GE(none->proxy_height, kMinProxyHeight);
+
+  const auto huge = settings_from_json(R"({"proxy_height":99999})");
+  ASSERT_TRUE(huge.has_value()) << huge.error();
+  EXPECT_EQ(huge->proxy_height, kMaxProxyHeight);
+}
+
+TEST(Settings, AProxyFolderIsOnlyWrittenWhenThereIsOne) {
+  // Beside the footage is the default and the absence of a key, so a fresh
+  // file does not carry an empty path for somebody to wonder about.
+  EXPECT_EQ(to_json(Settings{}).find("proxy_folder"), std::string::npos);
+
+  Settings elsewhere;
+  elsewhere.proxy_folder = "E:/Fast";
+  EXPECT_NE(to_json(elsewhere).find("proxy_folder"), std::string::npos);
 }
 
 TEST(Settings, AnUnknownSortReadsAsPoolOrder) {

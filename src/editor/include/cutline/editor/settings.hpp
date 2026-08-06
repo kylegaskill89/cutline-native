@@ -38,6 +38,14 @@ namespace cutline::editor {
 /// is refused rather than half-read, exactly as the workspaces are.
 inline constexpr int kSettingsSchemaVersion = 1;
 
+/// How tall a proxy is written when nobody has said otherwise.
+///
+/// Spelled out here rather than taken from `media::kProxyHeight`, because this
+/// layer is built and tested without FFmpeg anywhere near it — that is the
+/// whole reason `editor` exists as a separate thing. The two are asserted equal
+/// in the one translation unit that can see both.
+inline constexpr int kDefaultProxyHeight = 540;
+
 struct Settings {
   /// The theme, by name rather than by index.
   ///
@@ -103,6 +111,24 @@ struct Settings {
   /// every title Mango was not coloured by anybody, and reads at a glance.
   std::vector<std::string> label_defaults;
 
+  // ------------------------------------------------------------- proxies --
+
+  /// How tall a proxy is written. Width follows the source's aspect.
+  ///
+  /// The one proxy setting with no right answer: what a machine can keep up
+  /// with, and what a screen makes worth looking at, are facts about the desk
+  /// this is running on. The *quality* stays fixed — it is a number on the
+  /// encoder's own scale, and a control offering somebody a CRF to guess at
+  /// makes worse sessions than a default chosen once with a reason beside it.
+  int proxy_height = kDefaultProxyHeight;
+
+  /// Where proxies are written, or empty for beside the footage.
+  ///
+  /// Premiere's Ingest Settings, and worth having because footage is so often
+  /// on a drive that is slow, full, or somebody else's — a card mounted
+  /// read-only has nowhere beside it to put anything.
+  std::string proxy_folder;
+
   friend bool operator==(const Settings&, const Settings&) = default;
 };
 
@@ -125,6 +151,8 @@ inline constexpr double kMinTransitionLength = 0.04;
 inline constexpr double kMaxTransitionLength = 60.0;
 inline constexpr int kMinAutosaveSeconds = 15;
 inline constexpr int kMaxAutosaveSeconds = 3600;
+inline constexpr int kMinProxyHeight = 180;
+inline constexpr int kMaxProxyHeight = 2160;
 
 /// The smallest and largest preview scales a file may ask for.
 inline constexpr double kMinPreviewScale = 0.1;
