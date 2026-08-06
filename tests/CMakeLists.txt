@@ -30,6 +30,7 @@ add_executable(cutline_core_tests
   editor/bins_test.cpp
   editor/presets_test.cpp
   editor/session_test.cpp
+  editor/settings_test.cpp
   editor/timeline_binding_test.cpp
   editor/titles_test.cpp
   editor/transitions_test.cpp

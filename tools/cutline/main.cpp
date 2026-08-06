@@ -38,6 +38,7 @@
 #include "cutline/editor/presets.hpp"
 #include "cutline/editor/monitor_binding.hpp"
 #include "cutline/editor/session.hpp"
+#include "cutline/editor/settings.hpp"
 #include "cutline/editor/timeline_binding.hpp"
 #include "cutline/editor/titles.hpp"
 #include "cutline/editor/transitions.hpp"
@@ -449,6 +450,9 @@ struct App {
   MediaBrowser* browser = nullptr;
   /// The button that swaps the pool between a list and a grid of pictures.
   Button* view_button = nullptr;
+  /// The view the settings asked for, applied when the panel is built — the
+  /// browser does not exist yet when the file is read.
+  cutline::ui::BrowserView pool_view = cutline::ui::BrowserView::List;
   cutline::editor::BrowserSort browser_sort = cutline::editor::BrowserSort::Pool;
   bool browser_descending = false;
   /// The bins showing what is inside them.
@@ -610,6 +614,10 @@ struct App {
   cutline::editor::Workspaces workspaces = cutline::editor::default_workspaces();
   /// Where the file was read from, and where it goes back to.
   std::filesystem::path workspace_file = cutline::editor::default_workspace_path();
+
+  /// Where the settings file is, so a test or a portable copy can point
+  /// somewhere else without the writing having to be told twice.
+  std::filesystem::path settings_file = cutline::editor::default_settings_path();
   Button* workspace_button = nullptr;
   /// Set when the arrangement has changed and the views need rebuilding.
   ///
@@ -948,6 +956,7 @@ void mark_dirty(App& app) {
 }
 
 void set_theme(App& app, std::size_t index);
+void save_settings(App& app);
 void refresh_timeline(App& app);
 void refresh_busy(App& app);
 void refresh_drop_ghost(App& app);
@@ -2788,6 +2797,7 @@ void refresh_inspector(App& app) {
     lock.set_on_change([&app](bool locked) {
       app.aspect_locked = locked;
       if (app.monitor != nullptr) app.monitor->set_aspect_locked(locked);
+      save_settings(app);
       mark_dirty(app);
     });
   }
@@ -3244,6 +3254,7 @@ void sort_by_column(App& app, cutline::ui::MediaColumn column) {
     app.browser_sort = cutline::editor::BrowserSort::Pool;
     app.browser_descending = false;
   }
+  save_settings(app);
   refresh_browser(app);
 }
 
@@ -4464,6 +4475,7 @@ constexpr std::array<double, 7> kFrameRates{23.976, 24.0, 25.0, 29.97, 30.0, 50.
 void choose_preview_scale(App& app, double scale) {
   if (app.preview_scale == scale) return;
   app.preview_scale = scale;
+  save_settings(app);
   // Kept in step for the callers that are not the control itself — the
   // dropdown has already moved when it is the one asking, and setting it back
   // to where it is costs nothing.
@@ -4642,6 +4654,7 @@ void invalidate_playback(App& app) {
 
 void toggle_looping(App& app) {
   app.looping = !app.looping;
+  save_settings(app);
   if (app.loop_button != nullptr) app.loop_button->set_selected(app.looping);
   mark_dirty(app);
 }
@@ -5526,6 +5539,7 @@ void show_snapping(App& app) {
 
 void toggle_snapping(App& app) {
   app.snapping = !app.snapping;
+  save_settings(app);
   show_snapping(app);
 }
 
@@ -5701,6 +5715,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     const bool icons = app->browser->view() == cutline::ui::BrowserView::Icons;
     app->browser->set_view(icons ? cutline::ui::BrowserView::List
                                  : cutline::ui::BrowserView::Icons);
+    save_settings(*app);
     // Named for what it would do next, so the button says where pressing it
     // goes rather than where you already are.
     if (app->view_button != nullptr) app->view_button->set_text(icons ? "Icons" : "List");
@@ -5759,6 +5774,11 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   if (app != nullptr) {
     app->browser = &pool;
     app->view_button = &view_choice;
+    // Whatever the settings asked for, applied now that there is a widget to
+    // ask it of. The button is named for what it would do next, so it says the
+    // opposite of the view being shown.
+    pool.set_view(app->pool_view);
+    view_choice.set_text(app->pool_view == cutline::ui::BrowserView::Icons ? "List" : "Icons");
     refresh_browser(*app);
   } else {
     // The headless check builds these with no session behind them. Filling the
@@ -7736,6 +7756,30 @@ void save_workspaces(App& app, bool complain_on_failure) {
   }
 }
 
+/// Gathers what the person has chosen, and writes it.
+///
+/// Called from every place that changes one of these rather than on a timer or
+/// at shutdown. A setting written only on a clean exit is a setting lost by
+/// every crash, and the file is a few hundred bytes — the cost of writing it on
+/// each change is nothing next to a preference that does not stick.
+void save_settings(App& app) {
+  cutline::editor::Settings settings;
+  settings.theme = std::string(built_in_themes()[app.theme].name);
+  settings.snapping = app.snapping;
+  settings.looping = app.looping;
+  settings.aspect_locked = app.aspect_locked;
+  settings.preview_scale = app.preview_scale;
+  settings.pool_sort = app.browser_sort;
+  settings.pool_descending = app.browser_descending;
+  settings.pool_view =
+      app.browser == nullptr ? cutline::ui::BrowserView::List : app.browser->view();
+
+  // Quietly. Losing a preference is not worth a dialog in the middle of an
+  // edit, and the one place it would matter — a settings directory that cannot
+  // be written at all — would complain once per keystroke.
+  (void)cutline::editor::write_settings(app.settings_file, settings);
+}
+
 /// Rebuilds the dock from the layout.
 ///
 /// Panel contents are carried across by the view itself, so this costs a walk
@@ -8717,6 +8761,7 @@ void render(Shell& shell) {
 void set_theme(App& app, std::size_t index) {
   if (index >= built_in_themes().size() || index == app.theme) return;
   app.theme = index;
+  save_settings(app);
 
   // Metrics change with the theme, so everything has to be measured again —
   // in every window, not only the one whose button was pressed.
@@ -10055,6 +10100,26 @@ int main(int argc, char** argv) {
 
   App app;
   app.main.app = &app;
+
+  // The preferences first of all, and before the tree is built: the theme
+  // decides every metric the layout is measured against, so reading it
+  // afterwards would mean laying the whole window out twice — and the first of
+  // those would be visible.
+  if (auto read = cutline::editor::read_settings(app.settings_file); read.has_value()) {
+    const cutline::editor::Settings& settings = *read;
+    // By name, and quietly ignored when it names one this build does not have.
+    const auto theme = std::ranges::find(built_in_themes(), settings.theme, &Theme::name);
+    if (theme != built_in_themes().end()) {
+      app.theme = static_cast<std::size_t>(theme - built_in_themes().begin());
+    }
+    app.snapping = settings.snapping;
+    app.looping = settings.looping;
+    app.aspect_locked = settings.aspect_locked;
+    app.preview_scale = settings.preview_scale;
+    app.browser_sort = settings.pool_sort;
+    app.browser_descending = settings.pool_descending;
+    app.pool_view = settings.pool_view;
+  }
 
   // Read before the tree is built, so the window opens in the arrangement it
   // was last left in rather than flashing the default and then moving.
