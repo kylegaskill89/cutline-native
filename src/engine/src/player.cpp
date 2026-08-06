@@ -116,6 +116,32 @@ class EventHandle {
   return name;
 }
 
+/// A UTF-8 string as the wide one every Windows call wants.
+[[nodiscard]] std::wstring widen(std::string_view text) {
+  if (text.empty()) return {};
+  const int size = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+                                       nullptr, 0);
+  if (size <= 0) return {};
+  std::wstring wide(static_cast<std::size_t>(size), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), size);
+  return wide;
+}
+
+/// A device's system identifier, which is what a preference stores: it survives
+/// a reboot and a rename, where the friendly name survives neither.
+[[nodiscard]] std::string device_id_of(IMMDevice* device) {
+  LPWSTR id = nullptr;
+  if (FAILED(device->GetId(&id)) || id == nullptr) return {};
+  const int size = WideCharToMultiByte(CP_UTF8, 0, id, -1, nullptr, 0, nullptr, nullptr);
+  std::string out;
+  if (size > 1) {
+    out.assign(static_cast<std::size_t>(size) - 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, id, -1, out.data(), size, nullptr, nullptr);
+  }
+  CoTaskMemFree(id);
+  return out;
+}
+
 /// What the render thread reports back once it has a device, so `create` can
 /// fail with a real message instead of returning a player that never plays.
 struct Opened {
@@ -207,9 +233,19 @@ void Player::Impl::render(const core::Project& project, PlayerSettings settings,
   }
 
   ComPtr<IMMDevice> endpoint;
-  if (HRESULT hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &endpoint);
-      FAILED(hr)) {
-    return fail(std::format("no default audio output device: {}", describe(hr)));
+  if (!settings.device_id.empty()) {
+    // A device that is not there is not an error. An interface somebody
+    // unplugged should cost them the sound they were used to, not the ability
+    // to play at all — so this falls through to the default and the preference
+    // is left alone, which is what makes plugging it back in resume.
+    const std::wstring wide = widen(settings.device_id);
+    if (FAILED(enumerator->GetDevice(wide.c_str(), &endpoint))) endpoint = nullptr;
+  }
+  if (endpoint == nullptr) {
+    if (HRESULT hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &endpoint);
+        FAILED(hr)) {
+      return fail(std::format("no default audio output device: {}", describe(hr)));
+    }
   }
 
   ComPtr<IAudioClient> client;
@@ -499,6 +535,48 @@ double Player::duration() const noexcept { return impl_->timeline; }
 bool Player::finished() const noexcept { return impl_->at_end.load(std::memory_order_acquire); }
 
 const std::string& Player::device_name() const noexcept { return impl_->device; }
+
+std::vector<AudioOutput> audio_outputs() {
+  // Its own apartment, because this is called from the interface thread and the
+  // player owns its objects on the render thread. Both are short-lived claims
+  // on a thread that has no COM of its own.
+  const ComApartment apartment(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+
+  ComPtr<IMMDeviceEnumerator> enumerator;
+  if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                              IID_PPV_ARGS(&enumerator)))) {
+    return {};
+  }
+
+  // The default first, so it can be marked. A machine with none is normal on a
+  // build server and gives an empty list rather than an error.
+  std::string preferred;
+  ComPtr<IMMDevice> standard;
+  if (SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &standard)) &&
+      standard != nullptr) {
+    preferred = device_id_of(standard.Get());
+  }
+
+  ComPtr<IMMDeviceCollection> all;
+  if (FAILED(enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &all))) return {};
+
+  UINT count = 0;
+  if (FAILED(all->GetCount(&count))) return {};
+
+  std::vector<AudioOutput> outputs;
+  outputs.reserve(count);
+  for (UINT i = 0; i < count; ++i) {
+    ComPtr<IMMDevice> device;
+    if (FAILED(all->Item(i, &device)) || device == nullptr) continue;
+    std::string id = device_id_of(device.Get());
+    if (id.empty()) continue;
+    const bool is_default = !preferred.empty() && id == preferred;
+    outputs.push_back(AudioOutput{.id = std::move(id),
+                                  .name = friendly_name(device.Get()),
+                                  .is_default = is_default});
+  }
+  return outputs;
+}
 int Player::sample_rate() const noexcept { return impl_->rate; }
 int Player::channels() const noexcept { return impl_->channels; }
 bool Player::silent() const noexcept { return impl_->silent; }

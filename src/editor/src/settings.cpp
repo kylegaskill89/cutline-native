@@ -104,6 +104,10 @@ std::string to_json(const Settings& settings, int indent) {
   }
   out["proxy_height"] = settings.proxy_height;
   if (!settings.proxy_folder.empty()) out["proxy_folder"] = settings.proxy_folder;
+  if (!settings.audio_device.empty()) {
+    out["audio_device"] = settings.audio_device;
+    out["audio_device_name"] = settings.audio_device_name;
+  }
   return out.dump(indent);
 }
 
@@ -152,6 +156,8 @@ std::expected<Settings, std::string> settings_from_json(std::string_view text) {
   settings.proxy_height = std::clamp(document.value("proxy_height", settings.proxy_height),
                                      kMinProxyHeight, kMaxProxyHeight);
   settings.proxy_folder = document.value("proxy_folder", settings.proxy_folder);
+  settings.audio_device = document.value("audio_device", settings.audio_device);
+  settings.audio_device_name = document.value("audio_device_name", settings.audio_device_name);
   return settings;
 }
 

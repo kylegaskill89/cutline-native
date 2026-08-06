@@ -129,6 +129,19 @@ struct Settings {
   /// read-only has nowhere beside it to put anything.
   std::string proxy_folder;
 
+  // --------------------------------------------------------------- audio --
+
+  /// Which output to play through, by the system's own identifier, or empty for
+  /// whichever the system prefers.
+  ///
+  /// Kept by id rather than by name because a name is neither unique nor
+  /// stable: two identical interfaces are called the same thing, and one
+  /// renamed would silently stop being the chosen one. The name is remembered
+  /// beside it only so a device that is not plugged in can still be *named* in
+  /// the list rather than appearing as a line of hex.
+  std::string audio_device;
+  std::string audio_device_name;
+
   friend bool operator==(const Settings&, const Settings&) = default;
 };
 

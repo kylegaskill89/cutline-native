@@ -4111,7 +4111,8 @@ void toggle_source_playback([[maybe_unused]] App& app) {
     app.source_player.reset();
   }
   if (app.source_player == nullptr) {
-    auto made = cutline::engine::Player::create(source_project(*media));
+    auto made = cutline::engine::Player::create(source_project(*media),
+                                               {.device_id = app.settings.audio_device});
     if (!made.has_value()) {
       app.player_failed = true;
       complain(app.main.window, "Playback is unavailable.\n\n" + made.error());
@@ -4785,6 +4786,75 @@ void build_proxies_page(App& app, Box& into) {
       .set_small(true);
 }
 
+/// Which output to play through. Premiere's Preferences ▸ Audio Hardware.
+void build_audio_page([[maybe_unused]] App& app, Box& into) {
+  into.emplace<Label>("Output device").set_bold(true);
+
+#if CUTLINE_HAVE_PREVIEW
+  // Asked for each time the page is built rather than kept: devices are
+  // plugged in and out while an application runs, and a list gathered at
+  // startup would be wrong by the time anybody opened this.
+  const std::vector<cutline::engine::AudioOutput> outputs = cutline::engine::audio_outputs();
+
+  // Device names have no length anybody can plan for — "Speakers (High
+  // Definition Audio Device)" is an ordinary one — and a dropdown is as wide as
+  // its widest entry. `--check` found five squeezed widgets in every theme
+  // before this was cut back.
+  constexpr std::size_t kLongestDevice = 34;
+  const auto shorten = [](std::string name) {
+    if (name.size() > kLongestDevice) name = name.substr(0, kLongestDevice - 3) + "...";
+    return name;
+  };
+
+  std::vector<std::string> names{"System default"};
+  std::vector<std::string> ids{std::string{}};
+  std::size_t chosen = 0;
+  for (const cutline::engine::AudioOutput& output : outputs) {
+    names.push_back(shorten(output.is_default ? output.name + " (default)" : output.name));
+    ids.push_back(output.id);
+    if (output.id == app.settings.audio_device) chosen = ids.size() - 1;
+  }
+
+  // A chosen device that is not plugged in stays in the list, by the name it
+  // had when it was picked. Dropping it would silently reset the preference to
+  // the default, and plugging the interface back in would not bring it back.
+  if (!app.settings.audio_device.empty() && chosen == 0) {
+    names.push_back(shorten((app.settings.audio_device_name.empty()
+                                 ? std::string("Chosen device")
+                                 : app.settings.audio_device_name) +
+                            " (not connected)"));
+    ids.push_back(app.settings.audio_device);
+    chosen = ids.size() - 1;
+  }
+
+  into.emplace<Label>("Play through").set_small(true);
+  auto& choice = into.emplace<Dropdown>(names, chosen);
+  choice.set_on_change([&app, ids, names](std::size_t index) {
+    if (index >= ids.size()) return;
+    app.settings.audio_device = ids[index];
+    // The name goes with it, so a device that is unplugged later can still be
+    // named in this list rather than shown as a line of hex.
+    app.settings.audio_device_name = index == 0 ? std::string{} : names[index];
+    save_settings(app);
+    // The players hold a device open. Dropped rather than retargeted: WASAPI
+    // has no way to move a stream, and a player rebuilt on the next press is a
+    // pause nobody notices.
+    app.player.reset();
+    app.source_player.reset();
+    app.player_failed = false;
+    app.settings_page_stale = true;
+  });
+
+  if (outputs.empty()) {
+    into.emplace<Label>("No output devices. Playback will be silent.").set_small(true);
+  } else {
+    into.emplace<Label>("Playback restarts on the next press.").set_small(true);
+  }
+#else
+  into.emplace<Label>("This build has no audio.").set_small(true);
+#endif
+}
+
 /// The pages a settings window offers, in the order they are listed.
 [[nodiscard]] std::vector<SettingsPage> pages_for(SettingsKind kind) {
   if (kind == SettingsKind::Project) {
@@ -4794,6 +4864,7 @@ void build_proxies_page(App& app, Box& into) {
     return {SettingsPage{"General", build_sequence_page}};
   }
   return {SettingsPage{"Appearance", build_appearance_page},
+          SettingsPage{"Audio Hardware", build_audio_page},
           SettingsPage{"Labels", build_labels_page},
           SettingsPage{"Timeline", build_timeline_page},
           SettingsPage{"Proxies", build_proxies_page},
@@ -5285,7 +5356,8 @@ void toggle_playback(App& app) {
   }
 
   if (app.player == nullptr) {
-    auto made = cutline::engine::Player::create(app.session.project());
+    auto made = cutline::engine::Player::create(app.session.project(),
+                                               {.device_id = app.settings.audio_device});
     if (!made.has_value()) {
       // Once and no more: a machine with no output device will not acquire one,
       // and a dialog on every press of Play would be worse than the silence.

@@ -279,5 +279,41 @@ TEST(Player, ASilentProjectStillKeepsTime) {
   EXPECT_TRUE((*built)->error().empty()) << (*built)->error();
 }
 
+// ---------------------------------------------------------------- devices --
+
+TEST(Player, TheMachineListsItsOutputs) {
+  const std::vector<AudioOutput> outputs = audio_outputs();
+  if (outputs.empty()) GTEST_SKIP() << "no audio output devices on this machine";
+
+  int defaults = 0;
+  for (const AudioOutput& output : outputs) {
+    EXPECT_FALSE(output.id.empty()) << "a device with no id cannot be stored in a setting";
+    EXPECT_FALSE(output.name.empty()) << "a device with no name cannot be shown in a list";
+    if (output.is_default) ++defaults;
+  }
+  EXPECT_LE(defaults, 1) << "two devices claimed to be the default one";
+}
+
+TEST(Player, AChosenDeviceIsOpenedByItsId) {
+  const std::vector<AudioOutput> outputs = audio_outputs();
+  if (outputs.empty()) GTEST_SKIP() << "no audio output devices on this machine";
+
+  auto built = Player::create(tone_project(), {.device_id = outputs.front().id});
+  if (!built) GTEST_SKIP() << "that device would not open: " << built.error();
+  EXPECT_FALSE((*built)->device_name().empty());
+}
+
+TEST(Player, ADeviceThatIsNotThereFallsBackRatherThanFailing) {
+  // The behaviour that matters when somebody unplugs an interface. Losing the
+  // sound they were used to is a nuisance; losing the ability to play at all is
+  // an editor that stopped working because of a cable.
+  auto built = Player::create(tone_project(),
+                              {.device_id = "{0.0.0.00000000}.{no-such-device-at-all}"});
+  if (!built) GTEST_SKIP() << "no audio output device: " << built.error();
+
+  EXPECT_FALSE((*built)->device_name().empty()) << "it opened nothing at all";
+  EXPECT_TRUE((*built)->error().empty()) << (*built)->error();
+}
+
 }  // namespace
 }  // namespace cutline::engine

@@ -20,8 +20,27 @@
 #include <expected>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace cutline::engine {
+
+/// An output the machine offers, as something to choose from a list.
+struct AudioOutput {
+  /// The system's own identifier, which survives a reboot and a rename. What a
+  /// preference stores.
+  std::string id;
+  /// What it is called, which is what somebody reads. Not stable — a device can
+  /// be renamed, and two identical interfaces have the same name — so it is
+  /// never what a setting is keyed by.
+  std::string name;
+  bool is_default = false;
+};
+
+/// Every output device that could be played through, most useful first.
+///
+/// Empty when the machine has none, which is normal on a build server and is
+/// not an error: playback simply fails later, with a message about it.
+[[nodiscard]] std::vector<AudioOutput> audio_outputs();
 
 struct PlayerSettings {
   /// Preferred format. The device's own mix format wins when they differ —
@@ -29,11 +48,20 @@ struct PlayerSettings {
   /// than letting the mixer produce what the card already wants.
   int sample_rate = 48000;
   int channels = 2;
+
+  /// Which output to play through, or empty for whichever the system prefers.
+  ///
+  /// A device that is not there falls back to the default rather than failing.
+  /// An interface somebody unplugs should cost them the sound they were used
+  /// to, not the ability to play at all — and keeping the setting means
+  /// plugging it back in resumes without anybody visiting a dialog.
+  std::string device_id;
 };
 
 class Player {
  public:
-  /// Opens the default output device and decodes everything the project needs.
+  /// Opens the chosen output device — or the default — and decodes everything
+  /// the project needs.
   /// Fails when there is no usable output device, which is normal on a
   /// headless machine.
   [[nodiscard]] static std::expected<std::unique_ptr<Player>, std::string> create(
