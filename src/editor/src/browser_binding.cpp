@@ -133,6 +133,7 @@ void order(std::vector<ui::MediaItem>& rows, const BrowserOptions& options) {
   item.duration = media.duration;
   item.detail = media_detail(media, project.fps);
   item.uses = media_uses(project, media.id);
+  item.label_color = media.label_color;
   item.offline = !media.path.empty() &&
                  std::ranges::find(options.offline, media.path) != options.offline.end();
   return item;

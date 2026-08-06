@@ -195,6 +195,7 @@ json write(const Media& m) {
   put_if_set(j, "out_point", m.out_point);
   if (!m.proxy_path.empty()) j["proxy_path"] = m.proxy_path;
   if (!m.bin.empty()) j["bin"] = m.bin;
+  if (!m.label_color.empty()) j["label_color"] = m.label_color;
   return j;
 }
 
@@ -466,6 +467,7 @@ Media read_media(const json& j) {
   m.out_point = read_optional<double>(j, "out_point");
   m.proxy_path = read_or(j, "proxy_path", std::string{});
   m.bin = read_or(j, "bin", std::string{});
+  m.label_color = read_or(j, "label_color", std::string{});
   return m;
 }
 

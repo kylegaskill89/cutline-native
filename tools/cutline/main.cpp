@@ -214,6 +214,8 @@ using cutline::ui::built_in_themes;
                   Bin{.id = "bin_sound", .name = "Sound", .parent = "bin_pictures"}};
   project.media[0].bin = "bin_pictures";
   project.media[3].bin = "bin_sound";
+  // One labelled entry, so the check paints the stripe as well as the tree.
+  project.media[1].label_color = "#8f7bb8";
 
   const auto clip = [](std::string id, std::string media, double start, double length,
                        TrackKind kind = TrackKind::Video) {
@@ -953,6 +955,7 @@ void add_bin(App& app);
 void toggle_bin(App& app, std::size_t row);
 void file_into_bin(App& app, std::size_t from, std::size_t onto);
 void open_pool_menu(App& app, double x, double y);
+void open_media_label_menu(App& app, double x, double y);
 void make_proxies(App& app);
 void collect_proxies(App& app);
 void toggle_use_proxies(App& app);
@@ -3482,6 +3485,42 @@ void remove_from_pool(App& app) {
   refresh_all(app);
 }
 
+/// The colours a pool entry can be labelled with.
+///
+/// The same palette a clip's label uses, because a label put on the source is
+/// the one that ends up on every clip cut from it — two palettes would mean two
+/// meanings for the same colour.
+void open_media_label_menu(App& app, double x, double y) {
+  if (app.main.host == nullptr || app.browser == nullptr) return;
+  const cutline::ui::MediaItem* chosen = app.browser->selected();
+  if (chosen == nullptr) return;
+
+  const std::string media_id = chosen->id;
+  const std::string current = chosen->label_color;
+
+  std::vector<std::string> labels{"None"};
+  std::vector<bool> ticks{current.empty()};
+  std::vector<std::string> colors{std::string{}};
+  for (const cutline::editor::ClipLabel& label : cutline::editor::clip_labels()) {
+    labels.emplace_back(label.name);
+    colors.emplace_back(label.color);
+    ticks.push_back(current == label.color);
+  }
+
+  auto list = std::make_unique<MenuList>(std::move(labels));
+  list->set_checked(std::move(ticks));
+  list->set_on_choose([&app, colors, media_id](std::size_t index) {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    if (index >= colors.size()) return;
+    app.session.apply(
+        cutline::core::set_media_label(app.session.project(), media_id, colors[index]));
+    // Only the pool. Clips already on the timeline keep whatever they were
+    // given, which is the point of them taking a copy at placement.
+    refresh_browser(app);
+  });
+  app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
+}
+
 /// The pool's own menu, from a right-click.
 ///
 /// What a panel this narrow cannot hold as buttons. The row under the pointer is
@@ -3503,6 +3542,7 @@ void open_pool_menu(App& app, double x, double y) {
     items.push_back(Item{"Rename...", [&app] { rename_pool_entry(app); }});
     items.push_back(Item{is_bin ? "Delete Bin" : "Remove", [&app] { remove_from_pool(app); }});
     if (!is_bin) {
+      items.push_back(Item{"Label", [&app, x, y] { open_media_label_menu(app, x, y); }});
       items.push_back(Item{"Relink Media...", [&app] { relink_pool_entry(app); }});
       // Only where a row is already inside one. "Move to Top Level" on
       // something already there is an entry that cannot do anything.

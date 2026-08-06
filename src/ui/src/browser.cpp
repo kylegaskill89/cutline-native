@@ -228,6 +228,16 @@ void MediaBrowser::paint_content(Painter& painter, const Theme& theme) const {
     // with bevelled selection gets one.
     if (chosen) paint_surface(painter, row, theme.style(Part::Clip, State::Selected));
 
+    // A stripe down the leading edge, before anything else is drawn over it. A
+    // wash over the whole row would fight the selection for the same pixels,
+    // and a label is meant to be found at a glance down a list rather than read
+    // one entry at a time.
+    if (!item.label_color.empty()) {
+      painter.fill(Rect{row.x, row.y + 1.0, kBrowserLabelStripe,
+                        std::max(0.0, row.height - 2.0)},
+                   0.0, Fill::solid(parse_color(item.label_color, panel.text)));
+    }
+
     // The bin a drag would file into, drawn the same way a row being hovered
     // for a drop is drawn everywhere else here.
     if (const auto target = file_target(); target.has_value() && *target == i) {

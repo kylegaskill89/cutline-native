@@ -188,6 +188,15 @@ struct Media {
   std::optional<double> in_point;
   std::optional<double> out_point;
 
+  /// The colour this entry is labelled with, as "#rrggbb", or empty for none.
+  ///
+  /// The same palette a clip's label uses, and for the same reason: a label put
+  /// on the source is the one that ends up on every clip cut from it, so the
+  /// two have to mean the same thing. Clips take a copy at placement rather than
+  /// reading through to the media — relabelling a source should not repaint a
+  /// cut somebody has already coloured by hand.
+  std::string label_color;
+
   /// The bin this entry is filed in, or empty for the top level.
   ///
   /// A name here rather than the entry living inside a bin's own list, so that

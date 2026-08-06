@@ -1,5 +1,6 @@
 #include "cutline/core/properties.hpp"
 
+#include "cutline/core/edit.hpp"
 #include "cutline/core/id.hpp"
 #include "cutline/core/query.hpp"
 
@@ -895,6 +896,56 @@ TEST(ClipLabel, ChangesNothingAboutWhatIsRendered) {
   EXPECT_DOUBLE_EQ(was.opacity, now.opacity);
   EXPECT_EQ(was.disabled, now.disabled);
   EXPECT_EQ(was.effects.size(), now.effects.size());
+}
+
+// ------------------------------------------------------------- media labels --
+
+TEST(MediaLabel, IsPutOnClipsCutFromItAfterwards) {
+  // The whole point: label the source once and every shot from it arrives
+  // already coloured.
+  Project p = core::empty_project(1, 1);
+  Media media;
+  media.id = "f1";
+  media.duration = 10.0;
+  media.has_video = true;
+  p.media = {media};
+
+  p = set_media_label(std::move(p), "f1", "#8f7bb8");
+  p = place_media(std::move(p), "f1", 0.0);
+
+  ASSERT_FALSE(p.tracks.front().clips.empty());
+  EXPECT_EQ(p.tracks.front().clips.front().label_color, "#8f7bb8");
+}
+
+TEST(MediaLabel, DoesNotRepaintClipsAlreadyOnTheTimeline) {
+  // A label is exactly the thing people set by hand, and relabelling a source
+  // must not undo that.
+  Project p = core::empty_project(1, 1);
+  Media media;
+  media.id = "f1";
+  media.duration = 10.0;
+  media.has_video = true;
+  p.media = {media};
+
+  p = place_media(std::move(p), "f1", 0.0);
+  const std::string clip_id = p.tracks.front().clips.front().id;
+  p = set_clips_label(std::move(p), std::vector<std::string>{clip_id}, "#c05050");
+
+  p = set_media_label(std::move(p), "f1", "#8f7bb8");
+  EXPECT_EQ(find_clip(p, clip_id)->label_color, "#c05050")
+      << "labelling the source repainted a clip somebody had coloured by hand";
+}
+
+TEST(MediaLabel, AnEmptyColourTakesItOff) {
+  Project p = one_source_project();
+  p = set_media_label(std::move(p), "f1", "#8f7bb8");
+  p = set_media_label(std::move(p), "f1", "");
+  EXPECT_TRUE(p.media[0].label_color.empty());
+}
+
+TEST(MediaLabel, LabellingSomethingThatIsNotThereChangesNothing) {
+  const Project before = one_source_project();
+  EXPECT_EQ(set_media_label(before, "gone", "#8f7bb8"), before);
 }
 
 // ------------------------------------------------------------------ proxies --

@@ -539,6 +539,13 @@ Project set_proxy_path(Project p, std::string_view media_id, std::string path) {
   return p;
 }
 
+Project set_media_label(Project p, std::string_view media_id, std::string color) {
+  if (Media* media = find_media(p, media_id); media != nullptr) {
+    media->label_color = std::move(color);
+  }
+  return p;
+}
+
 Project set_use_proxies(Project p, bool use) {
   p.use_proxies = use;
   return p;

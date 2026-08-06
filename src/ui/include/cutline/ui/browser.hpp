@@ -86,6 +86,14 @@ struct MediaItem {
   /// Whether a bin is showing what is inside it. Meaningless on anything else.
   bool expanded = false;
 
+  /// The colour this row is labelled with, as "#rrggbb", or empty for none.
+  ///
+  /// Drawn as a stripe down the leading edge rather than as a wash over the
+  /// row: a tinted row fights the selection for the same pixels, and a label is
+  /// meant to be found at a glance down the list rather than read one entry at
+  /// a time. The timeline draws clip labels the same way.
+  std::string label_color;
+
   friend bool operator==(const MediaItem&, const MediaItem&) = default;
 };
 
@@ -245,6 +253,9 @@ class MediaBrowser : public Widget {
 inline constexpr double kBrowserIndent = 14.0;
 /// The chevron's square on a bin row.
 inline constexpr double kBrowserTwist = 14.0;
+/// How wide the stripe down a labelled row is. Thin: it is a mark saying which
+/// shot this is, not a second border.
+inline constexpr double kBrowserLabelStripe = 3.0;
 
 /// How far a press has to move before it counts as dragging an entry out.
 inline constexpr double kBrowserDragThreshold = 4.0;

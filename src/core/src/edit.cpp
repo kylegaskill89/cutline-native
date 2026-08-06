@@ -237,6 +237,9 @@ Project place_media(Project p, std::string_view media_id, double start,
     clip.source_out = source_out;
     clip.start = start;
     clip.group_id = group_id;
+    // Copied rather than looked up through the media. Relabelling a source
+    // should not repaint a cut somebody has already coloured by hand.
+    clip.label_color = media.label_color;
     p.tracks[*lanes.video].clips.push_back(std::move(clip));
     sort_track(p.tracks[*lanes.video]);
   }
@@ -256,6 +259,7 @@ Project place_media(Project p, std::string_view media_id, double start,
     clip.source_out = source_out;
     clip.start = start;
     clip.group_id = group_id;
+    clip.label_color = media.label_color;
     p.tracks[lanes.audio[stream]].clips.push_back(std::move(clip));
     sort_track(p.tracks[lanes.audio[stream]]);
   }

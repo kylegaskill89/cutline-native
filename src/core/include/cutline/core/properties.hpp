@@ -267,6 +267,13 @@ struct TrackPropsPatch {
 /// could need. Naming a media that is not in the project changes nothing.
 [[nodiscard]] Project set_proxy_path(Project p, std::string_view media_id, std::string path);
 
+/// Labels a pool entry, or takes its label off with an empty colour.
+///
+/// Only what is placed *after* this carries it. Repainting the clips already on
+/// the timeline would undo every label somebody set on a clip by hand, and a
+/// label is exactly the thing people set by hand.
+[[nodiscard]] Project set_media_label(Project p, std::string_view media_id, std::string color);
+
 /// Whether the preview reads from proxies where sources have them.
 ///
 /// A property of the project rather than of the application, so a cut opened on
