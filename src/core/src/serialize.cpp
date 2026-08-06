@@ -286,7 +286,8 @@ json write(const Project& p) {
          {"canvas_h", p.canvas_h},
          {"fps", p.fps},
          {"master_gain", p.master_gain},
-         {"use_proxies", p.use_proxies}};
+         {"use_proxies", p.use_proxies},
+         {"drop_frame", p.drop_frame}};
 
   json media = json::array();
   for (const Media& m : p.media) media.push_back(write(m));
@@ -561,6 +562,7 @@ Project read_project(const json& j) {
   p.fps = read_or(j, "fps", p.fps);
   p.master_gain = read_or(j, "master_gain", p.master_gain);
   p.use_proxies = read_or(j, "use_proxies", p.use_proxies);
+  p.drop_frame = read_or(j, "drop_frame", p.drop_frame);
 
   const auto media = j.find("media");
   if (media != j.end() && media->is_array()) {

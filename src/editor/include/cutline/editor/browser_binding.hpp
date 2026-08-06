@@ -24,7 +24,8 @@ namespace cutline::editor {
 
 /// The right-hand column: a duration for anything with one, and what it is for
 /// anything without.
-[[nodiscard]] std::string media_detail(const core::Media& media, double fps);
+[[nodiscard]] std::string media_detail(const core::Media& media, double fps,
+                                       bool drop_frame = false);
 
 /// How many clips in the sequence use this media.
 ///

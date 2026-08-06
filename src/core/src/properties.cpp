@@ -539,6 +539,11 @@ Project set_proxy_path(Project p, std::string_view media_id, std::string path) {
   return p;
 }
 
+Project set_drop_frame(Project p, bool drop_frame) {
+  p.drop_frame = drop_frame;
+  return p;
+}
+
 Project set_media_label(Project p, std::string_view media_id, std::string color) {
   if (Media* media = find_media(p, media_id); media != nullptr) {
     media->label_color = std::move(color);

@@ -40,7 +40,7 @@ ui::MediaKind media_kind(const core::Media& media) noexcept {
   return ui::MediaKind::Video;
 }
 
-std::string media_detail(const core::Media& media, double fps) {
+std::string media_detail(const core::Media& media, double fps, bool drop_frame) {
   switch (media_kind(media)) {
     case ui::MediaKind::Adjustment: return "adjustment";
     case ui::MediaKind::Title: return "title";
@@ -49,13 +49,13 @@ std::string media_detail(const core::Media& media, double fps) {
       // An animated still has a real running time; a plain one does not, and
       // showing its default placement length as though it did would be a lie.
       return media.is_animated && media.duration > 0.0
-                 ? core::seconds_to_timecode(media.duration, fps)
+                 ? core::seconds_to_timecode(media.duration, fps, drop_frame)
                  : "still";
     case ui::MediaKind::Audio:
     case ui::MediaKind::Video: break;
   }
   if (media.duration <= 0.0) return {};
-  return core::seconds_to_timecode(media.duration, fps);
+  return core::seconds_to_timecode(media.duration, fps, drop_frame);
 }
 
 int media_uses(const core::Project& project, std::string_view media_id) noexcept {
@@ -131,7 +131,7 @@ void order(std::vector<ui::MediaItem>& rows, const BrowserOptions& options) {
   item.name = media.name.empty() ? media.path : media.name;
   item.kind = media_kind(media);
   item.duration = media.duration;
-  item.detail = media_detail(media, project.fps);
+  item.detail = media_detail(media, project.fps, project.drop_frame);
   item.uses = media_uses(project, media.id);
   item.label_color = media.label_color;
   item.offline = !media.path.empty() &&

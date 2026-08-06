@@ -200,7 +200,9 @@ using cutline::ui::built_in_themes;
   using namespace cutline::core;
 
   Project project;
-  project.fps = 30.0;
+  // 29.97, so the headless pass lays out the drop-frame control at all — it is
+  // only shown where it means something, and at 30 it means nothing.
+  project.fps = 30000.0 / 1001.0;
   project.media = {
       Media{.id = "wide", .name = "wide.mp4", .duration = 120.0, .has_video = true},
       Media{.id = "close", .name = "close.mp4", .duration = 120.0, .has_video = true},
@@ -1005,6 +1007,7 @@ void mark_dirty(App& app) {
 }
 
 void set_theme(App& app, std::size_t index);
+void show_playhead(App& app);
 void save_settings(App& app);
 void refresh_timeline(App& app);
 void refresh_busy(App& app);
@@ -1192,7 +1195,8 @@ void show_playhead(App& app) {
   if (app.readout == nullptr) return;
   if (app.main.host != nullptr && app.main.host->focused() == app.readout) return;
   app.readout->set_text(
-      cutline::core::seconds_to_timecode(app.session.playhead(), app.session.project().fps));
+      cutline::core::seconds_to_timecode(app.session.playhead(), app.session.project().fps,
+                                         app.session.project().drop_frame));
 }
 
 void follow_playhead(App& app) {
@@ -4436,6 +4440,11 @@ void apply_fps(App& app, double fps) {
   refresh_timeline(app);
   refresh_title(app);
   invalidate_preview(app);
+  // The page that changed it shows what the rate makes possible: drop-frame
+  // appears at 29.97 and vanishes at 30, and nothing else would rebuild it.
+  if (app.settings_window != nullptr && app.settings_kind == SettingsKind::Project) {
+    app.settings_page_stale = true;
+  }
 }
 
 /// The rates worth offering, which are the ones cameras and screens produce.
@@ -4555,6 +4564,29 @@ void build_sequence_page(App& app, Box& into) {
     }
     apply_fps(app, rate);
   });
+
+  // Only where it means anything. At 25 or 30 the timecode already counts real
+  // seconds, and a choice between two spellings of one thing is a control that
+  // teaches somebody the wrong lesson about their own sequence.
+  if (cutline::core::supports_drop_frame(app.session.project().fps)) {
+    into.emplace<Label>("Timecode").set_bold(true);
+
+    auto& counting = into.emplace<Box>(Axis::Horizontal);
+    counting.emplace<Label>("Count").set_small(true);
+    counting.emplace<Spacer>();
+
+    auto& how = counting.emplace<Dropdown>(
+        std::vector<std::string>{"Drop frame", "Non-drop frame"},
+        app.session.project().drop_frame ? 0u : 1u);
+    how.set_on_change([&app](std::size_t index) {
+      app.session.apply(cutline::core::set_drop_frame(app.session.project(), index == 0));
+      refresh_all(app);
+    });
+
+    // Short because it has to fit the roomiest theme, and because the one
+    // thing anybody needs told is that no footage is harmed by this.
+    into.emplace<Label>("Skips numbers, never frames.").set_small(true);
+  }
 }
 
 /// The theme. Premiere's Preferences ▸ Appearance.
@@ -5518,6 +5550,19 @@ void refresh_all(App& app) {
   refresh_title(app);
   invalidate_preview(app);
   app.inspector_stale = true;
+  // The readout is a *timecode*, so how the project counts them is part of what
+  // it says. Nothing else here would repaint it: `refresh_timeline` redraws the
+  // ruler and leaves the field alone, which is right while somebody is typing
+  // into it and wrong the moment the counting changes underneath.
+  show_playhead(app);
+  // Project Settings shows the project, so a change to the project is a change
+  // to that page — setting the rate to 29.97 is exactly what makes the
+  // drop-frame choice appear, and it appeared nowhere until this was written.
+  // Deferred like the inspector, since what asked is usually a control inside
+  // the page about to be rebuilt.
+  if (app.settings_window != nullptr && app.settings_kind == SettingsKind::Project) {
+    app.settings_page_stale = true;
+  }
   // The master fader belongs to the document, so a loaded project moves it.
   if (app.master_fader != nullptr) {
     app.master_fader->set_value(
@@ -6671,7 +6716,8 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
   auto& length_row = panel->emplace<Box>(Axis::Horizontal);
   length_row.emplace<Label>("Duration");
   auto& length_field = length_row.emplace<TextField>(
-      cutline::core::seconds_to_timecode(cutline::core::clip_duration(*anchor), fps));
+      cutline::core::seconds_to_timecode(cutline::core::clip_duration(*anchor), fps,
+                                         app.session.project().drop_frame));
   length_field.set_columns(11);
 
   auto& reverse = panel->emplace<Checkbox>("Reverse speed", anchor->reverse);
@@ -6679,7 +6725,8 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
 
   // Each field rewrites the other when its edit ends. `span` is fixed by the
   // trim, so it is the constant the two are computed through.
-  speed_field.set_on_finish([field = &speed_field, other = &length_field, span, fps] {
+  const bool drop_frame = app.session.project().drop_frame;
+  speed_field.set_on_finish([field = &speed_field, other = &length_field, span, fps, drop_frame] {
     double percent = 0.0;
     if (std::from_chars(field->text().data(), field->text().data() + field->text().size(),
                         percent)
@@ -6689,10 +6736,12 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
     }
     const double rate = std::clamp(percent / 100.0, cutline::core::kMinSpeed,
                                    cutline::core::kMaxSpeed);
-    other->set_text(cutline::core::seconds_to_timecode(span / rate, fps));
+    other->set_text(cutline::core::seconds_to_timecode(span / rate, fps, drop_frame));
   });
-  length_field.set_on_finish([field = &length_field, other = &speed_field, span, fps] {
-    const std::optional<double> wanted = cutline::core::timecode_to_seconds(field->text(), fps);
+  length_field.set_on_finish([field = &length_field, other = &speed_field, span, fps,
+                              drop_frame] {
+    const std::optional<double> wanted =
+        cutline::core::timecode_to_seconds(field->text(), fps, drop_frame);
     if (!wanted.has_value() || *wanted <= 0.0) return;
     const double rate =
         std::clamp(span / *wanted, cutline::core::kMinSpeed, cutline::core::kMaxSpeed);
@@ -6747,7 +6796,8 @@ void open_marker_dialog(App& app, std::size_t index) {
   const double fps = app.session.project().fps;
 
   auto panel = std::make_unique<Panel>();
-  panel->emplace<Label>("Marker at " + cutline::core::seconds_to_timecode(marker.time, fps))
+  panel->emplace<Label>("Marker at " + cutline::core::seconds_to_timecode(
+                                          marker.time, fps, app.session.project().drop_frame))
       .set_bold(true);
 
   auto& name_row = panel->emplace<Box>(Axis::Horizontal);
@@ -6765,7 +6815,8 @@ void open_marker_dialog(App& app, std::size_t index) {
   // A timecode rather than seconds, like every other length in the interface.
   // Zero reads as a point marker, which is what it writes back as too.
   auto& span = span_row.emplace<TextField>(
-      cutline::core::seconds_to_timecode(marker.duration, fps));
+      cutline::core::seconds_to_timecode(marker.duration, fps,
+                                         app.session.project().drop_frame));
   span.set_columns(11);
 
   panel->emplace<Label>("Colour").set_small(true);
@@ -6805,7 +6856,8 @@ void open_marker_dialog(App& app, std::size_t index) {
                                  d = &span] {
     // A duration that does not parse leaves the one it had rather than
     // becoming zero, which would silently turn a span back into a point.
-    const std::optional<double> length = cutline::core::timecode_to_seconds(d->text(), fps);
+    const std::optional<double> length =
+        cutline::core::timecode_to_seconds(d->text(), fps, app.session.project().drop_frame);
     const cutline::core::Marker* was = nullptr;
     for (const cutline::core::Marker& m : app.session.project().markers) {
       if (m.id == id) was = &m;
@@ -7075,7 +7127,8 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
   readout.set_on_commit([app](const std::string& typed) {
     if (app == nullptr) return;
     const std::optional<double> at =
-        cutline::core::timecode_to_seconds(typed, app->session.project().fps);
+        cutline::core::timecode_to_seconds(typed, app->session.project().fps,
+                                           app->session.project().drop_frame);
     // Nothing that parses leaves the playhead where it is rather than sending
     // it to zero, which is what a mistyped character would otherwise do.
     if (!at.has_value()) {
@@ -8988,8 +9041,11 @@ void settle_export(App& app) {
   if (marked) {
     const cutline::core::MarkedSpan span = cutline::core::marked_span(app->session.project());
     const double fps = app->session.project().fps;
-    range += std::format(" ({} to {})", cutline::core::seconds_to_timecode(span.start, fps),
-                         cutline::core::seconds_to_timecode(span.start + span.duration, fps));
+    const bool drop = app->session.project().drop_frame;
+    range += std::format(" ({} to {})",
+                         cutline::core::seconds_to_timecode(span.start, fps, drop),
+                         cutline::core::seconds_to_timecode(span.start + span.duration, fps,
+                                                            drop));
   }
   auto& only = body.emplace<Checkbox>(std::move(range),
                                       app != nullptr && app->export_setup.marked_only && marked);

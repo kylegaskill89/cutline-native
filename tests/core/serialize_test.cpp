@@ -329,6 +329,27 @@ TEST(Serialize, ABinIdFromAFileIsNotHandedOutAgain) {
   EXPECT_NE(new_id("bin"), "bin_9");
 }
 
+TEST(Serialize, HowTimecodeIsCountedTravelsWithTheCut) {
+  Project p = empty_project();
+  p.fps = 30000.0 / 1001.0;
+  p.drop_frame = false;
+
+  const auto loaded = from_json(to_json(p));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_FALSE(loaded->project.drop_frame)
+      << "a sequence handed to somebody else has to number its frames the same way there";
+}
+
+TEST(Serialize, AProjectWrittenBeforeDropFrameCountsItTheBroadcastWay) {
+  // On by default, because the rates it applies to are broadcast rates and
+  // drop-frame is what broadcast means by timecode. A project from before this
+  // existed was being shown wall-clock numbers that skipped, so there is no
+  // older behaviour worth preserving.
+  const auto loaded = from_json(R"({"version": 1, "project": {"fps": 29.97}})");
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_TRUE(loaded->project.drop_frame);
+}
+
 TEST(Serialize, ReportsMissingMediaWithoutDroppingIt) {
   Project p = empty_project();
   Media m;

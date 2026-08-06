@@ -96,6 +96,7 @@ ui::TimelineModel timeline_model(const core::Project& project,
                                  const TimelineMedia& media) {
   ui::TimelineModel model;
   model.fps = project.fps;
+  model.drop_frame = project.drop_frame;
   model.duration = core::timeline_duration(project);
   model.in_point = project.in_point;
   model.out_point = project.out_point;

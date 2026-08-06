@@ -20,9 +20,30 @@ namespace cutline::core {
 /// independent. Used for durations and file-scoped times.
 [[nodiscard]] std::string seconds_to_timestamp(double seconds);
 
-/// Formats seconds as Premiere-style "HH:MM:SS:FF" at `fps`, where FF counts
-/// whole frames within the current second. Used for the playhead readout.
-[[nodiscard]] std::string seconds_to_timecode(double seconds, double fps);
+/// Whether drop-frame timecode means anything at this rate.
+///
+/// True only for the rates that are a thousand-and-first slower than a whole
+/// number — 29.97 and 59.94. At 25 or at 30 the timecode already counts real
+/// seconds and there is nothing to drop; offering the choice there would be
+/// offering two names for one thing.
+[[nodiscard]] bool supports_drop_frame(double fps) noexcept;
+
+/// Formats seconds as Premiere-style "HH:MM:SS:FF" at `fps`.
+///
+/// The frame index comes from the *actual* rate and the fields are counted at
+/// the nominal one, which is what timecode is: at 29.97 the thirtieth frame of
+/// a second is `:29` and the next is the following second's `:00`. Counting the
+/// index at the nominal rate instead — which this did until drop-frame went in
+/// — skips a number about every thousand frames, so the readout visibly
+/// stutters while the picture does not.
+///
+/// Non-drop timecode therefore falls behind the clock, by about 3.6 seconds an
+/// hour at 29.97. That is not an error; it is the whole reason drop-frame
+/// exists. With `drop_frame`, frame *numbers* are skipped — two at the start of
+/// every minute except every tenth — so the timecode tracks the clock again,
+/// and the separator before the frames becomes `;` to say so.
+[[nodiscard]] std::string seconds_to_timecode(double seconds, double fps,
+                                              bool drop_frame = false);
 
 /// And back: "HH:MM:SS:FF" at `fps` into seconds, snapped to a frame.
 ///
@@ -37,8 +58,13 @@ namespace cutline::core {
 /// is taken as seconds. Nothing that parses at all returns nothing — malformed
 /// input yields nothing, which is what leaves the playhead where it was rather
 /// than sending it to zero.
-[[nodiscard]] std::optional<double> timecode_to_seconds(std::string_view text,
-                                                        double fps) noexcept;
+///
+/// A `;` is accepted anywhere a `:` is, and means the same thing: what decides
+/// whether the digits are read as drop-frame is `drop_frame`, not the
+/// punctuation. Somebody copying a timecode out of an email should not have to
+/// get the semicolon right for it to land in the right place.
+[[nodiscard]] std::optional<double> timecode_to_seconds(std::string_view text, double fps,
+                                                        bool drop_frame = false) noexcept;
 
 /// Human-readable byte count ("12.00 MB"). Negative or non-finite input
 /// yields "Unknown Size".

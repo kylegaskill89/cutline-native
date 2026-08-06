@@ -564,6 +564,19 @@ struct Project {
   /// defaults to off so that nothing has to remember to turn it off.
   bool use_proxies = false;
 
+  /// Whether timecode is shown drop-frame where the rate allows it.
+  ///
+  /// A property of the sequence, not of the person: it is how the times in
+  /// *this* cut are written down and read back, and a cut handed to somebody
+  /// else has to number its frames the same way there. Premiere keeps it in
+  /// Project Settings for the same reason.
+  ///
+  /// Ignored entirely at 25, 30 and every other whole rate, where the timecode
+  /// already counts real seconds. On by default because the rates it applies to
+  /// — 29.97 and 59.94 — are broadcast rates, and drop-frame is what broadcast
+  /// means by timecode.
+  bool drop_frame = true;
+
   std::vector<Media> media;
   /// Folders the pool is filed into. Flat, and nested by `Bin::parent`.
   std::vector<Bin> bins;

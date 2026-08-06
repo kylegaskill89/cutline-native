@@ -156,5 +156,109 @@ TEST(TimecodeToSeconds, TheFrameRateIsWhatTheLastFieldMeans) {
   EXPECT_NEAR(*timecode_to_seconds("00:00:00:12", 48.0), 0.25, 1e-9);
 }
 
+// -------------------------------------------------------------- drop frame --
+
+TEST(DropFrame, OnlyTheRatesThatCanDriftSupportIt) {
+  // At 25 or 30 the timecode already counts real seconds. Offering the choice
+  // there would be offering two names for one thing.
+  EXPECT_TRUE(supports_drop_frame(30000.0 / 1001.0));
+  EXPECT_TRUE(supports_drop_frame(60000.0 / 1001.0));
+  EXPECT_TRUE(supports_drop_frame(29.97));
+  EXPECT_FALSE(supports_drop_frame(30.0));
+  EXPECT_FALSE(supports_drop_frame(25.0));
+  EXPECT_FALSE(supports_drop_frame(24000.0 / 1001.0)) << "23.976 has no drop-frame form";
+  EXPECT_FALSE(supports_drop_frame(0.0));
+}
+
+TEST(DropFrame, EveryFrameGetsItsOwnNumber) {
+  // The bug this replaced: counting the frame index at the *nominal* rate meant
+  // 29.97 skipped a timecode number about every thousand frames, so the readout
+  // stuttered while the picture did not.
+  constexpr double fps = 30000.0 / 1001.0;
+  std::set<std::string> seen;
+  std::string previous;
+  for (int frame = 0; frame < 3000; ++frame) {
+    const std::string shown = seconds_to_timecode(frame / fps, fps);
+    EXPECT_TRUE(seen.insert(shown).second) << "two frames share " << shown;
+    previous = shown;
+  }
+  EXPECT_EQ(seen.size(), 3000u);
+}
+
+TEST(DropFrame, NonDropFallsBehindTheClockAndThatIsCorrect) {
+  // An hour of 29.97 is 107892 frames, which counted at thirty is four minutes
+  // short of a whole hour by three and a half seconds. Drop-frame exists
+  // because of exactly this number.
+  constexpr double fps = 30000.0 / 1001.0;
+  EXPECT_EQ(seconds_to_timecode(3600.0, fps), "00:59:56:12");
+}
+
+TEST(DropFrame, DropFrameTracksTheClock) {
+  constexpr double fps = 30000.0 / 1001.0;
+  EXPECT_EQ(seconds_to_timecode(3600.0, fps, true), "01:00:00;00");
+  EXPECT_EQ(seconds_to_timecode(0.0, fps, true), "00:00:00;00");
+}
+
+TEST(DropFrame, TheNumbersDroppedAreTheFirstTwoOfNineMinutesInTen) {
+  // The rule itself, at the boundary where it bites. One minute in, the count
+  // jumps from :29 straight to ;02 — frames 00 and 01 of that minute have no
+  // number at all.
+  // In frame indices rather than in round seconds: a minute of drop-frame
+  // timecode is 1800 frames of the sequence, and 1800/29.97 is 60.06 seconds
+  // of clock — writing the test in seconds is how you test the wrong frame.
+  constexpr double fps = 30000.0 / 1001.0;
+  EXPECT_EQ(seconds_to_timecode(1799 / fps, fps, true), "00:00:59;29");
+  EXPECT_EQ(seconds_to_timecode(1800 / fps, fps, true), "00:01:00;02");
+}
+
+TEST(DropFrame, TheTenthMinuteKeepsItsNumbers) {
+  // The exception that stops the correction overshooting: every tenth minute
+  // drops nothing, which is why the drift comes out at zero over ten.
+  // Nine minutes have each lost two numbers by here, so ten minutes of
+  // timecode is 18000 - 18 frames of sequence.
+  constexpr double fps = 30000.0 / 1001.0;
+  EXPECT_EQ(seconds_to_timecode(17982 / fps, fps, true), "00:10:00;00");
+  EXPECT_EQ(seconds_to_timecode(17981 / fps, fps, true), "00:09:59;29");
+}
+
+TEST(DropFrame, TheSeparatorSaysWhichItIs) {
+  constexpr double fps = 30000.0 / 1001.0;
+  EXPECT_NE(seconds_to_timecode(5.0, fps, true).find(';'), std::string::npos);
+  EXPECT_EQ(seconds_to_timecode(5.0, fps, false).find(';'), std::string::npos);
+  // And asking for it where it means nothing gives the ordinary form rather
+  // than a semicolon that claims something untrue.
+  EXPECT_EQ(seconds_to_timecode(5.0, 30.0, true).find(';'), std::string::npos);
+}
+
+TEST(DropFrame, ReadingBackGivesTheFrameItCameFrom) {
+  // The round trip is what a timecode field lives or dies by: typing back what
+  // is displayed has to land on the same frame.
+  constexpr double fps = 30000.0 / 1001.0;
+  for (const int frame : {0, 1, 29, 30, 1799, 1800, 1801, 17981, 17982, 107891}) {
+    const double at = frame / fps;
+    for (const bool drop : {false, true}) {
+      const std::string shown = seconds_to_timecode(at, fps, drop);
+      const auto read = timecode_to_seconds(shown, fps, drop);
+      ASSERT_TRUE(read.has_value()) << shown;
+      EXPECT_NEAR(*read, at, 1.0 / fps * 0.5) << shown << " read back as a different frame";
+    }
+  }
+}
+
+TEST(DropFrame, EitherSeparatorIsAccepted) {
+  // What decides how the digits are read is the setting, not the punctuation.
+  constexpr double fps = 30000.0 / 1001.0;
+  EXPECT_EQ(timecode_to_seconds("00:01:00;02", fps, true),
+            timecode_to_seconds("00:01:00:02", fps, true));
+}
+
+TEST(DropFrame, AnIntegerRateIsUntouchedByAnyOfThis) {
+  // The change that matters most: nothing about 24, 25, 30 or 60 moved.
+  EXPECT_EQ(seconds_to_timecode(3600.0, 30.0), "01:00:00:00");
+  EXPECT_EQ(seconds_to_timecode(1.5, 30.0), "00:00:01:15");
+  EXPECT_EQ(seconds_to_timecode(0.5, 24.0), "00:00:00:12");
+  EXPECT_NEAR(*timecode_to_seconds("00:00:01:15", 30.0), 1.5, 1e-9);
+}
+
 }  // namespace
 }  // namespace cutline::core

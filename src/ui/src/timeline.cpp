@@ -1420,7 +1420,7 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
 
     if (!tick.major) continue;
     const Rect label{x + 3.0, ruler.y, 100.0, ruler.height * 0.6};
-    painter.text(text_run(label, core::seconds_to_timecode(tick.time, model_.fps), ruler_style,
+    painter.text(text_run(label, core::seconds_to_timecode(tick.time, model_.fps, model_.drop_frame), ruler_style,
                           metrics_.small_font_size, TextAlign::Left, false));
   }
 

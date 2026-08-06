@@ -121,6 +121,14 @@ inline constexpr double kMaxFps = 240.0;
 /// put, and what moves is which frames land either side of it.
 [[nodiscard]] Project set_fps(Project p, double fps);
 
+/// Whether timecode is shown drop-frame where the rate allows it.
+///
+/// Changes nothing about the cut — every time in the model is in seconds, and
+/// this is only how those seconds are written down. Stored on the project
+/// rather than as a preference because a sequence handed to somebody else has
+/// to number its frames the same way there.
+[[nodiscard]] Project set_drop_frame(Project p, bool drop_frame);
+
 /// Makes an **empty** sequence take its shape and rate from a media.
 ///
 /// A sequence starts 1080p at 30, because it has to start as something. Drop

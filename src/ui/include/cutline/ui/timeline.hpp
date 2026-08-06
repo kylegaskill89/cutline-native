@@ -361,6 +361,9 @@ struct TimelineModel {
   /// worked out from the blocks.
   double duration = 0.0;
   double fps = 30.0;
+  /// Whether the ruler's timecode is drop-frame. Meaningless at whole rates,
+  /// and the widget does not decide it — the sequence does.
+  bool drop_frame = false;
 
   /// What the top of a volume band means. The model's ceiling, carried here so
   /// the timeline does not have to know the model to draw one.
