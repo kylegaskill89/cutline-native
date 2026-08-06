@@ -12,6 +12,7 @@
 
 #include "cutline/core/model.hpp"
 
+#include <cstddef>
 #include <optional>
 #include <span>
 #include <string>
@@ -256,6 +257,26 @@ struct TrackPropsPatch {
 [[nodiscard]] Project clear_source_marks(Project p, std::string_view media_id);
 
 [[nodiscard]] Project clear_marks(Project p);
+
+// ------------------------------------------------------------------ proxies --
+
+/// Attaches a proxy to a source, or takes one away with an empty path.
+///
+/// Only a path is kept, because a proxy is the same footage — the same length,
+/// the same frames at the same times — so there is nothing else about it a clip
+/// could need. Naming a media that is not in the project changes nothing.
+[[nodiscard]] Project set_proxy_path(Project p, std::string_view media_id, std::string path);
+
+/// Whether the preview reads from proxies where sources have them.
+///
+/// A property of the project rather than of the application, so a cut opened on
+/// another machine is edited the way it was left rather than the way that
+/// machine happens to be set. Export ignores it either way.
+[[nodiscard]] Project set_use_proxies(Project p, bool use);
+
+/// How many sources have a proxy attached. What a menu item says, and what
+/// tells a switch whether it would do anything at all.
+[[nodiscard]] std::size_t proxy_count(const Project& p) noexcept;
 
 /// Whether either mark is set. What greys out "export the marked range".
 [[nodiscard]] bool has_marks(const Project& p) noexcept;

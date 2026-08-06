@@ -532,6 +532,23 @@ Project clear_source_marks(Project p, std::string_view media_id) {
   return p;
 }
 
+Project set_proxy_path(Project p, std::string_view media_id, std::string path) {
+  if (Media* media = find_media(p, media_id); media != nullptr) {
+    media->proxy_path = std::move(path);
+  }
+  return p;
+}
+
+Project set_use_proxies(Project p, bool use) {
+  p.use_proxies = use;
+  return p;
+}
+
+std::size_t proxy_count(const Project& p) noexcept {
+  return static_cast<std::size_t>(
+      std::ranges::count_if(p.media, [](const Media& m) { return !m.proxy_path.empty(); }));
+}
+
 bool has_marks(const Project& p) noexcept {
   return p.in_point.has_value() || p.out_point.has_value();
 }

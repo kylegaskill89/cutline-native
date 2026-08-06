@@ -881,7 +881,7 @@ fact about the person and are saved beside the presets.
 |---|---|---|---|
 | Bins | folders of media, nested, saved with the project | one flat pool | model |
 | ~~Relinking~~ | point a moved file at its new home, and the clips follow | **done** — Project ▸ Relink Media | — |
-| Proxies | attach a small copy, edit against it, export from the original | none | model + machinery |
+| ~~Proxies~~ | attach a small copy, edit against it, export from the original | **done** — Project ▸ Make Proxies / Use Proxies | — |
 | Metadata columns | a real column view, sortable by clicking a heading | one name and one detail string | control |
 | Icon view | thumbnails, and hover to scrub them | a letter badge | control |
 | Labels | a colour per entry, carried onto its clips | none | model |
@@ -893,11 +893,22 @@ which paths did not open, and clips name media by id rather than by path — so
 repointing one entry repairs every clip that used it. What is missing is a
 dialog and one setter.
 
-**Proxies are the one with teeth**, and the reason to do them: every
-performance measurement in this project ends at 4K decode. A proxy is a second
-path on the `Media`, a switch saying which to render from, and an exporter that
-ignores the switch — plus something to *make* them, which is the encoder this
-application already has. The model change is small and the machinery is not.
+**Proxies were the one with teeth**, and are done. A second path on the
+`Media`, a switch on the project, one function deciding which file a source is
+read from, and a background transcode that writes 540p copies beside the
+footage. The renderer defaults to *not* using them, so the exporter ignores the
+switch by doing nothing rather than by remembering to turn it off.
+
+What was harder than the model: keeping the proxy the same footage. Frames are
+held to the source's frame rate rather than emitted one for one, so a
+variable-rate source is written as constant-rate by repeating and dropping —
+without that, a proxy runs at the wrong speed the moment a camera drops a
+frame, and every cut made against it moves when the original comes back.
+
+Left out on purpose: no automatic proxy on import (a card of footage would
+transcode for an hour uninvited), and no proxy for audio, which is decoded from
+the original wherever it is wanted and cheap enough that a smaller copy would
+buy nothing.
 
 **Bins are a model change and a drawing change at once.** A tree of folders in
 the project, and a browser that draws a tree rather than a list. The browser

@@ -1,5 +1,6 @@
 #include "cutline/app/proxies.hpp"
 
+#include <chrono>
 #include <utility>
 
 namespace cutline::app {
@@ -115,8 +116,16 @@ void ProxyBuilder::run() {
     // progress report a minute later.
     announce();
 
+    // Progress is reported per decoded frame, which on a long source is
+    // thousands of times a second — far more often than anything showing it
+    // could use, and each one costs a lock and a message posted to a window.
+    // Four times a second is faster than a percentage changes and slow enough
+    // to be free.
+    auto told_at = std::chrono::steady_clock::now();
+    constexpr auto kTellEvery = std::chrono::milliseconds(250);
+
     media::ProxyOptions options;
-    options.on_progress = [this](double done) {
+    options.on_progress = [&, this](double done) {
       // `stopping_` is read under the lock and `cancelling_` is not, because
       // only one of them is written by a thread that could be inside this
       // function at the time.
@@ -125,6 +134,10 @@ void ProxyBuilder::run() {
         const std::lock_guard<std::mutex> lock(mutex_);
         current_done_ = done;
         stopping = stopping_;
+      }
+      if (const auto now = std::chrono::steady_clock::now(); now - told_at >= kTellEvery) {
+        told_at = now;
+        announce();
       }
       return !stopping && !cancelling_.load();
     };

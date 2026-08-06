@@ -64,6 +64,7 @@
 #if CUTLINE_HAVE_PREVIEW
 #include "cutline/app/preview.hpp"
 #include "cutline/app/updater.hpp"
+#include "cutline/app/proxies.hpp"
 #include "cutline/app/thumbnails.hpp"
 #include "cutline/app/waveforms.hpp"
 #include "cutline/engine/exporter.hpp"
@@ -364,6 +365,13 @@ constexpr UINT kAutosaveTickMs = 5000;
 /// `kMediaReady` exists: the loop blocks on its queue, and an answer that
 /// arrived while nothing was moving would be shown at the next mouse move.
 constexpr UINT kUpdateChanged = WM_APP + 2;
+
+/// Posted by the proxy builder when it starts one, finishes one, or fails.
+///
+/// Its own message rather than sharing `kMediaReady`, because what it triggers
+/// is not a rebuild: a finished proxy changes the *project*, and folding that
+/// into the media rebuild would mean a filmstrip arriving could apply one.
+constexpr UINT kProxyChanged = WM_APP + 3;
 
 /// One real window: its widgets, its pixels, and where the two meet.
 ///
@@ -770,6 +778,11 @@ struct App {
   cutline::app::WaveformCache waveforms;
   cutline::app::ThumbnailCache filmstrips;
 
+  /// The worker that makes proxies. Beside the other two and unlike them in one
+  /// respect: what it produces outlives the session, so its results go into the
+  /// project rather than into a cache.
+  cutline::app::ProxyBuilder proxies;
+
   /// The one Direct3D device: the compositor renders on it and the windows
   /// draw on it.
   ///
@@ -920,6 +933,10 @@ void refresh_timeline(App& app);
 void refresh_busy(App& app);
 void refresh_drop_ghost(App& app);
 void relink_pool_entry(App& app);
+void make_proxies(App& app);
+void collect_proxies(App& app);
+void toggle_use_proxies(App& app);
+void stop_making_proxies(App& app);
 void open_from_command_line(App& app, const std::filesystem::path& path);
 void refresh_source(App& app);
 void refresh_source_list(App& app);
@@ -3070,6 +3087,24 @@ void refresh_busy(App& app) {
   // five things, and a number that comes down is the difference between waiting
   // and wondering.
   std::string says = left == 0 ? std::string{} : std::format("Reading media ({})", left);
+
+  // Proxies take precedence over the reading, because they take minutes where
+  // the reading takes seconds — and a line that flickered between the two would
+  // say less than either. Named and given a percentage for the same reason the
+  // rest is counted: something that will run for five minutes has to show it is
+  // moving, or it is indistinguishable from something stuck.
+  if (const auto making = app.proxies.progress()) {
+    // The name is elided rather than let run. This label sits in the corner of
+    // the project panel with the version badge at the other end, and a camera
+    // file called A001_C003_0410XX_001.R3D would push it off the edge — which
+    // `--check` cannot catch, because nothing is being transcoded when it runs.
+    constexpr std::size_t kLongestName = 20;
+    std::string name = making->name;
+    if (name.size() > kLongestName) name = name.substr(0, kLongestName - 3) + "...";
+
+    says = std::format("Proxy: {} {}%", name, static_cast<int>(making->done * 100.0));
+    if (making->queued > 0) says += std::format(" (+{})", making->queued);
+  }
 #else
   std::string says;
 #endif
@@ -3355,6 +3390,121 @@ void relink_pool_entry([[maybe_unused]] App& app) {
   if (app.preview != nullptr) app.preview->release_sources();
   app.filmstrips.clear();
   app.waveforms.clear();
+  refresh_all(app);
+  invalidate_preview(app);
+#endif
+}
+
+/// Queues proxies for the sources that have not got one.
+///
+/// Everything in the pool rather than whatever is selected, which is the one
+/// place this deliberately parts company with Premiere's per-clip menu. A proxy
+/// is wanted when a machine cannot keep up with the footage, and that is a fact
+/// about the whole cut — being asked to select the right files first, and to
+/// remember which ones were done, is work the application can do itself.
+void make_proxies([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  int asked = 0;
+  for (const cutline::core::Media& media : app.session.project().media) {
+    // Generated media has no file to transcode, and a source that already has a
+    // proxy is not made again — rebuilding one is what taking it away first is
+    // for.
+    if (media.path.empty() || cutline::core::is_generated_media(media)) continue;
+    if (!media.proxy_path.empty()) continue;
+    if (!media.has_video) continue;  // audio is read from the original either way
+
+    app.proxies.request(media.id, media.name, media.path,
+                        cutline::media::default_proxy_path(media.path));
+    ++asked;
+  }
+
+  // Said rather than silent. The work is on a worker and the only sign of it is
+  // a line in the corner, so a press that queued nothing has to say why or it
+  // reads as one that did nothing at all.
+  if (asked == 0) {
+    const std::size_t have = cutline::core::proxy_count(app.session.project());
+    complain(app.main.window,
+             have == 0 ? "There is nothing in this project to make a proxy of."
+                       : "Every source in this project already has a proxy.");
+    return;
+  }
+  refresh_busy(app);
+#endif
+}
+
+/// Attaches the proxies that have finished, and reports the ones that did not.
+///
+/// Called from the frame loop, because this is where a worker's answer becomes
+/// part of the project — and the project may only be touched from the thread
+/// that owns it.
+void collect_proxies([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  const auto finished = app.proxies.take_finished();
+  if (!finished.empty()) {
+    cutline::core::Project project = app.session.project();
+    for (const cutline::app::FinishedProxy& made : finished) {
+      project = cutline::core::set_proxy_path(std::move(project), made.media_id, made.path);
+    }
+    // Applied as one edit however many arrived, so a batch of proxies is one
+    // step to undo rather than forty.
+    app.session.apply(std::move(project));
+    // Only when the project is already reading from proxies: attaching one to a
+    // source the renderer has open would otherwise leave it on the original
+    // until something else happened to reopen it.
+    if (app.session.project().use_proxies && app.preview != nullptr) {
+      app.preview->release_sources();
+      invalidate_preview(app);
+    }
+    refresh_all(app);
+  }
+
+  const auto failures = app.proxies.take_failures();
+  if (!failures.empty()) {
+    // One dialog for however many arrived together, because several failing at
+    // once is usually one cause — a drive gone, a folder that cannot be written
+    // to — and a modal per file during a long batch would be unusable. Said at
+    // all, though: a proxy that never appears is indistinguishable from one
+    // still being made, and that difference is a session spent waiting.
+    std::string message = "Could not make proxies for:";
+    for (const cutline::app::FailedProxy& failed : failures) {
+      message += "\n\n" + failed.name + "\n" + failed.message;
+    }
+    complain(app.main.window, message);
+  }
+#endif
+}
+
+/// Abandons the queue and the transcode in progress.
+void stop_making_proxies([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.proxies.pending() == 0) {
+    complain(app.main.window, "No proxies are being made.");
+    return;
+  }
+  // What has already finished is kept. Those files are written and attached,
+  // and throwing them away because the rest was stopped would mean transcoding
+  // them again.
+  app.proxies.cancel_all();
+  refresh_busy(app);
+#endif
+}
+
+/// Turns reading from proxies on or off.
+void toggle_use_proxies([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  const cutline::core::Project& project = app.session.project();
+  const bool wanted = !project.use_proxies;
+  if (wanted && cutline::core::proxy_count(project) == 0) {
+    complain(app.main.window,
+             "Nothing in this project has a proxy yet. Make some first, from the Project menu.");
+    return;
+  }
+
+  app.session.apply(cutline::core::set_use_proxies(project, wanted));
+  // The renderer is holding decoders open on the other file. Dropping them is
+  // what makes the switch take effect on the next frame rather than the next
+  // time something happened to reopen a source.
+  if (app.preview != nullptr) app.preview->release_sources();
   refresh_all(app);
   invalidate_preview(app);
 #endif
@@ -7319,6 +7469,11 @@ void refresh_dock(App& app) {
   struct MenuEntry {
     const char* label;
     std::function<void()> act;
+    /// Whether the thing this entry turns on is on, for the entries that are
+    /// switches rather than actions. Asked at the moment the menu drops, since
+    /// that is the only moment the answer is worth anything — a menu built once
+    /// at startup would show the state the application began with for ever.
+    std::function<bool()> ticked;
   };
   const auto menu = [app, &bar](const char* title, std::vector<MenuEntry> entries) {
     auto& button = bar.emplace<Button>(title);
@@ -7326,10 +7481,19 @@ void refresh_dock(App& app) {
       if (app == nullptr || app->main.host == nullptr) return;
 
       std::vector<std::string> labels;
+      std::vector<bool> checked;
+      bool any_switches = false;
       labels.reserve(entries.size());
-      for (const MenuEntry& entry : entries) labels.emplace_back(entry.label);
+      for (const MenuEntry& entry : entries) {
+        labels.emplace_back(entry.label);
+        checked.push_back(entry.ticked && entry.ticked());
+        if (entry.ticked) any_switches = true;
+      }
 
       auto list = std::make_unique<MenuList>(std::move(labels));
+      // Only for menus that have a switch in them. A menu of plain actions
+      // would otherwise hold a column open for ticks none of them can have.
+      if (any_switches) list->set_checked(std::move(checked));
       list->set_on_choose([app, entries](std::size_t index) {
         if (app->main.host != nullptr) app->main.host->close_popup();
         if (index < entries.size() && entries[index].act) entries[index].act();
@@ -7382,6 +7546,20 @@ void refresh_dock(App& app) {
       // four controls wide already, and this is a thing wanted rarely and
       // urgently rather than often.
       {"Relink Media...", [app] { if (app != nullptr) relink_pool_entry(*app); }},
+      // The two halves kept apart, as Premiere keeps them: making proxies is a
+      // job that runs for minutes, and reading from them is a switch. Somebody
+      // who has made them once will use the second of these all week and the
+      // first only when new footage arrives.
+      {"Make Proxies", [app] { if (app != nullptr) make_proxies(*app); }},
+      // A tick rather than a label that changes, so the entry says both what it
+      // is and what it is set to. "Use Proxies" that became "Stop Using
+      // Proxies" would make somebody read it twice to find out which.
+      {"Use Proxies", [app] { if (app != nullptr) toggle_use_proxies(*app); },
+       [app] { return app != nullptr && app->session.project().use_proxies; }},
+      // Reachable at all, which matters more than where it is: a transcode
+      // queued over a card of footage is an hour of the machine, and without
+      // this the only way to stop it is to close the application.
+      {"Stop Making Proxies", [app] { if (app != nullptr) stop_making_proxies(*app); }},
       {"Project Settings...", [app] {
          if (app == nullptr || app->main.host == nullptr) return;
          app->main.host->open_popup(build_project_settings_popup(*app), settings_anchor());
@@ -8745,6 +8923,13 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       refresh_busy(*app);
       return 0;
     }
+
+    case kProxyChanged:
+      // Both, and in this order: the ones that finished are attached first, so
+      // the line in the corner is redrawn from what is actually left.
+      collect_proxies(*app);
+      refresh_busy(*app);
+      return 0;
 #endif
 
     case WM_CLOSE:
@@ -9568,6 +9753,7 @@ int main(int argc, char** argv) {
   // thing that is safe from there and leaves the rest to the message handler.
   app.waveforms.set_on_arrival([window] { PostMessageW(window, kMediaReady, 0, 0); });
   app.filmstrips.set_on_arrival([window] { PostMessageW(window, kMediaReady, 0, 0); });
+  app.proxies.set_on_change([window] { PostMessageW(window, kProxyChanged, 0, 0); });
 #endif
   // Same shape, and for the same reason: the answer arrives on a worker while
   // the loop is blocked on its queue.

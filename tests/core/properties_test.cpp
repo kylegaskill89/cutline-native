@@ -897,5 +897,61 @@ TEST(ClipLabel, ChangesNothingAboutWhatIsRendered) {
   EXPECT_EQ(was.effects.size(), now.effects.size());
 }
 
+// ------------------------------------------------------------------ proxies --
+
+TEST(Proxies, AttachingOneKeepsTheOriginalPath) {
+  // The whole arrangement rests on this: a proxy stands in for the original and
+  // does not replace it, because the original is what gets exported.
+  Project p = one_source_project();
+  p.media[0].path = "D:/Footage/A001.mp4";
+  p = set_proxy_path(std::move(p), "f1", "D:/Footage/Proxies/A001.mp4");
+
+  EXPECT_EQ(p.media[0].path, "D:/Footage/A001.mp4");
+  EXPECT_EQ(p.media[0].proxy_path, "D:/Footage/Proxies/A001.mp4");
+}
+
+TEST(Proxies, AnEmptyPathTakesTheProxyAway) {
+  // What "make it again" needs, and what a proxy pointing at a file that is no
+  // longer there needs.
+  Project p = one_source_project();
+  p = set_proxy_path(std::move(p), "f1", "D:/Proxies/A001.mp4");
+  p = set_proxy_path(std::move(p), "f1", "");
+  EXPECT_TRUE(p.media[0].proxy_path.empty());
+}
+
+TEST(Proxies, AttachingToASourceThatIsNotThereChangesNothing) {
+  // A proxy can finish long after the source it was for was removed.
+  Project p = one_source_project();
+  p = set_proxy_path(std::move(p), "gone", "D:/Proxies/A001.mp4");
+  EXPECT_TRUE(p.media[0].proxy_path.empty());
+}
+
+TEST(Proxies, TheSwitchIsAPropertyOfTheProject) {
+  // So a cut opened on another machine is edited the way it was left rather
+  // than the way that machine happens to be set.
+  Project p = one_source_project();
+  EXPECT_FALSE(p.use_proxies) << "a project should not start out reading from files it has none of";
+  p = set_use_proxies(std::move(p), true);
+  EXPECT_TRUE(p.use_proxies);
+  p = set_use_proxies(std::move(p), false);
+  EXPECT_FALSE(p.use_proxies);
+}
+
+TEST(Proxies, CountingThemIsWhatSaysWhetherTheSwitchWouldDoAnything) {
+  Project p = one_source_project();
+  Media second;
+  second.id = "f2";
+  second.duration = 10.0;
+  p.media.push_back(second);
+
+  EXPECT_EQ(proxy_count(p), 0u);
+  p = set_proxy_path(std::move(p), "f1", "D:/Proxies/one.mp4");
+  EXPECT_EQ(proxy_count(p), 1u);
+  p = set_proxy_path(std::move(p), "f2", "D:/Proxies/two.mp4");
+  EXPECT_EQ(proxy_count(p), 2u);
+  p = set_proxy_path(std::move(p), "f1", "");
+  EXPECT_EQ(proxy_count(p), 1u);
+}
+
 }  // namespace
 }  // namespace cutline::core
