@@ -147,6 +147,7 @@ if(CUTLINE_WITH_GPU)
     # checked against a real one, so it skips unless the footage is present.
     add_executable(cutline_app_tests
       app/preview_test.cpp
+      app/proxies_test.cpp
       app/thumbnails_test.cpp
       app/waveforms_test.cpp)
     target_link_libraries(cutline_app_tests PRIVATE
