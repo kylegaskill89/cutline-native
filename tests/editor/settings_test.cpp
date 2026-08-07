@@ -64,6 +64,11 @@ class TempSettings {
   settings.label_defaults = {"#8f7bb8", "", "", "", "", "#c07a92"};
   settings.proxy_height = 720;
   settings.proxy_folder = "E:/Fast/Proxies";
+  settings.autosave_versions = 12;
+  settings.undo_depth = 250;
+  settings.preroll = 1.5;
+  settings.postroll = 2.5;
+  settings.software_renderer = true;
   return settings;
 }
 
@@ -86,6 +91,11 @@ TEST(Settings, TheDefaultsAreWhatTheApplicationAlreadyDid) {
   EXPECT_EQ(settings.autosave_seconds, static_cast<int>(kAutosaveInterval.count()));
   EXPECT_EQ(settings.proxy_height, kDefaultProxyHeight);
   EXPECT_TRUE(settings.proxy_folder.empty()) << "beside the footage is the default";
+  EXPECT_EQ(settings.autosave_versions, kAutosaveVersions);
+  EXPECT_EQ(settings.undo_depth, static_cast<int>(core::kDefaultUndoDepth));
+  EXPECT_DOUBLE_EQ(settings.preroll, 0.0) << "no run-up is what looping did before";
+  EXPECT_DOUBLE_EQ(settings.postroll, 0.0);
+  EXPECT_FALSE(settings.software_renderer) << "the GPU is the whole point of this application";
 }
 
 // ------------------------------------------------------------------ labels --
@@ -272,6 +282,43 @@ TEST(Settings, ANegativeDurationCannotSurvive) {
   const auto loaded = settings_from_json(R"({"still_length":-5.0})");
   ASSERT_TRUE(loaded.has_value()) << loaded.error();
   EXPECT_GT(loaded->still_length, 0.0);
+}
+
+TEST(Settings, TheUndoDepthIsClampedRatherThanTrusted) {
+  // Zero would leave an editor with no undo at all, reached by a typing mistake
+  // in a file rather than by any control.
+  const auto none = settings_from_json(R"({"undo_depth":0})");
+  ASSERT_TRUE(none.has_value()) << none.error();
+  EXPECT_GE(none->undo_depth, kMinUndoDepth);
+
+  const auto silly = settings_from_json(R"({"undo_depth":1000000})");
+  ASSERT_TRUE(silly.has_value()) << silly.error();
+  EXPECT_EQ(silly->undo_depth, kMaxUndoDepth);
+}
+
+TEST(Settings, TheNumberOfCopiesKeptIsClampedRatherThanTrusted) {
+  // None would mean writing a recovery copy and deleting it, which is the one
+  // answer that turns the feature off while looking as though it is on.
+  const auto none = settings_from_json(R"({"autosave_versions":0})");
+  ASSERT_TRUE(none.has_value()) << none.error();
+  EXPECT_GE(none->autosave_versions, kMinAutosaveVersions);
+
+  const auto silly = settings_from_json(R"({"autosave_versions":9999})");
+  ASSERT_TRUE(silly.has_value()) << silly.error();
+  EXPECT_EQ(silly->autosave_versions, kMaxAutosaveVersions);
+}
+
+TEST(Settings, TheRollsAreClampedRatherThanTrusted) {
+  // A negative preroll would move the start of a loop past its end.
+  const auto backwards = settings_from_json(R"({"preroll":-3.0,"postroll":-3.0})");
+  ASSERT_TRUE(backwards.has_value()) << backwards.error();
+  EXPECT_DOUBLE_EQ(backwards->preroll, kMinRoll);
+  EXPECT_DOUBLE_EQ(backwards->postroll, kMinRoll);
+
+  const auto silly = settings_from_json(R"({"preroll":600.0,"postroll":600.0})");
+  ASSERT_TRUE(silly.has_value()) << silly.error();
+  EXPECT_DOUBLE_EQ(silly->preroll, kMaxRoll);
+  EXPECT_DOUBLE_EQ(silly->postroll, kMaxRoll);
 }
 
 TEST(Settings, AProxyHeightIsClampedRatherThanTrusted) {

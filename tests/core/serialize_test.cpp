@@ -434,6 +434,58 @@ TEST(History, DiscardsTheOldestBeyondTheLimit) {
   EXPECT_EQ(history.undo_depth(), 2u);
 }
 
+// The preference is read after the session exists, so the limit has to be
+// settable rather than fixed when the history is made.
+TEST(History, ALowerLimitDiscardsTheOldestStraightAway) {
+  History history(10);
+  const Project p = empty_project();
+  for (int i = 0; i < 6; ++i) history.push(p);
+  ASSERT_EQ(history.undo_depth(), 6u);
+
+  history.set_limit(2);
+  EXPECT_EQ(history.undo_depth(), 2u) << "not at the next edit — now";
+  EXPECT_EQ(history.limit(), 2u);
+}
+
+// The most recent edits are the ones worth keeping, so trimming takes from the
+// far end. Checked by value rather than by count, because a trim that kept the
+// wrong end would pass a count.
+TEST(History, TrimmingKeepsTheMostRecentEdits) {
+  History history(10);
+  for (int i = 0; i < 5; ++i) {
+    Project p = empty_project();
+    p.canvas_w = 100 + i;
+    history.push(p);
+  }
+
+  history.set_limit(2);
+  const std::optional<Project> last = history.undo(empty_project());
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->canvas_w, 104) << "the newest snapshot pushed";
+}
+
+TEST(History, RaisingTheLimitKeepsWhatIsThere) {
+  History history(3);
+  const Project p = empty_project();
+  for (int i = 0; i < 3; ++i) history.push(p);
+
+  history.set_limit(50);
+  EXPECT_EQ(history.undo_depth(), 3u);
+}
+
+// A future somebody is stepping through is not what "keep fewer past edits"
+// asks for, and the redo stack is bounded by the undo stack it came from.
+TEST(History, LoweringTheLimitLeavesRedoAlone) {
+  History history(10);
+  const Project p = empty_project();
+  for (int i = 0; i < 4; ++i) history.push(p);
+  for (int i = 0; i < 3; ++i) (void)history.undo(p);
+  ASSERT_EQ(history.redo_depth(), 3u);
+
+  history.set_limit(1);
+  EXPECT_EQ(history.redo_depth(), 3u);
+}
+
 // Opening a project used to leave the id counter at zero, so the next split
 // handed out a name the file already used — and every lookup by id then found
 // two clips where it meant one.

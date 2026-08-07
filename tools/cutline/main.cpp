@@ -910,6 +910,22 @@ struct App {
 
   [[nodiscard]] bool playing() const noexcept { return player != nullptr && player->playing(); }
 
+  /// Whether playback has been *asked for*, which is not the same as the player
+  /// still running.
+  ///
+  /// A player that reaches the end stops itself, so `playing()` goes false at
+  /// exactly the moment there is something left to decide — loop round, or stop
+  /// and tidy up. `advance_playback` guarded on `playing()` and therefore
+  /// returned before it could decide either, which is why looping a range that
+  /// ran to the end of the sequence sat on the last frame for ever.
+  bool playback_wanted = false;
+
+  /// Whether there is still playback to advance: the user has asked for it, and
+  /// either it is running or it has just finished and wants handling.
+  [[nodiscard]] bool playback_live() const noexcept {
+    return playback_wanted && player != nullptr && (player->playing() || player->finished());
+  }
+
   /// An export in flight.
   ///
   /// On its own thread because it is minutes of work and the window has to stay
@@ -4652,6 +4668,16 @@ void build_autosave_page(App& app, Box& into) {
                static_cast<double>(app.settings.autosave_seconds),
                cutline::editor::kMinAutosaveSeconds, cutline::editor::kMaxAutosaveSeconds, "sec",
                [&app](double set) { app.settings.autosave_seconds = static_cast<int>(set); });
+  duration_row(app, into, "Copies kept", static_cast<double>(app.settings.autosave_versions),
+               cutline::editor::kMinAutosaveVersions, cutline::editor::kMaxAutosaveVersions, "",
+               [&app](double set) { app.settings.autosave_versions = static_cast<int>(set); });
+
+  // Why more than one is worth keeping, which is not obvious and is the whole
+  // reason this row exists. The newest copy is written from the state the
+  // application is in — so a document that has been quietly wrong for the last
+  // few minutes has had that faithfully copied over the only thing there was to
+  // go back to.
+  into.emplace<Label>("Older copies are kept, so a bad one is not the only one.").set_small(true);
   into.emplace<Label>("Copies are written beside the application's own data.").set_small(true);
 }
 
@@ -4887,6 +4913,88 @@ void build_audio_page([[maybe_unused]] App& app, Box& into) {
 #endif
 }
 
+/// How far back an edit can be taken. Premiere's Preferences ▸ General.
+void build_general_page(App& app, Box& into) {
+  into.emplace<Label>("Undo").set_bold(true);
+  duration_row(app, into, "Edits kept", static_cast<double>(app.settings.undo_depth),
+               cutline::editor::kMinUndoDepth, cutline::editor::kMaxUndoDepth, "",
+               [&app](double set) {
+                 app.settings.undo_depth = static_cast<int>(set);
+                 // Applied to the open document as well as saved, so lowering it
+                 // frees the memory now rather than at the next edit. A setting
+                 // that appears to do nothing until something else happens is
+                 // one nobody believes they changed.
+                 app.session.set_undo_depth(static_cast<std::size_t>(app.settings.undo_depth));
+               });
+
+  // The trade said out loud, because it is not the one anybody expects. Undo
+  // here is a stack of whole projects rather than a list of things to reverse,
+  // which is what makes it correct for every operation without any of them
+  // knowing about it — and what makes a long history cost real memory on a cut
+  // with a lot of keyframes in it.
+  into.emplace<Label>("Each step keeps a copy of the whole project.").set_small(true);
+}
+
+/// What plays around a marked range. Premiere's Preferences ▸ Playback.
+void build_playback_page(App& app, Box& into) {
+  into.emplace<Label>("Around the marked range").set_bold(true);
+  duration_row(app, into, "Preroll", app.settings.preroll, cutline::editor::kMinRoll,
+               cutline::editor::kMaxRoll, "s",
+               [&app](double set) { app.settings.preroll = set; });
+  duration_row(app, into, "Postroll", app.settings.postroll, cutline::editor::kMinRoll,
+               cutline::editor::kMaxRoll, "s",
+               [&app](double set) { app.settings.postroll = set; });
+
+  // Which gesture this changes, since it changes only one. A run-up is for
+  // judging a cut in context, and the gesture that judges a cut is looping over
+  // it — playing from the playhead already starts wherever you put it.
+  into.emplace<Label>("Looping plays this much either side of the marks.").set_small(true);
+}
+
+/// Which adapter everything draws on. Premiere's Preferences ▸ Graphics.
+void build_graphics_page(App& app, Box& into) {
+  into.emplace<Label>("Renderer").set_bold(true);
+
+  auto& row = into.emplace<Box>(Axis::Horizontal);
+  row.emplace<Label>("Draw with").set_small(true);
+  row.emplace<Spacer>();
+
+  auto& choice = row.emplace<Dropdown>(std::vector<std::string>{"Graphics card", "Software"},
+                                       app.settings.software_renderer ? 1u : 0u);
+  choice.set_on_change([&app](std::size_t index) {
+    app.settings.software_renderer = index == 1;
+    save_settings(app);
+    // The page says what is running now and what was chosen, and those have
+    // just stopped agreeing.
+    app.settings_page_stale = true;
+  });
+
+#if CUTLINE_HAVE_PREVIEW
+  // What is actually in use, which is not always what was chosen: the device
+  // falls back to software on its own when no adapter will have it, and a
+  // machine quietly running on WARP is exactly the machine somebody has opened
+  // this page to ask about.
+  if (app.device != nullptr) {
+    // Elided, because an adapter name is a name from outside — "NVIDIA GeForce
+    // RTX 4090 Laptop GPU" is an ordinary one, and a settings window has a
+    // width.
+    constexpr std::size_t kLongestAdapter = 40;
+    std::string now = app.device->adapter_name();
+    if (now.size() > kLongestAdapter) now = now.substr(0, kLongestAdapter - 3) + "...";
+    into.emplace<Label>("Now using " + now).set_small(true);
+  }
+#endif
+
+  // Both halves of the honest answer. The choice is read once when the device
+  // is made, and everything that draws — the compositor, the swapchain, Skia's
+  // context — is built on it; there is no way to move those to another adapter
+  // while they are open, so a tick that appeared to take effect would be lying.
+  if (app.settings.software_renderer) {
+    into.emplace<Label>("Software drawing is correct and much slower.").set_small(true);
+  }
+  into.emplace<Label>("Takes effect when Cutline is restarted.").set_small(true);
+}
+
 /// The pages a settings window offers, in the order they are listed.
 [[nodiscard]] std::vector<SettingsPage> pages_for(SettingsKind kind) {
   if (kind == SettingsKind::Project) {
@@ -4895,8 +5003,11 @@ void build_audio_page([[maybe_unused]] App& app, Box& into) {
     // the side appears on its own once a second page does.
     return {SettingsPage{"General", build_sequence_page}};
   }
-  return {SettingsPage{"Appearance", build_appearance_page},
+  return {SettingsPage{"General", build_general_page},
+          SettingsPage{"Appearance", build_appearance_page},
           SettingsPage{"Audio Hardware", build_audio_page},
+          SettingsPage{"Playback", build_playback_page},
+          SettingsPage{"Graphics", build_graphics_page},
           SettingsPage{"Labels", build_labels_page},
           SettingsPage{"Timeline", build_timeline_page},
           SettingsPage{"Proxies", build_proxies_page},
@@ -5219,6 +5330,9 @@ void invalidate_preview(App& app) {
 /// timeline and when the document changes underneath a playing project.
 void stop_playback(App& app) {
 #if CUTLINE_HAVE_PREVIEW
+  // Cleared before the early return, so a player that has gone away cannot
+  // leave the application believing playback is still wanted.
+  app.playback_wanted = false;
   if (app.player == nullptr) return;
   if (app.player->playing()) {
     app.player->pause();
@@ -5406,6 +5520,7 @@ void toggle_playback(App& app) {
   // the user may have scrubbed since.
   app.player->seek(app.session.playhead());
   app.player->play();
+  app.playback_wanted = true;
   // Without this, `Sleep(1)` in the playback loop really sleeps about 15 ms,
   // which is most of a frame at 60 Hz.
   timeBeginPeriod(1);
@@ -5427,7 +5542,7 @@ void toggle_playback(App& app) {
 /// click. So the picture is what adapts.
 void advance_playback(App& app) {
 #if CUTLINE_HAVE_PREVIEW
-  if (!app.playing()) return;
+  if (!app.playback_live()) return;
 
   if (!app.player->error().empty()) {
     const std::string message = app.player->error();
@@ -5477,7 +5592,9 @@ void advance_playback(App& app) {
     // and looping it is one gesture: it is how a cut gets watched twenty times
     // while a level is set against it.
     if (app.looping) {
-      const double from = cutline::core::marked_span(app.session.project()).start;
+      const double from = cutline::core::playback_span(app.session.project(), app.settings.preroll,
+                                                       app.settings.postroll)
+                              .start;
       app.session.set_playhead(from);
       app.player->seek(from);
       app.player->play();
@@ -5495,9 +5612,13 @@ void advance_playback(App& app) {
 
   // The end of the marked range is the loop's end. The player only knows where
   // the *sequence* stops, so this is the one place that can notice.
+  //
+  // Widened by the preroll and postroll, so a loop shows what leads into the
+  // marked passage and what it lands in. With both at zero this is the marked
+  // span exactly, which is what it was before they existed.
   if (app.looping) {
-    const cutline::core::MarkedSpan span =
-        cutline::core::marked_span(app.session.project());
+    const cutline::core::MarkedSpan span = cutline::core::playback_span(
+        app.session.project(), app.settings.preroll, app.settings.postroll);
     const double end = span.start + span.duration;
     if (span.duration > 0.0 && at >= end) {
       app.session.set_playhead(span.start);
@@ -5796,7 +5917,8 @@ void poll_autosave(App& app) {
     return;
   }
 
-  if (cutline::editor::write_autosave(app.session.path(), app.session.project())) {
+  if (cutline::editor::write_autosave(app.session.path(), app.session.project(),
+                                      app.settings.autosave_versions)) {
     app.autosave = {.written_at = std::chrono::steady_clock::now(),
                     .written_revision = revision,
                     .ever_written = true};
@@ -8856,8 +8978,17 @@ void start_export(App& app) {
 
   if (app.export_status != nullptr) app.export_status->set_text("Exporting...");
 
-  job.worker = std::thread([&app, &job, project, settings] {
-    auto device = cutline::gpu::Device::create();
+  // Captured by value: the worker outlives this call, and reaching into the
+  // application's settings from another thread to ask again would be reading a
+  // field the interface may be writing.
+  const bool software = app.settings.software_renderer;
+
+  job.worker = std::thread([&app, &job, project, settings, software] {
+    // The export renders on a device of its own, and it has to make the same
+    // choice the preview did. Somebody who picked the software renderer because
+    // their driver produces wrong pixels would otherwise get a preview they
+    // trust and a file they cannot.
+    auto device = cutline::gpu::Device::create({.force_software = software});
     if (!device.has_value()) {
       job.outcome = "No usable graphics device: " + device.error();
       job.failed = true;
@@ -9309,7 +9440,12 @@ void refresh_float_titles(App& app) {
 [[nodiscard]] cutline::ui::AdoptedDevice shared_device(App& app) {
 #if CUTLINE_HAVE_PREVIEW
   if (app.device == nullptr && !app.device_failed) {
-    auto made = cutline::gpu::Device::create();
+    // The preference is read here and nowhere later. Everything that draws is
+    // built on this device, so the choice is settled once per run — which is
+    // why the page that offers it says a restart is needed rather than
+    // pretending the tick took effect.
+    auto made = cutline::gpu::Device::create(
+        {.force_software = app.settings.software_renderer});
     if (made.has_value()) {
       app.device = std::move(*made);
     } else {
@@ -10852,6 +10988,7 @@ int main(int argc, char** argv) {
     app.browser_sort = settings.pool_sort;
     app.browser_descending = settings.pool_descending;
     app.pool_view = settings.pool_view;
+    app.session.set_undo_depth(static_cast<std::size_t>(settings.undo_depth));
   }
 
   // Read before the tree is built, so the window opens in the arrangement it
@@ -10964,7 +11101,13 @@ int main(int argc, char** argv) {
     // watching only the first would go back to blocking with a thread still to
     // join and a bar stopped short of the end — which worked, whenever the
     // timing happened to fall the right way.
-    if (app.playing() || app.shuttling() || app.source_playing() || app.exporting() ||
+    //
+    // `playback_live` rather than `playing` for the same reason, and it is the
+    // same bug twice: a player that has reached the end has already stopped
+    // running, so a loop watching only that goes back to blocking with the
+    // end still to handle — and a loop that was meant to round again never
+    // does, because nothing wakes to notice.
+    if (app.playback_live() || app.shuttling() || app.source_playing() || app.exporting() ||
         app.export_job.finished.load()) {
       while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
         if (message.message == WM_QUIT) {
@@ -10981,7 +11124,7 @@ int main(int argc, char** argv) {
         poll_export(app);
         // Nothing is due this instant when only the export is running, and the
         // encoder wants the core far more than this loop does.
-        if (!app.playing() && !app.shuttling() && !app.source_playing()) Sleep(8);
+        if (!app.playback_live() && !app.shuttling() && !app.source_playing()) Sleep(8);
       }
     } else if (GetMessageW(&message, nullptr, 0, 0) > 0) {
       TranslateMessage(&message);

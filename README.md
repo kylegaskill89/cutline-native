@@ -451,9 +451,12 @@ appending, and landing only on clips of the same kind as the one they came
 from — an A/V pair is two linked clips here, so a video look pasted across a
 selection must not take the audio's filters with it.
 
-**A recovery copy of anything unsaved**, written beside the application's own
+**Recovery copies of anything unsaved**, written beside the application's own
 settings rather than over the file the user saved. An autosave that wrote the
-real file would turn a crash into a silently overwritten afternoon.
+real file would turn a crash into a silently overwritten afternoon. Several are
+kept, oldest pruned, because the newest copy is written from the state the
+application is in — so a document that has been quietly wrong for a few minutes
+has had that faithfully copied over the only thing there was to go back to.
 
 **The interface specification is done bar two items.** §18 is the shape of the thing
 rather than the list of what it can do, and closing it was mostly small
@@ -487,7 +490,7 @@ anywhere. They are the first entries in
 [`docs/premiere-gaps.md`](docs/premiere-gaps.md), which is the comparison with
 Premiere that matters more than either specification now.
 
-1895 tests, plus a headless check that lays every panel out in every theme —
+2739 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a matte, an adjustment layer, a title, and the
 colour picker open, which is the only way the controls a panel is made of get

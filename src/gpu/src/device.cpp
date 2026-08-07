@@ -164,8 +164,13 @@ std::expected<std::shared_ptr<Device>, std::string> Device::create(DeviceOptions
     return std::unexpected(std::format("cannot create a DXGI factory: {}", hresult_string(hr)));
   }
 
+  // Skipped entirely when the software rasteriser was asked for by name. The
+  // point of asking is to take the hardware adapter out of the picture, and a
+  // device created on it first — even one immediately dropped — has already run
+  // the driver code somebody is trying to rule out.
   ComPtr<IDXGIAdapter1> adapter;
-  for (UINT i = 0; impl->factory->EnumAdapterByGpuPreference(
+  for (UINT i = 0; !options.force_software &&
+                   impl->factory->EnumAdapterByGpuPreference(
                        i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
                        IID_PPV_ARGS(adapter.ReleaseAndGetAddressOf())) != DXGI_ERROR_NOT_FOUND;
        ++i) {
@@ -181,7 +186,7 @@ std::expected<std::shared_ptr<Device>, std::string> Device::create(DeviceOptions
     }
   }
 
-  if (!impl->device && options.allow_software) {
+  if (!impl->device && (options.allow_software || options.force_software)) {
     ComPtr<IDXGIAdapter1> warp;
     if (SUCCEEDED(impl->factory->EnumWarpAdapter(IID_PPV_ARGS(&warp))) &&
         SUCCEEDED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0,

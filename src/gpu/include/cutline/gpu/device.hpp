@@ -22,6 +22,18 @@ struct DeviceOptions {
   /// to software on a real machine would look like a mysterious slowdown.
   bool allow_software = false;
 
+  /// Use the software rasteriser even where a hardware adapter would work.
+  ///
+  /// Distinct from `allow_software`, which is a fallback: this is a choice, and
+  /// the difference matters when the hardware adapter is the thing under
+  /// suspicion. A driver that creates a device and then draws wrong or hangs
+  /// passes every fallback test there is, so "no hardware adapter found" is not
+  /// the condition somebody diagnosing one needs to reach.
+  ///
+  /// Implies `allow_software`, since asking for the software adapter and being
+  /// refused it would be the one answer nobody meant.
+  bool force_software = false;
+
   /// Enable the debug layer, which turns silent API misuse into a message.
   /// Defaults to on in debug builds.
   bool debug_layer =

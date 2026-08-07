@@ -2,9 +2,12 @@
 
 #include "cutline/editor/document.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <format>
+#include <string_view>
 #include <system_error>
+#include <vector>
 
 namespace cutline::editor {
 namespace {
@@ -41,6 +44,12 @@ namespace {
   return out.empty() ? "untitled" : out;
 }
 
+/// What `autosave_path_for` adds to a prefix: a dash, a date and a time.
+/// Named because `autosave_copies` recognises a copy by exactly this much
+/// following the prefix, and a format change that did not move this with it
+/// would quietly stop finding anything.
+constexpr std::size_t kStampWidth = std::string_view("-20260806-140309").size();
+
 }  // namespace
 
 bool autosave_due(const AutosaveState& state, bool modified, std::uint64_t revision,
@@ -67,16 +76,26 @@ std::filesystem::path autosave_dir() {
   return base / "Cutline" / "recovery";
 }
 
-std::filesystem::path autosave_path_for(const std::filesystem::path& document) {
-  const std::string name =
-      document.empty() ? std::string("untitled")
-                       : std::format("{}-{}", safe_stem(document), digest_of(document));
-  return autosave_dir() / (name + std::string(kProjectExtension));
+std::string autosave_prefix(const std::filesystem::path& document) {
+  if (document.empty()) return "untitled";
+  return std::format("{}-{}", safe_stem(document), digest_of(document));
+}
+
+std::filesystem::path autosave_path_for(const std::filesystem::path& document,
+                                        std::chrono::system_clock::time_point when) {
+  // Fixed width, so the name sorts chronologically as plain text. Seconds are
+  // as fine as this needs to go: the shortest interval anybody can ask for is
+  // fifteen of them, so two copies of one document cannot share a stamp.
+  const std::string stamp =
+      std::format("{:%Y%m%d-%H%M%S}", std::chrono::floor<std::chrono::seconds>(when));
+  return autosave_dir() /
+         std::format("{}-{}{}", autosave_prefix(document), stamp, kProjectExtension);
 }
 
 std::expected<void, std::string> write_autosave(const std::filesystem::path& document,
-                                                const core::Project& project) {
-  const std::filesystem::path target = autosave_path_for(document);
+                                                const core::Project& project, int versions,
+                                                std::chrono::system_clock::time_point when) {
+  const std::filesystem::path target = autosave_path_for(document, when);
 
   std::error_code error;
   std::filesystem::create_directories(target.parent_path(), error);
@@ -87,32 +106,78 @@ std::expected<void, std::string> write_autosave(const std::filesystem::path& doc
   // The same write-and-rename the real save uses: a recovery copy caught
   // half-written is worse than none, because it looks like something to
   // recover from.
-  return write_project(target, project);
+  if (auto written = write_project(target, project); !written.has_value()) return written;
+
+  // Only now. Making room first would mean a failed write had thrown away a
+  // good copy to fit one that never arrived.
+  const std::vector<Recovery> copies = autosave_copies(document);
+  const auto keep = static_cast<std::size_t>(std::max(1, versions));
+  for (std::size_t i = keep; i < copies.size(); ++i) {
+    std::error_code ignored;
+    std::filesystem::remove(copies[i].path, ignored);
+  }
+  return {};
 }
 
 void discard_autosave(const std::filesystem::path& document) {
-  std::error_code ignored;
-  std::filesystem::remove(autosave_path_for(document), ignored);
+  for (const Recovery& copy : autosave_copies(document)) {
+    std::error_code ignored;
+    std::filesystem::remove(copy.path, ignored);
+  }
+}
+
+std::vector<Recovery> autosave_copies(const std::filesystem::path& document) {
+  const std::string prefix = autosave_prefix(document);
+
+  std::error_code error;
+  std::filesystem::directory_iterator entries(autosave_dir(), error);
+  if (error) return {};
+
+  std::vector<Recovery> found;
+  for (const std::filesystem::directory_entry& entry : entries) {
+    if (!entry.is_regular_file(error) || error) continue;
+    if (entry.path().extension() != kProjectExtension) continue;
+
+    // Matching the prefix is not enough: what follows it has to be a whole
+    // stamp and nothing else. A document that has never been saved has the
+    // prefix "untitled", which is *also* the start of every copy of a saved
+    // project called "untitled" — so a looser test would hand one document's
+    // copies to another, and the two are the pair most likely to both exist.
+    //
+    // Nothing at all is the copy written before the stamps existed.
+    const std::string stem = entry.path().stem().string();
+    if (!stem.starts_with(prefix)) continue;
+    if (stem.size() != prefix.size() && stem.size() != prefix.size() + kStampWidth) continue;
+
+    const std::filesystem::file_time_type written = entry.last_write_time(error);
+    found.push_back(Recovery{.path = entry.path(),
+                             .written_at = error ? std::filesystem::file_time_type{} : written});
+  }
+
+  // Newest first, by the stamp in the name. A copy from before the stamps
+  // existed is the shortest name and therefore sorts last, which is where the
+  // oldest belongs.
+  std::ranges::sort(found, [](const Recovery& a, const Recovery& b) {
+    return a.path.stem().string() > b.path.stem().string();
+  });
+  return found;
 }
 
 std::optional<Recovery> find_recovery(const std::filesystem::path& document) {
-  const std::filesystem::path copy = autosave_path_for(document);
-
-  std::error_code error;
-  if (!std::filesystem::exists(copy, error) || error) return std::nullopt;
-
-  const std::filesystem::file_time_type written = std::filesystem::last_write_time(copy, error);
-  if (error) return std::nullopt;
+  const std::vector<Recovery> copies = autosave_copies(document);
+  if (copies.empty()) return std::nullopt;
+  const Recovery& newest = copies.front();
 
   // A document saved since the copy was made is ahead of it, and offering the
   // copy would be offering to go backwards.
+  std::error_code error;
   if (!document.empty() && std::filesystem::exists(document, error) && !error) {
     const std::filesystem::file_time_type saved =
         std::filesystem::last_write_time(document, error);
-    if (!error && saved >= written) return std::nullopt;
+    if (!error && saved >= newest.written_at) return std::nullopt;
   }
 
-  return Recovery{.path = copy, .written_at = written};
+  return newest;
 }
 
 }  // namespace cutline::editor

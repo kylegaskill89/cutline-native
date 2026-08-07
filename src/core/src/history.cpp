@@ -4,10 +4,27 @@
 
 namespace cutline::core {
 
+namespace {
+
+/// Drops the oldest snapshots until no more than `limit` are left. A limit of
+/// zero means no limit at all, which is what a `History` built without one used
+/// to mean and what nothing in the application asks for.
+void trim(std::vector<Project>& stack, std::size_t limit) {
+  if (limit == 0 || stack.size() <= limit) return;
+  stack.erase(stack.begin(), stack.begin() + static_cast<std::ptrdiff_t>(stack.size() - limit));
+}
+
+}  // namespace
+
 void History::push(Project snapshot) {
   undo_.push_back(std::move(snapshot));
-  if (limit_ > 0 && undo_.size() > limit_) undo_.erase(undo_.begin());
+  trim(undo_, limit_);
   redo_.clear();
+}
+
+void History::set_limit(std::size_t limit) {
+  limit_ = limit;
+  trim(undo_, limit_);
 }
 
 std::optional<Project> History::undo(Project current) {

@@ -1040,20 +1040,20 @@ Settings — and are not gaps. What is left, with an honest size on each:
 | ~~Still image duration~~ | Timeline ▸ default duration | **done** — Settings ▸ Defaults | — |
 | ~~Transition durations~~ | Timeline ▸ video and audio defaults | **done** — one length, not two | — |
 | ~~Auto Save interval~~ | Auto Save ▸ every N minutes | **done** — Settings ▸ Defaults | — |
-| Auto Save versions kept | Auto Save ▸ maximum versions | one copy per document, no history | control |
-| Undo depth | historically a preference | `History` limit, 100, fixed | wiring |
+| ~~Auto Save versions kept~~ | Auto Save ▸ maximum versions | **done** — five by default, oldest pruned | — |
+| ~~Undo depth~~ | historically a preference | **done** — Settings ▸ General, applied to the open document | — |
 | ~~Label names~~ | Labels ▸ eight named colours, editable | **done** — names only; the colours cannot move, see below | — |
 | ~~Default label per media type~~ | Labels ▸ per kind | **done** — applied at import | — |
 | ~~Audio device~~ | Audio Hardware ▸ device, latency | **done** — device; latency is still WASAPI's | — |
-| Playback preroll / postroll | Playback | none | wiring |
-| Media cache location | Media Cache | no disk cache exists | machinery |
+| ~~Playback preroll / postroll~~ | Playback | **done** — Settings ▸ Playback, around a looped range | — |
+| Media cache location | Media Cache | no disk cache exists | **won't do**, see §5.6 |
 | ~~Proxy settings~~ | Ingest Settings ▸ preset, location | **done** — size and location | — |
-| Memory / RAM reserved | Memory | none — the caches have fixed budgets | control |
-| Renderer choice | Graphics ▸ GPU or software | always the GPU, falls back on its own | wiring |
-| Appearance brightness | Appearance ▸ a slider | four discrete themes | control |
+| Memory / RAM reserved | Memory | none — the caches have fixed budgets | **won't do**, see §5.6 |
+| ~~Renderer choice~~ | Graphics ▸ GPU or software | **done** — Settings ▸ Graphics, read at startup | — |
+| Appearance brightness | Appearance ▸ a slider | four discrete themes | **won't do**, see §5.6 |
 | Keyboard shortcuts | fully editable, with presets | `kApplicationKeys` and `kTransportKeys`, fixed | **machinery** |
 | ~~Timecode display format~~ | Project Settings ▸ display format | **done** — drop-frame, and the counting under it fixed | — |
-| Scratch disks | Project Settings ▸ Scratch Disks | proxies go beside the footage, nothing else is written | wiring |
+| Scratch disks | Project Settings ▸ Scratch Disks | proxies go beside the footage, nothing else is written | **won't do yet**, see §5.6 |
 
 Premiere keeps a *separate* default duration for video and for audio
 transitions. There is one here, because there is one `default_transition_length`
@@ -1102,6 +1102,83 @@ binding store, a resolver that runs before the widget tree, a conflict check,
 and a panel to edit it in. The bindings are already two tables of structs, which
 is the right starting shape, but they are `constexpr` and matched by hand in two
 places. Worth its own section rather than a row in this one.
+
+### 5.6 The rows that are deliberately not built
+
+A row closed with a reason is worth more than a row left open, so each of these
+says what was weighed rather than quietly staying blank. All four follow from
+the same rule the section was run on: **expose what has no right answer, leave
+what was measured.**
+
+**Memory / RAM reserved — won't do.** The caches have fixed budgets, and every
+one of them was chosen against a measurement written down beside it in the code.
+A control here cannot offer a *better* answer than the measured one; it can only
+offer a worse one, and the sessions it creates are the bad kind — a preview that
+stutters for a reason nobody can see, set months ago. Premiere exposes this
+because Premiere shares a machine with After Effects and Media Encoder and has
+to be told how to divide it. Nothing here does.
+
+**Media cache location — won't do, for now, and not because it is hard.** There
+is no disk cache to point anywhere. Filmstrips and waveforms live in memory and
+die with the session. A control over the location of a thing that does not exist
+is worse than no control: it implies a cache is being written, so the first
+person to look for it loses an afternoon. If a disk cache is ever built, its
+location is a row on the same page and half a day. Until then this is a
+subsystem, and it belongs in a section about caching rather than in one about
+settings.
+
+**Appearance brightness — won't do.** Premiere's slider works because its
+appearance is one generated palette with a lightness parameter. There are four
+*themes* here, and they are not recolours: `xp` has bevels, `aero` has glass,
+each owns its own metrics, and the whole widget layer is built so that a theme
+can change chrome rather than colours. A brightness slider means themes
+generated rather than declared — a different design for the theme layer, not a
+control on top of it — and it would buy a dimmer Luna, which nobody has asked
+for. Somebody who wants a lighter interface wants a light theme, which is a new
+theme and a much smaller piece of work.
+
+**Scratch disks — not yet, and worth doing when there is a second thing to
+place.** Proxies have a folder, on their own page, because proxies are the one
+thing this writes that can be large and can want to be elsewhere. A "Scratch
+Disks" page today would be that one row moved and given a grander name. The
+moment a second kind of file needs a home — a disk cache, rendered previews —
+the two belong together and this becomes worth building.
+
+### 5.7 What closing the section turned up
+
+Two things, and the second is the reason the driving step is not optional.
+
+**A preference read once has to say so.** The renderer choice takes effect when
+the application restarts, because the device is made at startup and everything
+that draws — the compositor, each window's swapchain, Skia's context — is built
+on it. Nothing can move those to another adapter while they are open. So the
+page says which renderer was *chosen* and which one is *in use*, and those
+disagree until a restart. That is worth more than it sounds: a machine quietly
+running on WARP because no adapter would have it is exactly the machine somebody
+opens this page to ask about, and now it answers.
+
+**Looping never restarted when the range ran to the end of the sequence**, and
+postroll is what made that reachable. Found by driving, invisible to the tests,
+and two faults deep:
+
+- The player stops itself at the end — reaching it clears `running` — and
+  `advance_playback` guarded on "is the player playing". So it returned at its
+  first line at exactly the moment there was something left to decide, and the
+  loop-round it would have done sat unreachable behind that guard. The frame
+  loop had the *same* guard and would go back to blocking on its message queue,
+  so nothing even woke to notice. There is a comment beside the export case in
+  that loop describing this identical shape; it had not been applied here.
+- Underneath it, `Player::seek` only cleared the at-the-end flag on the render
+  thread when the flush landed, while `Player::play` sends a finished player
+  back to zero. Looping does exactly `seek` then `play`, so the seek would have
+  been discarded — a bug that could never be observed while the first one kept
+  the code from running at all.
+
+Both are fixed, and the second has a test. Measured on screen by sampling the
+playhead's position off the picture every 20 ms: with the rolls at zero a loop
+over a range marked 4–6 s runs 3.99 → 5.97 and wraps every 2.0 s; with 1.5 s of
+preroll and 2 s of postroll the same range runs 2.46 → 7.99 and wraps every
+5.5 s, which is the marked span widened by exactly what was asked for.
 
 ---
 
@@ -1165,7 +1242,9 @@ becomes too slow to work with.
 The rest of the application, in the order it seems worth walking:
 
 - ~~**Project panel**~~ — audited, and written up as section 4 above.
-- ~~**Application settings**~~ — audited, and written up as section 5 above.
+- ~~**Application settings**~~ — audited, written up as section 5, and **closed**:
+  every row is built or declined with a reason, bar keyboard customisation,
+  which was pulled out into a section of its own below.
 - **Audio** — the Audio Track Mixer, submixes, sends, the essential sound panel,
   loudness normalisation.
 - **Titles and graphics** — the Essential Graphics panel, layered graphics,

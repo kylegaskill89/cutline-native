@@ -93,6 +93,11 @@ std::string to_json(const Settings& settings, int indent) {
   out["still_length"] = settings.still_length;
   out["transition_length"] = settings.transition_length;
   out["autosave_seconds"] = settings.autosave_seconds;
+  out["autosave_versions"] = settings.autosave_versions;
+  out["undo_depth"] = settings.undo_depth;
+  out["preroll"] = settings.preroll;
+  out["postroll"] = settings.postroll;
+  out["software_renderer"] = settings.software_renderer;
   // Only when somebody has changed one. A fresh file saying "every label is
   // called what it is already called" is eight lines of nothing.
   if (std::ranges::any_of(settings.label_names, [](const std::string& n) { return !n.empty(); })) {
@@ -144,6 +149,17 @@ std::expected<Settings, std::string> settings_from_json(std::string_view text) {
   settings.autosave_seconds =
       std::clamp(document.value("autosave_seconds", settings.autosave_seconds),
                  kMinAutosaveSeconds, kMaxAutosaveSeconds);
+  settings.autosave_versions =
+      std::clamp(document.value("autosave_versions", settings.autosave_versions),
+                 kMinAutosaveVersions, kMaxAutosaveVersions);
+  settings.undo_depth = std::clamp(document.value("undo_depth", settings.undo_depth),
+                                   kMinUndoDepth, kMaxUndoDepth);
+  settings.preroll =
+      std::clamp(document.value("preroll", settings.preroll), kMinRoll, kMaxRoll);
+  settings.postroll =
+      std::clamp(document.value("postroll", settings.postroll), kMinRoll, kMaxRoll);
+  settings.software_renderer =
+      document.value("software_renderer", settings.software_renderer);
 
   // Sized to what this build has rather than to what the file says. A file from
   // a version with one more label would otherwise reach past the palette, and

@@ -283,6 +283,22 @@ click during this stretch went to a background application because the editor di
 not have the foreground. Nothing was harmed, and the helper that asserts the
 target is ours is the reason it is knowable.
 
+**Assert the state you set, do not assume the click took.** Two separate runs
+were spent measuring a loop that was not looping, because the Loop button had
+been clicked and had not come on — the button moves when its label changes
+between Play and Pause, so a coordinate that worked a moment ago lands beside
+it. Reading one pixel of the button's fill answers it: lit is the theme's accent
+blue, and it costs nothing next to a twenty-second measurement of nothing.
+
+**Three traps in the driver itself**, each of which looked like a fault in the
+application. `GetWindowTextW` marshalled with a plain `StringBuilder` comes back
+cut at the first UTF-16 null, so every window title reads as its first letter
+and nothing matches — it needs `CharSet.Unicode`. An `EnumWindows` callback
+passed as a PowerShell scriptblock silently records nothing, so the enumeration
+belongs in the C# helper. And **PowerShell parameter names are case-insensitive**:
+a local `$h` inside a function taking `[IntPtr]$H` *is* the handle, so assigning
+a height to it corrupts the window being drawn.
+
 **Watch the DPI.** Whether
 PowerShell launches DPI-aware varies between invocations; when
 `[System.Windows.Forms.Screen]::PrimaryScreen.Bounds` reports 3840×2160 you are
@@ -314,6 +330,55 @@ deciding it is probably fine.
 - **The icon view against a large pool.** It was driven with two sources. Forty
   is the case where the filmstrip requests and the eviction budget meet, and
   nobody has looked at that on screen.
+- **The application running on WARP, for more than a few minutes.** Choosing the
+  software renderer is new, and it works: the whole interface, Skia included,
+  draws correctly on it and the Graphics page names it. But once during a long
+  driven session on WARP the main window's client area went black and stayed
+  black, with the process responsive and burning no CPU, and the dialog over it
+  black too. It did not reproduce — the same actions afterwards were handled
+  correctly, and a fresh run sat on WARP for twenty seconds idle and through six
+  category switches with no trouble. Recorded rather than diagnosed, and worth a
+  session of its own before anybody leans on the software renderer. Timing-
+  sensitive faults that go away when you look at them are still real.
+
+#### Driven: the loop that never came round
+
+Closing §5 added a preroll and a postroll around a looped range, and driving
+them found something much older underneath. The loop's end is measured against
+the player's reported position, and postroll pushes that end out to the end of
+the sequence — where the player stops itself, clears `running`, and is therefore
+no longer "playing". Both the guard at the top of `advance_playback` and the
+frame loop's own condition asked exactly that question, so the end-of-playback
+handling was unreachable at exactly the moment it had something to do, and the
+frame loop went back to blocking on its message queue with a loop still to come
+round. **Looping a range that ran to the end of the sequence had never
+restarted**, marks or no marks; the marked-range case worked only because the
+end usually arrived early.
+
+Under it was a second fault that the first one hid completely: `Player::seek`
+cleared the at-the-end flag on the render thread when the flush landed, and
+`Player::play` sends a finished player back to zero — so `seek` then `play`,
+which is precisely what looping does, would have discarded the position asked
+for. It could not be observed while the code that does it never ran.
+
+Measured by sampling the playhead's own pixels off the screen every 20 ms, on a
+range marked 4–6 s in an eight-second sequence:
+
+| | loop start | loop end | period |
+|---|---|---|---|
+| no preroll or postroll | 3.99 s | 5.97 s | 2.0 s |
+| 1.5 s preroll, 2 s postroll | 2.46 s | 7.99 s | 5.5 s |
+
+The second row is the first widened by exactly what was asked for, and before
+the fix it played once to 7.99 and sat there for the whole twenty-two seconds
+of the measurement.
+
+Two things about the measurement are worth keeping. **Sample the playhead, not
+the picture** — finding the reddest column in a one-pixel row of the timeline
+gives the position in seconds directly, and a wrap is a backwards step in that
+series rather than something to infer. And **assert the control case**: the
+zero row is what says the widening is doing the widening, and it is the row
+that would have caught a preroll applied twice.
 
 #### Driven: playback, and the hitch the average hid
 
@@ -435,7 +500,7 @@ walked section by section.
 | §2 Timeline | done |
 | §3 Monitors | done bar a deferred row (see the audit list at the foot of that file) |
 | §4 Project panel | done bar "new sequence from a clip", which needs more than one sequence |
-| §5 Application settings | **in progress — this is what you are picking up**, see §10 below |
+| §5 Application settings | **done** — every row built or declined with a reason, see that file's §5.6 |
 | Audio, titles, colour, export, sequences, keyboard customisation | not started |
 
 **Works end to end.** Import, place, move, trim, split, ripple, undo/redo. Eleven
@@ -469,9 +534,13 @@ is about:
   at placement, and a right-click menu.
 - **`settings.json`** — the preferences file, and everything that now persists.
 - **The settings windows** — Preferences and Project Settings as real modal
-  windows with categories down the side.
+  windows with categories down the side. Nine preference pages now.
 - **Audio device selection**, and **drop-frame timecode** (which fixed a real
   counting bug beneath it).
+- **§5 closed** — undo depth, recovery copies kept, preroll and postroll, and a
+  GPU/software renderer choice; four rows declined with reasons. Driving the
+  last of those found that looping had never restarted at the end of a
+  sequence, which is fixed.
 
 ---
 
@@ -672,6 +741,17 @@ they are. `set_fills_cross(true)` is the opt-in. The comment beside it says why
 the default is the other way: a toolbar that inherited a spacer's flexibility
 would swallow the window.
 
+**"Is it still running" is the wrong question at the moment something ends.**
+A player that reaches the end of the timeline stops itself, so `playing()` goes
+false at exactly the instant there is something left to decide — loop round, or
+stop and tidy up. Both `advance_playback` and the frame loop guarded on it, so
+the deciding never happened and looping to the end of a sequence sat on the last
+frame for ever. The frame loop already carried a comment about the identical
+shape for the *export* worker, which clears `running` and sets `finished` as its
+last two acts; the lesson had been learned once and not applied. Anything that
+finishes on its own needs a guard that means "there is still something to do",
+not "it is still going".
+
 **A window not in `App::shells()` paints once and never again.** The settings
 window was missing from it, so its category buttons worked perfectly and nothing
 on screen ever said so — which reads as a dead control and is a dead repaint.
@@ -839,9 +919,10 @@ a backwards move smaller than one frame took compositing from 23 ms to 2 ms.
 
 ## 9. Where the work is right now
 
-**You are part-way through `docs/premiere-gaps.md` §5, application settings.**
-Read that section before anything else here — it is the plan, it says what was
-audited and why, and its tables are struck through as rows close.
+**`docs/premiere-gaps.md` §5, application settings, is closed.** Every row in it
+is either built or declined with a written reason; that file's §5.6 is the
+reasons and §5.7 is what closing it turned up. **Pick the next section** — see
+*The next thing* below.
 
 ### What the section is
 
@@ -860,37 +941,38 @@ its contents to a different place from the other half.
 
 ### What is done
 
-Preferences has six pages — Appearance, Audio Hardware, Labels, Timeline,
-Proxies, Auto Save — and everything on them persists. Project Settings has one,
-General, which grows a Timecode section at 29.97 and 59.94.
+Preferences has nine pages — General, Appearance, Audio Hardware, Playback,
+Graphics, Labels, Timeline, Proxies, Auto Save — and everything on them
+persists. Project Settings has one, General, which grows a Timecode section at
+29.97 and 59.94.
 
 Persisted preferences: theme (by name), snapping, looping, aspect lock, preview
 quality, pool ordering and view, still and transition durations, autosave
-interval, label names, default label per media kind, proxy height, proxy folder,
-audio output device.
+interval, **autosave copies kept**, **undo depth**, **preroll and postroll**,
+**renderer choice**, label names, default label per media kind, proxy height,
+proxy folder, audio output device.
 
-### What is left in §5, smallest first
+Four rows are closed as *won't do*, each with its reasoning in
+`premiere-gaps.md` §5.6: memory reserved, media cache location, appearance
+brightness, and scratch disks. Keyboard customisation was pulled out into a
+section of its own, being larger than the rest of §5 together.
 
-The table in `premiere-gaps.md` §5.4 is the list. What is not struck through:
+### Three things from §5 worth knowing before you touch them
 
-1. **Undo depth** — `History` takes a limit in its constructor and it is fixed at
-   100. One field, one control. An afternoon at most.
-2. **Auto Save versions kept** — one recovery copy per document today. Premiere
-   keeps N. Needs a naming scheme and a prune, in `editor/autosave.hpp`.
-3. **Playback preroll / postroll** — no machinery at all; the player seeks and
-   plays. Needs the player to start early and stop late around a marked range.
-4. **Renderer choice (GPU / software)** — the compositor already falls back on
-   its own; this is exposing the choice, and is mostly useful for diagnosing.
-5. **Appearance brightness** — four discrete themes today. A slider means themes
-   generated rather than declared, which is a bigger change than it sounds and
-   probably not worth it. Consider closing this row as "won't do" with a reason.
-6. **Scratch disks** — proxies have a folder now; nothing else this application
-   writes has one. Small, and worth doing when there is a second thing to place.
-7. **Media cache location** — *no disk cache exists.* Filmstrips and waveforms
-   are in memory only. This is a subsystem, not a setting; do not put a control
-   on it until there is something to point at.
-8. **Memory / RAM reserved** — the caches have fixed budgets chosen against
-   measurements. **Think hard before exposing this**; see the principle below.
+- **Recovery copies are timestamped and pruned**, `<name>-<digest>-<stamp>`,
+  newest first, oldest deleted past the limit. The stamp is fixed width so the
+  names sort chronologically as text — ordering needs neither the filesystem's
+  timestamps, which are coarse on some volumes, nor a parse. A copy written by
+  an older build has no stamp; it still matches and sorts last, which is right.
+  Matching is on the prefix **plus exactly a stamp's width**, because a
+  never-saved document's prefix is `untitled` and that is also the start of
+  every copy of a saved project called `untitled`.
+- **The renderer choice is read once, when the device is made**, and the page
+  says so. It also reports the adapter actually in use, which is not always the
+  one chosen — the device still falls back to WARP on its own.
+- **Preroll and postroll widen the looped range only.** `core::playback_span` is
+  the arithmetic, and with both at zero it is `marked_span` exactly, which is
+  what makes it safe everywhere the marked span was used before.
 
 ### The principle this section has been run on
 
@@ -930,12 +1012,9 @@ Twenty minutes, and every step has a reason:
 
 ### The next thing, if you want a recommendation
 
-**Close §5 with the two cheap rows (undo depth, autosave versions), write the
-"won't do" reasons for the rows that should not be built, and move to the next
-section.** §5 has no teeth left in it; the remaining rows are either trivial or
-need machinery that does not exist.
+§5 is closed, so this is a free choice between the sections still to walk.
 
-Of the sections still to walk, **sequences** is the one that keeps coming up:
+Of them, **sequences** is the one that keeps coming up:
 section 4 could not close "new sequence from a clip" without it, and it is the
 largest piece of unbuilt model in the application. **Keyboard customisation** is
 the other substantial one, and it was pulled out of §5 for being larger than the
@@ -944,13 +1023,12 @@ rest of that section put together.
 ### State of the tree
 
 Everything is committed and green. Nothing is half-finished, no branch is open,
-and there is no work in progress to reconstruct. The last commit is
-`9beffaa Count timecode the way broadcast does, and fix what it was counting`.
+and there is no work in progress to reconstruct.
 
-- 2714 tests pass under the `ui` preset.
-- `--check` reports 2525 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
+- 2739 tests pass under the `ui` preset.
+- `--check` reports 2577 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
   all four themes.
-- 24 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
+- 26 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
   the owner's standing instruction is that releases happen after major features,
   not per commit.
 

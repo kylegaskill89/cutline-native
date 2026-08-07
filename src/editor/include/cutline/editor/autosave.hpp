@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace cutline::editor {
 
@@ -34,6 +35,17 @@ namespace cutline::editor {
 /// A minute. A project file is text measured in kilobytes, so the cost is
 /// nothing, and a minute is about as much work as anyone will forgive losing.
 inline constexpr std::chrono::seconds kAutosaveInterval{60};
+
+/// How many copies of one document are kept.
+///
+/// Five rather than one, and the reason is the case this feature exists for:
+/// the newest copy is written *from the state the application is in*, so a
+/// document that has been quietly corrupted for the last few minutes has had
+/// that corruption faithfully copied over the only thing there was to go back
+/// to. Keeping a handful means the copy from before it went wrong is still
+/// there. Five is about five minutes at the default interval, which is as far
+/// back as anybody notices in time to want it.
+inline constexpr int kAutosaveVersions = 5;
 
 /// What has been written so far, so `autosave_due` can decide.
 struct AutosaveState {
@@ -58,21 +70,40 @@ struct AutosaveState {
 /// The directory recovery copies live in.
 [[nodiscard]] std::filesystem::path autosave_dir();
 
-/// Where the recovery copy of `document` goes. An empty path is the document
-/// that has never been saved, which gets one of its own.
+/// What every copy of `document` has at the front of its name. An empty path is
+/// the document that has never been saved, which gets a prefix of its own.
 ///
-/// The name carries both the document's own name and a digest of its full
-/// path: the name alone would make two projects called "cut" in two folders
-/// share a recovery file, and the digest alone would give a directory full of
-/// numbers nobody could read.
-[[nodiscard]] std::filesystem::path autosave_path_for(const std::filesystem::path& document);
+/// It carries both the document's own name and a digest of its full path: the
+/// name alone would make two projects called "cut" in two folders share a
+/// recovery file, and the digest alone would give a directory full of numbers
+/// nobody could read.
+[[nodiscard]] std::string autosave_prefix(const std::filesystem::path& document);
 
-/// Writes the recovery copy, creating the directory if it is not there.
+/// Where the copy of `document` written at `when` goes.
+///
+/// The time is in the name rather than left to the filesystem's own timestamp,
+/// for two reasons. A copy is identified by the moment it describes, and a
+/// file's modification time is a property of the file rather than of the work
+/// in it — a backup tool that rewrites one has changed which copy looks newest.
+/// And a fixed-width stamp sorts chronologically as text, so ordering the
+/// copies needs neither the filesystem nor a parse.
+[[nodiscard]] std::filesystem::path autosave_path_for(const std::filesystem::path& document,
+                                                      std::chrono::system_clock::time_point when);
+
+/// Writes a recovery copy, creating the directory if it is not there, and then
+/// discards all but the newest `versions` of them.
+///
+/// Pruning happens *after* the write rather than before it, so a failure to
+/// write leaves what was already there rather than making room for a copy that
+/// never arrived.
 [[nodiscard]] std::expected<void, std::string> write_autosave(
-    const std::filesystem::path& document, const core::Project& project);
+    const std::filesystem::path& document, const core::Project& project,
+    int versions = kAutosaveVersions,
+    std::chrono::system_clock::time_point when = std::chrono::system_clock::now());
 
-/// Removes the recovery copy. Called on a successful save and on a clean exit:
-/// what is left behind is exactly what was never recovered from.
+/// Removes every recovery copy of the document. Called on a successful save and
+/// on a clean exit: what is left behind is exactly what was never recovered
+/// from.
 void discard_autosave(const std::filesystem::path& document);
 
 /// A recovery copy worth offering.
@@ -82,7 +113,18 @@ struct Recovery {
   std::filesystem::file_time_type written_at{};
 };
 
-/// The recovery copy for `document`, if there is one worth offering.
+/// Every copy of `document`, newest first.
+///
+/// Ordered by the stamp in the name rather than by the filesystem's timestamps,
+/// which are coarse enough on some volumes that two copies a minute apart can
+/// report the same second.
+///
+/// A copy written before this application kept more than one has no stamp at
+/// all. It sorts last, which is right: it is the older shape, and anything with
+/// a stamp was written after the upgrade that introduced them.
+[[nodiscard]] std::vector<Recovery> autosave_copies(const std::filesystem::path& document);
+
+/// The newest recovery copy for `document`, if there is one worth offering.
 ///
 /// Nothing when there is no copy, and nothing when the document on disk is
 /// newer than the copy — that means the work was saved after the copy was

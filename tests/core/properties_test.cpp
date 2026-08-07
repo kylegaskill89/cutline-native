@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -803,6 +804,48 @@ TEST(Marks, ClearingLeavesTheWholeTimeline) {
 
   EXPECT_FALSE(has_marks(p));
   EXPECT_EQ(marked_span(p), (MarkedSpan{.start = 0.0, .duration = 10.0}));
+}
+
+// ------------------------------------------------------ preroll and postroll --
+
+// The property that makes this safe to use everywhere the marked span was used
+// before anybody had a preroll: with none set, it is the marked span.
+TEST(PlaybackSpan, WithNoRollItIsTheMarkedSpan) {
+  Project p = set_in_point(one_clip_project(), 2.0);
+  p = set_out_point(std::move(p), 7.0);
+  EXPECT_EQ(playback_span(p, 0.0, 0.0), marked_span(p));
+}
+
+TEST(PlaybackSpan, ARunUpStartsEarlierAndARunOutEndsLater) {
+  Project p = set_in_point(one_clip_project(), 4.0);
+  p = set_out_point(std::move(p), 6.0);
+  EXPECT_EQ(playback_span(p, 1.5, 2.0), (MarkedSpan{.start = 2.5, .duration = 5.5}));
+}
+
+// A run-up longer than what precedes the mark starts at the sequence rather
+// than at a negative time, which nothing downstream could seek to.
+TEST(PlaybackSpan, ARunUpCannotReachBeforeTheSequence) {
+  const Project p = set_in_point(one_clip_project(), 1.0);
+  EXPECT_EQ(playback_span(p, 5.0, 0.0), (MarkedSpan{.start = 0.0, .duration = 10.0}));
+}
+
+TEST(PlaybackSpan, ARunOutCannotReachPastTheSequence) {
+  const Project p = set_out_point(one_clip_project(), 8.0);
+  EXPECT_EQ(playback_span(p, 0.0, 5.0), (MarkedSpan{.start = 0.0, .duration = 10.0}));
+}
+
+// The numbers come from a preference file a person can edit, so there is
+// nothing to fail at here — a nonsense one reads as none rather than moving the
+// start past the end and turning a run-up into a skip.
+TEST(PlaybackSpan, NonsenseNumbersReadAsNone) {
+  Project p = set_in_point(one_clip_project(), 3.0);
+  p = set_out_point(std::move(p), 6.0);
+  const MarkedSpan plain = marked_span(p);
+
+  EXPECT_EQ(playback_span(p, -4.0, -4.0), plain);
+  EXPECT_EQ(playback_span(p, std::numeric_limits<double>::quiet_NaN(),
+                          std::numeric_limits<double>::infinity()),
+            plain);
 }
 
 TEST(Marks, AreClampedToTheSequence) {

@@ -19,6 +19,7 @@
 /// existed, so a fresh install behaves exactly as it always has and a missing
 /// file is not a special case.
 
+#include "cutline/core/history.hpp"
 #include "cutline/editor/autosave.hpp"
 #include "cutline/editor/browser_binding.hpp"
 #include "cutline/editor/import.hpp"
@@ -87,6 +88,43 @@ struct Settings {
   double transition_length = kPreferredTransitionLength;
   /// How often a recovery copy is written, in seconds.
   int autosave_seconds = static_cast<int>(kAutosaveInterval.count());
+  /// How many recovery copies of one document are kept before the oldest goes.
+  int autosave_versions = kAutosaveVersions;
+
+  /// How many edits can be stepped back through.
+  ///
+  /// A snapshot is a whole project, so this is a memory budget as much as a
+  /// convenience — which is exactly why it belongs here rather than being
+  /// chosen once for every machine. A long cut full of keyframes pays much more
+  /// per entry than a short one.
+  int undo_depth = static_cast<int>(core::kDefaultUndoDepth);
+
+  // ------------------------------------------------------------ playback --
+
+  /// How long before a marked range playback starts, and how long past its end
+  /// it carries on, in seconds.
+  ///
+  /// Premiere's preroll and postroll, and they exist because a loop that starts
+  /// exactly on the in point shows you the frame you were judging before you
+  /// have any sense of what leads into it. Zero for both, which is what this
+  /// did before they existed.
+  double preroll = 0.0;
+  double postroll = 0.0;
+
+  // ------------------------------------------------------------ graphics --
+
+  /// Whether to draw on Microsoft's software rasteriser instead of the GPU.
+  ///
+  /// Off, and it should stay off: WARP is correct and slow, and choosing it
+  /// costs the whole reason this application is written in C++. It is here for
+  /// the session where the answer to "is this the driver?" is worth more than
+  /// the frame rate — which is a real question, and one that otherwise needs a
+  /// build rather than a tick.
+  ///
+  /// Read once, when the device is made. Nothing can move a swapchain, a
+  /// compositor and a Skia context to another adapter while they are in use,
+  /// and pretending otherwise would be a control that appears to work.
+  bool software_renderer = false;
 
   // -------------------------------------------------------------- labels --
 
@@ -164,6 +202,19 @@ inline constexpr double kMinTransitionLength = 0.04;
 inline constexpr double kMaxTransitionLength = 60.0;
 inline constexpr int kMinAutosaveSeconds = 15;
 inline constexpr int kMaxAutosaveSeconds = 3600;
+/// One copy is the behaviour this had before versions existed, so it has to
+/// stay reachable. Twenty is where a directory of one project's copies stops
+/// being something anybody would read through.
+inline constexpr int kMinAutosaveVersions = 1;
+inline constexpr int kMaxAutosaveVersions = 20;
+/// Ten is few enough to be worth nothing, and a thousand whole projects is
+/// where the memory this costs stops being an afterthought.
+inline constexpr int kMinUndoDepth = 10;
+inline constexpr int kMaxUndoDepth = 1000;
+/// No run-up at all has to stay reachable, since it is what this did before.
+/// Ten seconds is past the point where anybody is still watching the cut.
+inline constexpr double kMinRoll = 0.0;
+inline constexpr double kMaxRoll = 10.0;
 inline constexpr int kMinProxyHeight = 180;
 inline constexpr int kMaxProxyHeight = 2160;
 

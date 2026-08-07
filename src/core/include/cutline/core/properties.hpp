@@ -311,6 +311,20 @@ struct MarkedSpan {
 
 [[nodiscard]] MarkedSpan marked_span(const Project& p) noexcept;
 
+/// The marked span with a run-up before it and a run-out after it.
+///
+/// Premiere's preroll and postroll. Watching a cut means seeing what leads into
+/// it and what it lands in, and a loop that starts exactly on the in point
+/// gives neither — the first thing you see is the frame you were judging.
+///
+/// Both are clamped to the sequence, so a preroll longer than what precedes the
+/// mark starts at zero rather than at a negative time, and neither is allowed
+/// to turn a marked span into one that runs off the end. Zero for both gives
+/// back exactly `marked_span`, which is what makes this safe to use everywhere
+/// the marked span was used before anybody set one.
+[[nodiscard]] MarkedSpan playback_span(const Project& p, double preroll,
+                                       double postroll) noexcept;
+
 // --------------------------------------------------------------- factories --
 
 /// A project with empty tracks and no media.

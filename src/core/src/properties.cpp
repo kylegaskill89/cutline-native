@@ -572,6 +572,21 @@ MarkedSpan marked_span(const Project& p) noexcept {
   return MarkedSpan{.start = start, .duration = std::max(0.0, end - start)};
 }
 
+MarkedSpan playback_span(const Project& p, double preroll, double postroll) noexcept {
+  const MarkedSpan marked = marked_span(p);
+  const double total = timeline_duration(p);
+
+  // A negative or non-finite number would move the start past the end and turn
+  // a run-up into a skip. Taken as none rather than refused: this comes from a
+  // preference file somebody can edit, and there is nothing to fail at here.
+  const double before = std::isfinite(preroll) ? std::max(0.0, preroll) : 0.0;
+  const double after = std::isfinite(postroll) ? std::max(0.0, postroll) : 0.0;
+
+  const double start = std::max(0.0, marked.start - before);
+  const double end = std::min(total, marked.start + marked.duration + after);
+  return MarkedSpan{.start = start, .duration = std::max(0.0, end - start)};
+}
+
 // --------------------------------------------------------------- factories --
 
 Project empty_project(int video_tracks, int audio_tracks) {

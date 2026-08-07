@@ -74,6 +74,15 @@ class Session {
   bool undo();
   bool redo();
 
+  /// How many edits are kept to step back through.
+  ///
+  /// Settable rather than fixed at construction because it is a preference, and
+  /// a preference read from a file that is loaded *after* the session exists —
+  /// the alternative is a session that cannot be made until the settings are,
+  /// which puts the file reading ahead of the document for no gain.
+  void set_undo_depth(std::size_t edits) { history_.set_limit(edits); }
+  [[nodiscard]] std::size_t undo_depth() const noexcept { return history_.limit(); }
+
   /// Bumped on every change to the project or the selection, so a view can
   /// tell whether it needs rebuilding without comparing whole projects.
   [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
