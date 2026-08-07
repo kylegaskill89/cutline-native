@@ -304,6 +304,14 @@ belongs in the C# helper. And **PowerShell parameter names are case-insensitive*
 a local `$h` inside a function taking `[IntPtr]$H` *is* the handle, so assigning
 a height to it corrupts the window being drawn.
 
+**To fill a pool, paste rather than click.** The file dialog's filename box
+accepts a whole multiple selection as quoted names separated by spaces —
+`"a.mp4" "b.mp4" …` — so navigating to the folder and pasting forty of them
+puts forty files in with two keystrokes. Setting the clipboard needs
+`powershell -STA`; the default apartment for a `-File` run will not do it. This
+only works because `OFN_ALLOWMULTISELECT` is set, so it is also the shortest
+check that the flag is still there.
+
 **Watch the DPI.** Whether
 PowerShell launches DPI-aware varies between invocations; when
 `[System.Windows.Forms.Screen]::PrimaryScreen.Bounds` reports 3840×2160 you are
@@ -339,12 +347,6 @@ deciding it is probably fine.
   this is ten seconds of work and worth closing.
 - **A source placed as it is marked** — that insert, overwrite and a drag from
   the pool all put down the same span.
-- **The icon view against a large pool.** It was driven with two sources. Forty
-  is the case where the filmstrip requests and the eviction budget meet, and
-  nobody has looked at that on screen. Sharper now than it was: a pool tile asks
-  for twelve frames across its whole source, and whether a dozen still *feels*
-  like enough to scrub across is exactly the sort of question only eyes answer.
-  The arithmetic and the worker are covered by tests.
 - **The application running on WARP, for more than a few minutes.** Choosing the
   software renderer is new, and it works: the whole interface, Skia included,
   draws correctly on it and the Graphics page names it. But once during a long
@@ -355,6 +357,43 @@ deciding it is probably fine.
   category switches with no trouble. Recorded rather than diagnosed, and worth a
   session of its own before anybody leans on the software renderer. Timing-
   sensitive faults that go away when you look at them are still real.
+
+#### Driven: forty in the pool, and the dialog that made it hard to get there
+
+The icon view had only ever been driven with two sources. Forty is where the
+filmstrip requests and the eviction budget were supposed to meet, and getting
+forty in was the first thing that went wrong: the import dialog took one file,
+so filling the pool meant forty trips through it, and a driver script doing
+that raced the dialog and gave up. That is not a scripting problem. Anybody
+with a folder of rushes has the same forty trips. The dialog takes a multiple
+selection now, and the whole pool goes in as one edit that one undo takes back.
+
+What forty then showed, on 4K copies of an eight-second capture:
+
+- **Nothing thrashes, and eviction earns its keep.** Tiles filled top first, in
+  the order they are shown, and only the ones on screen were asked for at all.
+  Memory rose to ~1.36 GB partway through and came back **down to 1.23 GB** by
+  the time the visible tiles were done, so the budget is releasing what it
+  should rather than fighting the requests. The worry that put this on the list
+  was the wrong worry.
+- **It is slow, and it gets slower.** The first six tiles took about a minute,
+  ten seconds each. The twenty visible ones took about **nine minutes** in
+  total — nearer twenty-five seconds a source by the end. Nothing blocks: the
+  interface stays responsive throughout and the strips arrive where you are
+  looking first. But a pool that takes most of ten minutes to finish drawing
+  itself is not what "browse your footage" should feel like, and the cache only
+  helps the second time. That it *decelerates* is the part worth chasing — a
+  fixed cost per source would not do that.
+- **Memory is not mostly the filmstrips.** It was already 1.36 GB with *one*
+  strip extracted. Forty sources in the pool cost that much before any of them
+  is looked at, which is a separate thing to go after and a bigger one.
+
+One fault fell out of it that is nothing to do with size: **undoing an import
+leaves the source monitor showing the source it removed.** The pool empties,
+the title loses its asterisk, and the monitor goes on displaying a frame from
+media the project no longer has. It predates the batch import — a single-file
+import undone does the same — and it is a refresh that does not check that what
+it is showing still exists.
 
 #### Measured: what reading a source actually costs
 
@@ -617,6 +656,20 @@ things about this codebase.
   handed to something that reads its input end to end. Every other clip is
   windowed now (see §8's note on `AudioMixer`), so this is the one case left
   where a long source costs its whole length in memory.
+- **A large pool costs a great deal of memory before anything is looked at.**
+  Forty 4K sources in the browser sat at ~1.36 GB with one filmstrip extracted,
+  so the cost is in holding forty sources open rather than in the pictures.
+  Nobody has taken this apart; it is the largest unexplained number in the
+  application.
+- **Filmstrips fill a large pool slowly, and slow down as they go.** Ten
+  seconds a source at first and nearer twenty-five by the twentieth, so twenty
+  visible tiles took about nine minutes. Ordered, evicting properly and never
+  blocking, so it degrades well — but browsing a folder of rushes should not be
+  a thing you wait out, and the deceleration says something is accumulating.
+  Both of these are written up under *Driven: forty in the pool* in §5.
+- **Undoing an import leaves the source monitor showing the removed source.**
+  Small, visible, and a refresh that does not check what it is showing still
+  exists. Also in §5.
 - **Reverse playback still hitches** about once every two to four seconds, down
   from twice a second. What is left is a group of pictures occasionally running
   longer than the run has turns to pay for; the honest next step is measuring GOP
@@ -1099,12 +1152,14 @@ rest of that section put together.
 Everything is committed and green. Nothing is half-finished, no branch is open,
 and there is no work in progress to reconstruct.
 
-- 2772 tests pass under the `ui` preset.
-- `--check` reports 2595 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
+- 2788 tests pass under the `ui` preset, 2408 under `release`. Set
+  `CUTLINE_TEST_MEDIA_DIR` or about fifty decode tests skip while the run still
+  says everything passed.
+- `--check` reports 2592 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
   all four themes — run it with something *in* the media cache as well as with
   it empty, since the Delete button only exists when there is something to
   delete.
-- 29 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
+- 31 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
   the owner's standing instruction is that releases happen after major features,
   not per commit.
 
