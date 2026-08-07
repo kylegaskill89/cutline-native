@@ -294,6 +294,9 @@ void TimelineView::zoom_about_playhead(bool closer) {
 
   scale_.zoom_about(anchor, closer ? kZoomStep : 1.0 / kZoomStep);
   scale_.clamp_start(model_.content_duration());
+  // Anchored on the playhead, so this is a statement that the playhead is what
+  // is being looked at — following it again is what was asked for.
+  scrolled_by_hand_ = false;
   refresh_bounds();
 }
 
@@ -311,6 +314,18 @@ bool TimelineView::follow_playhead() {
   const double margin = visible * kFollowMargin;
   const double first = scale_.start;
   const double last = first + visible;
+
+  // A view somebody has scrolled is theirs until the playhead reaches it.
+  //
+  // This runs on every frame of a playback, so without it the timeline simply
+  // could not be scrolled while anything was playing: the wheel moved the view
+  // and the next frame put it back. Handing it over again when the playhead
+  // arrives is what lets somebody look ahead and then stop looking, without a
+  // control for it.
+  if (scrolled_by_hand_) {
+    if (playhead_ < first || playhead_ > last) return false;
+    scrolled_by_hand_ = false;
+  }
 
   // Inside the comfortable part, which is where it is nearly all the time.
   if (playhead_ >= first + margin && playhead_ <= last - margin) return false;
@@ -2284,6 +2299,7 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
       scale_.start = view.offset;
       scale_.clamp_start(model_.content_duration());
       zoom_origin_ = scale_;
+      scrolled_by_hand_ = true;
       mode_ = DragMode::ScrollTime;
     }
     return true;
@@ -2584,6 +2600,7 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
                     view.thumb_offset(bar.width) + (event.x - scroll_origin_));
     scale_.start = view.offset;
     scale_.clamp_start(model_.content_duration());
+    scrolled_by_hand_ = true;
     if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
     return true;
   }
@@ -2608,6 +2625,7 @@ bool TimelineView::on_mouse_move(const MouseEvent& event) {
                               : zoom_origin_.start;
     scale_.start = std::max(0.0, scale_.start);
     scale_.clamp_start(model_.content_duration());
+    scrolled_by_hand_ = true;
     refresh_bounds();
     if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
     return true;
@@ -2879,6 +2897,7 @@ bool TimelineView::on_wheel(const WheelEvent& event) {
     const double factor = event.delta_y > 0.0 ? 1.0 / kZoomStep : kZoomStep;
     scale_.zoom_about(event.x - area.x, factor);
     scale_.clamp_start(model_.content_duration());
+    scrolled_by_hand_ = true;
     return true;
   }
 
@@ -2893,6 +2912,7 @@ bool TimelineView::on_wheel(const WheelEvent& event) {
   const double before = scale_.start;
   scale_.start += event.delta_y * scale_.visible_duration(area.width) * kScrollFraction;
   scale_.clamp_start(model_.content_duration());
+  if (scale_.start != before) scrolled_by_hand_ = true;
   // Unhandled when it could not move, so the wheel bubbles to whatever is
   // outside rather than dying against a timeline already at its end.
   return scale_.start != before;

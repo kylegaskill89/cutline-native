@@ -4284,6 +4284,78 @@ TEST(TimelineFollow, FollowsBackwardsToo) {
   EXPECT_GE(test.view->scale().start, 0.0);
 }
 
+// The reported bug: the timeline could not be scrolled at all while anything
+// was playing. Following runs on every frame of a playback, so the wheel moved
+// the view and the very next frame put it straight back.
+TEST(TimelineFollow, AScrolledViewIsNotDraggedBackWhilePlaying) {
+  Fixture test;
+  test.view->set_scale(TimeScale{.pixels_per_second = 400.0, .start = 0.0});
+  const double visible = test.view->scale().visible_duration(test.view->time_area().width);
+  ASSERT_LT(visible * 3.0, test.view->model().content_duration());
+
+  // Scrolled well ahead of where the playhead is.
+  const Rect area = test.view->time_area();
+  WheelEvent wheel{};
+  wheel.x = area.x + area.width * 0.5;
+  wheel.y = area.y + 4.0;
+  wheel.delta_y = 20.0;   // forward in time
+  wheel.modifiers.shift = true;  // a plain wheel scrolls the tracks instead
+  ASSERT_TRUE(test.view->on_wheel(wheel));
+  ASSERT_TRUE(test.view->scrolled_by_hand());
+
+  const double parked = test.view->scale().start;
+  ASSERT_GT(parked, 0.0);
+
+  // Playback carries on well behind what is on screen.
+  test.view->set_playhead(0.5);
+  EXPECT_FALSE(test.view->follow_playhead()) << "the view was dragged back";
+  EXPECT_DOUBLE_EQ(test.view->scale().start, parked);
+}
+
+// And it hands itself back, so looking ahead is something you stop doing
+// without having to press anything.
+TEST(TimelineFollow, FollowingResumesOnceThePlayheadReachesTheView) {
+  Fixture test;
+  test.view->set_scale(TimeScale{.pixels_per_second = 400.0, .start = 0.0});
+
+  const Rect area = test.view->time_area();
+  WheelEvent wheel{};
+  wheel.x = area.x + area.width * 0.5;
+  wheel.y = area.y + 4.0;
+  wheel.delta_y = 20.0;   // forward in time
+  wheel.modifiers.shift = true;  // a plain wheel scrolls the tracks instead
+  ASSERT_TRUE(test.view->on_wheel(wheel));
+
+  const double visible = test.view->scale().visible_duration(area.width);
+  const double parked = test.view->scale().start;
+
+  // Into what is on screen: the view is handed back.
+  test.view->set_playhead(parked + visible * 0.5);
+  test.view->follow_playhead();
+  EXPECT_FALSE(test.view->scrolled_by_hand());
+}
+
+// Pressing play says what is being watched, so the view goes back to the
+// playhead even if the last run was left scrolled somewhere else.
+TEST(TimelineFollow, AskingForItBackMakesItFollowAgain) {
+  Fixture test;
+  test.view->set_scale(TimeScale{.pixels_per_second = 400.0, .start = 0.0});
+
+  const Rect area = test.view->time_area();
+  WheelEvent wheel{};
+  wheel.x = area.x + area.width * 0.5;
+  wheel.y = area.y + 4.0;
+  wheel.delta_y = 20.0;   // forward in time
+  wheel.modifiers.shift = true;  // a plain wheel scrolls the tracks instead
+  ASSERT_TRUE(test.view->on_wheel(wheel));
+  ASSERT_TRUE(test.view->scrolled_by_hand());
+
+  test.view->follow_playhead_again();
+  test.view->set_playhead(0.5);
+  EXPECT_TRUE(test.view->follow_playhead());
+  EXPECT_LT(test.view->scale().start, 1.0);
+}
+
 TEST(TimelineFollow, NeverScrollsBeforeTheStartOfTheSequence) {
   Fixture test;
   test.view->set_scale(TimeScale{.pixels_per_second = 40.0, .start = 5.0});

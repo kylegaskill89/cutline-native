@@ -683,7 +683,23 @@ class TimelineView : public Widget {
   /// Not called from `set_playhead`. Scrubbing deliberately does not scroll —
   /// the pointer is already where the answer is, and moving the view out from
   /// under a drag makes it impossible to aim.
+  ///
+  /// **A view somebody has scrolled by hand is left alone.** Following runs on
+  /// every frame of a playback, so without that the timeline could not be
+  /// scrolled while anything was playing at all: the wheel moved the view and
+  /// the next frame put it straight back. Following resumes on its own once the
+  /// playhead reaches what is on screen, which is what makes looking ahead at
+  /// what is coming a thing you can do and then stop doing.
   bool follow_playhead();
+
+  /// Whether the view is being held where somebody put it rather than following
+  /// the playhead. Exposed for tests.
+  [[nodiscard]] bool scrolled_by_hand() const noexcept { return scrolled_by_hand_; }
+
+  /// Hands the view back to the playhead. Called when playback starts and when
+  /// the playhead is put somewhere deliberately, both of which are a statement
+  /// about where the interest now is.
+  void follow_playhead_again() noexcept { scrolled_by_hand_ = false; }
 
   /// Called while the playhead is dragged, and once when it is clicked.
   void set_on_scrub(std::function<void(double)> on_scrub) { on_scrub_ = std::move(on_scrub); }
@@ -1149,6 +1165,9 @@ class TimelineView : public Widget {
   Tool tool_ = Tool::Selection;
 
   DragMode mode_ = DragMode::None;
+  /// Set by any gesture that moves the view along time, and what stops
+  /// `follow_playhead` taking it straight back while something is playing.
+  bool scrolled_by_hand_ = false;
   std::optional<BlockRef> drag_;
   /// The block a drop from another panel would land on. See `set_drop_target`.
   std::optional<BlockRef> drop_target_;

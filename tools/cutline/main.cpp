@@ -5622,6 +5622,10 @@ void toggle_playback(App& app) {
   app.player->seek(app.session.playhead());
   app.player->play();
   app.playback_wanted = true;
+  // Pressing play is a statement about what is being watched, so the view goes
+  // back to following the playhead even if it was scrolled somewhere else while
+  // the last run was going.
+  if (app.timeline != nullptr) app.timeline->follow_playhead_again();
   // Without this, `Sleep(1)` in the playback loop really sleeps about 15 ms,
   // which is most of a frame at 60 Hz.
   timeBeginPeriod(1);
