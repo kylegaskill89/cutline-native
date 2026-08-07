@@ -31,12 +31,12 @@ measurements and the one correction they forced.
 | | |
 |---|---|
 | Repo | `github.com/kylegaskill89/cutline-native`, branch `main`, GPL-3.0-or-later |
-| Released | **0.3.0**, as an unsigned NSIS installer. `docs/releasing.md`. 27 commits since the tag, unreleased |
+| Released | **0.3.0**, as an unsigned NSIS installer. `docs/releasing.md`. 28 commits since the tag, unreleased |
 | Local | `d:\Videos\cutline-native` |
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~61k lines of source, ~39k of tests |
-| Tests | **2763** under the `ui` preset; 2392 of them need no GPU, no window, no FFmpeg |
+| Tests | **2769** under the `ui` preset; 2392 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -57,7 +57,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 2392 of the 2763 tests.
+binding between them — 2392 of the 2769 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -334,7 +334,10 @@ deciding it is probably fine.
   the pool all put down the same span.
 - **The icon view against a large pool.** It was driven with two sources. Forty
   is the case where the filmstrip requests and the eviction budget meet, and
-  nobody has looked at that on screen.
+  nobody has looked at that on screen. Sharper now than it was: a pool tile asks
+  for twelve frames across its whole source, and whether a dozen still *feels*
+  like enough to scrub across is exactly the sort of question only eyes answer.
+  The arithmetic and the worker are covered by tests.
 - **The application running on WARP, for more than a few minutes.** Choosing the
   software renderer is new, and it works: the whole interface, Skia included,
   draws correctly on it and the Graphics page names it. But once during a long
@@ -604,11 +607,6 @@ things about this codebase.
   them yet. This is the last large win left in the preview.
 - **Streaming audio decode.** `AudioMixer` decodes whole ranges eagerly, roughly
   230 MB per ten minutes of stereo.
-- **The icon view asks for the whole of every source.** `request_pool_pictures`
-  carries a comment promising "a short stretch of each source" over a line that
-  requests `0.0, media.duration`. With forty sources in the pool that is the
-  hundred seconds of processor time the comment itself warns about. Fixing it
-  means deciding what a tile should scrub across, which is why it was left.
 - **Reverse playback still hitches** about once every two to four seconds, down
   from twice a second. What is left is a group of pictures occasionally running
   longer than the run has turns to pay for; the honest next step is measuring GOP
@@ -911,6 +909,16 @@ Anything finishing on a worker has to *post* rather than set a flag for the loop
 to notice, or it appears at the next mouse move instead of when it was ready.
 `kWaveformReady` is the pattern.
 
+**A cache that records *what* it has without recording *how well* will hand one
+caller another caller's answer.** `ThumbnailCache` tracked which stretches of a
+source had been extracted and not how finely, so the pool's dozen frames across
+a ten-minute file marked the whole file covered — and every clip of it on the
+timeline was stuck with one frame every twelve seconds for the rest of the
+session, because nothing would ask again. Silent, and caused by opening a panel.
+Whenever two callers want the same *thing* at different resolutions, the
+resolution is part of what is stored, part of what is matched, and part of what
+may be merged.
+
 **Two test fixtures with the same name in one binary is a GoogleTest failure,
 not a shadowing.** `tests/app` links every file into `cutline_app_tests`, and a
 second `WithFootage` in an anonymous namespace still collides — the suite is keyed
@@ -1070,12 +1078,12 @@ rest of that section put together.
 Everything is committed and green. Nothing is half-finished, no branch is open,
 and there is no work in progress to reconstruct.
 
-- 2763 tests pass under the `ui` preset.
+- 2769 tests pass under the `ui` preset.
 - `--check` reports 2595 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
   all four themes — run it with something *in* the media cache as well as with
   it empty, since the Delete button only exists when there is something to
   delete.
-- 27 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
+- 28 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
   the owner's standing instruction is that releases happen after major features,
   not per commit.
 

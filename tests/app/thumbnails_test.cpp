@@ -98,6 +98,60 @@ TEST(ThumbnailSpans, AHoleInTheMiddleIsCoveredInOnePiece) {
   EXPECT_DOUBLE_EQ(want.to, 15.0);
 }
 
+// ------------------------------------------------------------- how finely --
+
+// The bug this exists to prevent, and it was a real one: the pool's tiles ask
+// for a dozen frames across a whole file, which used to record the file's whole
+// length as covered. Every clip of that source on the timeline was then stuck
+// with one frame every twelve seconds, for the rest of the session, because
+// nothing would ask again.
+TEST(ThumbnailFineness, ACoarseStretchDoesNotAnswerAFineOne) {
+  const ThumbnailCache::Span pool{0.0, 600.0, 50.0};  // a dozen across ten minutes
+  const auto want = ThumbnailCache::missing({pool}, {100.0, 120.0, kThumbnailSeconds});
+
+  EXPECT_FALSE(want.empty()) << "the timeline can never fill this in";
+  EXPECT_DOUBLE_EQ(want.from, 100.0);
+  EXPECT_DOUBLE_EQ(want.to, 120.0);
+  EXPECT_DOUBLE_EQ(want.seconds_per_frame, kThumbnailSeconds);
+}
+
+// The other way round is fine: what was taken finely answers a coarse question,
+// because the frames asked for are all there and more besides.
+TEST(ThumbnailFineness, AFineStretchAnswersACoarseOne) {
+  const ThumbnailCache::Span timeline{0.0, 600.0, kThumbnailSeconds};
+  EXPECT_TRUE(ThumbnailCache::missing({timeline}, {100.0, 120.0, 50.0}).empty());
+}
+
+TEST(ThumbnailFineness, TheSameFinenessBehavesAsItAlwaysDid) {
+  const ThumbnailCache::Span had{0.0, 30.0, kThumbnailSeconds};
+  EXPECT_TRUE(ThumbnailCache::missing({had}, {10.0, 20.0, kThumbnailSeconds}).empty());
+}
+
+// A coarse pass and a fine pass over the same seconds are two different facts
+// about them, and neither may be merged into the other's claim.
+TEST(ThumbnailFineness, TwoFinenessesAreBothRemembered) {
+  const ThumbnailCache::Span coarse{0.0, 600.0, 50.0};
+  const ThumbnailCache::Span fine{0.0, 20.0, kThumbnailSeconds};
+
+  EXPECT_TRUE(ThumbnailCache::missing({coarse, fine}, {0.0, 20.0, kThumbnailSeconds}).empty())
+      << "the fine pass covers this";
+  EXPECT_TRUE(ThumbnailCache::missing({coarse, fine}, {0.0, 600.0, 50.0}).empty())
+      << "the coarse pass covers this";
+
+  const auto want = ThumbnailCache::missing({coarse, fine}, {100.0, 120.0, kThumbnailSeconds});
+  EXPECT_FALSE(want.empty()) << "and neither covers finely past where the fine pass reached";
+}
+
+// How many frames a stretch is worth follows the fineness asked for, which is
+// what makes a pool tile cost a dozen seeks and not forty-eight.
+TEST(ThumbnailFineness, TheFrameCountFollowsTheFineness) {
+  EXPECT_EQ(ThumbnailCache::frames_for(600.0, kThumbnailSeconds), kMaxThumbnails)
+      << "ten minutes at the timeline's grid is capped";
+  EXPECT_EQ(ThumbnailCache::frames_for(600.0, 50.0), 12);
+  EXPECT_EQ(ThumbnailCache::frames_for(600.0, 0.0), kMaxThumbnails)
+      << "nonsense spacing falls back to the grid rather than dividing by zero";
+}
+
 // ------------------------------------------------- without any media at all --
 
 TEST(ThumbnailCache, AskingForNothingIsNotAsking) {
@@ -334,6 +388,31 @@ TEST_F(WithVideoFootage, AnEvictedSourceCanBeAskedForAgain) {
 
   cache.request("one", path_, 0.0, 8.0);
   EXPECT_NE(wait_for(cache, "one"), nullptr) << "it was remembered as done and never came back";
+}
+
+// A coarse pass must not rob a later fine one, all the way through the worker
+// rather than only in the arithmetic. This is the shape of what the pool and
+// the timeline do to the same source.
+TEST_F(WithVideoFootage, ACoarsePassDoesNotStopAFinerOne) {
+  ThumbnailCache cache;
+  cache.request("boiler", path_, 0.0, 8.0, 4.0);  // as a pool tile asks
+  const auto coarse = wait_for(cache, "boiler");
+  ASSERT_NE(coarse, nullptr);
+  const std::size_t after_coarse = coarse->frames.size();
+
+  cache.request("boiler", path_, 0.0, 8.0, 1.0);  // as the timeline asks
+  // The strip is replaced rather than added to, so waiting means waiting for
+  // the count to grow rather than for something to appear.
+  const auto deadline = std::chrono::steady_clock::now() + 60s;
+  std::shared_ptr<const ui::Filmstrip> fine;
+  while (std::chrono::steady_clock::now() < deadline) {
+    fine = cache.find("boiler");
+    if (fine != nullptr && fine->frames.size() > after_coarse) break;
+    std::this_thread::sleep_for(20ms);
+  }
+  ASSERT_NE(fine, nullptr);
+  EXPECT_GT(fine->frames.size(), after_coarse)
+      << "the coarse pass claimed these seconds and the fine one never ran";
 }
 
 // ------------------------------------------------------- kept between runs --

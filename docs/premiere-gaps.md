@@ -1253,15 +1253,31 @@ Four things in it are load bearing:
   fail silently: a cache that cannot be read is a slow session, and one that
   cannot be written is a slow session next time. Neither is worth a dialog.
 
-**Still open, and found while measuring this.** `request_pool_pictures` in the
-composition root has a comment promising "only a short stretch of each source"
-above a line asking for `0.0, media.duration` — the whole file, for every source
-in the pool, in the icon view. With forty sources that is precisely the hundred
-seconds of processor time the comment warns against. It is not fixed here
-because fixing it properly means deciding what a tile ought to scrub across, and
-the cache makes the second visit free rather than the first. It is also exactly
-the case on the handoff's waiting-to-be-driven list — nobody has ever watched
-the icon view against a large pool.
+**The icon view, found while measuring this and fixed after.**
+`request_pool_pictures` had a comment promising "only a short stretch of each
+source" above a line asking for `0.0, media.duration` — the whole file, for
+every source, at the timeline's own fineness. Forty-eight seeks per source, and
+forty sources in a pool.
+
+The cost was the smaller half. **Coverage recorded that a stretch had been taken
+and not how finely it had been taken**, so forty-eight frames spread across ten
+minutes marked the whole file as covered — and every clip of that source on the
+timeline was then stuck with one frame every twelve seconds for the rest of the
+session, because nothing would ever ask again. Silent, and produced by opening
+a panel.
+
+A `Span` now carries the seconds between its frames, `missing` only counts a
+stretch that reaches at least as finely as the one being asked for, and `cover`
+merges only stretches of matching fineness — two finenesses over the same
+seconds are two different facts and neither may be folded into the other's
+claim. The pool asks for twelve frames across whatever length the source is, so
+a ten-minute capture and a ten-second one cost the same.
+
+The tile's *appearance* has not been checked on screen — the desktop was not
+available — so what is verified is the arithmetic, the worker end to end against
+real footage, and that a coarse pass no longer stops a finer one. Whether a
+dozen frames still feels like enough to scrub across is a question for eyes, and
+it stays on the handoff's waiting list.
 
 ---
 

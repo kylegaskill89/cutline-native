@@ -3340,13 +3340,27 @@ void sort_by_column(App& app, cutline::ui::MediaColumn column) {
 /// Through the binding every time rather than being patched, for the same
 /// reason the timeline is: an undo can put media back that no incremental
 /// update would know to restore.
-/// Asks for a frame or two of every source the icon view is showing.
+/// How many frames one pool tile is worth taking, across the whole source.
 ///
-/// Only in the icon view, and only for a short stretch of each source: the tile
-/// scrubs across the whole file, but a handful of frames spread over it is what
-/// a 108-pixel picture can distinguish anyway — and a pool of forty sources
-/// asking for the whole of each would be the hundred seconds of processor time
-/// that the filmstrips were already cut back to avoid.
+/// A tile is about 108 pixels wide and the pointer's position across it picks
+/// the frame, so a dozen is already finer than anybody can aim. Every one of
+/// them is a seek and a decode — measured at about half a second each on a 4K
+/// capture — so this number is the whole cost of showing a pool of footage.
+constexpr int kPoolTileFrames = 12;
+
+/// Asks for a few frames of every source the icon view is showing.
+///
+/// Only in the icon view, and deliberately *coarse*: the tile scrubs across the
+/// whole file, but a handful of frames spread over it is what a 108-pixel
+/// picture can distinguish anyway.
+///
+/// This asked for the whole of each source at the timeline's own fineness until
+/// somebody read it — the comment above has said "a short stretch" since it was
+/// written, and the line below asked for `0.0, media.duration`. Forty sources
+/// was forty-eight seeks each. Worse than the cost, the coverage it recorded
+/// claimed those seconds were done, so every clip of that source on the
+/// timeline was stuck with one frame every twelve seconds for the rest of the
+/// session.
 void request_pool_pictures([[maybe_unused]] App& app) {
 #if CUTLINE_HAVE_PREVIEW
   if (app.browser == nullptr || app.browser->view() != cutline::ui::BrowserView::Icons) return;
@@ -3354,7 +3368,10 @@ void request_pool_pictures([[maybe_unused]] App& app) {
   for (const cutline::core::Media& media : app.session.project().media) {
     if (!media.has_video || cutline::core::is_generated_media(media) || media.is_image) continue;
     if (media.path.empty() || media.duration <= 0.0) continue;
-    app.filmstrips.request(media.id, media.path, 0.0, media.duration);
+    // Spread across the whole source, however long it is. A ten-minute capture
+    // and a ten-second one both cost twelve frames.
+    app.filmstrips.request(media.id, media.path, 0.0, media.duration,
+                           media.duration / kPoolTileFrames);
   }
 #endif
 }

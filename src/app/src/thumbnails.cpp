@@ -18,9 +18,10 @@ ThumbnailCache::~ThumbnailCache() {
   if (worker_.joinable()) worker_.join();
 }
 
-int ThumbnailCache::frames_for(double duration) noexcept {
+int ThumbnailCache::frames_for(double duration, double seconds_per_frame) noexcept {
   if (!(duration > 0.0)) return kMinThumbnails;
-  const auto wanted = static_cast<int>(duration / kThumbnailSeconds);
+  const double spacing = seconds_per_frame > 0.0 ? seconds_per_frame : kThumbnailSeconds;
+  const auto wanted = static_cast<int>(duration / spacing);
   return std::clamp(wanted, kMinThumbnails, kMaxThumbnails);
 }
 
@@ -59,24 +60,37 @@ ThumbnailCache::Span ThumbnailCache::missing(const std::vector<Span>& have,
   // range that covers it re-extracts a few frames already held, and one seek
   // saved is worth more than a few frames of memory.
   for (const Span& had : have) {
+    // A stretch taken more coarsely than this one is wanted does not answer it.
+    // The pool's dozen frames across a whole file cover its whole length and
+    // say nothing about any two seconds of it.
+    if (!had.as_fine_as(want)) continue;
     if (had.from <= from + 1e-6 && had.to > from) from = std::max(from, had.to);
     if (had.to >= to - 1e-6 && had.from < to) to = std::min(to, had.from);
   }
   if (!(to > from)) return {};
-  return Span{from, to};
+  return Span{from, to, want.seconds_per_frame};
 }
 
 namespace {
 
 /// Merges a stretch into a sorted, non-overlapping list.
+///
+/// Only stretches taken at the *same* fineness are merged. Two of different
+/// fineness describe different things about the same seconds, and joining them
+/// would have to claim one or the other's spacing for the pair — either
+/// promising frames that were never taken, or forgetting ones that were.
 void cover(std::vector<ThumbnailCache::Span>& spans, ThumbnailCache::Span add) {
   if (add.empty()) return;
+  const auto same_fineness = [&](const ThumbnailCache::Span& span) {
+    return std::abs(span.seconds_per_frame - add.seconds_per_frame) <= 1e-6;
+  };
+
   std::vector<ThumbnailCache::Span> out;
   out.reserve(spans.size() + 1);
   for (const ThumbnailCache::Span& span : spans) {
     // Touching counts as overlapping, so two views scrolled past each other
     // leave one stretch rather than a seam that asks to be filled for ever.
-    if (span.to < add.from - 1e-6 || span.from > add.to + 1e-6) {
+    if (!same_fineness(span) || span.to < add.from - 1e-6 || span.from > add.to + 1e-6) {
       out.push_back(span);
       continue;
     }
@@ -90,11 +104,13 @@ void cover(std::vector<ThumbnailCache::Span>& spans, ThumbnailCache::Span add) {
 
 }  // namespace
 
-void ThumbnailCache::request(std::string media_id, std::string path, double from, double to) {
+void ThumbnailCache::request(std::string media_id, std::string path, double from, double to,
+                             double seconds_per_frame) {
   // Generated media have no file behind them, and a still has one frame that
   // never changes — neither is a filmstrip.
   if (path.empty()) return;
   if (!(to > from)) return;
+  if (!(seconds_per_frame > 0.0)) seconds_per_frame = kThumbnailSeconds;
 
   {
     const std::lock_guard<std::mutex> lock(mutex_);
@@ -111,7 +127,7 @@ void ThumbnailCache::request(std::string media_id, std::string path, double from
       for (const Span& span : asked->second) cover(known, span);
     }
 
-    const Span want = missing(known, Span{from, to});
+    const Span want = missing(known, Span{from, to, seconds_per_frame});
     if (want.empty()) return;
 
     cover(requested_[media_id], want);
@@ -195,7 +211,7 @@ void ThumbnailCache::run() {
     const std::string key = cache_dir.empty() ? std::string{} : media_cache_key(job.path);
 
     const double length = job.span.to - job.span.from;
-    const int wanted = frames_for(length);
+    const int wanted = frames_for(length, job.span.seconds_per_frame);
 
     // What an earlier session already extracted for exactly this stretch.
     //
@@ -291,11 +307,12 @@ void ThumbnailCache::run() {
       bytes_ -= std::min(bytes_, entry.bytes);
       bytes_ += kept;
 
-      cover(entry.covered, Span{job.span.from, job.span.to});
+      cover(entry.covered, Span{job.span.from, job.span.to, job.span.seconds_per_frame});
       // And what the cap dropped is no longer covered, or it would never be
       // asked for again and the strip would have a hole nothing could fill.
       if (!strip->frames.empty()) {
-        const Span kept_span{strip->frames.front().t, strip->frames.back().t};
+        const Span kept_span{strip->frames.front().t, strip->frames.back().t,
+                             job.span.seconds_per_frame};
         std::erase_if(entry.covered, [&](const Span& span) {
           return span.to < kept_span.from - 1e-6 || span.from > kept_span.to + 1e-6;
         });
@@ -305,10 +322,14 @@ void ThumbnailCache::run() {
         }
         std::erase_if(entry.covered, [](const Span& span) { return span.empty(); });
       }
-      // What was in flight is in flight no longer, whatever came of it.
+      // What was in flight is in flight no longer, whatever came of it. Matched
+      // on fineness as well as on range: the same seconds can be in flight
+      // twice, once for the timeline and once for a pool tile, and clearing
+      // both here would let the one still queued be asked for a second time.
       if (const auto asked = requested_.find(job.media_id); asked != requested_.end()) {
         std::erase_if(asked->second, [&](const Span& span) {
-          return span.from >= job.span.from - 1e-6 && span.to <= job.span.to + 1e-6;
+          return span.from >= job.span.from - 1e-6 && span.to <= job.span.to + 1e-6 &&
+                 std::abs(span.seconds_per_frame - job.span.seconds_per_frame) <= 1e-6;
         });
       }
 

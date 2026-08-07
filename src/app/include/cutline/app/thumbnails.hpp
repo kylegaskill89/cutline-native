@@ -112,7 +112,13 @@ class ThumbnailCache {
   /// Overlapping requests are cheap: what a source already has is subtracted
   /// before anything is queued, so a view that moves by a second asks for a
   /// second's worth.
-  void request(std::string media_id, std::string path, double from, double to);
+  ///
+  /// `seconds_per_frame` is how finely the stretch is wanted. The default is
+  /// the timeline's grid; the pool asks far more coarsely, because a tile a
+  /// hundred pixels wide cannot show more than a dozen frames however many are
+  /// taken — and every one of them is a seek and a decode.
+  void request(std::string media_id, std::string path, double from, double to,
+               double seconds_per_frame = kThumbnailSeconds);
 
   /// Whether a filmstrip has arrived since this was last called, and clears the
   /// flag.
@@ -136,15 +142,34 @@ class ThumbnailCache {
   /// source that will not decode keeps its `requested_` entry for good.
   [[nodiscard]] std::size_t pending() const;
 
-  /// How many frames a stretch of this length is worth taking.
-  [[nodiscard]] static int frames_for(double duration) noexcept;
+  /// How many frames a stretch of this length is worth taking, at a given
+  /// spacing.
+  [[nodiscard]] static int frames_for(double duration,
+                                      double seconds_per_frame = kThumbnailSeconds) noexcept;
 
-  /// A stretch of a source, in source seconds.
+  /// A stretch of a source, in source seconds, and how finely it is sampled.
   struct Span {
     double from = 0.0;
     double to = 0.0;
 
+    /// How far apart this stretch's frames are, in source seconds.
+    ///
+    /// Coverage has to say how *finely* a stretch was taken and not only that
+    /// it was, because there are two callers wanting two different things from
+    /// the same strip: the pool's tiles want a dozen frames spread across a
+    /// whole file, and the timeline wants one every couple of seconds across a
+    /// window. Without this the first kind of answer satisfies the second kind
+    /// of question — and a filmstrip on the timeline silently became one frame
+    /// every twelve seconds for the rest of the session as soon as anybody
+    /// opened the icon view.
+    double seconds_per_frame = kThumbnailSeconds;
+
     [[nodiscard]] bool empty() const noexcept { return !(to > from); }
+    /// Whether this stretch answers a request for `other`: it has to reach at
+    /// least as finely, or it is not the same question being answered.
+    [[nodiscard]] bool as_fine_as(const Span& other) const noexcept {
+      return seconds_per_frame <= other.seconds_per_frame + 1e-6;
+    }
     friend bool operator==(const Span&, const Span&) = default;
   };
 
@@ -156,6 +181,8 @@ class ThumbnailCache {
   /// few frames that were already held. Exposed for tests, which is the only
   /// way to be sure a scroll asks for the new second rather than for all ten
   /// minutes again.
+  ///
+  /// Only stretches taken at least as finely as `want` count as covering it.
   [[nodiscard]] static Span missing(const std::vector<Span>& have, Span want) noexcept;
 
  private:
