@@ -279,6 +279,59 @@ TEST(Player, ASilentProjectStillKeepsTime) {
   EXPECT_TRUE((*built)->error().empty()) << (*built)->error();
 }
 
+// A player that has run out stops itself, and looping is what happens next:
+// seek back, play again. That pair has to land where it asked.
+//
+// It did not. `seek` only cleared the at-the-end flag on the render thread when
+// the flush landed, so `play` -- called immediately after, as looping does --
+// still saw the flag and sent the playhead to zero, discarding the position the
+// seek had just set. Nothing caught it because the loop that does this was
+// itself unreachable: the application skipped its end-of-playback handling
+// whenever the player had stopped running, which is exactly when it runs.
+TEST(Player, SeekingAfterTheEndLandsWhereItAsked) {
+  Project p;
+  p.canvas_w = 320;
+  p.canvas_h = 240;
+
+  Media m;
+  m.id = "colour";
+  m.is_color = true;
+  m.color = "#204060";
+  m.duration = 1.0;
+
+  Clip c;
+  c.id = "c";
+  c.media_id = "colour";
+  c.kind = TrackKind::Video;
+  c.source_in = 0.0;
+  c.source_out = 1.0;
+
+  Track t;
+  t.id = "v1";
+  t.kind = TrackKind::Video;
+  t.clips = {c};
+
+  p.media = {m};
+  p.tracks = {t};
+
+  auto built = Player::create(p);
+  if (!built) GTEST_SKIP() << "no audio output device: " << built.error();
+  Player& player = **built;
+
+  player.play();
+  for (int i = 0; i < 60 && !player.finished(); ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  ASSERT_TRUE(player.finished()) << "a one-second project should run out in three";
+
+  player.seek(0.4);
+  EXPECT_FALSE(player.finished()) << "somewhere else is not the end";
+  EXPECT_NEAR(player.position(), 0.4, 0.05);
+
+  player.play();
+  EXPECT_GT(player.position(), 0.3) << "play must not send a fresh seek back to zero";
+}
+
 // ---------------------------------------------------------------- devices --
 
 TEST(Player, TheMachineListsItsOutputs) {

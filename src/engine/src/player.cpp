@@ -528,6 +528,12 @@ void Player::seek(double seconds) {
   impl_->anchor.store(0, std::memory_order_release);
   // A seek is the one time the playhead is allowed to move backwards.
   impl_->furthest.store(impl_->seek_target, std::memory_order_release);
+  // Somewhere else is, by definition, not the end. Cleared here as well as on
+  // the render thread when the flush lands, because the gap between the two is
+  // long enough to matter: a caller that seeks and then plays -- which is what
+  // looping does -- would otherwise find `play` still seeing the old flag and
+  // sending it back to zero, discarding the position it had just asked for.
+  impl_->at_end.store(false, std::memory_order_release);
 }
 
 double Player::duration() const noexcept { return impl_->timeline; }
