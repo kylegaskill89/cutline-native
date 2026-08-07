@@ -15,8 +15,10 @@
 
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace cutline::editor {
 
@@ -86,6 +88,43 @@ inline constexpr double kStillLength = 5.0;
 [[nodiscard]] core::Project import_media(core::Project project, const MediaSource& source,
                                          std::string* id = nullptr,
                                          double still_length = kStillLength);
+
+/// Adds several files to the pool as one edit.
+///
+/// One edit rather than one per file, which is the whole point: a folder of
+/// forty rushes brought in as forty separate additions takes forty presses of
+/// undo to take back out again, and nobody thinks of an import that way. It
+/// happened once, so it is undone once.
+///
+/// Duplicates are skipped the way the single-file form skips them, and within
+/// the batch as well as against the pool — the same path named twice in one
+/// selection is one entry, not two.
+///
+/// `ids` receives one id per source, in the order given, so a caller can find
+/// what arrived and select it. A source that was already in the pool reports
+/// the id that was already there, which means the vector is always the same
+/// length as `sources` and index `i` always answers for source `i`.
+[[nodiscard]] core::Project import_media(core::Project project,
+                                         std::span<const MediaSource> sources,
+                                         std::vector<std::string>* ids = nullptr,
+                                         double still_length = kStillLength);
+
+/// The paths a Windows multi-select open dialog left behind in its buffer.
+///
+/// `OFN_ALLOWMULTISELECT` writes one of two shapes into the caller's buffer and
+/// does not say which: a single complete path when one file was picked, or the
+/// containing directory followed by bare filenames when several were. Each run
+/// ends at a null and the whole thing ends at an empty one, so the only way to
+/// tell the shapes apart is to notice whether the first entry is also the last.
+///
+/// A span rather than a pointer because the buffer is the unit that was handed
+/// to the dialog: scanning stops at its end whatever the dialog wrote, so a
+/// missing terminator is a short answer rather than a walk off the end.
+///
+/// Windows-shaped, and here rather than in the application because this is
+/// where bringing files into a project is decided and because a parse with two
+/// silently different shapes is exactly the kind of thing that wants a test.
+[[nodiscard]] std::vector<std::filesystem::path> chosen_paths(std::span<const wchar_t> buffer);
 
 /// Imports and places it on the timeline: one video clip plus one clip per
 /// audio stream, linked, exactly as `core::place_media` does it.

@@ -13,7 +13,11 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+#include <filesystem>
+#include <span>
 #include <string>
+#include <vector>
 
 namespace cutline::editor {
 namespace {
@@ -46,6 +50,149 @@ TEST(Import, AFileBecomesMedia) {
   EXPECT_TRUE(project.media[0].has_video);
   EXPECT_EQ(project.media[0].audio_stream_count, 1);
   EXPECT_DOUBLE_EQ(project.media[0].duration, 42.0);
+}
+
+// ------------------------------------------------------- several at once --
+
+TEST(ImportMany, EveryFileChosenLandsInThePool) {
+  const std::array<MediaSource, 3> chosen{a_video("D:/footage/a.mp4"),
+                                          a_video("D:/footage/b.mp4"),
+                                          a_video("D:/footage/c.mp4")};
+  std::vector<std::string> ids;
+  const Project project = import_media(Project{}, chosen, &ids);
+
+  ASSERT_EQ(project.media.size(), 3u);
+  ASSERT_EQ(ids.size(), 3u);
+  EXPECT_EQ(project.media[0].path, "D:/footage/a.mp4");
+  EXPECT_EQ(project.media[2].path, "D:/footage/c.mp4");
+}
+
+TEST(ImportMany, TheIdsComeBackInTheOrderTheFilesWereGiven) {
+  const std::array<MediaSource, 2> chosen{a_video("D:/footage/a.mp4"),
+                                          a_video("D:/footage/b.mp4")};
+  std::vector<std::string> ids;
+  const Project project = import_media(Project{}, chosen, &ids);
+
+  ASSERT_EQ(ids.size(), 2u);
+  EXPECT_EQ(ids[0], project.media[0].id);
+  EXPECT_EQ(ids[1], project.media[1].id);
+}
+
+TEST(ImportMany, TheSameFileTwiceInOneSelectionIsOneEntry) {
+  // A selection can name the same path twice, and the dedup has to hold within
+  // the batch and not only against what was already there.
+  const std::array<MediaSource, 3> chosen{a_video("D:/footage/a.mp4"),
+                                          a_video("D:/footage/a.mp4"),
+                                          a_video("D:/footage/b.mp4")};
+  std::vector<std::string> ids;
+  const Project project = import_media(Project{}, chosen, &ids);
+
+  EXPECT_EQ(project.media.size(), 2u);
+  // Still one id per source asked about, so index i answers for source i.
+  ASSERT_EQ(ids.size(), 3u);
+  EXPECT_EQ(ids[0], ids[1]);
+  EXPECT_NE(ids[0], ids[2]);
+}
+
+TEST(ImportMany, AFileAlreadyInThePoolReportsTheIdItAlreadyHad) {
+  std::string first;
+  const Project one = import_media(Project{}, a_video("D:/footage/a.mp4"), &first);
+
+  const std::array<MediaSource, 2> chosen{a_video("D:/footage/a.mp4"),
+                                          a_video("D:/footage/b.mp4")};
+  std::vector<std::string> ids;
+  const Project project = import_media(one, chosen, &ids);
+
+  EXPECT_EQ(project.media.size(), 2u);
+  ASSERT_EQ(ids.size(), 2u);
+  EXPECT_EQ(ids[0], first);
+}
+
+TEST(ImportMany, NothingChosenChangesNothing) {
+  std::vector<std::string> ids;
+  const Project project = import_media(Project{}, std::span<const MediaSource>{}, &ids);
+
+  EXPECT_TRUE(project.media.empty());
+  EXPECT_TRUE(ids.empty());
+}
+
+TEST(ImportMany, AStillLengthStillApplies) {
+  MediaSource still{.path = "D:/stills/one.png", .duration = 0.04, .is_image = true};
+  const std::array<MediaSource, 1> chosen{still};
+  const Project project = import_media(Project{}, chosen, nullptr, 7.0);
+
+  ASSERT_EQ(project.media.size(), 1u);
+  EXPECT_DOUBLE_EQ(project.media[0].duration, 7.0);
+}
+
+// ---------------------------------------- what the chooser leaves behind --
+
+/// The buffer a common dialog would have written, doubly terminated.
+[[nodiscard]] std::vector<wchar_t> a_buffer(std::span<const std::wstring> parts,
+                                            std::size_t size = 256) {
+  std::vector<wchar_t> buffer(size, L'\0');
+  std::size_t at = 0;
+  for (const std::wstring& part : parts) {
+    for (const wchar_t c : part) buffer[at++] = c;
+    ++at;  // the null that ends this run
+  }
+  return buffer;
+}
+
+TEST(ChosenPaths, OneFileComesBackAsItsWholePath) {
+  const std::array<std::wstring, 1> parts{L"D:\\footage\\wide.mp4"};
+  const std::vector<std::filesystem::path> paths = chosen_paths(a_buffer(parts));
+
+  ASSERT_EQ(paths.size(), 1u);
+  EXPECT_EQ(paths[0], std::filesystem::path(L"D:\\footage\\wide.mp4"));
+}
+
+TEST(ChosenPaths, SeveralFilesAreJoinedToTheDirectoryInFront) {
+  const std::array<std::wstring, 4> parts{L"D:\\footage", L"a.mp4", L"b.mp4", L"c.mp4"};
+  const std::vector<std::filesystem::path> paths = chosen_paths(a_buffer(parts));
+
+  ASSERT_EQ(paths.size(), 3u);
+  EXPECT_EQ(paths[0], std::filesystem::path(L"D:\\footage\\a.mp4"));
+  EXPECT_EQ(paths[2], std::filesystem::path(L"D:\\footage\\c.mp4"));
+}
+
+TEST(ChosenPaths, ADirectoryEndingInASlashDoesNotDoubleIt) {
+  // The root of a drive is the case that produces one: the dialog reports
+  // "D:\" rather than "D:".
+  const std::array<std::wstring, 2> parts{L"D:\\", L"a.mp4"};
+  const std::vector<std::filesystem::path> paths = chosen_paths(a_buffer(parts));
+
+  ASSERT_EQ(paths.size(), 1u);
+  EXPECT_EQ(paths[0], std::filesystem::path(L"D:\\a.mp4"));
+}
+
+TEST(ChosenPaths, NamesWithSpacesSurvive) {
+  // The whole reason the nulls matter: separated by spaces instead, these two
+  // could not be told apart again.
+  const std::array<std::wstring, 3> parts{L"D:\\footage", L"wide shot.mp4", L"close up.mp4"};
+  const std::vector<std::filesystem::path> paths = chosen_paths(a_buffer(parts));
+
+  ASSERT_EQ(paths.size(), 2u);
+  EXPECT_EQ(paths[0].filename(), std::filesystem::path(L"wide shot.mp4"));
+  EXPECT_EQ(paths[1].filename(), std::filesystem::path(L"close up.mp4"));
+}
+
+TEST(ChosenPaths, ACancelledDialogLeavesNothing) {
+  const std::vector<wchar_t> buffer(256, L'\0');
+  EXPECT_TRUE(chosen_paths(buffer).empty());
+}
+
+TEST(ChosenPaths, AnEmptyBufferIsNotWalkedOff) {
+  EXPECT_TRUE(chosen_paths(std::span<const wchar_t>{}).empty());
+}
+
+TEST(ChosenPaths, AMissingTerminatorStopsAtTheEndOfTheBuffer) {
+  // Nothing should read past what was handed over, whatever the dialog wrote.
+  const std::vector<wchar_t> buffer{L'D', L':', L'\\', L'a', L'.', L'm', L'p', L'4'};
+  const std::vector<std::filesystem::path> paths = chosen_paths(buffer);
+
+  ASSERT_EQ(paths.size(), 1u);
+  EXPECT_EQ(paths[0], std::filesystem::path(L"D:\\a.mp4"));
 }
 
 // --------------------------------------------------------------- relinking --

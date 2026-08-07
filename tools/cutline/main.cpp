@@ -1036,7 +1036,9 @@ void toggle_bin(App& app, std::size_t row);
 void file_into_bin(App& app, std::size_t from, std::size_t onto);
 void open_pool_menu(App& app, double x, double y);
 void open_media_label_menu(App& app, double x, double y);
-void label_new_media(App& app, const std::string& media_id);
+[[nodiscard]] cutline::core::Project labelled_new_media(const App& app,
+                                                        cutline::core::Project project,
+                                                        std::span<const std::string> media_ids);
 void make_proxies(App& app);
 void collect_proxies(App& app);
 void toggle_use_proxies(App& app);
@@ -3661,22 +3663,28 @@ void remove_from_pool(App& app) {
   refresh_all(app);
 }
 
-/// Gives a freshly imported entry the label its kind defaults to.
+/// Gives freshly imported entries the label their kind defaults to.
 ///
 /// Only what has none already: importing the same file twice hands back the
 /// entry that is there, and re-labelling it would undo a colour somebody set by
 /// hand the first time.
-void label_new_media(App& app, const std::string& media_id) {
-  if (media_id.empty()) return;
-  const auto media = std::ranges::find(app.session.project().media, media_id,
-                                       &cutline::core::Media::id);
-  if (media == app.session.project().media.end() || !media->label_color.empty()) return;
+///
+/// A transform rather than an edit so that labelling can be folded into the
+/// import that caused it. Bringing in forty files and then labelling them is
+/// one thing that happened, and it should take one undo to take back.
+cutline::core::Project labelled_new_media(const App& app, cutline::core::Project project,
+                                          std::span<const std::string> media_ids) {
+  for (const std::string& media_id : media_ids) {
+    if (media_id.empty()) continue;
+    const auto media = std::ranges::find(project.media, media_id, &cutline::core::Media::id);
+    if (media == project.media.end() || !media->label_color.empty()) continue;
 
-  const std::string_view colour =
-      cutline::editor::label_default(app.settings, cutline::editor::media_kind(*media));
-  if (colour.empty()) return;
-  app.session.apply(
-      cutline::core::set_media_label(app.session.project(), media_id, std::string(colour)));
+    const std::string_view colour =
+        cutline::editor::label_default(app.settings, cutline::editor::media_kind(*media));
+    if (colour.empty()) continue;
+    project = cutline::core::set_media_label(std::move(project), media_id, std::string(colour));
+  }
+  return project;
 }
 
 /// The colours a pool entry can be labelled with.
@@ -5804,10 +5812,19 @@ void refresh_all(App& app) {
   if (app.main.host != nullptr) app.main.host->request_layout();
 }
 
-/// Brings a file into the project and drops it at the playhead.
+/// Brings files into the project's pool.
+///
+/// Several at once, because a day's rushes arrive as a folder rather than as a
+/// file: the dialog allows a multiple selection and everything picked is
+/// probed, filed and labelled as a single edit.
 void import_media(App& app) {
 #if CUTLINE_HAVE_PREVIEW
-  std::array<wchar_t, MAX_PATH> buffer{};
+  // Room for many names rather than for one path. A multi-select dialog packs
+  // the directory and every chosen filename into this one buffer, and a
+  // selection too large for it is refused outright rather than truncated — so
+  // the size is the real limit on how much can be brought in at once, and
+  // MAX_PATH would have made that limit one file.
+  std::vector<wchar_t> buffer(64 * 1024, L'\0');
   OPENFILENAMEW dialog{};
   dialog.lStructSize = sizeof(dialog);
   dialog.hwndOwner = app.main.window;
@@ -5816,31 +5833,51 @@ void import_media(App& app) {
       L"All files\0*.*\0";
   dialog.lpstrFile = buffer.data();
   dialog.nMaxFile = static_cast<DWORD>(buffer.size());
-  dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+  // OFN_EXPLORER is named because it is what separates the chosen names with
+  // nulls. Without it a multiple selection comes back separated by spaces,
+  // which cannot be taken apart again once a filename contains one.
+  dialog.Flags =
+      OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_ALLOWMULTISELECT | OFN_EXPLORER;
   if (GetOpenFileNameW(&dialog) == FALSE) return;
 
-  const std::filesystem::path path{buffer.data()};
-  const auto source = cutline::app::probe_source(path.string());
-  if (!source.has_value()) {
-    complain(app.main.window, "Could not read that file.\n\n" + source.error());
-    return;
+  const std::vector<std::filesystem::path> paths = cutline::editor::chosen_paths(buffer);
+  if (paths.empty()) return;
+
+  // Probed before anything is applied, so a folder with one unreadable file in
+  // it still brings in the rest. The alternative — stopping at the first
+  // refusal — makes one bad file cost the whole selection.
+  std::vector<cutline::editor::MediaSource> sources;
+  sources.reserve(paths.size());
+  std::vector<std::string> refused;
+  for (const std::filesystem::path& path : paths) {
+    auto source = cutline::app::probe_source(path.string());
+    if (source.has_value()) {
+      sources.push_back(std::move(*source));
+    } else {
+      refused.push_back(path.filename().string() + " — " + source.error());
+    }
   }
 
   // Into the pool and nowhere else. Importing is filing something away, not
   // editing with it — and a file that lands on the timeline the moment it is
   // read is one that has to be undone before the sequence can be looked at.
   // Placing it is a gesture of its own: a drag onto a track, or a drop.
-  std::string id;
-  app.session.apply(cutline::editor::import_media(app.session.project(), *source, &id,
-                                                 app.settings.still_length));
-  label_new_media(app, id);
-  refresh_all(app);
+  std::vector<std::string> ids;
+  if (!sources.empty()) {
+    cutline::core::Project next = cutline::editor::import_media(
+        app.session.project(), sources, &ids, app.settings.still_length);
+    app.session.apply(labelled_new_media(app, std::move(next), ids));
+    refresh_all(app);
+  }
 
   // Selected in the pool, so it is obvious where it went — a browser that has
-  // silently grown by one is how somebody imports the same file twice.
-  if (app.browser != nullptr && !id.empty()) {
+  // silently grown by one is how somebody imports the same file twice. The
+  // first of a batch rather than the last, because that is where what arrived
+  // begins and scrolling down from it shows the rest.
+  const auto first = std::ranges::find_if(ids, [](const std::string& id) { return !id.empty(); });
+  if (app.browser != nullptr && first != ids.end()) {
     const auto& items = app.browser->items();
-    const auto found = std::ranges::find(items, id, &cutline::ui::MediaItem::id);
+    const auto found = std::ranges::find(items, *first, &cutline::ui::MediaItem::id);
     if (found != items.end()) {
       app.browser->select(static_cast<std::size_t>(found - items.begin()));
     }
@@ -5848,7 +5885,25 @@ void import_media(App& app) {
     // go through the browser's own callback — it is set, not chosen. Without
     // this the pool showed the new file highlighted and the source monitor
     // said "No source", which is two panels disagreeing about what is selected.
-    show_source(app, id);
+    show_source(app, *first);
+  }
+
+  // Said last, so the complaint is about what did not arrive rather than
+  // standing between the selection and everything that did. Listed in full up
+  // to a point and then counted, because a dialog taller than the screen has
+  // an OK button nobody can reach.
+  if (!refused.empty()) {
+    constexpr std::size_t kMostNamed = 8;
+    std::string message = refused.size() == 1 ? "Could not read that file.\n\n"
+                                              : "Could not read " + std::to_string(refused.size()) +
+                                                    " of the files chosen.\n\n";
+    for (std::size_t i = 0; i < refused.size() && i < kMostNamed; ++i) {
+      message += refused[i] + "\n";
+    }
+    if (refused.size() > kMostNamed) {
+      message += "and " + std::to_string(refused.size() - kMostNamed) + " more.";
+    }
+    complain(app.main.window, message);
   }
 #else
   complain(app.main.window, "This build has no media layer, so there is nothing to import with.");
@@ -6246,9 +6301,10 @@ void open_from_command_line(App& app, const std::filesystem::path& path) {
       return;
     }
     std::string id;
-    app.session.apply(cutline::editor::import_media(app.session.project(), *source, &id,
-                                                   app.settings.still_length));
-    label_new_media(app, id);
+    cutline::core::Project next = cutline::editor::import_media(
+        app.session.project(), *source, &id, app.settings.still_length);
+    const std::array<std::string, 1> ids{id};
+    app.session.apply(labelled_new_media(app, std::move(next), ids));
     refresh_all(app);
     if (app.browser != nullptr && !id.empty()) app.browser->select_id(id);
     show_source(app, id);

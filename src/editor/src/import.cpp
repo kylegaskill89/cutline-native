@@ -96,6 +96,50 @@ core::Project import_media(core::Project project, const MediaSource& source, std
   return core::add_media(std::move(project), std::move(media));
 }
 
+core::Project import_media(core::Project project, std::span<const MediaSource> sources,
+                           std::vector<std::string>* ids, double still_length) {
+  if (ids != nullptr) {
+    ids->clear();
+    ids->reserve(sources.size());
+  }
+  // Threaded through one at a time, so a path that appears twice in the batch
+  // finds itself in the pool on the second pass and reports the id it was
+  // given on the first. The dedup costs nothing extra by being written once.
+  for (const MediaSource& source : sources) {
+    std::string id;
+    project = import_media(std::move(project), source, &id, still_length);
+    if (ids != nullptr) ids->push_back(std::move(id));
+  }
+  return project;
+}
+
+std::vector<std::filesystem::path> chosen_paths(std::span<const wchar_t> buffer) {
+  std::vector<std::wstring> parts;
+  for (std::size_t at = 0; at < buffer.size() && buffer[at] != L'\0';) {
+    std::size_t end = at;
+    while (end < buffer.size() && buffer[end] != L'\0') ++end;
+    parts.emplace_back(buffer.data() + at, end - at);
+    if (end == buffer.size()) break;
+    at = end + 1;
+  }
+
+  std::vector<std::filesystem::path> paths;
+  if (parts.empty()) return paths;
+
+  // One entry is a whole path on its own. More than one, and the first names
+  // the directory the rest live in — which is why a single file cannot simply
+  // be treated as the degenerate case of the many.
+  if (parts.size() == 1) {
+    paths.emplace_back(std::move(parts.front()));
+    return paths;
+  }
+
+  const std::filesystem::path folder{parts.front()};
+  paths.reserve(parts.size() - 1);
+  for (std::size_t i = 1; i < parts.size(); ++i) paths.push_back(folder / parts[i]);
+  return paths;
+}
+
 core::Project relink_media(core::Project project, std::string_view media_id,
                            const MediaSource& source, double still_length) {
   const auto found = std::ranges::find(project.media, media_id, &core::Media::id);
