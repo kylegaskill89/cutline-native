@@ -42,28 +42,50 @@ struct AudioMixSettings {
   /// master fader and the limiter still apply to each — the alternative is a
   /// set of stems that sum to something louder than the file anybody checked.
   std::optional<int> only_track;
+
+  /// Whether this mixer is feeding a sound card.
+  ///
+  /// It decides one thing: what happens when a long source is asked for audio
+  /// it has not read yet. Off — an export, a test — the samples are decoded
+  /// there and then, which is simple, exactly reproducible, and free of
+  /// threads. On, nothing may touch a file on the mixing thread, because that
+  /// thread has a few milliseconds to fill a buffer and a decode is tens of
+  /// them; a reader keeps the window ahead of the playhead instead, and audio
+  /// it has not reached yet mixes as silence rather than as a missed deadline.
+  ///
+  /// Off by default, so anything that is not real time gets the deterministic
+  /// behaviour without having to know this exists.
+  bool realtime = false;
 };
 
 class AudioMixer {
  public:
   /// Builds the plan and decodes every source it names.
   ///
-  /// Decoding is eager, and it happens *here* rather than while playing:
-  /// WASAPI wants a buffer every few milliseconds and missing that deadline is
-  /// audible, so everything that touches a file is done before the render
-  /// thread starts. It covers each clip's own source range and a margin, not
-  /// the whole file — but a clip that spans its source is the ordinary case
-  /// when a long capture has just been dropped in, and then the two are the
-  /// same thing.
+  /// A clip short enough to hold is decoded here and whole, which is nearly
+  /// every clip anybody cuts and keeps the simplest thing the common thing.
+  /// A clip longer than `kWholeSourceSeconds` gets a **window** instead: the
+  /// part of it around wherever the mix has reached, refilled as that moves.
   ///
-  /// **Measured**, on the reference ten-minute capture with its four audio
-  /// streams, one clip each spanning the whole source: **2.9 seconds before the
-  /// player is ready, and 887 MB held** — 48 kHz stereo float is about 230 MB
-  /// per ten minutes per stream, and there are four of them. That is the wait
-  /// before sound starts and the memory it costs to have pressed play.
+  /// This is what stops a long capture costing its whole length in memory
+  /// before a note is heard. Measured on the reference ten-minute capture with
+  /// its four audio streams, one clip each spanning the whole source:
   ///
-  /// A long timeline of long sources is the case that needs streaming decode,
-  /// and this is the number to beat. The interface assumes neither.
+  /// | | whole | windowed |
+  /// |---|---|---|
+  /// | before the player is ready | 2.9 s | 0.41 s |
+  /// | held | 887 MB | 119 MB |
+  ///
+  /// Decoding audio runs at something like eight hundred times real time, so a
+  /// reader has no difficulty staying in front of a playhead; the window is
+  /// generous either side precisely so that ordinary scrubbing stays inside it
+  /// and never waits for anything.
+  ///
+  /// **A retimed clip is still decoded whole**, however long it is: reversing
+  /// it and stretching it are done once, up front, over the clip's whole span,
+  /// and a window cannot be handed to a process that reads its input end to
+  /// end. Speed and reverse are the exception rather than the rule, and this is
+  /// where to start if they stop being.
   ///
   /// A source that cannot be read is not an error: it is recorded in
   /// `missing_media` and mixed as silence, so an export completes with a hole

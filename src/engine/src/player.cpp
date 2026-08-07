@@ -299,7 +299,11 @@ void Player::Impl::render(const core::Project& project, PlayerSettings settings,
   }
 
   // Everything that touches a file happens here, before the first deadline.
-  auto built = AudioMixer::create(project, {.sample_rate = rate, .channels = channels});
+  // Real time, which is what stops a long source being decoded end to end
+  // before a note is heard — and what forbids this thread from ever touching a
+  // file again once it is running.
+  auto built = AudioMixer::create(
+      project, {.sample_rate = rate, .channels = channels, .realtime = true});
   if (!built) return fail(built.error());
   mixer = std::move(*built);
 

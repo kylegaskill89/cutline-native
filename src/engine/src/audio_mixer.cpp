@@ -9,6 +9,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <memory>
+#include <chrono>
+#include <thread>
+#include <condition_variable>
 #include <cmath>
 #include <cstdint>
 #include <map>
@@ -41,6 +45,103 @@ struct SourceKey {
 /// the start.
 constexpr double kDecodeMargin = 0.05;
 
+/// A clip's range up to this long is decoded whole and never thought about
+/// again.
+///
+/// Two minutes of stereo is about 46 MB, and a cut is made of clips far shorter
+/// than that — so the windowing below is machinery that the ordinary project
+/// never touches, and the simplest behaviour stays the common one. It is the
+/// ten-minute capture dropped in untrimmed that needs the other path.
+constexpr double kWholeSourceSeconds = 120.0;
+
+/// How much of a long source is kept either side of where the mix has reached.
+///
+/// Ahead is what playback eats into and behind is what a scrub back lands in.
+/// Both are generous on purpose: a window is only worth having if ordinary
+/// movement stays inside it, since going outside costs a decode. Seventy-five
+/// seconds of stereo is about 29 MB per stream.
+constexpr double kWindowBehind = 15.0;
+constexpr double kWindowAhead = 60.0;
+
+/// What has been read of one source, and where in the source it sits.
+///
+/// Immutable once published. That is what lets the mixing thread take a
+/// pointer to it and read for a whole block while a reader thread is building
+/// the next one: nothing it is looking at can change underneath it, and the
+/// swap is a single atomic store.
+struct Window {
+  double from = 0.0;  ///< source seconds this window begins at
+  double to = 0.0;    ///< and ends at
+  media::AudioBuffer audio;
+};
+
+/// One source's audio, as much of it as is worth holding at once.
+struct StreamedSource {
+  SourceKey key;
+  int sample_rate = 48000;
+  int channels = 2;
+  /// True when the whole range is resident and there is nothing to refill.
+  bool whole = false;
+
+  /// The resident window. Read on the mixing thread, replaced on the reader's.
+  ///
+  /// An atomic shared pointer rather than a mutex, and that is the whole reason
+  /// this is safe: the mixing thread takes a reference and reads through it for
+  /// the length of a block, while the reader builds the next window beside it
+  /// and publishes with one store. Nothing blocks, and nothing the mixer is
+  /// looking at can be freed while it looks.
+  std::atomic<std::shared_ptr<const Window>> resident;
+
+  /// Where the mix last needed audio, in source seconds. Written by the mixing
+  /// thread, read by the reader.
+  std::atomic<double> wanted{0.0};
+  /// Set once when the file will not decode, so a broken source is not tried
+  /// again on every block for the life of the mix.
+  std::atomic<bool> failed{false};
+};
+
+/// Decodes the part of `source` that should be resident when the mix is at
+/// `at`, or the whole range when it is short enough to hold.
+[[nodiscard]] std::shared_ptr<const Window> read_window(const StreamedSource& source, double at) {
+  const double from = source.whole
+                          ? source.key.source_in
+                          : std::clamp(at - kWindowBehind, source.key.source_in,
+                                       source.key.source_out);
+  const double to = source.whole
+                        ? source.key.source_out
+                        : std::min(source.key.source_out, from + kWindowBehind + kWindowAhead);
+  if (!(to > from)) return nullptr;
+
+  auto decoded = media::decode_audio(source.key.path, source.key.stream,
+                                     {.sample_rate = source.sample_rate,
+                                      .channels = source.channels,
+                                      .start = from,
+                                      .duration = to - from});
+  if (!decoded) return nullptr;
+
+  auto window = std::make_shared<Window>();
+  window->from = from;
+  window->to = to;
+  window->audio = std::move(*decoded);
+  return window;
+}
+
+/// Whether what is resident still answers for a mix that has reached `at`.
+///
+/// Refilled before the edge rather than at it: a window whose end is exactly
+/// where playback has got to is one that has already run out.
+[[nodiscard]] bool covers(const Window* window, const StreamedSource& source, double at) noexcept {
+  if (window == nullptr) return false;
+  if (source.whole) return true;
+  // Comfortably inside, or up against the end of the source, where there is
+  // nothing further to read and the window is as complete as it can be.
+  const bool room_ahead =
+      at + kWindowAhead * 0.25 < window->to || window->to >= source.key.source_out - 1e-6;
+  const bool room_behind =
+      at >= window->from || window->from <= source.key.source_in + 1e-6;
+  return room_ahead && room_behind;
+}
+
 /// How often an animated effect parameter is re-read, in frames.
 ///
 /// A control rate rather than a sample rate. Sixty-four frames is about a
@@ -54,10 +155,10 @@ constexpr std::int64_t kControlBlock = 64;
 /// One planned clip, with the samples and DSP it needs.
 struct Voice {
   render::PlannedAudioClip planned;
-  /// Points into the mixer's source cache, or at `retimed` when the clip is
-  /// sped up, slowed down or reversed. Null when the media could not be read,
+  /// The shared source this reads from, or null when it is retimed — which
+  /// reads its own baked buffer — or when the media could not be read at all,
   /// in which case the voice contributes silence.
-  const media::AudioBuffer* source = nullptr;
+  StreamedSource* stream = nullptr;
   /// Owned when retiming applies: the clip's own audio, already stretched and
   /// reversed, laid out in *timeline* time so reading it is a plain sequential
   /// walk. Empty otherwise, since the shared source serves directly.
@@ -155,9 +256,28 @@ struct AudioMixer::Impl {
   core::Project project;
   AudioMixSettings settings;
 
-  std::map<SourceKey, media::AudioBuffer> sources;
+  /// Unique pointers so a source's address, and the atomics in it, survive the
+  /// map growing.
+  std::map<SourceKey, std::unique_ptr<StreamedSource>> sources;
   std::vector<Voice> voices;
   std::vector<std::string> missing;
+
+  /// Reads ahead of the mix, for real-time playback only. Nothing offline has
+  /// one: an export decodes what it needs where it needs it, which is simpler
+  /// and exactly reproducible.
+  std::thread reader;
+  std::mutex reader_lock;
+  std::condition_variable reader_wake;
+  bool reader_stopping = false;
+
+  ~Impl() {
+    {
+      const std::lock_guard<std::mutex> lock(reader_lock);
+      reader_stopping = true;
+    }
+    reader_wake.notify_all();
+    if (reader.joinable()) reader.join();
+  }
 
   std::unique_ptr<audio::Limiter> limiter;
 
@@ -216,30 +336,44 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
 
       auto found = impl->sources.find(key);
       if (found == impl->sources.end()) {
-        auto decoded = media::decode_audio(entry.media->path, entry.audio_stream,
-                                           {.sample_rate = settings.sample_rate,
-                                            .channels = settings.channels,
-                                            .start = from,
-                                            .duration = to - from});
-        if (decoded) {
-          found = impl->sources.emplace(key, std::move(*decoded)).first;
-        } else {
+        auto source = std::make_unique<StreamedSource>();
+        source->key = key;
+        source->sample_rate = settings.sample_rate;
+        source->channels = settings.channels;
+        // Short enough to hold, or wanted end to end by a retime that reads it
+        // that way. Either forces the whole range resident, and a retimed clip
+        // is why this is decided per source rather than per length alone.
+        source->whole = (to - from) <= kWholeSourceSeconds || needs_retiming(entry);
+        source->wanted.store(from, std::memory_order_relaxed);
+
+        // The first window is read here, so a mixer that has been created is
+        // one that can be mixed from — an export never waits on a thread and
+        // the player has sound the instant it starts.
+        auto window = read_window(*source, from);
+        if (window == nullptr) {
           // Recorded and mixed as silence: an export should complete with a
           // hole rather than fail at the last step.
           missing.insert(entry.media->id);
+          source->failed.store(true, std::memory_order_relaxed);
         }
+        source->resident.store(std::move(window));
+        found = impl->sources.emplace(key, std::move(source)).first;
       }
-      if (found != impl->sources.end()) {
+
+      StreamedSource& source = *found->second;
+      if (!source.failed.load(std::memory_order_relaxed)) {
         if (needs_retiming(entry)) {
-          voice.retimed = render_retimed(found->second, entry, settings.sample_rate,
-                                         settings.channels);
-          // `source` is left null and pointed at the voice's own buffer below,
-          // once the vector has stopped moving its elements around.
+          // Whole by construction, so this is the entire clip's audio.
+          const std::shared_ptr<const Window> window = source.resident.load();
+          if (window != nullptr) {
+            voice.retimed =
+                render_retimed(window->audio, entry, settings.sample_rate, settings.channels);
+          }
           voice.timeline_indexed = true;
         } else {
-          // Safe to hold across later insertions: a map is node-based, so its
-          // values never move once they are in it.
-          voice.source = &found->second;
+          // Safe to hold: the map owns the source through a unique pointer, so
+          // its address survives every later insertion.
+          voice.stream = &source;
         }
       }
     } else {
@@ -249,11 +383,22 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
     impl->voices.push_back(std::move(voice));
   }
 
-  // Retimed voices own their audio, so their pointers can only be taken once
-  // every push_back is done and the vector's elements have stopped moving.
+  // A retimed voice whose stretch produced nothing has no audio to read, and
+  // saying so here is what keeps the mixing loop from checking every block.
   for (Voice& voice : impl->voices) {
-    if (!voice.timeline_indexed) continue;
-    voice.source = voice.retimed.frame_count() > 0 ? &voice.retimed : nullptr;
+    if (voice.timeline_indexed && voice.retimed.frame_count() == 0) {
+      voice.timeline_indexed = false;
+      voice.stream = nullptr;
+    }
+  }
+
+  // Whatever the retimes left behind. A source read only to be stretched is a
+  // whole clip's audio held twice over — once raw and once retimed — and only
+  // one of them is ever read again.
+  for (auto& [key, source] : impl->sources) {
+    const bool wanted_raw = std::ranges::any_of(
+        impl->voices, [&](const Voice& voice) { return voice.stream == source.get(); });
+    if (!wanted_raw) source->resident.store(nullptr);
   }
 
   impl->missing.assign(missing.begin(), missing.end());
@@ -269,6 +414,43 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
                                                settings.channels,
                                                audio::MeterSettings{.over = limiting.limit});
   impl->levels = impl->meter->read();
+
+  // Only when something can actually run out. Every source held whole means
+  // there is nothing for a reader to do, which is the ordinary project.
+  const bool anything_windowed =
+      std::ranges::any_of(impl->sources, [](const auto& entry) { return !entry.second->whole; });
+  if (settings.realtime && anything_windowed) {
+    Impl* raw = impl.get();
+    raw->reader = std::thread([raw] {
+      for (;;) {
+        {
+          std::unique_lock<std::mutex> lock(raw->reader_lock);
+          // A short wait rather than a signal per block: the mixing thread must
+          // not pay for waking anybody, and audio decodes hundreds of times
+          // faster than it plays, so checking ten times a second is far more
+          // often than a window can be used up.
+          raw->reader_wake.wait_for(lock, std::chrono::milliseconds(100),
+                                    [raw] { return raw->reader_stopping; });
+          if (raw->reader_stopping) return;
+        }
+
+        for (auto& [key, source] : raw->sources) {
+          if (source->whole || source->failed.load(std::memory_order_relaxed)) continue;
+          const double at = source->wanted.load(std::memory_order_relaxed);
+          const std::shared_ptr<const Window> have = source->resident.load();
+          if (covers(have.get(), *source, at)) continue;
+
+          // Built beside what is being read rather than over it, so the mixing
+          // thread's pointer stays valid for as long as it holds it.
+          if (auto fresh = read_window(*source, at)) {
+            source->resident.store(std::move(fresh));
+          } else {
+            source->failed.store(true, std::memory_order_relaxed);
+          }
+        }
+      }
+    });
+  }
 
   return std::unique_ptr<AudioMixer>(new AudioMixer(std::move(impl)));
 }
@@ -296,8 +478,36 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
   const double block_end = static_cast<double>(base + static_cast<std::int64_t>(frames)) / rate;
 
   for (Voice& voice : impl_->voices) {
-    if (voice.source == nullptr) continue;
+    if (voice.stream == nullptr && !voice.timeline_indexed) continue;
     if (block_end <= voice.planned.start || begin >= voice.planned.end) continue;
+
+    // Resolved once for the block rather than per frame. A retimed voice reads
+    // its own baked audio; a shared source is whatever window is resident, and
+    // holding the pointer for the whole block is what makes it safe to read
+    // while a reader thread builds the next one.
+    std::shared_ptr<const Window> window;
+    const media::AudioBuffer* audio = nullptr;
+    if (voice.timeline_indexed) {
+      audio = &voice.retimed;
+    } else {
+      const double at =
+          render::audio_source_time_at(voice.planned, std::max(begin, voice.planned.start));
+      voice.stream->wanted.store(at, std::memory_order_relaxed);
+
+      window = voice.stream->resident.load();
+      if (!impl_->settings.realtime && !covers(window.get(), *voice.stream, at)) {
+        // Nothing is waiting on this thread, so read it here and now. That is
+        // what makes an export deterministic: no thread decides how much had
+        // arrived by the time a block was mixed.
+        if (auto fresh = read_window(*voice.stream, at)) {
+          voice.stream->resident.store(fresh);
+          window = std::move(fresh);
+        }
+      }
+      if (window == nullptr) continue;  // not read yet: this voice is silent
+      audio = &window->audio;
+    }
+    if (audio == nullptr || audio->frame_count() == 0) continue;
 
     // The sub-range of this block the clip actually covers. Feeding the effect
     // chain only these frames keeps it contiguous in the clip's own time, which
@@ -322,10 +532,9 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
       const double position =
           voice.timeline_indexed
               ? (now - voice.planned.start) * rate
-              : (render::audio_source_time_at(voice.planned, now) - voice.source->start_time) *
-                    rate;
+              : (render::audio_source_time_at(voice.planned, now) - audio->start_time) * rate;
 
-      sample_into(*voice.source, position, channels,
+      sample_into(*audio, position, channels,
                   std::span(impl_->voice_block).subspan(i * channels, channels));
 
       // Gain and fades before the effects, matching the reference's chain.
@@ -438,8 +647,9 @@ void AudioMixer::reset() {
 }
 
 bool AudioMixer::silent() const noexcept {
-  return std::ranges::none_of(impl_->voices,
-                              [](const Voice& v) { return v.source != nullptr; });
+  return std::ranges::none_of(impl_->voices, [](const Voice& v) {
+    return v.stream != nullptr || v.timeline_indexed;
+  });
 }
 
 const AudioMixSettings& AudioMixer::settings() const noexcept { return impl_->settings; }

@@ -612,5 +612,184 @@ TEST(AudioMixer, TheSettingsComeBackAsGiven) {
   EXPECT_EQ(mixer->settings().channels, kChannels);
 }
 
+// ------------------------------------------------------- a source too long --
+
+/// How loud the long tone is during the ten seconds beginning at `t`.
+///
+/// Stepping the amplitude every ten seconds is what makes *where* the mixer
+/// read observable at all. A tone of one level throughout would sound the same
+/// whichever part of the file a window happened to land on, which is precisely
+/// the mistake worth catching.
+[[nodiscard]] double long_tone_level(double t) {
+  const int block = static_cast<int>(t / 10.0);
+  return 0.05 * static_cast<double>(block + 1);
+}
+
+constexpr double kLongToneSeconds = 140.0;
+
+/// A tone longer than a mixer will hold whole, so the windowing runs.
+class LongToneSource {
+ public:
+  [[nodiscard]] static const std::string& path() {
+    static const LongToneSource instance;
+    return instance.path_;
+  }
+
+ private:
+  LongToneSource() {
+    path_ = (std::filesystem::temp_directory_path() / "cutline_mixer_long_tone.mp4").string();
+
+    media::VideoEncodeSettings video;
+    video.width = 32;
+    video.height = 32;
+    video.fps = 5;
+    video.preference = media::EncoderPreference::Software;
+
+    media::AudioEncodeSettings audio;
+    audio.enabled = true;
+    audio.sample_rate = kRate;
+    audio.channels = kChannels;
+
+    auto writer = media::MediaWriter::create(path_, video, audio);
+    if (!writer) {
+      path_.clear();
+      return;
+    }
+
+    const std::vector<std::uint8_t> frame(32 * 32 * 4, 128);
+    std::vector<float> second(static_cast<std::size_t>(kRate) * kChannels);
+    for (int s = 0; s < static_cast<int>(kLongToneSeconds); ++s) {
+      const auto level = static_cast<float>(long_tone_level(s));
+      for (std::size_t i = 0; i < static_cast<std::size_t>(kRate); ++i) {
+        const double phase = 2.0 * std::numbers::pi * 440.0 * static_cast<double>(i) / kRate;
+        const auto value = static_cast<float>(std::sin(phase)) * level;
+        second[i * kChannels] = value;
+        second[i * kChannels + 1] = value;
+      }
+      for (int f = 0; f < 5; ++f) {
+        if (!writer.value()->write_frame(frame)) {
+          path_.clear();
+          return;
+        }
+      }
+      if (!writer.value()->write_audio(second)) {
+        path_.clear();
+        return;
+      }
+    }
+    if (!writer.value()->finish()) path_.clear();
+  }
+
+  std::string path_;
+};
+
+/// The loudest sample in the second half of a one-second mix at `at`.
+///
+/// The second half because the master limiter has look-ahead: the first
+/// milliseconds after a reset are its delay line filling, and they are quiet
+/// for a reason that has nothing to do with where the audio was read from.
+[[nodiscard]] float level_at(AudioMixer& mixer, double at) {
+  mixer.reset();
+  std::vector<float> out(static_cast<std::size_t>(kRate) * kChannels, 0.0f);
+  if (!mixer.mix(at, out)) return -1.0f;
+
+  float peak = 0.0f;
+  for (std::size_t i = out.size() / 2; i < out.size(); ++i) peak = std::max(peak, std::abs(out[i]));
+  return peak;
+}
+
+class WithLongTone : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    if (LongToneSource::path().empty()) GTEST_SKIP() << "could not write a long tone";
+    media_.id = "long";
+    media_.path = LongToneSource::path();
+    media_.duration = kLongToneSeconds;
+    media_.has_video = true;
+    media_.audio_stream_count = 1;
+  }
+
+  [[nodiscard]] Project whole_source_project() const {
+    Project p;
+    p.media = {media_};
+    p.tracks = {audio_track("a1", {audio_clip("c", "long", 0.0, kLongToneSeconds)})};
+    return p;
+  }
+
+  Media media_;
+};
+
+// The claim the whole thing rests on: a source too long to hold is still read
+// from the right place. Three positions, three amplitudes, and the last is far
+// past anything the first window covered — so it can only be right if the
+// window was refilled around where the mix had reached.
+TEST_F(WithLongTone, ReadsTheRightPartOfASourceTooLongToHold) {
+  auto mixer = AudioMixer::create(whole_source_project(),
+                                  {.sample_rate = kRate, .channels = kChannels});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+
+  for (const double at : {5.0, 65.0, 135.0}) {
+    const float measured = level_at(**mixer, at);
+    const auto expected = static_cast<float>(long_tone_level(at));
+    ASSERT_GE(measured, 0.0f) << "mixing failed at " << at;
+    // Generous: this went through a lossy encoder and back, and what is being
+    // asserted is which ten seconds were read rather than the codec's accuracy.
+    EXPECT_NEAR(measured, expected, expected * 0.35f)
+        << "at " << at << "s the mixer read audio from somewhere else";
+  }
+}
+
+// Walking forward across a window's edge has to be seamless. The join is where
+// a refill happens, and a gap there would be a moment of silence in the middle
+// of a clip that nothing else would catch.
+TEST_F(WithLongTone, WalkingPastAWindowEdgeStaysContinuous) {
+  auto mixer = AudioMixer::create(whole_source_project(),
+                                  {.sample_rate = kRate, .channels = kChannels});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+
+  // A second at a time from well inside the first window to well past its end,
+  // which is 75 seconds in.
+  (*mixer)->reset();
+  std::vector<float> out(static_cast<std::size_t>(kRate) * kChannels, 0.0f);
+  for (int second = 60; second < 100; ++second) {
+    ASSERT_TRUE((*mixer)->mix(static_cast<double>(second), out));
+
+    float peak = 0.0f;
+    for (const float sample : out) peak = std::max(peak, std::abs(sample));
+    const auto expected = static_cast<float>(long_tone_level(second));
+    EXPECT_GT(peak, expected * 0.5f) << "second " << second << " came out silent or nearly so";
+  }
+}
+
+// Nothing about the answer may depend on how the caller split its blocks, which
+// is exactly what a window refilled mid-block could break.
+TEST_F(WithLongTone, TheBlockSizeDoesNotChangeTheSamples) {
+  auto whole = AudioMixer::create(whole_source_project(),
+                                  {.sample_rate = kRate, .channels = kChannels});
+  auto split = AudioMixer::create(whole_source_project(),
+                                  {.sample_rate = kRate, .channels = kChannels});
+  ASSERT_TRUE(whole.has_value());
+  ASSERT_TRUE(split.has_value());
+
+  // Across the first window's edge, so a refill happens inside the run.
+  constexpr double kFrom = 70.0;
+  const std::size_t frames = static_cast<std::size_t>(kRate) * 10;
+
+  std::vector<float> one(frames * kChannels, 0.0f);
+  ASSERT_TRUE((*whole)->mix(kFrom, one));
+
+  std::vector<float> many(frames * kChannels, 0.0f);
+  constexpr std::size_t kChunk = 4096;
+  for (std::size_t at = 0; at < frames; at += kChunk) {
+    const std::size_t take = std::min(kChunk, frames - at);
+    ASSERT_TRUE((*split)->mix(kFrom + static_cast<double>(at) / kRate,
+                              std::span(many).subspan(at * kChannels, take * kChannels)));
+  }
+
+  for (std::size_t i = 0; i < one.size(); ++i) {
+    ASSERT_FLOAT_EQ(many[i], one[i]) << "sample " << i << " depends on the block size";
+  }
+}
+
 }  // namespace
 }  // namespace cutline::engine

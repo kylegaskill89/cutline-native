@@ -31,12 +31,12 @@ measurements and the one correction they forced.
 | | |
 |---|---|
 | Repo | `github.com/kylegaskill89/cutline-native`, branch `main`, GPL-3.0-or-later |
-| Released | **0.3.0**, as an unsigned NSIS installer. `docs/releasing.md`. 28 commits since the tag, unreleased |
+| Released | **0.3.0**, as an unsigned NSIS installer. `docs/releasing.md`. 29 commits since the tag, unreleased |
 | Local | `d:\Videos\cutline-native` |
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~61k lines of source, ~39k of tests |
-| Tests | **2769** under the `ui` preset; 2392 of them need no GPU, no window, no FFmpeg |
+| Tests | **2772** under the `ui` preset; 2392 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -57,7 +57,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 2392 of the 2769 tests.
+binding between them — 2392 of the 2772 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -323,6 +323,13 @@ deciding it is probably fine.
 
 **Waiting now:**
 
+- **A long source playing with sound, for longer than a window lasts.** Audio
+  is windowed now, so a capture longer than two minutes is read a stretch at a
+  time by a reader thread while the mix walks through it. The seams are covered
+  by tests — the samples either side of a refill, and that the block size cannot
+  change them — but *hearing* seventy-five seconds go by and the next stretch
+  arrive is the check no test makes. Play a ten-minute capture through and
+  listen for a gap at about a minute in.
 - **The audio device actually carrying sound.** The page lists this machine's
   real outputs and stores a choice by id; what was *not* driven is pressing play
   through a chosen one, because that moves somebody's monitoring to another
@@ -605,12 +612,11 @@ things about this codebase.
 - **Keeping hardware-decoded frames on the GPU** instead of uploading them from
   system memory. The decoder can already produce D3D12 textures; nothing samples
   them yet. This is the last large win left in the preview.
-- **Streaming audio decode.** `AudioMixer` decodes each clip's whole source
-  range before the player starts, because the render thread cannot touch a file.
-  Measured on the reference ten-minute capture with its four audio streams:
-  **2.9 s before the player is ready, and 887 MB held.** That is the wait before
-  sound starts and what it costs to have pressed play, and it is the number to
-  beat. It is the largest single piece of memory the application uses.
+- **Retimed audio is still decoded whole.** A clip with a speed or a reverse on
+  it is stretched once, up front, across its whole span — a window cannot be
+  handed to something that reads its input end to end. Every other clip is
+  windowed now (see §8's note on `AudioMixer`), so this is the one case left
+  where a long source costs its whole length in memory.
 - **Reverse playback still hitches** about once every two to four seconds, down
   from twice a second. What is left is a group of pictures occasionally running
   longer than the run has turns to pay for; the honest next step is measuring GOP
@@ -913,6 +919,17 @@ Anything finishing on a worker has to *post* rather than set a flag for the loop
 to notice, or it appears at the next mouse move instead of when it was ready.
 `kWaveformReady` is the pattern.
 
+**The mixing thread may not touch a file, and "may not" includes the clever
+case.** `AudioMixer` decoded everything up front for exactly this reason —
+WASAPI wants a buffer every few milliseconds and a decode is tens of them — and
+the windowed version keeps the rule rather than bending it: a reader thread
+fills ahead, the window is published through one atomic store of a shared
+pointer, and audio that has not been reached yet mixes as **silence** rather
+than as a missed deadline. `AudioMixSettings::realtime` is what separates that
+from an export, which decodes on the spot because nothing is waiting and being
+exactly reproducible matters more. If you find yourself wanting to block "just
+briefly" on the render thread, that is the bug.
+
 **A cache that records *what* it has without recording *how well* will hand one
 caller another caller's answer.** `ThumbnailCache` tracked which stretches of a
 source had been extracted and not how finely, so the pool's dozen frames across
@@ -1082,12 +1099,12 @@ rest of that section put together.
 Everything is committed and green. Nothing is half-finished, no branch is open,
 and there is no work in progress to reconstruct.
 
-- 2769 tests pass under the `ui` preset.
+- 2772 tests pass under the `ui` preset.
 - `--check` reports 2595 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
   all four themes — run it with something *in* the media cache as well as with
   it empty, since the Delete button only exists when there is something to
   delete.
-- 28 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
+- 29 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
   the owner's standing instruction is that releases happen after major features,
   not per commit.
 

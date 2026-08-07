@@ -499,7 +499,7 @@ anywhere. They are the first entries in
 [`docs/premiere-gaps.md`](docs/premiere-gaps.md), which is the comparison with
 Premiere that matters more than either specification now.
 
-2769 tests, plus a headless check that lays every panel out in every theme —
+2772 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a matte, an adjustment layer, a title, and the
 colour picker open, which is the only way the controls a panel is made of get
