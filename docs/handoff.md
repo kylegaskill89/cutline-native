@@ -31,12 +31,12 @@ measurements and the one correction they forced.
 | | |
 |---|---|
 | Repo | `github.com/kylegaskill89/cutline-native`, branch `main`, GPL-3.0-or-later |
-| Released | **0.3.0**, as an unsigned NSIS installer. `docs/releasing.md`. 24 commits since the tag, unreleased |
+| Released | **0.3.0**, as an unsigned NSIS installer. `docs/releasing.md`. 27 commits since the tag, unreleased |
 | Local | `d:\Videos\cutline-native` |
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~61k lines of source, ~39k of tests |
-| Tests | **2714** under the `ui` preset; 2368 of them need no GPU, no window, no FFmpeg |
+| Tests | **2763** under the `ui` preset; 2392 of them need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -57,7 +57,7 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 2368 of the 2714 tests.
+binding between them — 2392 of the 2763 tests.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -133,14 +133,15 @@ ui       widgets, layout, themes, painters. Depends on core (for time) and
 editor   bindings: turns a project into what a panel shows, and a gesture into
          an operation. Depends on core and ui. Pure.
 engine   frame renderer, exporter, player. Joins render + media + gpu.
-app      preview, the waveform and thumbnail caches, and the proxy builder: the
-         whole stack, and the work the interface waits on without doing itself.
+app      preview, the waveform and thumbnail caches, the media cache they keep
+         their answers in, and the proxy builder: the whole stack, and the work
+         the interface waits on without doing itself.
 tools    executables.
 ```
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 2368 tests run with
+place that knows both, and it is pure too. That is what makes 2392 tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -161,6 +162,10 @@ break would be silly.
   a worker behind it. `WaveformCache` is the one to copy; `ThumbnailCache` is
   what copying it looks like, and `ProxyBuilder` is what copying it looks like
   when the job takes minutes and its result outlives the session.
+- *Something derived from footage that is worth keeping between sessions* →
+  `app/media_cache.hpp`, which both of those caches consult before they decode.
+  Read §5.8 of the gaps document before adding a third kind: the key and the
+  unit are the two decisions that go wrong.
 - *A preference* → `editor/settings.hpp` and a row on a page in `main.cpp`. §9
   has the recipe and the rule for deciding whether it is a preference at all.
 - *A per-sequence setting* → `core::Project`, serialised, with a control in
@@ -340,6 +345,34 @@ deciding it is probably fine.
   category switches with no trouble. Recorded rather than diagnosed, and worth a
   session of its own before anybody leans on the software renderer. Timing-
   sensitive faults that go away when you look at them are still real.
+
+#### Measured: what reading a source actually costs
+
+Asked whether a media cache would smooth playback. It would not — playback is
+video-decode bound and reads none of this — but measuring the question found
+that importing the reference ten-minute four-stream capture took **over eleven
+minutes** of reading before its waveforms and filmstrips were done, and that
+almost all of it was waste: every packet in the container was demuxed and
+discarded to reach one stream, and the file was read once per stream. With the
+other streams refused at the container and all four read in one pass, four
+waveforms went from minutes to **1.4 s**. The full write-up is §5.8 of the gaps
+document.
+
+Two things about measuring it are worth keeping, because both cost a run.
+
+**Measure the parts before believing a theory about the whole.** The audio fix
+looked like it had barely helped when the end-to-end number only moved from
+"over eleven minutes" to nine — and timing the pieces separately showed audio
+was then 1.4 s and the filmstrip 141 s, which is a completely different problem
+from the one being guessed at.
+
+**A GUI measurement on a shared machine is not a measurement.** Three runs were
+spent on numbers that turned out to mean nothing: the window opened at a size
+the script did not expect, the theme changed under it — every theme has its own
+metrics, so every coordinate moved — and the owner was using the desktop. The
+numbers that settled it came from a throwaway test driving `WaveformCache` and
+`ThumbnailCache` directly, with no window at all. **Reach for that first when
+what is being measured is not itself a matter of pixels.**
 
 #### Driven: the loop that never came round
 
@@ -538,9 +571,15 @@ is about:
 - **Audio device selection**, and **drop-frame timecode** (which fixed a real
   counting bug beneath it).
 - **§5 closed** — undo depth, recovery copies kept, preroll and postroll, and a
-  GPU/software renderer choice; four rows declined with reasons. Driving the
+  GPU/software renderer choice; three rows declined with reasons. Driving the
   last of those found that looping had never restarted at the end of a
   sequence, which is fixed.
+- **The media cache**, and the reading it exists to avoid. Waveforms and
+  filmstrips are kept between sessions under `%LOCALAPPDATA%`, movable and
+  emptiable from Preferences ▸ Media Cache. Under it, two fixes to how a source
+  is read that matter more than the cache does: the container's other streams
+  are refused rather than demuxed and discarded, and a file's audio streams are
+  read in one pass instead of one each.
 
 ---
 
@@ -565,6 +604,11 @@ things about this codebase.
   them yet. This is the last large win left in the preview.
 - **Streaming audio decode.** `AudioMixer` decodes whole ranges eagerly, roughly
   230 MB per ten minutes of stereo.
+- **The icon view asks for the whole of every source.** `request_pool_pictures`
+  carries a comment promising "a short stretch of each source" over a line that
+  requests `0.0, media.duration`. With forty sources in the pool that is the
+  hundred seconds of processor time the comment itself warns about. Fixing it
+  means deciding what a tile should scrub across, which is why it was left.
 - **Reverse playback still hitches** about once every two to four seconds, down
   from twice a second. What is left is a group of pictures occasionally running
   longer than the run has turns to pay for; the honest next step is measuring GOP
@@ -941,21 +985,22 @@ its contents to a different place from the other half.
 
 ### What is done
 
-Preferences has nine pages — General, Appearance, Audio Hardware, Playback,
-Graphics, Labels, Timeline, Proxies, Auto Save — and everything on them
-persists. Project Settings has one, General, which grows a Timecode section at
+Preferences has ten pages — General, Appearance, Audio Hardware, Playback,
+Graphics, Labels, Timeline, Proxies, Media Cache, Auto Save — and everything on
+them persists. Project Settings has one, General, which grows a Timecode section at
 29.97 and 59.94.
 
 Persisted preferences: theme (by name), snapping, looping, aspect lock, preview
 quality, pool ordering and view, still and transition durations, autosave
 interval, **autosave copies kept**, **undo depth**, **preroll and postroll**,
-**renderer choice**, label names, default label per media kind, proxy height,
-proxy folder, audio output device.
+**renderer choice**, **media cache folder**, label names, default label per
+media kind, proxy height, proxy folder, audio output device.
 
-Four rows are closed as *won't do*, each with its reasoning in
-`premiere-gaps.md` §5.6: memory reserved, media cache location, appearance
-brightness, and scratch disks. Keyboard customisation was pulled out into a
-section of its own, being larger than the rest of §5 together.
+Three rows are closed as *won't do*, each with its reasoning in
+`premiere-gaps.md` §5.6: memory reserved, appearance brightness, and scratch
+disks. The media cache row was declined and then built once somebody measured
+what its absence cost — §5.8 is that story. Keyboard customisation was pulled
+out into a section of its own, being larger than the rest of §5 together.
 
 ### Three things from §5 worth knowing before you touch them
 
@@ -1025,10 +1070,12 @@ rest of that section put together.
 Everything is committed and green. Nothing is half-finished, no branch is open,
 and there is no work in progress to reconstruct.
 
-- 2739 tests pass under the `ui` preset.
-- `--check` reports 2577 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
-  all four themes.
-- 26 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
+- 2763 tests pass under the `ui` preset.
+- `--check` reports 2595 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
+  all four themes — run it with something *in* the media cache as well as with
+  it empty, since the Delete button only exists when there is something to
+  delete.
+- 27 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
   the owner's standing instruction is that releases happen after major features,
   not per commit.
 

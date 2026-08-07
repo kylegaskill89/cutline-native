@@ -17,6 +17,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
@@ -75,6 +76,13 @@ class WaveformCache {
   /// and the sources it named are no longer anybody's business.
   void clear();
 
+  /// Where envelopes are kept between sessions, or empty for not at all.
+  ///
+  /// Settable rather than fixed because it is a preference, and one that can
+  /// change while the application runs. Read on the worker, so it is guarded
+  /// like everything else here.
+  void set_cache_dir(std::filesystem::path dir);
+
   /// How many envelopes are held. For tests and for saying something honest in
   /// a status line.
   [[nodiscard]] std::size_t size() const;
@@ -101,6 +109,7 @@ class WaveformCache {
   void run();
 
   mutable std::mutex mutex_;
+  std::filesystem::path cache_dir_;
   std::map<Key, std::shared_ptr<const ui::Waveform>> waveforms_;
   /// What has been asked for, so a source on screen every frame is not queued
   /// every frame. An entry stays after it is done, which is what `waveforms_`

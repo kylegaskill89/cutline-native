@@ -19,6 +19,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
@@ -123,6 +124,9 @@ class ThumbnailCache {
 
   void clear();
 
+  /// Where filmstrips are kept between sessions, or empty for not at all.
+  void set_cache_dir(std::filesystem::path dir);
+
   [[nodiscard]] std::size_t size() const;
   /// How many bytes of pixels are held.
   [[nodiscard]] std::size_t bytes() const;
@@ -180,6 +184,7 @@ class ThumbnailCache {
   void evict();
 
   mutable std::mutex mutex_;
+  std::filesystem::path cache_dir_;
   mutable std::map<std::string, Entry> strips_;
   mutable std::uint64_t tick_ = 0;
   /// Stretches asked for and not yet finished with, per source. What is in

@@ -336,5 +336,90 @@ TEST_F(WithVideoFootage, AnEvictedSourceCanBeAskedForAgain) {
   EXPECT_NE(wait_for(cache, "one"), nullptr) << "it was remembered as done and never came back";
 }
 
+// ------------------------------------------------------- kept between runs --
+
+/// A cache directory of its own, removed afterwards.
+class Scratch {
+ public:
+  Scratch() {
+    dir_ = std::filesystem::temp_directory_path() /
+           ("cutline-strip-cache-" + std::to_string(reinterpret_cast<std::uintptr_t>(this)));
+  }
+  ~Scratch() {
+    std::error_code ignored;
+    std::filesystem::remove_all(dir_, ignored);
+  }
+  Scratch(const Scratch&) = delete;
+  Scratch& operator=(const Scratch&) = delete;
+  [[nodiscard]] const std::filesystem::path& dir() const { return dir_; }
+
+ private:
+  std::filesystem::path dir_;
+};
+
+[[nodiscard]] std::size_t files_in(const std::filesystem::path& dir) {
+  std::error_code error;
+  if (!std::filesystem::exists(dir, error)) return 0;
+  std::size_t count = 0;
+  for (const auto& entry : std::filesystem::recursive_directory_iterator(dir, error)) {
+    std::error_code ignored;
+    if (entry.is_regular_file(ignored)) ++count;
+  }
+  return count;
+}
+
+TEST_F(WithVideoFootage, FramesAreWrittenWhereTheyCanBeFoundAgain) {
+  const Scratch scratch;
+  ThumbnailCache cache;
+  cache.set_cache_dir(scratch.dir());
+
+  cache.request("boiler", path_, 0.0, 8.0);
+  ASSERT_NE(wait_for(cache, "boiler"), nullptr);
+
+  EXPECT_GT(files_in(scratch.dir()), 0u) << "nothing was kept for the next session";
+}
+
+// The half of this that is worth having: a filmstrip costs a seek and a decode
+// per frame — measured at about half a second each on a 4K capture — and a
+// second session must not pay it again. Checked by the pixels being the same
+// rather than by timing, since a test that asserts "faster" fails on a busy
+// machine.
+TEST_F(WithVideoFootage, ASecondSessionReadsTheFramesTheFirstExtracted) {
+  const Scratch scratch;
+
+  std::vector<ui::FilmFrame> first;
+  {
+    ThumbnailCache cache;
+    cache.set_cache_dir(scratch.dir());
+    cache.request("boiler", path_, 0.0, 8.0);
+    const auto strip = wait_for(cache, "boiler");
+    ASSERT_NE(strip, nullptr);
+    first = strip->frames;
+  }
+  ASSERT_FALSE(first.empty());
+
+  // A fresh cache with nothing in memory, pointed at the same directory.
+  ThumbnailCache second;
+  second.set_cache_dir(scratch.dir());
+  second.request("boiler", path_, 0.0, 8.0);
+  const auto again = wait_for(second, "boiler");
+  ASSERT_NE(again, nullptr);
+
+  ASSERT_EQ(again->frames.size(), first.size());
+  for (std::size_t i = 0; i < first.size(); ++i) {
+    EXPECT_DOUBLE_EQ(again->frames[i].t, first[i].t) << "frame " << i;
+    EXPECT_EQ(again->frames[i].rgba, first[i].rgba) << "frame " << i << " is not the same picture";
+  }
+}
+
+TEST_F(WithVideoFootage, WithNowhereToKeepThemNothingIsKept) {
+  const Scratch scratch;
+  ThumbnailCache cache;  // no cache dir set
+
+  cache.request("boiler", path_, 0.0, 8.0);
+  ASSERT_NE(wait_for(cache, "boiler"), nullptr);
+  EXPECT_EQ(files_in(scratch.dir()), 0u);
+}
+
 }  // namespace
 }  // namespace cutline::app

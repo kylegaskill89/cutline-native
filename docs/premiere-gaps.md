@@ -1046,7 +1046,7 @@ Settings — and are not gaps. What is left, with an honest size on each:
 | ~~Default label per media type~~ | Labels ▸ per kind | **done** — applied at import | — |
 | ~~Audio device~~ | Audio Hardware ▸ device, latency | **done** — device; latency is still WASAPI's | — |
 | ~~Playback preroll / postroll~~ | Playback | **done** — Settings ▸ Playback, around a looped range | — |
-| Media cache location | Media Cache | no disk cache exists | **won't do**, see §5.6 |
+| ~~Media cache location~~ | Media Cache | **done** — and the cache under it, see §5.8 | — |
 | ~~Proxy settings~~ | Ingest Settings ▸ preset, location | **done** — size and location | — |
 | Memory / RAM reserved | Memory | none — the caches have fixed budgets | **won't do**, see §5.6 |
 | ~~Renderer choice~~ | Graphics ▸ GPU or software | **done** — Settings ▸ Graphics, read at startup | — |
@@ -1118,14 +1118,12 @@ stutters for a reason nobody can see, set months ago. Premiere exposes this
 because Premiere shares a machine with After Effects and Media Encoder and has
 to be told how to divide it. Nothing here does.
 
-**Media cache location — won't do, for now, and not because it is hard.** There
-is no disk cache to point anywhere. Filmstrips and waveforms live in memory and
-die with the session. A control over the location of a thing that does not exist
-is worse than no control: it implies a cache is being written, so the first
-person to look for it loses an afternoon. If a disk cache is ever built, its
-location is a row on the same page and half a day. Until then this is a
-subsystem, and it belongs in a section about caching rather than in one about
-settings.
+**Media cache location — this was declined and then built**, and the reasoning
+that declined it was sound at the time and wrong about the size of the prize.
+The row was closed as "there is no disk cache to point anywhere, and a control
+over the location of a thing that does not exist is worse than no control".
+That is still the right rule; what was missing was any measurement of what the
+absence cost. See §5.8.
 
 **Appearance brightness — won't do.** Premiere's slider works because its
 appearance is one generated palette with a lightness parameter. There are four
@@ -1179,6 +1177,91 @@ playhead's position off the picture every 20 ms: with the rolls at zero a loop
 over a range marked 4–6 s runs 3.99 → 5.97 and wraps every 2.0 s; with 1.5 s of
 preroll and 2 s of postroll the same range runs 2.46 → 7.99 and wraps every
 5.5 s, which is the marked span widened by exactly what was asked for.
+
+### 5.8 The media cache, and what measuring it changed
+
+Asked whether a media cache would smooth playback. The answer is **no** — and
+saying so first is what made the rest worth doing.
+
+**Playback is not what this touches.** Nothing on the playback path reads a
+waveform or a filmstrip. What makes playback hitch is video decode: the reverse
+stalls are group-of-pictures bound and forward runs at about 40 fps on 4K60
+because every frame is uploaded from system memory. The win there is keeping
+hardware-decoded frames on the GPU, which is a different subsystem.
+
+**Editing is, and the cost was far worse than this page had guessed.** Importing
+the reference ten-minute capture — 1.5 GB, four audio streams — and dropping it
+on the timeline took **over eleven minutes** of reading before the waveforms and
+filmstrips were done, with a core and a half busy throughout. Every reopen paid
+it again.
+
+Almost all of that turned out to be waste rather than work, and it is worth
+recording what it was:
+
+- **Every packet in the container was demuxed and thrown away.** `read_audio`
+  asked `av_read_frame` for everything and kept the one stream it wanted, which
+  sounds free and is not — the demuxer still parses what it hands over, and on
+  this material that is 4K HEVC interleaved with the audio. `AVDISCARD_ALL` on
+  the streams not being read makes the container skip them outright.
+- **The file was read once per audio stream.** Four streams meant four full
+  passes over 1.5 GB to draw four lines. `media::extract_waveforms` reads them
+  all in one pass, and `WaveformCache` batches every queued stream of the same
+  file into one job.
+
+Measured after those two, on the same capture: one waveform **0.7 s**, all four
+together **1.4 s**. It had been minutes.
+
+What was left is the filmstrip, and that is genuinely expensive: it seeks and
+decodes per frame, about **0.47 s each** on this footage, 300 frames for a
+ten-minute source. Seeking is the right access pattern for a handful of frames
+spread across a long file, and it is what a cache is for.
+
+`app::media_cache` is that cache — Premiere's Media Cache, under
+`%LOCALAPPDATA%` by default and movable and emptiable from Preferences ▸ Media
+Cache. Measured on the same capture, doing what dropping it on the timeline
+does (four waveforms and a twenty-second stretch of filmstrip):
+
+| | |
+|---|---|
+| no cache at all | 13.5 s |
+| cold cache, filling it | 13.6 s |
+| **warm cache** | **0.0 s** |
+| stored | 2.18 MB |
+
+Filling it costs nothing measurable, which is the property that makes it safe to
+have on always.
+
+Four things in it are load bearing:
+
+- **The key is the path, the size and the modification time together**, rather
+  than the path with the other two checked on read. A miss costs a decode; a
+  false hit hands somebody a waveform belonging to footage they have replaced,
+  and there is no version of that which is worth the saving.
+- **A stretch is the unit, not a frame.** Filing frames under which step of a
+  fixed grid they fell nearest lost one whenever two landed in the same step —
+  which a short stretch does immediately, because a minimum frame count makes it
+  sample more finely than the grid. The extractor spreads *n* frames evenly
+  across whatever range it is given, so where they land is a property of the
+  range: nothing smaller than the range identifies them. Caught by a test that
+  asked for six frames back and got five.
+- **Everything is refused rather than trusted on the way in.** Every length read
+  is a number out of a file that a crash or a disk error can have made anything,
+  and believing one is how a cache miss stops being a slow session and becomes
+  an allocation the size of the number. A truncated or unrecognised entry is a
+  miss.
+- **Nothing here can fail an edit.** Every read and every write is allowed to
+  fail silently: a cache that cannot be read is a slow session, and one that
+  cannot be written is a slow session next time. Neither is worth a dialog.
+
+**Still open, and found while measuring this.** `request_pool_pictures` in the
+composition root has a comment promising "only a short stretch of each source"
+above a line asking for `0.0, media.duration` — the whole file, for every source
+in the pool, in the icon view. With forty sources that is precisely the hundred
+seconds of processor time the comment warns against. It is not fixed here
+because fixing it properly means deciding what a tile ought to scrub across, and
+the cache makes the second visit free rather than the first. It is also exactly
+the case on the handoff's waiting-to-be-driven list — nobody has ever watched
+the icon view against a large pool.
 
 ---
 

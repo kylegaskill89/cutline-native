@@ -451,6 +451,15 @@ appending, and landing only on clips of the same kind as the one they came
 from — an A/V pair is two linked clips here, so a video look pasted across a
 selection must not take the audio's filters with it.
 
+**Waveforms and filmstrips kept between sessions**, under a folder you can move
+or empty. Nothing in it is footage and nothing in it is precious — every entry
+is worked out again from the source when it is next wanted — which is what makes
+it safe to offer a Delete button at all. Reading a ten-minute capture with four
+audio streams used to cost over eleven minutes before its waveforms and
+filmstrips were done, and every reopen paid it again; most of that turned out to
+be the container being demuxed once per audio stream with the video parsed each
+time, and what is left is stored.
+
 **Recovery copies of anything unsaved**, written beside the application's own
 settings rather than over the file the user saved. An autosave that wrote the
 real file would turn a crash into a silently overwritten afternoon. Several are
@@ -490,7 +499,7 @@ anywhere. They are the first entries in
 [`docs/premiere-gaps.md`](docs/premiere-gaps.md), which is the comparison with
 Premiere that matters more than either specification now.
 
-2739 tests, plus a headless check that lays every panel out in every theme —
+2763 tests, plus a headless check that lays every panel out in every theme —
 including the inspector with a clip selected and every effect on it, an audio
 clip with all eight of its own, a matte, an adjustment layer, a title, and the
 colour picker open, which is the only way the controls a panel is made of get

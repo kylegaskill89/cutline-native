@@ -1,8 +1,10 @@
 #include "cutline/app/waveforms.hpp"
 
+#include "cutline/app/media_cache.hpp"
 #include "cutline/media/audio.hpp"
 
 #include <utility>
+#include <vector>
 
 namespace cutline::app {
 
@@ -70,6 +72,11 @@ void WaveformCache::clear() {
   outstanding_ = 0;
 }
 
+void WaveformCache::set_cache_dir(std::filesystem::path dir) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  cache_dir_ = std::move(dir);
+}
+
 void WaveformCache::ensure_worker() {
   const std::lock_guard<std::mutex> lock(mutex_);
   if (stopping_ || worker_.joinable()) return;
@@ -80,42 +87,98 @@ void WaveformCache::ensure_worker() {
 
 void WaveformCache::run() {
   for (;;) {
-    Job job;
+    std::vector<Job> batch;
     {
       std::unique_lock<std::mutex> lock(mutex_);
       wake_.wait(lock, [this] { return stopping_ || !queue_.empty(); });
       if (stopping_) return;
-      job = std::move(queue_.front());
+
+      // Every queued stream of the *same file* goes together, because getting
+      // one stream's samples means demuxing the whole container: one job at a
+      // time reads the file once per stream. The material this is built for is
+      // a 1.5 GB capture with four audio streams, so that is six gigabytes read
+      // to draw four lines, and it measured in minutes.
+      batch.push_back(std::move(queue_.front()));
       queue_.pop_front();
+      for (auto it = queue_.begin(); it != queue_.end();) {
+        if (it->path == batch.front().path) {
+          batch.push_back(std::move(*it));
+          it = queue_.erase(it);
+        } else {
+          ++it;
+        }
+      }
     }
+
+    std::filesystem::path cache_dir;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      cache_dir = cache_dir_;
+    }
+
+    // What was worked out in an earlier session, before anything is decoded.
+    // The key carries the file's size and modification time, so footage that
+    // has been replaced misses rather than handing back an envelope belonging
+    // to something else.
+    const std::string key =
+        cache_dir.empty() ? std::string{} : media_cache_key(batch.front().path);
+
+    std::vector<ui::Waveform> found(batch.size());
+    std::vector<Job> missing;
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      if (!key.empty()) {
+        if (auto stored = read_cached_waveform(cache_dir, key, batch[i].stream)) {
+          found[i] = std::move(*stored);
+          continue;
+        }
+      }
+      missing.push_back(batch[i]);
+    }
+
+    std::vector<int> streams;
+    streams.reserve(missing.size());
+    for (const Job& job : missing) streams.push_back(job.stream);
 
     // Outside the lock. This is seconds of decoding, and holding the mutex
     // across it would make every lookup on the paint thread wait for it —
     // turning a cache built to keep the interface answerable into the thing
     // that stops it.
-    auto peaks = media::extract_waveform(job.path, job.stream, kWaveformBucketsPerSecond);
-    if (!peaks.has_value()) {
+    auto peaks = media::extract_waveforms(batch.front().path, streams, kWaveformBucketsPerSecond);
+    if (!peaks.has_value() || peaks->size() != missing.size()) {
       // A source that cannot be decoded is left with no envelope and not asked
       // for again. `requested_` keeps the entry, which is what stops a broken
       // path being retried on every rebuild for the life of the session — and
       // is why `outstanding_` has to come down here too, or one unreadable file
       // would leave the interface saying it was still working for ever.
       const std::lock_guard<std::mutex> lock(mutex_);
-      if (outstanding_ > 0) --outstanding_;
+      if (outstanding_ >= batch.size()) outstanding_ -= batch.size();
+      else outstanding_ = 0;
       continue;
     }
 
-    auto wave = std::make_shared<ui::Waveform>();
-    wave->buckets_per_second = peaks->buckets_per_second;
-    wave->minimum = std::move(peaks->minimum);
-    wave->maximum = std::move(peaks->maximum);
+    // What was decoded takes its place beside what was already stored, in the
+    // order the batch asked for.
+    for (std::size_t i = 0, next = 0; i < batch.size() && next < peaks->size(); ++i) {
+      if (!found[i].empty()) continue;
+      found[i].buckets_per_second = (*peaks)[next].buckets_per_second;
+      found[i].minimum = std::move((*peaks)[next].minimum);
+      found[i].maximum = std::move((*peaks)[next].maximum);
+      // Written before the interface is told, so the session that paid for the
+      // decode is the one that banks it — a crash on the next frame still
+      // leaves the answer behind for next time.
+      if (!key.empty()) write_cached_waveform(cache_dir, key, batch[i].stream, found[i]);
+      ++next;
+    }
 
     std::function<void()> tell;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       if (stopping_) return;
-      waveforms_.insert_or_assign(Key{job.media_id, job.stream}, std::move(wave));
-      if (outstanding_ > 0) --outstanding_;
+      for (std::size_t i = 0; i < batch.size(); ++i) {
+        waveforms_.insert_or_assign(Key{batch[i].media_id, batch[i].stream},
+                                    std::make_shared<ui::Waveform>(std::move(found[i])));
+        if (outstanding_ > 0) --outstanding_;
+      }
       tell = on_arrival_;
     }
     // Set after the map is written, so a frame that sees the flag finds the

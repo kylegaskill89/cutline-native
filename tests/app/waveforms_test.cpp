@@ -202,5 +202,86 @@ TEST_F(WithAudioFootage, TheWakeUpFires) {
   EXPECT_GE(woken.load(), 1) << "nothing would have told a waiting message loop";
 }
 
+// ------------------------------------------------------- kept between runs --
+
+/// A cache directory of its own, removed afterwards.
+class Scratch {
+ public:
+  Scratch() {
+    dir_ = std::filesystem::temp_directory_path() /
+           ("cutline-wave-cache-" + std::to_string(reinterpret_cast<std::uintptr_t>(this)));
+  }
+  ~Scratch() {
+    std::error_code ignored;
+    std::filesystem::remove_all(dir_, ignored);
+  }
+  Scratch(const Scratch&) = delete;
+  Scratch& operator=(const Scratch&) = delete;
+  [[nodiscard]] const std::filesystem::path& dir() const { return dir_; }
+
+ private:
+  std::filesystem::path dir_;
+};
+
+[[nodiscard]] std::size_t files_in(const std::filesystem::path& dir) {
+  std::error_code error;
+  if (!std::filesystem::exists(dir, error)) return 0;
+  std::size_t count = 0;
+  for (const auto& entry : std::filesystem::recursive_directory_iterator(dir, error)) {
+    std::error_code ignored;
+    if (entry.is_regular_file(ignored)) ++count;
+  }
+  return count;
+}
+
+TEST_F(WithAudioFootage, AnEnvelopeIsWrittenWhereItCanBeFoundAgain) {
+  const Scratch scratch;
+  WaveformCache cache;
+  cache.set_cache_dir(scratch.dir());
+
+  cache.request("boiler", path_, 0);
+  ASSERT_NE(wait_for(cache, "boiler", 0), nullptr);
+
+  EXPECT_GT(files_in(scratch.dir()), 0u) << "nothing was kept for the next session";
+}
+
+// The point of the whole thing: a second session does not decode again. Checked
+// by the answer being right rather than by timing, because a test that asserts
+// "faster" is a test that fails on a busy machine.
+TEST_F(WithAudioFootage, ASecondSessionReadsWhatTheFirstWorkedOut) {
+  const Scratch scratch;
+
+  ui::Waveform first;
+  {
+    WaveformCache cache;
+    cache.set_cache_dir(scratch.dir());
+    cache.request("boiler", path_, 0);
+    const auto found = wait_for(cache, "boiler", 0);
+    ASSERT_NE(found, nullptr);
+    first = *found;
+  }
+  ASSERT_FALSE(first.empty());
+
+  // A fresh cache with nothing in memory, pointed at the same directory.
+  WaveformCache second;
+  second.set_cache_dir(scratch.dir());
+  second.request("boiler", path_, 0);
+  const auto again = wait_for(second, "boiler", 0);
+  ASSERT_NE(again, nullptr);
+
+  EXPECT_EQ(*again, first) << "the stored envelope is not the one that was worked out";
+}
+
+// Without a directory nothing is written, which is what "no cache" has to mean
+// — and the envelope still arrives.
+TEST_F(WithAudioFootage, WithNowhereToKeepItNothingIsKept) {
+  const Scratch scratch;
+  WaveformCache cache;  // no cache dir set
+
+  cache.request("boiler", path_, 0);
+  ASSERT_NE(wait_for(cache, "boiler", 0), nullptr);
+  EXPECT_EQ(files_in(scratch.dir()), 0u);
+}
+
 }  // namespace
 }  // namespace cutline::app

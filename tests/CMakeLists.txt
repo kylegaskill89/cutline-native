@@ -148,6 +148,7 @@ if(CUTLINE_WITH_GPU)
     # layer is already tested without media; this is the only place they are
     # checked against a real one, so it skips unless the footage is present.
     add_executable(cutline_app_tests
+      app/media_cache_test.cpp
       app/preview_test.cpp
       app/proxies_test.cpp
       app/thumbnails_test.cpp

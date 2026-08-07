@@ -1,5 +1,6 @@
 #include "cutline/app/thumbnails.hpp"
 
+#include "cutline/app/media_cache.hpp"
 #include "cutline/media/thumbnail.hpp"
 
 #include <algorithm>
@@ -135,6 +136,11 @@ void ThumbnailCache::clear() {
   outstanding_ = 0;
 }
 
+void ThumbnailCache::set_cache_dir(std::filesystem::path dir) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  cache_dir_ = std::move(dir);
+}
+
 void ThumbnailCache::ensure_worker() {
   const std::lock_guard<std::mutex> lock(mutex_);
   if (stopping_ || worker_.joinable()) return;
@@ -181,28 +187,61 @@ void ThumbnailCache::run() {
       }
     } done{this};
 
-    // Outside the lock: this is seconds of seeking and decoding, and holding
-    // the mutex across it would make every lookup on the paint thread wait for
-    // exactly the work this class exists to keep off it.
-    media::ThumbnailOptions options;
-    options.height = kThumbnailHeight;
-    options.start = job.span.from;
-    options.end = job.span.to;
-    // Paced rather than given the machine. This is the difference between an
-    // editor that is busy and one that looks like it is failing.
-    options.threads = kThumbnailThreads;
+    std::filesystem::path cache_dir;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      cache_dir = cache_dir_;
+    }
+    const std::string key = cache_dir.empty() ? std::string{} : media_cache_key(job.path);
+
     const double length = job.span.to - job.span.from;
-    auto frames = media::extract_thumbnails(job.path, frames_for(length), options);
-    if (!frames.has_value()) continue;
+    const int wanted = frames_for(length);
+
+    // What an earlier session already extracted for exactly this stretch.
+    //
+    // The stretch is the unit because the extractor spreads its frames evenly
+    // across whatever range it is given: where they land is a property of the
+    // range asked for, so nothing smaller than the range identifies them.
+    const CachedStrip what{.from = job.span.from,
+                           .to = job.span.to,
+                           .count = wanted,
+                           .height = kThumbnailHeight};
 
     std::vector<ui::FilmFrame> fresh;
-    fresh.reserve(frames->size());
-    for (media::Thumbnail& thumb : *frames) {
-      if (thumb.width <= 0 || thumb.height <= 0 || thumb.rgba.empty()) continue;
-      fresh.push_back(ui::FilmFrame{.t = thumb.timestamp,
-                                    .width = thumb.width,
-                                    .height = thumb.height,
-                                    .rgba = std::move(thumb.rgba)});
+    bool complete = false;
+    if (!key.empty()) {
+      if (auto stored = read_cached_strip(cache_dir, key, what)) {
+        fresh = std::move(*stored);
+        complete = true;
+      }
+    }
+
+    if (!complete) {
+      // Outside the lock: this is seconds of seeking and decoding, and holding
+      // the mutex across it would make every lookup on the paint thread wait for
+      // exactly the work this class exists to keep off it.
+      media::ThumbnailOptions options;
+      options.height = kThumbnailHeight;
+      options.start = job.span.from;
+      options.end = job.span.to;
+      // Paced rather than given the machine. This is the difference between an
+      // editor that is busy and one that looks like it is failing.
+      options.threads = kThumbnailThreads;
+      auto frames = media::extract_thumbnails(job.path, wanted, options);
+      if (!frames.has_value()) continue;
+
+      fresh.reserve(frames->size());
+      for (media::Thumbnail& thumb : *frames) {
+        if (thumb.width <= 0 || thumb.height <= 0 || thumb.rgba.empty()) continue;
+        fresh.push_back(ui::FilmFrame{.t = thumb.timestamp,
+                                      .width = thumb.width,
+                                      .height = thumb.height,
+                                      .rgba = std::move(thumb.rgba)});
+      }
+
+      // Stored before the interface is told, so the session that paid for the
+      // seeking is the one that banks it.
+      if (!key.empty()) write_cached_strip(cache_dir, key, what, fresh);
     }
     if (fresh.empty()) continue;
 

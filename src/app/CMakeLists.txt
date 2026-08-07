@@ -11,6 +11,7 @@ add_library(cutline_app
   src/proxies.cpp
   src/thumbnails.cpp
   src/updater.cpp
+  src/media_cache.cpp
   src/waveforms.cpp)
 add_library(cutline::app ALIAS cutline_app)
 

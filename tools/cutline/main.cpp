@@ -66,6 +66,7 @@
 #if CUTLINE_HAVE_PREVIEW
 #include "cutline/app/preview.hpp"
 #include "cutline/app/updater.hpp"
+#include "cutline/app/media_cache.hpp"
 #include "cutline/app/proxies.hpp"
 #include "cutline/app/thumbnails.hpp"
 #include "cutline/app/waveforms.hpp"
@@ -1071,6 +1072,7 @@ void toggle_snapping(App& app);
 void choose_preview_scale(App& app, double scale);
 void invalidate_playback(App& app);
 void open_export_dialog(App& app);
+void apply_media_cache(App& app);
 void open_settings_dialog(App& app, SettingsKind kind);
 void close_settings_dialog(App& app);
 void refresh_settings_page(App& app);
@@ -4995,6 +4997,87 @@ void build_graphics_page(App& app, Box& into) {
   into.emplace<Label>("Takes effect when Cutline is restarted.").set_small(true);
 }
 
+/// A size in the units somebody reads. Kilobytes are too many to take in and
+/// bytes are not a number at all once a cache has anything in it.
+[[nodiscard]] std::string bytes_label(std::uintmax_t bytes) {
+  if (bytes >= 1024ull * 1024 * 1024) {
+    return std::format("{:.1f} GB", static_cast<double>(bytes) / (1024.0 * 1024 * 1024));
+  }
+  if (bytes >= 1024ull * 1024) {
+    return std::format("{:.0f} MB", static_cast<double>(bytes) / (1024.0 * 1024));
+  }
+  if (bytes == 0) return "nothing";
+  return std::format("{:.0f} KB", std::max(1.0, static_cast<double>(bytes) / 1024.0));
+}
+
+/// Where what has already been read out of footage is kept. Premiere's
+/// Preferences ▸ Media Cache.
+void build_media_cache_page([[maybe_unused]] App& app, Box& into) {
+#if CUTLINE_HAVE_PREVIEW
+  into.emplace<Label>("Where it goes").set_bold(true);
+
+  const std::filesystem::path dir =
+      cutline::app::media_cache_dir(app.settings.media_cache_folder);
+
+  // The path on its own row and the buttons under it, for the reason the proxy
+  // folder is laid out that way: a path has no length anybody can plan for, and
+  // sharing a row with two buttons is what `--check` found overflowing in the
+  // roomiest theme the moment there was a real one. Elided from the front,
+  // because the end of a path is the part that says where it is.
+  constexpr std::size_t kLongestPath = 44;
+  std::string shown = dir.generic_string();
+  if (shown.size() > kLongestPath) shown = "..." + shown.substr(shown.size() - kLongestPath + 3);
+  into.emplace<Label>(shown).set_small(true);
+
+  auto& where = into.emplace<Box>(Axis::Horizontal);
+  where.emplace<Button>("Choose...", [&app] {
+    const auto folder = choose_folder(app.settings_window == nullptr ? app.main.window
+                                                                    : app.settings_window->window);
+    if (!folder.has_value()) return;
+    app.settings.media_cache_folder = folder->string();
+    save_settings(app);
+    apply_media_cache(app);
+    app.settings_page_stale = true;
+  });
+  if (!app.settings.media_cache_folder.empty()) {
+    where.emplace<Button>("Use the default place", [&app] {
+      app.settings.media_cache_folder.clear();
+      save_settings(app);
+      apply_media_cache(app);
+      app.settings_page_stale = true;
+    });
+  }
+
+  into.emplace<Label>("What is in it").set_bold(true);
+
+  const std::uintmax_t held = cutline::app::media_cache_bytes(dir);
+  into.emplace<Label>(std::format("Holding {}.", bytes_label(held))).set_small(true);
+
+  // Only when there is something to delete. A button that does nothing is a
+  // control that teaches somebody not to trust the page — and the *row* only
+  // when the button is in it, which `--check` is the reason for knowing: a row
+  // holding nothing but a spacer has nothing to take its size from, and lands
+  // nowhere at all.
+  if (held > 0) {
+    auto& tidy = into.emplace<Box>(Axis::Horizontal);
+    tidy.emplace<Button>("Delete", [&app, dir] {
+      (void)cutline::app::clear_media_cache(dir);
+      app.settings_page_stale = true;
+    });
+    tidy.emplace<Spacer>();
+  }
+
+  // Said plainly, because "delete" beside anything to do with media is a word
+  // that ought to frighten somebody until they know what it means here.
+  into.emplace<Label>("Waveforms and filmstrips only. Nothing here is your footage,")
+      .set_small(true);
+  into.emplace<Label>("and anything deleted is worked out again when it is next needed.")
+      .set_small(true);
+#else
+  into.emplace<Label>("This build has no media.").set_small(true);
+#endif
+}
+
 /// The pages a settings window offers, in the order they are listed.
 [[nodiscard]] std::vector<SettingsPage> pages_for(SettingsKind kind) {
   if (kind == SettingsKind::Project) {
@@ -5011,6 +5094,7 @@ void build_graphics_page(App& app, Box& into) {
           SettingsPage{"Labels", build_labels_page},
           SettingsPage{"Timeline", build_timeline_page},
           SettingsPage{"Proxies", build_proxies_page},
+          SettingsPage{"Media Cache", build_media_cache_page},
           SettingsPage{"Auto Save", build_autosave_page}};
 }
 
@@ -8559,6 +8643,20 @@ void save_workspaces(App& app, bool complain_on_failure) {
   }
 }
 
+/// Points both derived-media caches at wherever the preference says.
+///
+/// One function rather than two calls at each site, because the two must never
+/// disagree: a waveform found in one place and a filmstrip written to another
+/// is a cache somebody empties and finds still full.
+void apply_media_cache([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  const std::filesystem::path dir =
+      cutline::app::media_cache_dir(app.settings.media_cache_folder);
+  app.waveforms.set_cache_dir(dir);
+  app.filmstrips.set_cache_dir(dir);
+#endif
+}
+
 /// Gathers what the person has chosen, and writes it.
 ///
 /// Called from every place that changes one of these rather than on a timer or
@@ -10990,6 +11088,9 @@ int main(int argc, char** argv) {
     app.pool_view = settings.pool_view;
     app.session.set_undo_depth(static_cast<std::size_t>(settings.undo_depth));
   }
+  // After the settings are read and before anything asks for a waveform, so the
+  // first request of the session already looks on disk.
+  apply_media_cache(app);
 
   // Read before the tree is built, so the window opens in the arrangement it
   // was last left in rather than flashing the default and then moving.

@@ -167,6 +167,18 @@ struct Settings {
   /// read-only has nowhere beside it to put anything.
   std::string proxy_folder;
 
+  // --------------------------------------------------------- media cache --
+
+  /// Where waveforms and filmstrips already worked out are kept between
+  /// sessions, or empty for the default place.
+  ///
+  /// Worth a setting for the reason Premiere's is: this grows with every source
+  /// ever opened, and the drive the application is installed on is very often
+  /// the small fast one. Nothing in it is precious — every entry can be worked
+  /// out again from the footage — so moving it or emptying it costs time and
+  /// never data, which is what makes it safe to offer at all.
+  std::string media_cache_folder;
+
   // --------------------------------------------------------------- audio --
 
   /// Which output to play through, by the system's own identifier, or empty for
