@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <format>
 #include <functional>
+#include <memory>
 #include <span>
 #include <limits>
 #include <vector>
@@ -80,6 +81,19 @@ using namespace detail;
   if (index < 0) {
     return std::unexpected(
         std::format("{} has no audio stream {}", path_string, audio_stream));
+  }
+
+  // Everything else in the file is refused before a single packet is read.
+  //
+  // `av_read_frame` hands over every stream's packets and the loop below throws
+  // away the ones it did not want — which sounds free and is not. The demuxer
+  // still parses them, and on the material this is built for that is 4K HEVC
+  // interleaved with the audio: reading one ten-minute stream out of a 1.5 GB
+  // capture meant parsing the whole 1.5 GB. `AVDISCARD_ALL` makes the demuxer
+  // skip those packets at the container level instead.
+  for (unsigned i = 0; i < format->nb_streams; ++i) {
+    format->streams[i]->discard = static_cast<int>(i) == index ? AVDISCARD_DEFAULT
+                                                               : AVDISCARD_ALL;
   }
 
   AVStream* stream = format->streams[index];
@@ -372,6 +386,148 @@ std::expected<WaveformPeaks, std::string> extract_waveform(std::string_view path
   if (!decoded) return std::unexpected(decoded.error());
 
   return folder.finish();
+}
+
+std::expected<std::vector<WaveformPeaks>, std::string> extract_waveforms(
+    std::string_view path, std::span<const int> audio_streams, int buckets_per_second) {
+  if (audio_streams.empty()) return std::vector<WaveformPeaks>{};
+
+  const std::string path_string(path);
+  const AudioDecodeOptions options;
+
+  AVFormatContext* raw = nullptr;
+  detail::quiet_av_logging();
+  if (const int rc = avformat_open_input(&raw, path_string.c_str(), nullptr, nullptr); rc < 0) {
+    return std::unexpected(std::format("cannot open {}: {}", path_string, av_error_string(rc)));
+  }
+  FormatContext format(raw);
+
+  if (const int rc = avformat_find_stream_info(format.get(), nullptr); rc < 0) {
+    return std::unexpected(
+        std::format("cannot read streams in {}: {}", path_string, av_error_string(rc)));
+  }
+
+  /// One stream being read: its decoder, its resampler, and the envelope being
+  /// folded. Kept together because the demux loop dispatches on the absolute
+  /// index and has to reach all three.
+  struct Reading {
+    int index = -1;
+    CodecContext decoder;
+    Resampler resampler;
+    std::unique_ptr<PeakFolder> folder;
+    std::vector<float> block;
+  };
+
+  // Nothing at all until a stream asks for it, so a container's other tracks
+  // are skipped by the demuxer rather than parsed and dropped.
+  for (unsigned i = 0; i < format->nb_streams; ++i) format->streams[i]->discard = AVDISCARD_ALL;
+
+  std::vector<Reading> readings(audio_streams.size());
+  for (std::size_t i = 0; i < audio_streams.size(); ++i) {
+    Reading& reading = readings[i];
+    // An ordinal the file does not have leaves an empty envelope rather than
+    // failing every other stream with it.
+    reading.index = audio_stream_index(format.get(), audio_streams[i]);
+    if (reading.index < 0) continue;
+
+    AVStream* stream = format->streams[reading.index];
+    const AVCodec* codec = avcodec_find_decoder(stream->codecpar->codec_id);
+    if (codec == nullptr) {
+      reading.index = -1;
+      continue;
+    }
+    stream->discard = AVDISCARD_DEFAULT;
+
+    reading.decoder.reset(avcodec_alloc_context3(codec));
+    if (!reading.decoder) return std::unexpected("out of memory allocating an audio decoder");
+    if (const int rc = avcodec_parameters_to_context(reading.decoder.get(), stream->codecpar);
+        rc < 0) {
+      return std::unexpected(std::format("cannot configure decoder: {}", av_error_string(rc)));
+    }
+    reading.decoder->pkt_timebase = stream->time_base;
+    if (const int rc = avcodec_open2(reading.decoder.get(), codec, nullptr); rc < 0) {
+      return std::unexpected(std::format("cannot open audio decoder: {}", av_error_string(rc)));
+    }
+
+    AVChannelLayout target_layout{};
+    av_channel_layout_default(&target_layout, options.channels);
+    SwrContext* raw_resampler = nullptr;
+    const int rc = swr_alloc_set_opts2(&raw_resampler, &target_layout, AV_SAMPLE_FMT_FLT,
+                                       options.sample_rate, &reading.decoder->ch_layout,
+                                       reading.decoder->sample_fmt, reading.decoder->sample_rate,
+                                       0, nullptr);
+    av_channel_layout_uninit(&target_layout);
+    if (rc < 0) {
+      return std::unexpected(std::format("cannot configure resampler: {}", av_error_string(rc)));
+    }
+    reading.resampler.reset(raw_resampler);
+    if (const int opened = swr_init(reading.resampler.get()); opened < 0) {
+      return std::unexpected(std::format("cannot open resampler: {}", av_error_string(opened)));
+    }
+    reading.folder = std::make_unique<PeakFolder>(options.sample_rate, options.channels,
+                                                  buckets_per_second);
+  }
+
+  Frame frame(av_frame_alloc());
+  Packet packet(av_packet_alloc());
+  if (!frame || !packet) return std::unexpected("out of memory allocating an audio frame");
+
+  const auto pump = [&](Reading& reading) -> std::expected<void, std::string> {
+    for (;;) {
+      const int got = avcodec_receive_frame(reading.decoder.get(), frame.get());
+      if (got == AVERROR(EAGAIN) || got == AVERROR_EOF) return {};
+      if (got < 0) return std::unexpected(std::format("decode failed: {}", av_error_string(got)));
+
+      if (auto ok = drain_resampler(reading.resampler.get(), frame.get(), options.channels,
+                                    reading.block);
+          !ok) {
+        return ok;
+      }
+      reading.folder->take(reading.block);
+      reading.block.clear();
+    }
+  };
+
+  for (;;) {
+    const int read = av_read_frame(format.get(), packet.get());
+    if (read == AVERROR_EOF) break;
+    if (read < 0) {
+      return std::unexpected(std::format("read failed: {}", av_error_string(read)));
+    }
+
+    for (Reading& reading : readings) {
+      if (reading.index != packet->stream_index) continue;
+      if (const int sent = avcodec_send_packet(reading.decoder.get(), packet.get()); sent < 0) {
+        av_packet_unref(packet.get());
+        return std::unexpected(std::format("cannot feed decoder: {}", av_error_string(sent)));
+      }
+      if (auto ok = pump(reading); !ok) {
+        av_packet_unref(packet.get());
+        return std::unexpected(ok.error());
+      }
+      break;
+    }
+    av_packet_unref(packet.get());
+  }
+
+  std::vector<WaveformPeaks> out(audio_streams.size());
+  for (std::size_t i = 0; i < readings.size(); ++i) {
+    Reading& reading = readings[i];
+    if (reading.folder == nullptr) continue;
+
+    avcodec_send_packet(reading.decoder.get(), nullptr);
+    if (auto ok = pump(reading); !ok) return std::unexpected(ok.error());
+    // The resampler holds samples back for its own latency; without this the
+    // last few milliseconds of every stream would go missing.
+    if (auto ok = drain_resampler(reading.resampler.get(), nullptr, options.channels,
+                                  reading.block);
+        !ok) {
+      return std::unexpected(ok.error());
+    }
+    reading.folder->take(reading.block);
+    out[i] = reading.folder->finish();
+  }
+  return out;
 }
 
 }  // namespace cutline::media

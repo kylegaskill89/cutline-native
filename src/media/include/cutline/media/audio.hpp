@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <expected>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -77,5 +78,22 @@ struct WaveformPeaks {
 /// Decodes a stream and reduces it to peaks in one step.
 [[nodiscard]] std::expected<WaveformPeaks, std::string> extract_waveform(
     std::string_view path, int audio_stream = 0, int buckets_per_second = 100);
+
+/// Peaks for several of a file's audio streams, read in **one pass**.
+///
+/// The reason this exists rather than calling `extract_waveform` per stream:
+/// getting one stream's samples means demuxing the whole container, because
+/// that is how the packets are interleaved. Doing that once per stream reads
+/// the file once per stream — and the material this is built for is a 1.5 GB
+/// capture with four audio streams in it, so the difference is reading a
+/// gigabyte and a half instead of six.
+///
+/// Streams are given as ordinals among the file's audio streams, the same
+/// numbering `decode_audio` and `Clip::audio_stream` use. The result is in the
+/// order asked for. An ordinal the file does not have gives an empty envelope
+/// in its place rather than failing the lot, since one absent stream should not
+/// cost the others their waveforms.
+[[nodiscard]] std::expected<std::vector<WaveformPeaks>, std::string> extract_waveforms(
+    std::string_view path, std::span<const int> audio_streams, int buckets_per_second = 100);
 
 }  // namespace cutline::media

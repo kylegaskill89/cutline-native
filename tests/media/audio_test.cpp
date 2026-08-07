@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -245,6 +247,46 @@ TEST_F(ReferenceAudio, TheStreamedEnvelopeMatchesTheWholeBufferOne) {
     EXPECT_FLOAT_EQ(streamed->minimum[i], whole.minimum[i]) << "bucket " << i;
     EXPECT_FLOAT_EQ(streamed->maximum[i], whole.maximum[i]) << "bucket " << i;
   }
+}
+
+// Reading every stream in one pass has to give exactly what reading them one at
+// a time gave, or the saving would have been bought by changing what a waveform
+// looks like. The saving is real: getting one stream's samples means demuxing
+// the whole container, so one pass per stream reads the file once per stream —
+// six gigabytes for a four-stream 1.5 GB capture instead of one and a half.
+TEST_F(ReferenceAudio, OnePassOverTheFileMatchesOnePassPerStream) {
+  const std::array<int, 1> streams{0};
+  const auto together = extract_waveforms(path_, streams, 100);
+  ASSERT_TRUE(together.has_value()) << together.error();
+  ASSERT_EQ(together->size(), 1u);
+
+  const auto alone = extract_waveform(path_, 0, 100);
+  ASSERT_TRUE(alone.has_value()) << alone.error();
+
+  ASSERT_EQ((*together)[0].size(), alone->size());
+  EXPECT_EQ((*together)[0].buckets_per_second, alone->buckets_per_second);
+  for (std::size_t i = 0; i < alone->size(); ++i) {
+    EXPECT_FLOAT_EQ((*together)[0].minimum[i], alone->minimum[i]) << "bucket " << i;
+    EXPECT_FLOAT_EQ((*together)[0].maximum[i], alone->maximum[i]) << "bucket " << i;
+  }
+}
+
+// One stream the file does not have must not cost the others their waveforms:
+// an ordinal past the end is an empty envelope in its place.
+TEST_F(ReferenceAudio, AStreamThatIsNotThereLeavesTheOthersAlone) {
+  const std::array<int, 2> streams{0, 97};
+  const auto peaks = extract_waveforms(path_, streams, 100);
+  ASSERT_TRUE(peaks.has_value()) << peaks.error();
+  ASSERT_EQ(peaks->size(), 2u);
+
+  EXPECT_FALSE((*peaks)[0].empty()) << "the stream that is there still reads";
+  EXPECT_TRUE((*peaks)[1].empty()) << "the one that is not reads as nothing";
+}
+
+TEST_F(ReferenceAudio, AskingForNoStreamsReadsNothing) {
+  const auto peaks = extract_waveforms(path_, {}, 100);
+  ASSERT_TRUE(peaks.has_value()) << peaks.error();
+  EXPECT_TRUE(peaks->empty());
 }
 
 // ------------------------------------------------------------- thumbnails --
