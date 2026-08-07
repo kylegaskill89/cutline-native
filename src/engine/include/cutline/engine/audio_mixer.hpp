@@ -48,10 +48,22 @@ class AudioMixer {
  public:
   /// Builds the plan and decodes every source it names.
   ///
-  /// Decoding is eager and whole-file, which is what the reference did and what
-  /// real-time playback scheduling wants — roughly 230 MB per ten minutes of
-  /// 48 kHz stereo. A long timeline of long sources is the case that will
-  /// eventually need streaming decode; the interface does not assume either.
+  /// Decoding is eager, and it happens *here* rather than while playing:
+  /// WASAPI wants a buffer every few milliseconds and missing that deadline is
+  /// audible, so everything that touches a file is done before the render
+  /// thread starts. It covers each clip's own source range and a margin, not
+  /// the whole file — but a clip that spans its source is the ordinary case
+  /// when a long capture has just been dropped in, and then the two are the
+  /// same thing.
+  ///
+  /// **Measured**, on the reference ten-minute capture with its four audio
+  /// streams, one clip each spanning the whole source: **2.9 seconds before the
+  /// player is ready, and 887 MB held** — 48 kHz stereo float is about 230 MB
+  /// per ten minutes per stream, and there are four of them. That is the wait
+  /// before sound starts and the memory it costs to have pressed play.
+  ///
+  /// A long timeline of long sources is the case that needs streaming decode,
+  /// and this is the number to beat. The interface assumes neither.
   ///
   /// A source that cannot be read is not an error: it is recorded in
   /// `missing_media` and mixed as silence, so an export completes with a hole

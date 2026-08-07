@@ -605,8 +605,12 @@ things about this codebase.
 - **Keeping hardware-decoded frames on the GPU** instead of uploading them from
   system memory. The decoder can already produce D3D12 textures; nothing samples
   them yet. This is the last large win left in the preview.
-- **Streaming audio decode.** `AudioMixer` decodes whole ranges eagerly, roughly
-  230 MB per ten minutes of stereo.
+- **Streaming audio decode.** `AudioMixer` decodes each clip's whole source
+  range before the player starts, because the render thread cannot touch a file.
+  Measured on the reference ten-minute capture with its four audio streams:
+  **2.9 s before the player is ready, and 887 MB held.** That is the wait before
+  sound starts and what it costs to have pressed play, and it is the number to
+  beat. It is the largest single piece of memory the application uses.
 - **Reverse playback still hitches** about once every two to four seconds, down
   from twice a second. What is left is a group of pictures occasionally running
   longer than the run has turns to pay for; the honest next step is measuring GOP
