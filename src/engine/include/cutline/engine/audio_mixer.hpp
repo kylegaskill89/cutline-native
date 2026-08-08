@@ -181,6 +181,23 @@ class AudioMixer {
   /// Media ids whose audio could not be decoded, deduplicated.
   [[nodiscard]] const std::vector<std::string>& missing_media() const noexcept;
 
+  /// Measures a project's programme loudness, in LUFS, by mixing all of it.
+  ///
+  /// Offline and complete: loudness is *integrated* over a programme, so there
+  /// is no such thing as measuring the part you happen to be looking at. A
+  /// ten-minute sequence takes a few seconds, because audio decodes at some
+  /// hundreds of times real time and this reads no pictures at all.
+  ///
+  /// Mixed exactly as it would be exported — through every clip's stack, every
+  /// track's, the master fader and the master's — so the number is about the
+  /// file that would be written rather than about an intermediate nobody hears.
+  /// The limiter is included for the same reason.
+  ///
+  /// `kAbsoluteGateLufs` for a sequence with no audio in it, which is what
+  /// `audio::LoudnessMeter` reports for silence and is the honest answer.
+  [[nodiscard]] static std::expected<double, std::string> measure_loudness(
+      const core::Project& project, AudioMixSettings settings = {});
+
  private:
   struct Impl;
   explicit AudioMixer(std::unique_ptr<Impl> impl);

@@ -4,6 +4,7 @@ add_library(cutline_audio
   src/compressor.cpp
   src/delay.cpp
   src/limiter.cpp
+  src/loudness.cpp
   src/reverb.cpp
   src/meter.cpp
   src/stretch.cpp)

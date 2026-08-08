@@ -2,6 +2,7 @@
 
 #include "cutline/audio/chain.hpp"
 #include "cutline/audio/limiter.hpp"
+#include "cutline/audio/loudness.hpp"
 #include "cutline/audio/meter.hpp"
 #include "cutline/audio/stretch.hpp"
 #include "cutline/core/query.hpp"
@@ -911,6 +912,46 @@ bool AudioMixer::silent() const noexcept {
 }
 
 const AudioMixSettings& AudioMixer::settings() const noexcept { return impl_->settings; }
+
+std::expected<double, std::string> AudioMixer::measure_loudness(const core::Project& project,
+                                                                AudioMixSettings settings) {
+  // Never real time: this is an offline pass and wants the deterministic
+  // behaviour, where a window that has not been read yet is read there and then
+  // rather than mixing as silence. A measurement that depended on how much a
+  // reader thread had managed would not be a measurement.
+  settings.realtime = false;
+
+  auto built = AudioMixer::create(project, settings);
+  if (!built) return std::unexpected(built.error());
+  AudioMixer& mixer = **built;
+
+  const double duration = core::timeline_duration(project);
+  if (mixer.silent() || !(duration > 0.0)) return audio::kAbsoluteGateLufs;
+
+  audio::LoudnessMeter meter(static_cast<double>(settings.sample_rate), settings.channels);
+
+  // A second at a time. Large enough that the per-block overhead disappears,
+  // small enough that a long sequence does not need its whole mix in memory at
+  // once — which is the same reason the mixer windows its sources.
+  const auto frames = static_cast<std::size_t>(settings.sample_rate);
+  const auto channels = static_cast<std::size_t>(settings.channels);
+  std::vector<float> block(frames * channels);
+
+  for (double at = 0.0; at < duration; at += 1.0) {
+    if (auto mixed = mixer.mix(at, block); !mixed) return std::unexpected(mixed.error());
+    meter.process(block);
+  }
+
+  // The limiter's look-ahead, so the tail of the programme is counted. A
+  // sequence ending on its loudest moment would otherwise lose it.
+  std::vector<float> tail(mixer.latency_frames() * channels, 0.0f);
+  if (!tail.empty()) {
+    mixer.flush(tail);
+    meter.process(tail);
+  }
+
+  return meter.integrated_lufs();
+}
 
 const std::vector<std::string>& AudioMixer::missing_media() const noexcept {
   return impl_->missing;

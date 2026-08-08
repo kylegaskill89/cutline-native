@@ -23,6 +23,7 @@
 #include "cutline/core/model.hpp"
 #include "cutline/core/pool.hpp"
 #include "cutline/audio/chain.hpp"
+#include "cutline/audio/loudness.hpp"
 #include "cutline/core/animate.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
@@ -73,6 +74,7 @@
 #include "cutline/app/thumbnails.hpp"
 #include "cutline/app/waveforms.hpp"
 #include "cutline/engine/exporter.hpp"
+#include "cutline/engine/audio_mixer.hpp"
 #include "cutline/engine/player.hpp"
 #endif
 
@@ -1100,6 +1102,7 @@ void show_master_gain(App& app, double gain);
 void refresh_meter(App& app);
 void record_automation(App& app);
 void open_channel_dialog(App& app, std::span<const std::string> clips);
+void open_loudness_dialog(App& app);
 void commit_automation(App& app);
 void refresh_handles(App& app);
 void refresh_title(App& app);
@@ -8290,6 +8293,84 @@ void open_library_menu(App& app, double x, double y) {
 /// The two belong together: a fader is moved by ear and by eye, and the eye
 /// part is the meter. Splitting them across panels would mean setting a level
 /// while watching something that might be behind another tab.
+/// Measure the programme, then move the master fader to a delivery target.
+///
+/// The measurement is the slow half and it is done when the box opens rather
+/// than when OK is pressed: a number nobody has seen is not a thing anybody can
+/// decide about, and "how loud is this" is most of what somebody opening this
+/// wants to know even when they change nothing.
+void open_loudness_dialog(App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.main.host == nullptr) return;
+
+  const auto measured =
+      cutline::engine::AudioMixer::measure_loudness(app.session.project());
+  if (!measured.has_value()) {
+    complain(app.main.window, "Could not measure this sequence.\n\n" + measured.error());
+    return;
+  }
+
+  auto panel = std::make_unique<Panel>();
+  panel->emplace<Label>("Normalise Loudness").set_bold(true);
+
+  const bool measurable = *measured > cutline::audio::kAbsoluteGateLufs;
+  panel->emplace<Label>(measurable ? std::format("This sequence measures {:.1f} LUFS.", *measured)
+                                   : "This sequence has no audio to measure.")
+      .set_small(true);
+
+  // The delivery numbers people are actually given, named by where they come
+  // from. A field to type a number into would be more general and less useful:
+  // nobody invents a loudness target, they are handed one.
+  struct Target {
+    std::string_view label;
+    double lufs;
+  };
+  static constexpr std::array<Target, 4> kTargets{{
+      {"-14 LUFS — streaming (Spotify, YouTube)", -14.0},
+      {"-16 LUFS — podcast (Apple)", -16.0},
+      {"-23 LUFS — broadcast (EBU R128)", -23.0},
+      {"-24 LUFS — broadcast (ATSC A/85)", -24.0},
+  }};
+
+  std::vector<std::string> names;
+  names.reserve(kTargets.size());
+  for (const Target& target : kTargets) names.emplace_back(target.label);
+  auto& group = panel->emplace<cutline::ui::RadioGroup>(std::move(names), 0u);
+
+  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
+  auto& ok = buttons.emplace<Button>("Normalise", [&app, chosen = &group, at = *measured] {
+    const std::size_t index = chosen->selected();
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    if (index >= kTargets.size()) return;
+
+    // The offset goes on the *master fader*, which is where a programme's level
+    // belongs: it moves everything together and leaves every clip and track
+    // exactly as it was set, so normalising is one number to undo rather than a
+    // change spread across the whole sequence.
+    const double offset = cutline::audio::loudness_offset_db(at, kTargets[index].lufs);
+    if (offset == 0.0) return;
+
+    const double now = app.session.project().master_gain;
+    const double moved = now * std::pow(10.0, offset / 20.0);
+    app.session.apply(cutline::core::set_master_gain(app.session.project(), moved));
+    show_master_gain(app, app.session.project().master_gain);
+    refresh_all(app);
+    stop_playback(app);
+    mark_dirty(app);
+  });
+  // Nothing to normalise, so the button says so rather than doing nothing.
+  ok.set_enabled(measurable);
+
+  buttons.emplace<Button>("Cancel", [&app] {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+  });
+
+  app.main.host->open_popup(std::move(panel), settings_anchor());
+#else
+  complain(app.main.window, "This build has no media layer, so there is nothing to measure.");
+#endif
+}
+
 /// Premiere's Audio Channels: which source channel feeds each output channel.
 ///
 /// The presets are the shoot, not the arithmetic. "Channel 1 to both" is what
@@ -9537,6 +9618,12 @@ void refresh_dock(App& app) {
       // queued over a card of footage is an hour of the machine, and without
       // this the only way to stop it is to close the application.
       {"Stop Making Proxies", [app] { if (app != nullptr) stop_making_proxies(*app); }},
+      // Premiere keeps loudness in the Essential Sound panel, applied per role.
+      // With no roles yet, the programme as a whole is the thing that has a
+      // delivery number attached to it, and the master fader is where a
+      // programme's level is set — so it goes here, next to the other things
+      // that are about the project rather than about a clip.
+      {"Normalise Loudness...", [app] { if (app != nullptr) open_loudness_dialog(*app); }},
       {"Project Settings...", [app] {
          if (app != nullptr) open_settings_dialog(*app, SettingsKind::Project);
        }},
