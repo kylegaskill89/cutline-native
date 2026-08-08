@@ -447,22 +447,31 @@ TEST(FitMedia, EveryChoiceGivesUpExactlyOneMark) {
   const Project before = over_determined();
   const EditPoints points = edit_points(before, "m1", 0.0);
 
-  const Clip& speed = placed_video(fit_media(before, "m1", points, FitChoice::ChangeSpeed));
-  EXPECT_NE(speed.speed, 1.0);
+  // Each project is held in a named variable rather than fitted inside the
+  // call: `placed_video` returns a reference into the project it is given, and
+  // a temporary dies at the end of the full expression. This test read freed
+  // memory for as long as it existed and passed anyway, until a field added to
+  // the model somewhere else moved what happened to be in it.
+  const Project sped = fit_media(before, "m1", points, FitChoice::ChangeSpeed);
+  EXPECT_NE(placed_video(sped).speed, 1.0);
 
-  const Clip& head = placed_video(fit_media(before, "m1", points, FitChoice::TrimHead));
+  const Project trimmed_head = fit_media(before, "m1", points, FitChoice::TrimHead);
+  const Clip& head = placed_video(trimmed_head);
   EXPECT_NE(head.source_in, 2.0);
   EXPECT_DOUBLE_EQ(head.source_out, 5.0);
 
-  const Clip& tail = placed_video(fit_media(before, "m1", points, FitChoice::TrimTail));
+  const Project trimmed_tail = fit_media(before, "m1", points, FitChoice::TrimTail);
+  const Clip& tail = placed_video(trimmed_tail);
   EXPECT_DOUBLE_EQ(tail.source_in, 2.0);
   EXPECT_NE(tail.source_out, 5.0);
 
-  const Clip& no_in = placed_video(fit_media(before, "m1", points, FitChoice::IgnoreSequenceIn));
+  const Project without_in = fit_media(before, "m1", points, FitChoice::IgnoreSequenceIn);
+  const Clip& no_in = placed_video(without_in);
   EXPECT_NE(no_in.start, 10.0);
   EXPECT_DOUBLE_EQ(clip_end(no_in), 16.0);
 
-  const Clip& no_out = placed_video(fit_media(before, "m1", points, FitChoice::IgnoreSequenceOut));
+  const Project without_out = fit_media(before, "m1", points, FitChoice::IgnoreSequenceOut);
+  const Clip& no_out = placed_video(without_out);
   EXPECT_DOUBLE_EQ(no_out.start, 10.0);
   EXPECT_NE(clip_end(no_out), 16.0);
 }

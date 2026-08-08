@@ -82,7 +82,7 @@ std::vector<PlannedAudioClip> plan_audio(const core::Project& project) {
   return planned;
 }
 
-double audio_gain_at(const PlannedAudioClip& planned, double t) noexcept {
+double clip_gain_at(const PlannedAudioClip& planned, double t) noexcept {
   if (planned.clip == nullptr) return 0.0;
   const core::Clip& clip = *planned.clip;
 
@@ -103,6 +103,10 @@ double audio_gain_at(const PlannedAudioClip& planned, double t) noexcept {
     gain *= std::max(0.0, tail / clip.fade_out);
   }
 
+  return std::max(gain, 0.0);
+}
+
+double audio_gain_at(const PlannedAudioClip& planned, double t) noexcept {
   // The track's fader last, and read at *timeline* time. The clip's own
   // automation above is clip-local; a track has no local time, so its curve is
   // anchored to the sequence. Both clocks are in play on one entry and this is
@@ -111,26 +115,32 @@ double audio_gain_at(const PlannedAudioClip& planned, double t) noexcept {
                            ? planned.track_gain
                            : std::clamp(core::eval_keyframes(planned.track_gain_keyframes, t),
                                         0.0, core::kMaxGain);
-  return std::max(gain * track, 0.0);
+  return std::max(clip_gain_at(planned, t) * track, 0.0);
+}
+
+namespace {
+
+/// Balance: one side is let through less and the other is left alone. Centre is
+/// exactly unity on both, so a project made before there was a panner sounds
+/// the same to the sample.
+[[nodiscard]] StereoGain sides(double pan) noexcept {
+  return StereoGain{.left = pan > 0.0 ? 1.0 - pan : 1.0, .right = pan < 0.0 ? 1.0 + pan : 1.0};
+}
+
+}  // namespace
+
+StereoGain clip_pan_at(const PlannedAudioClip& planned, double t) noexcept {
+  if (planned.clip == nullptr) return {};
+  return sides(core::pan_at(*planned.clip, t - planned.start));
 }
 
 StereoGain audio_pan_at(const PlannedAudioClip& planned, double t) noexcept {
   if (planned.clip == nullptr) return {};
 
-  const double local = t - planned.start;
-
-  // Balance: one side is let through less and the other is left alone. Centre
-  // is exactly unity on both, so a project made before there was a panner
-  // sounds the same to the sample.
-  const auto sides = [](double pan) {
-    return StereoGain{.left = pan > 0.0 ? 1.0 - pan : 1.0,
-                      .right = pan < 0.0 ? 1.0 + pan : 1.0};
-  };
-
   // The clip's panner and then the track's, multiplied rather than summed: a
   // clip hard left on a track panned hard right is silent, which is what two
   // balances in series give and what adding the two pans would not.
-  const StereoGain clip = sides(core::pan_at(*planned.clip, local));
+  const StereoGain clip = clip_pan_at(planned, t);
   // Timeline time for the track's, clip-local for the clip's — see
   // `audio_gain_at`.
   const StereoGain track =

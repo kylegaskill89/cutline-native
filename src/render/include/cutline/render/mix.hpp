@@ -83,6 +83,17 @@ struct PlannedAudioClip {
 /// clips in this model, and the audio half lives on an audio track.
 [[nodiscard]] std::vector<PlannedAudioClip> plan_audio(const core::Project& project);
 
+/// The clip's own linear gain at timeline time `t`: its automation or constant
+/// gain, times its fades, and nothing else.
+///
+/// Where the track's fader is *not*. A mixer that runs each lane as a bus
+/// applies the track fader once to the lane, after the lane's effect stack —
+/// which is where Premiere has it and the only place a pre-fader send can be
+/// tapped from. Folding it into each clip here would put it before the clip's
+/// own effects as well, so a compressor on a clip would change its behaviour
+/// when somebody moved a track fader.
+[[nodiscard]] double clip_gain_at(const PlannedAudioClip& planned, double t) noexcept;
+
 /// The clip's linear gain at timeline time `t`: its automation or constant
 /// gain, times its fades, times the track's fader.
 ///
@@ -113,6 +124,9 @@ struct StereoGain {
 /// Separate from `audio_gain_at` because it is a different shape of answer and
 /// because the fades belong to the gain: a pan does not fade.
 [[nodiscard]] StereoGain audio_pan_at(const PlannedAudioClip& planned, double t) noexcept;
+
+/// The clip's own pan, without the track's panner. See `clip_gain_at`.
+[[nodiscard]] StereoGain clip_pan_at(const PlannedAudioClip& planned, double t) noexcept;
 
 /// The source time playing at timeline time `t`, clamped inside the clip's
 /// trim so a rounding error at a boundary cannot pull in audio from beyond it.

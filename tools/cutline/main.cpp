@@ -27,6 +27,8 @@
 #include "cutline/core/animate.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
+#include "cutline/core/roles.hpp"
+#include "cutline/core/routing.hpp"
 #include "cutline/core/time.hpp"
 #include "cutline/editor/autosave.hpp"
 #include "cutline/editor/browser_binding.hpp"
@@ -1102,6 +1104,7 @@ void show_master_gain(App& app, double gain);
 void refresh_meter(App& app);
 void record_automation(App& app);
 void open_channel_dialog(App& app, std::span<const std::string> clips);
+void open_essential_sound(App& app, std::span<const std::string> clips);
 void open_loudness_dialog(App& app);
 void commit_automation(App& app);
 void refresh_handles(App& app);
@@ -7418,6 +7421,16 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
   rows_out.push_back(Row{.label = "Add Audio Track", .act = [&app] {
                            run_command(app, cutline::editor::Command::AddAudioTrack);
                          }});
+  // A bus, rather than a lane. Nothing can be dropped on it: it is fed by the
+  // tracks routed into it, which is what the output dropdown on every mixer
+  // strip is for.
+  rows_out.push_back(Row{.label = "Add Submix Track", .act = [&app] {
+                           app.session.apply(
+                               cutline::core::add_submix_track(app.session.project()));
+                           refresh_all(app);
+                           stop_playback(app);
+                           mark_dirty(app);
+                         }});
   rows_out.push_back(Row{.label = "Delete Track", .act = [&app, id] {
                            app.session.apply(
                                cutline::core::remove_track(app.session.project(), id));
@@ -7723,6 +7736,10 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
       // lapel on one channel and a shotgun on the other.
       labels.emplace_back("Audio Channels...");
       ticks.push_back(false);
+      // Premiere's Essential Sound: what the clip is, the processing that
+      // usually goes with it, and ducking.
+      labels.emplace_back("Essential Sound...");
+      ticks.push_back(false);
     }
     if (!selected.empty()) {
       const bool enabled = std::ranges::all_of(selected, [&](const std::string& id) {
@@ -7791,6 +7808,10 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
       }
       if (index == commands.size() + 5) {
         open_channel_dialog(*app, selected);
+        return;
+      }
+      if (index == commands.size() + 6) {
+        open_essential_sound(*app, selected);
         return;
       }
       {
@@ -8444,6 +8465,131 @@ void open_channel_dialog(App& app, std::span<const std::string> clips) {
   app.main.host->open_popup(std::move(panel), settings_anchor());
 }
 
+/// Premiere's Essential Sound: what a clip is, and the two things that follow
+/// from saying so.
+///
+/// A role on its own is a label. What makes it worth setting is that something
+/// reads it — a preset that knows roughly what a voice needs, and ducking that
+/// knows what has to get out of the way of what — so both are in this box
+/// rather than scattered through menus that would each need the role explained
+/// again.
+///
+/// Ducking is offered whatever the role, and not only under Music. It is nearly
+/// always music that ducks, and "nearly" is doing real work there: a wind bed
+/// under an interview wants exactly the same treatment, and a box that decided
+/// otherwise would be one to argue with rather than use.
+void open_essential_sound(App& app, std::span<const std::string> clips) {
+  if (app.main.host == nullptr || clips.empty()) return;
+
+  // What the selection already says, so the box opens on the answer it has.
+  // The first clip's, because a mixed selection has no single answer and
+  // showing the first is at least showing one of them.
+  cutline::core::AudioRole current = cutline::core::AudioRole::None;
+  if (const cutline::core::Clip* first =
+          cutline::core::find_clip(app.session.project(), clips.front());
+      first != nullptr) {
+    current = first->role;
+  }
+  const auto at_role = std::ranges::find(cutline::core::kAudioRoles, current);
+  const auto selected_role = at_role == cutline::core::kAudioRoles.end()
+                                 ? 0u
+                                 : static_cast<std::size_t>(
+                                       at_role - cutline::core::kAudioRoles.begin());
+
+  auto panel = std::make_unique<Panel>();
+  panel->emplace<Label>("Essential Sound").set_bold(true);
+
+  std::vector<std::string> names;
+  names.reserve(cutline::core::kAudioRoles.size());
+  for (const cutline::core::AudioRole role : cutline::core::kAudioRoles) {
+    names.emplace_back(cutline::core::role_name(role));
+  }
+  auto& group = panel->emplace<cutline::ui::RadioGroup>(std::move(names), selected_role);
+
+  auto& preset = panel->emplace<Checkbox>("Apply the preset for this role", true);
+
+  panel->emplace<Label>("Ducking").set_bold(true);
+  const auto number = [&panel](const char* label, cutline::ui::ValueRange range, double value,
+                               const char* unit) -> cutline::ui::NumericField& {
+    auto& row = panel->emplace<Box>(Axis::Horizontal);
+    row.emplace<Label>(label).set_small(true);
+    row.emplace<Spacer>();
+    auto& field = row.emplace<cutline::ui::NumericField>(range, value);
+    field.set_decimals(1);
+    field.set_default_value(value);
+    field.set_suffix(unit);
+    return field;
+  };
+
+  const cutline::core::DuckSettings defaults;
+  auto& amount = number("Duck by", {.minimum = -60.0, .maximum = 0.0}, defaults.amount_db, "dB");
+  auto& fade = number("Fade", {.minimum = 0.0, .maximum = 5.0}, defaults.fade, "s");
+  auto& position = number("Position", {.minimum = -5.0, .maximum = 5.0}, defaults.position, "s");
+
+  const std::vector<std::string> ids(clips.begin(), clips.end());
+
+  auto& duck = panel->emplace<Button>("Generate Keyframes");
+  duck.set_on_click([&app, ids, chosen = &group, amount = &amount, fade = &fade,
+                     position = &position] {
+    const cutline::core::DuckSettings settings{
+        .amount_db = amount->value(),
+        .fade = fade->value(),
+        .position = position->value(),
+    };
+    if (app.main.host != nullptr) app.main.host->close_popup();
+
+    // The role is set first, in the same edit. Ducking reads roles — the
+    // dialogue it has to get out of the way of is found by role — so a box
+    // that ducked without setting what was chosen would duck against a
+    // sequence that is not the one on screen.
+    cutline::core::Project next = app.session.project();
+    const std::size_t index = chosen->selected();
+    if (index < cutline::core::kAudioRoles.size()) {
+      for (const std::string& id : ids) {
+        next = cutline::core::set_clip_role(std::move(next), id,
+                                            cutline::core::kAudioRoles[index]);
+      }
+    }
+    for (const std::string& id : ids) {
+      next = cutline::core::duck_clip(std::move(next), id, settings);
+    }
+    app.session.apply(std::move(next));
+    refresh_all(app);
+    invalidate_preview(app);
+    // The curve is baked into the mix when the mix is built, so it is heard
+    // once the player is rebuilt.
+    stop_playback(app);
+    mark_dirty(app);
+  });
+
+  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
+  buttons.emplace<Button>("OK", [&app, ids, chosen = &group, preset = &preset] {
+    const std::size_t index = chosen->selected();
+    const bool with_preset = preset->checked();
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    if (index >= cutline::core::kAudioRoles.size()) return;
+    const cutline::core::AudioRole role = cutline::core::kAudioRoles[index];
+
+    // One project, edited once per clip, applied once — so naming six takes is
+    // one press of undo rather than six.
+    cutline::core::Project next = app.session.project();
+    for (const std::string& id : ids) {
+      next = with_preset ? cutline::editor::apply_role_preset(std::move(next), id, role)
+                         : cutline::core::set_clip_role(std::move(next), id, role);
+    }
+    app.session.apply(std::move(next));
+    refresh_all(app);
+    invalidate_preview(app);
+    stop_playback(app);
+    mark_dirty(app);
+  });
+  buttons.emplace<Button>("Cancel", [&app] {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+  });
+
+  app.main.host->open_popup(std::move(panel), settings_anchor());
+}
+
 /// The effect stack on a mixer strip, as a box that can be opened from it.
 ///
 /// `track_id` empty means the master, which has one stack and no id to name it
@@ -8657,6 +8803,144 @@ void commit_automation(App& app) {
   refresh_all(app);
 }
 
+/// The buses a track could be routed into, as names, with "Master" first.
+///
+/// Built from `can_route`, so a bus that would close a loop is not offered
+/// rather than being offered and refused. The track's own current output is
+/// always in the list even when it would not be legal to choose again — a
+/// dropdown that could not show what it is set to would be a dropdown showing
+/// the wrong thing.
+struct BusChoices {
+  std::vector<std::string> names{"Master"};
+  std::vector<std::string> ids{std::string{}};
+  std::size_t selected = 0;
+};
+
+[[nodiscard]] BusChoices bus_choices(const cutline::core::Project& project,
+                                     const cutline::core::Track& track) {
+  BusChoices out;
+  for (std::size_t i = 0; i < project.tracks.size(); ++i) {
+    const cutline::core::Track& bus = project.tracks[i];
+    if (!bus.submix) continue;
+    if (bus.id != track.output && !cutline::core::can_route(project, track.id, bus.id)) continue;
+    out.names.push_back(bus.label.empty()
+                            ? cutline::editor::default_track_label(project, i)
+                            : bus.label);
+    out.ids.push_back(bus.id);
+    if (bus.id == track.output) out.selected = out.ids.size() - 1;
+  }
+  return out;
+}
+
+/// A track's sends, as a box opened from its strip.
+///
+/// A popup for the reason the effect stack is one: a strip is a narrow column,
+/// and three sends with a level and a tap point each would push the fader — the
+/// control the panel exists for — off the bottom. Premiere keeps sends in a
+/// disclosure at the head of the strip for the same reason.
+void open_strip_sends(App& app, const std::string& track_id) {
+  if (app.main.host == nullptr) return;
+
+  const auto track_now = [&app, track_id]() -> const cutline::core::Track* {
+    const auto found = std::ranges::find(app.session.project().tracks, track_id,
+                                         &cutline::core::Track::id);
+    return found == app.session.project().tracks.end() ? nullptr : &*found;
+  };
+  const cutline::core::Track* track = track_now();
+  if (track == nullptr) return;
+
+  auto panel = std::make_unique<Panel>();
+  panel->emplace<Label>("Sends").set_bold(true);
+
+  // Every bus this track could feed, each as a row that is either a send or an
+  // offer of one. A list of what exists rather than an "Add" button and a
+  // second menu: there are only ever a handful of buses, and showing them all
+  // is both shorter to build and shorter to read.
+  bool any = false;
+  for (std::size_t i = 0; i < app.session.project().tracks.size(); ++i) {
+    const cutline::core::Track& bus = app.session.project().tracks[i];
+    if (!bus.submix) continue;
+    if (!cutline::core::can_route(app.session.project(), track_id, bus.id)) continue;
+    any = true;
+
+    const auto existing = std::ranges::find(track->sends, bus.id, &cutline::core::Send::to);
+    const bool sending = existing != track->sends.end();
+    const std::string bus_id = bus.id;
+
+    auto& row = panel->emplace<Box>(Axis::Horizontal);
+    auto& on = row.emplace<Checkbox>(
+        bus.label.empty() ? cutline::editor::default_track_label(app.session.project(), i)
+                          : bus.label,
+        sending);
+    on.set_on_change([&app, track_id, bus_id](bool now) {
+      // A new send starts well below unity. A reverb fed at full is a reverb
+      // nobody wanted, and the first thing anybody would do is pull it down.
+      constexpr double kNewSendLevel = 0.25;
+      app.session.apply(now ? cutline::core::set_send(app.session.project(), track_id, bus_id,
+                                                      kNewSendLevel)
+                            : cutline::core::remove_send(app.session.project(), track_id,
+                                                         bus_id));
+      if (app.main.host != nullptr) app.main.host->close_popup();
+      refresh_all(app);
+      stop_playback(app);
+      mark_dirty(app);
+      open_strip_sends(app, track_id);
+    });
+
+    if (!sending) continue;
+
+    row.emplace<Spacer>();
+    auto& level = row.emplace<cutline::ui::NumericField>(
+        cutline::ui::ValueRange{.minimum = cutline::ui::kGainFloorDb,
+                                .maximum = cutline::ui::gain_to_fader_db(cutline::core::kMaxGain)},
+        cutline::ui::gain_to_fader_db(existing->level));
+    level.set_decimals(1);
+    level.set_default_value(0.0);
+    level.set_suffix("dB");
+    level.set_on_commit([&app, track_id, bus_id, pre = existing->pre_fader](double db) {
+      app.session.apply(cutline::core::set_send(
+          app.session.project(), track_id, bus_id,
+          cutline::ui::fader_db_to_gain(db, cutline::core::kMaxGain), pre));
+      refresh_all(app);
+      stop_playback(app);
+      mark_dirty(app);
+    });
+
+    auto& tap = panel->emplace<Checkbox>("Pre-fader", existing->pre_fader);
+    tap.set_on_change([&app, track_id, bus_id, level = existing->level](bool pre) {
+      app.session.apply(
+          cutline::core::set_send(app.session.project(), track_id, bus_id, level, pre));
+      if (app.main.host != nullptr) app.main.host->close_popup();
+      refresh_all(app);
+      stop_playback(app);
+      mark_dirty(app);
+      open_strip_sends(app, track_id);
+    });
+  }
+
+  if (!any) {
+    // The honest empty state. A send needs somewhere to go, and the answer to
+    // an empty box is a submix rather than a longer list.
+    panel->emplace<Label>("No submixes to send to").set_small(true);
+    panel->emplace<Button>("Add Submix Track", [&app, track_id] {
+      if (app.main.host != nullptr) app.main.host->close_popup();
+      app.session.apply(cutline::core::add_submix_track(app.session.project()));
+      refresh_all(app);
+      stop_playback(app);
+      mark_dirty(app);
+      open_strip_sends(app, track_id);
+    });
+  }
+
+  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
+  buttons.emplace<Spacer>();
+  buttons.emplace<Button>("Close", [&app] {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+  });
+
+  app.main.host->open_popup(std::move(panel), settings_anchor());
+}
+
 /// One audio track's strip in the mixer, in Premiere's order down the column:
 /// the panner, the mute and solo pair, the fader with its meter beside it, the
 /// level as a number, and the track's name at the foot.
@@ -8718,6 +9002,12 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
     open_strip_effects(app, track_id);
   });
   fx.set_selected(!track.audio_effects.empty());
+  // Premiere's sends, beside the inserts and lit the same way: a strip says
+  // whether anything is going out of it without being opened.
+  auto& sends = switches.emplace<Button>("snd", [&app, track_id] {
+    open_strip_sends(app, track_id);
+  });
+  sends.set_selected(!track.sends.empty());
   auto& mute = switches.emplace<Button>("M", [&app, track_id] {
     const auto now = std::ranges::find(app.session.project().tracks, track_id,
                                        &cutline::core::Track::id);
@@ -8806,10 +9096,33 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
     app.inspector_stale = true;
   });
 
+  // Where this strip goes, under the fader and above the name — which is where
+  // Premiere puts a track's output assignment, and the order the signal runs
+  // in: through the fader, then out to whatever is next.
+  const BusChoices buses = bus_choices(app.session.project(), track);
+  auto& output = strip.emplace<Dropdown>(buses.names, buses.selected);
+  output.set_on_change([&app, track_id, ids = buses.ids](std::size_t choice) {
+    if (choice >= ids.size()) return;
+    app.session.apply(
+        cutline::core::set_track_output(app.session.project(), track_id, ids[choice]));
+    refresh_all(app);
+    // The routing is built into the mix when the mix is built, so a new route
+    // is heard once the player is rebuilt.
+    stop_playback(app);
+    mark_dirty(app);
+  });
+
   // The same name the timeline shows, at the foot where Premiere puts it. The
   // raw id is an internal string, and reading "a1" in one panel and "A1" in
   // another is two names for one track.
-  strip.emplace<Label>(cutline::editor::default_track_label(app.session.project(), index))
+  //
+  // A submix carries its own label instead. Its lane number is the one thing
+  // about it that says nothing: "A4" for a dialogue bus is a name that has to
+  // be looked up every time it is read.
+  strip
+      .emplace<Label>(track.submix && !track.label.empty()
+                          ? track.label
+                          : cutline::editor::default_track_label(app.session.project(), index))
       .set_bold(true);
 }
 
@@ -8904,6 +9217,11 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
 
   auto& reading = column.emplace<Label>();
   reading.set_small(true);
+
+  // A gap where a track strip carries its output assignment. The master has
+  // nowhere to be routed — it is where everything arrives — and leaving the
+  // space keeps every name in the row on one line.
+  column.emplace<Spacer>(Axis::Vertical, control);
 
   // The name at the foot, where every other strip carries its own.
   column.emplace<Label>("Master").set_bold(true);

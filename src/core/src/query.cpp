@@ -1,6 +1,7 @@
 #include "cutline/core/query.hpp"
 
 #include "cutline/core/keyframe.hpp"
+#include "cutline/core/routing.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -216,7 +217,17 @@ bool is_track_audible(const Project& p, const Track& track) noexcept {
   const bool any_solo = std::ranges::any_of(p.tracks, [](const Track& t) {
     return t.kind == TrackKind::Audio && t.solo;
   });
-  return !any_solo || track.solo;
+  if (!any_solo || track.solo) return true;
+
+  // Soloing a bus solos what feeds it. Without this, pressing S on a submix
+  // would silence the whole sequence — the submix is an audio track, so it
+  // makes "something is soloed" true, and then nothing that is not itself
+  // soloed plays, which includes every track pouring into the thing you asked
+  // to hear.
+  return std::ranges::any_of(p.tracks, [&](const Track& t) {
+    return t.kind == TrackKind::Audio && t.submix && t.solo && !t.muted &&
+           reaches(p, track.id, t.id);
+  });
 }
 
 const Clip* find_clip(const Project& p, std::string_view clip_id) noexcept {

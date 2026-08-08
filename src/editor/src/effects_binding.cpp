@@ -4,6 +4,7 @@
 #include "cutline/core/effects.hpp"
 #include "cutline/core/keyframe.hpp"
 #include "cutline/core/query.hpp"
+#include "cutline/core/roles.hpp"
 #include "cutline/editor/transitions.hpp"
 #include "cutline/render/effect_catalog.hpp"
 
@@ -506,6 +507,39 @@ core::Project add_audio_effect(core::Project project, std::string_view clip_id,
 
   return core::add_audio_effect(std::move(project), clip_id, std::string(def->id),
                                 std::move(params));
+}
+
+core::Project apply_role_preset(core::Project project, std::string_view clip_id,
+                                core::AudioRole role) {
+  project = core::set_clip_role(std::move(project), clip_id, role);
+
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr || clip->kind != core::TrackKind::Audio) return project;
+
+  for (const core::AudioClipEffect& wanted : audio::role_preset(role)) {
+    const bool already =
+        std::ranges::any_of(clip->audio_effects, [&](const core::AudioClipEffect& have) {
+          return have.type == wanted.type;
+        });
+    if (already) continue;
+
+    // Every parameter written out, not only the ones the preset has an opinion
+    // about: the panel reads what is stored, and an effect whose map is half
+    // empty shows those sliders at the registry defaults while the *file* says
+    // nothing — a difference that only appears after saving and reopening.
+    std::map<std::string, double> params;
+    if (const audio::AudioEffectDef* def = audio::audio_effect_def(wanted.type); def != nullptr) {
+      for (const audio::AudioEffectParamDef& param : def->params) {
+        params.emplace(std::string(param.key), param.fallback);
+      }
+    }
+    for (const auto& [key, value] : wanted.params) params[key] = value;
+
+    project = core::add_audio_effect(std::move(project), clip_id, wanted.type, std::move(params));
+    clip = core::find_clip(project, clip_id);
+    if (clip == nullptr) break;
+  }
+  return project;
 }
 
 // ------------------------------------------------------------- copy/paste --

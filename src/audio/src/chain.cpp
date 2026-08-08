@@ -11,6 +11,7 @@
 #include <cmath>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace cutline::audio {
 namespace {
@@ -76,6 +77,38 @@ std::span<const AudioEffectDef> audio_effect_defs() noexcept { return kDefs; }
 const AudioEffectDef* audio_effect_def(std::string_view id) noexcept {
   const auto found = std::ranges::find(kDefs, id, &AudioEffectDef::id);
   return found == kDefs.end() ? nullptr : &*found;
+}
+
+std::vector<core::AudioClipEffect> role_preset(core::AudioRole role) {
+  const auto effect = [](std::string_view type,
+                         std::initializer_list<std::pair<const char*, double>> params) {
+    core::AudioClipEffect e;
+    e.type = std::string(type);
+    for (const auto& [key, value] : params) e.params[key] = value;
+    return e;
+  };
+
+  switch (role) {
+    case core::AudioRole::Dialogue:
+      // Rumble off, a little presence, and a compressor to hold the level of a
+      // voice that moves toward and away from the microphone.
+      return {effect("highpass", {{"freq", 80.0}}),
+              effect("eqband", {{"freq", 3000.0}, {"gain", 3.0}, {"q", 1.0}}),
+              effect("compressor", {{"threshold", -18.0}, {"ratio", 3.0}})};
+    case core::AudioRole::Music:
+      // A bed sits under things. Gentle, because a music preset that squashed
+      // the track would be audible on the very first press.
+      return {effect("compressor", {{"threshold", -12.0}, {"ratio", 2.0}})};
+    case core::AudioRole::Effects:
+      // Only the rumble. An effect is whatever it is, and a preset with an
+      // opinion about it would be in the way.
+      return {effect("highpass", {{"freq", 40.0}})};
+    case core::AudioRole::Ambience:
+      // Rumble off and a little down: ambience that is noticed is too loud.
+      return {effect("highpass", {{"freq", 60.0}}), effect("gain", {{"gain", -3.0}})};
+    case core::AudioRole::None: break;
+  }
+  return {};
 }
 
 bool audio_effect_param_animated(const core::AudioClipEffect& effect,

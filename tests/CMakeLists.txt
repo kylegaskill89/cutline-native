@@ -15,6 +15,8 @@ add_executable(cutline_core_tests
   core/pool_test.cpp
   core/properties_test.cpp
   core/query_test.cpp
+  core/roles_test.cpp
+  core/routing_test.cpp
   core/segments_test.cpp
   core/serialize_test.cpp
   core/time_test.cpp

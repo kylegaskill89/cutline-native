@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <process.h>
 #include <numbers>
 #include <memory>
 #include <string>
@@ -47,11 +48,17 @@ std::shared_ptr<gpu::Device> shared_device() {
 }
 
 /// A scratch path that cleans itself up.
+///
+/// The process id is in the name, not only the counter. ctest runs the suite as
+/// many processes at once and the counter restarts at one in each of them, so
+/// two exports were writing the same file and reading each other's — which
+/// looked like an exporter that sometimes wrote the wrong size.
 class TempFile {
  public:
   explicit TempFile(std::string suffix)
       : path_(std::filesystem::temp_directory_path() /
-              ("cutline_export_" + std::to_string(++counter_) + suffix)) {}
+              ("cutline_export_" + std::to_string(_getpid()) + "_" +
+               std::to_string(++counter_) + suffix)) {}
 
   ~TempFile() {
     std::error_code ignored;
@@ -111,7 +118,9 @@ class ToneSource {
 
  private:
   ToneSource() {
-    path_ = (std::filesystem::temp_directory_path() / "cutline_export_tone.mp4").string();
+    path_ = (std::filesystem::temp_directory_path() /
+             ("cutline_export_tone_" + std::to_string(_getpid()) + ".mp4"))
+                .string();
 
     media::VideoEncodeSettings video;
     video.width = 64;

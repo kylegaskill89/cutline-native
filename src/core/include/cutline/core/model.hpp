@@ -383,6 +383,30 @@ struct AudioClipEffect {
   friend bool operator==(const AudioClipEffect&, const AudioClipEffect&) = default;
 };
 
+/// What a piece of sound *is*, as opposed to where it sits. Premiere's
+/// Essential Sound roles.
+///
+/// A role is not an effect and does not change what is heard on its own. It is
+/// the answer to "what is this" — this is the interview, that is the music bed
+/// — and everything else here reads it: a preset knows what a voice usually
+/// needs, ducking knows what has to get out of the way of what, and a submix
+/// knows which clips belong on it.
+///
+/// `None` first, because it is what every clip written before roles existed
+/// reads back as, and because "unlabelled" is a real answer rather than a
+/// missing one — a bar of tone at the head of a reel is none of these four.
+enum class AudioRole {
+  None,
+  /// Speech: interviews, pieces to camera, voiceover.
+  Dialogue,
+  Music,
+  /// Premiere's SFX. Spelled out here because `Sfx` beside three full words
+  /// reads as an abbreviation somebody was in a hurry to type.
+  Effects,
+  /// Room tone, wind, traffic — the bed under everything else.
+  Ambience,
+};
+
 /// A placement of a media on a track over a span of timeline time.
 struct Clip {
   std::string id;
@@ -418,6 +442,14 @@ struct Clip {
   /// So `{0, 0}` is "the lapel, in both ears", `{1, 1}` is the shotgun, and
   /// `{1, 0}` swaps a pair that was wired backwards.
   std::vector<int> channel_map;
+
+  /// What this clip is, in the mix. See `AudioRole`.
+  ///
+  /// On the clip rather than on the track, which is where Premiere puts it and
+  /// is the only place it can honestly go: a track is a place things were put,
+  /// and one lane routinely carries an interview in one passage and the room
+  /// tone under it in the next.
+  AudioRole role = AudioRole::None;
 
   /// Per-clip linear audio gain; 1 is unity.
   double gain = 1.0;
@@ -508,6 +540,35 @@ enum class AutomationMode {
   Touch,
 };
 
+/// A copy of one track's signal, taken at a level and poured into a bus.
+///
+/// The difference between a send and an output is that a send is a *copy*: the
+/// track goes on feeding whatever it fed before. That is the whole reason
+/// reverbs are used this way — one reverb, fed a little from each of six
+/// tracks, sounds like one room, where six reverbs sound like six.
+struct Send {
+  /// The submix track this feeds. A send naming a track that is not a submix,
+  /// or naming nothing, is ignored rather than being an error: a project whose
+  /// submix was deleted should still play.
+  std::string to;
+
+  /// How much of the signal is sent, linear; 1 is unity and the usual setting
+  /// is well below it.
+  double level = 1.0;
+
+  /// Where the copy is taken from.
+  ///
+  /// Post-fader by default, which is Premiere's default and the one that
+  /// behaves the way a hand expects: pulling a track's fader down takes its
+  /// reverb down with it, so a track faded out is gone rather than leaving its
+  /// tail hanging in the room. Pre-fader is for the case where the send *is*
+  /// the destination — a cue mix, or an effect that should stay put while the
+  /// dry signal is ridden.
+  bool pre_fader = false;
+
+  friend bool operator==(const Send&, const Send&) = default;
+};
+
 /// An ordered lane of clips. Display order is the array order, and clips within
 /// a track are kept sorted by start time.
 struct Track {
@@ -589,6 +650,31 @@ struct Track {
   /// are clip-local and these are in **timeline** seconds, for the same reason
   /// `gain_keyframes` above is.
   std::vector<AudioClipEffect> audio_effects;
+
+  /// Whether this track is a bus fed by other tracks rather than a lane of
+  /// clips. Premiere's submix track.
+  ///
+  /// A flag on an audio track rather than a third `TrackKind`, because that is
+  /// what it is: it has a fader, a panner, a stack, a meter, automation and a
+  /// strip in the mixer, and every one of those already works because it is an
+  /// audio track. What it does not have is clips — nothing can be dropped on
+  /// it, and `plan_audio` finds none there — so the one thing this changes is
+  /// where its signal comes from.
+  bool submix = false;
+
+  /// Where this track's output goes: the id of a submix track, or empty for the
+  /// master.
+  ///
+  /// Empty is the master, which is what every track written before submixes
+  /// existed means and what most tracks mean afterwards. A route that names a
+  /// track which is missing, is not a submix, or would close a loop is treated
+  /// as the master — see `core::routed_output`. Deciding that at the point of
+  /// reading, rather than trusting the field, is what keeps a project that has
+  /// had a submix deleted underneath it audible instead of silent.
+  std::string output;
+
+  /// Copies of this track's signal, poured into other buses. See `Send`.
+  std::vector<Send> sends;
 
   /// Custom lane height in pixels, overriding the default for its kind.
   std::optional<double> height;

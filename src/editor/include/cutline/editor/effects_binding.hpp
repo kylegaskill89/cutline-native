@@ -247,6 +247,20 @@ struct EffectChoice {
 [[nodiscard]] core::Project add_audio_effect(core::Project project, std::string_view clip_id,
                                              std::string_view type);
 
+/// Gives a clip a role and the processing that role usually wants — Premiere's
+/// Essential Sound, where naming a clip's type is followed by a preset.
+///
+/// Appends what the clip does not already have rather than replacing its stack.
+/// Pressing it twice therefore changes nothing the second time, and a
+/// compressor somebody tuned by hand is left exactly as they left it: the
+/// preset is a starting point offered to a clip that has none, not an opinion
+/// about work already done.
+///
+/// See `audio::role_preset` for what each role is given, and why they are this
+/// catalogue's nearest equivalents rather than Adobe's exact chains.
+[[nodiscard]] core::Project apply_role_preset(core::Project project, std::string_view clip_id,
+                                              core::AudioRole role);
+
 /// The same four operations the visual stack has, on the audio one.
 ///
 /// Sound is retuned on a fixed grid rather than per sample — see

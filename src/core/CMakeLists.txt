@@ -9,6 +9,8 @@
   src/pool.cpp
   src/properties.cpp
   src/query.cpp
+  src/roles.cpp
+  src/routing.cpp
   src/segments.cpp
   src/serialize.cpp
   src/time.cpp)

@@ -10,6 +10,7 @@
 
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
+#include "cutline/core/routing.hpp"
 #include "cutline/media/encoder.hpp"
 
 #include <gtest/gtest.h>
@@ -17,8 +18,10 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <process.h>
 #include <numbers>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace cutline::engine {
@@ -34,6 +37,19 @@ constexpr int kRate = 48000;
 constexpr int kChannels = 2;
 constexpr double kToneAmplitude = 0.5;
 
+/// A name in the temp directory that no other process will pick.
+///
+/// The process id, because ctest runs the suite as many processes at once and
+/// each of them writes its own copy of the tone. A fixed name meant two of them
+/// encoding over the top of each other, and the test that read the file
+/// mid-write saw a mixer with no audio in it — which showed up as five
+/// unrelated failures that all passed when run one at a time.
+[[nodiscard]] std::string scratch_path(std::string_view name) {
+  return (std::filesystem::temp_directory_path() /
+          (std::string(name) + "_" + std::to_string(_getpid()) + ".mp4"))
+      .string();
+}
+
 /// A ten-second tone, written once and shared by every test in this file.
 /// Encoding it per test would dominate the runtime for no extra coverage.
 class ToneSource {
@@ -45,7 +61,7 @@ class ToneSource {
 
  private:
   ToneSource() {
-    path_ = (std::filesystem::temp_directory_path() / "cutline_mixer_tone.mp4").string();
+    path_ = scratch_path("cutline_mixer_tone");
 
     media::VideoEncodeSettings video;
     video.width = 64;
@@ -336,9 +352,9 @@ TEST(TrackMeters, AMutedLaneReadsAsSilence) {
 // ------------------------------------------------------ live track faders --
 
 TEST(TrackFader, AMixNobodyHasTouchedIsUnchanged) {
-  // The property that makes this safe to add: the trim is a ratio against the
-  // gain the mix was built with, so an untouched fader multiplies by exactly
-  // one and an export is what it always was.
+  // The property that makes this safe to have: the live fader starts at the
+  // gain the track was built with, so a mixer nobody has touched applies
+  // exactly what the project says and an export is what it always was.
   auto plain = mixer_for(two_lanes());
   auto same = mixer_for(two_lanes());
   ASSERT_NE(plain, nullptr);
@@ -1146,7 +1162,7 @@ class LongToneSource {
 
  private:
   LongToneSource() {
-    path_ = (std::filesystem::temp_directory_path() / "cutline_mixer_long_tone.mp4").string();
+    path_ = scratch_path("cutline_mixer_long_tone");
 
     media::VideoEncodeSettings video;
     video.width = 32;
@@ -1298,6 +1314,141 @@ TEST_F(WithLongTone, TheBlockSizeDoesNotChangeTheSamples) {
   for (std::size_t i = 0; i < one.size(); ++i) {
     ASSERT_FLOAT_EQ(many[i], one[i]) << "sample " << i << " depends on the block size";
   }
+}
+
+
+// ------------------------------------------------------- submixes and sends --
+
+/// One lane of tone, poured into a bus rather than straight at the master.
+[[nodiscard]] Project bus_project() {
+  Project p = one_clip_project();
+  p = core::add_submix_track(std::move(p), "Dialogue");
+  p = core::set_track_output(std::move(p), "a1", p.tracks.back().id);
+  return p;
+}
+
+TEST(Submixes, GoingThroughABusSoundsExactlyTheSameAsNotHavingOne) {
+  // The property that makes everything below safe to build: a bus that does
+  // nothing does nothing. A project gains a submix and its mix is unchanged.
+  auto direct = mixer_for(one_clip_project());
+  auto through = mixer_for(bus_project());
+  ASSERT_NE(direct, nullptr);
+  ASSERT_NE(through, nullptr);
+
+  const std::vector<float> a = mix_span(*direct, 1.0, 0.5);
+  const std::vector<float> b = mix_span(*through, 1.0, 0.5);
+  ASSERT_EQ(a.size(), b.size());
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    ASSERT_FLOAT_EQ(a[i], b[i]) << "sample " << i << " changed by being routed";
+  }
+}
+
+TEST(Submixes, TheBusFaderRidesEverythingOnIt) {
+  Project p = bus_project();
+  p.tracks[1].gain = 0.5;
+
+  auto plain = mixer_for(bus_project());
+  auto ridden = mixer_for(p);
+  ASSERT_NE(plain, nullptr);
+  ASSERT_NE(ridden, nullptr);
+
+  const double loud = rms_of(mix_span(*plain, 1.0, 0.5));
+  const double quiet = rms_of(mix_span(*ridden, 1.0, 0.5));
+  EXPECT_NEAR(quiet, loud * 0.5, loud * 0.05);
+}
+
+TEST(Submixes, AStackOnTheBusProcessesTheWholeGroup) {
+  // The reason submixes exist: one compressor across the dialogue rather than
+  // one per clip. A gain stands in for it, being the effect whose result can be
+  // stated exactly.
+  Project p = bus_project();
+  core::AudioClipEffect trim;
+  trim.type = "gain";
+  trim.params["gain"] = -12.0;
+  p.tracks[1].audio_effects = {trim};
+
+  auto plain = mixer_for(bus_project());
+  auto processed = mixer_for(p);
+  ASSERT_NE(plain, nullptr);
+  ASSERT_NE(processed, nullptr);
+
+  const double loud = rms_of(mix_span(*plain, 1.0, 0.5));
+  const double quiet = rms_of(mix_span(*processed, 1.0, 0.5));
+  EXPECT_NEAR(quiet, loud * std::pow(10.0, -12.0 / 20.0), loud * 0.05);
+}
+
+TEST(Submixes, TheBusMetersWhatWasPouredIntoIt) {
+  auto mixer = mixer_for(bus_project());
+  ASSERT_NE(mixer, nullptr);
+  (void)mix_span(*mixer, 1.0, 0.5);
+
+  EXPECT_GT(mixer->track_levels(1).channels[0].peak_db, kSilenceDb)
+      << "a bus has no clips on it, and a meter that only ever read clips would stay dark";
+}
+
+TEST(Submixes, MutingTheBusSilencesEverythingThroughIt) {
+  Project p = bus_project();
+  p.tracks[1].muted = true;
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  EXPECT_LT(rms_of(mix_span(*mixer, 1.0, 0.5)), 1e-4)
+      << "the plan drops clips on a muted lane; a bus has none to drop";
+}
+
+TEST(Submixes, SoloingTheBusKeepsWhatFeedsItAndDropsWhatDoesNot) {
+  Project p = bus_project();
+  p.tracks.push_back(audio_track("a2", {audio_clip("c2", "m", 0.0, 5.0)}));
+  p.tracks[1].solo = true;
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  (void)mix_span(*mixer, 1.0, 0.5);
+
+  EXPECT_GT(mixer->track_levels(0).channels[0].peak_db, kSilenceDb) << "a1 feeds the soloed bus";
+  EXPECT_LE(mixer->track_levels(2).channels[0].peak_db, kSilenceDb) << "a2 goes to the master";
+}
+
+TEST(Sends, ASendIsACopyRatherThanADiversion) {
+  Project p = one_clip_project();
+  p = core::add_submix_track(std::move(p), "Reverb");
+  // Half rather than unity, which is not fussiness about levels: the tone is at
+  // 0.5, so sending a full copy of it puts the sum at full scale and the master
+  // limiter — correctly — takes some of it back. The arithmetic being checked
+  // here is the routing's, so it is kept below the ceiling.
+  p = core::set_send(std::move(p), "a1", p.tracks.back().id, 0.5);
+
+  auto dry = mixer_for(one_clip_project());
+  auto sent = mixer_for(p);
+  ASSERT_NE(dry, nullptr);
+  ASSERT_NE(sent, nullptr);
+
+  const double alone = rms_of(mix_span(*dry, 1.0, 0.5));
+  const double both = rms_of(mix_span(*sent, 1.0, 0.5));
+  EXPECT_NEAR(both, alone * 1.5, alone * 0.05)
+      << "the track still feeds the master, and the bus feeds it half as much again";
+}
+
+TEST(Sends, APostFaderSendFollowsTheFaderAndAPreFaderOneDoesNot) {
+  const auto bus_level = [](bool pre_fader, double fader) {
+    Project p = one_clip_project();
+    p = core::add_submix_track(std::move(p), "Reverb");
+    p = core::set_send(std::move(p), "a1", p.tracks.back().id, 1.0, pre_fader);
+    auto mixer = mixer_for(p);
+    EXPECT_NE(mixer, nullptr);
+    if (mixer == nullptr) return 0.0;
+    mixer->set_track_gain(0, fader);
+    (void)mix_span(*mixer, 1.0, 0.5);
+    return mixer->track_levels(1).channels[0].peak_db;
+  };
+
+  const double post_up = bus_level(false, 1.0);
+  const double post_down = bus_level(false, 0.25);
+  EXPECT_LT(post_down, post_up - 6.0) << "pulling a track down takes its reverb down with it";
+
+  const double pre_up = bus_level(true, 1.0);
+  const double pre_down = bus_level(true, 0.25);
+  EXPECT_NEAR(pre_down, pre_up, 0.5) << "a pre-fader send is tapped before the fader";
 }
 
 }  // namespace

@@ -5,7 +5,9 @@
 #include "cutline/audio/loudness.hpp"
 #include "cutline/audio/meter.hpp"
 #include "cutline/audio/stretch.hpp"
+#include "cutline/core/keyframe.hpp"
 #include "cutline/core/query.hpp"
+#include "cutline/core/routing.hpp"
 #include "cutline/media/audio.hpp"
 #include "cutline/render/mix.hpp"
 
@@ -376,13 +378,37 @@ struct AudioMixer::Impl {
   std::vector<audio::MeterReading> track_levels;
 
   /// What each lane's fader was set to when the mix was planned, and what it is
-  /// set to now. The mix multiplies by the ratio, so a mixer nobody has touched
-  /// multiplies by exactly one — an export is unchanged by this existing.
+  /// set to now.
+  ///
+  /// The fader is applied to the lane, once, after the lane's stack — so the
+  /// live value *is* the fader rather than a ratio against a gain already
+  /// folded into the clips. It used to be a ratio, because the plan multiplied
+  /// the track's gain into every clip on it; that put a track fader ahead of
+  /// each clip's own effects, and left a pre-fader send with no pre-fader
+  /// signal to be taken from.
   ///
   /// Atomic for the same reason the master's is: the render thread reads them
   /// on every block while the interface writes them from the message loop.
   std::vector<double> built_track_gain;
   std::vector<std::atomic<double>> live_track_gain;
+
+  /// Each lane's fader and panner automation, in timeline seconds, when it has
+  /// any. A curve wins over the live fader, exactly as the master's does: an
+  /// automated fader is being played back.
+  std::vector<std::vector<core::Keyframe>> lane_gain_curve;
+  std::vector<double> lane_pan;
+  std::vector<std::vector<core::Keyframe>> lane_pan_curve;
+
+  /// Whether each lane is heard at all — its mute, and solo elsewhere.
+  ///
+  /// The plan already drops clips on a silenced track, so this exists for the
+  /// one kind of lane the plan has nothing to say about: a submix, which has no
+  /// clips to drop and is silenced by not being poured onward.
+  std::vector<bool> lane_audible;
+
+  /// Where each lane goes, in the order it has to be run. See
+  /// `core::bus_routes`.
+  std::vector<core::BusRoute> routes;
 
   /// One effect chain per lane, run on what the lane sums to before it reaches
   /// the mix. Empty for a track with no stack, which is nearly all of them and
@@ -410,17 +436,22 @@ struct AudioMixer::Impl {
     return at < lane_of_track.size() ? lane_of_track[at] : -1;
   }
 
-  /// The ratio to apply to a lane, by the plan's numbering.
-  [[nodiscard]] double lane_trim(int lane_index) const noexcept {
-    if (lane_index < 0) return 1.0;
-    const auto lane = static_cast<std::size_t>(lane_index);
-    if (lane >= built_track_gain.size()) return 1.0;
-    const double built = built_track_gain[lane];
-    // A lane built silent has no ratio that can bring it back, so moving its
-    // fader off zero is a rebuild rather than a trim. Returning 1 leaves it as
-    // the mix was planned rather than dividing by nothing.
-    if (built <= 0.0) return 1.0;
-    return live_track_gain[lane].load(std::memory_order_relaxed) / built;
+  /// A lane's fader at timeline time `t`: its curve when it has one, and the
+  /// live value — which is what the interface writes — when it does not.
+  [[nodiscard]] double lane_gain_at(std::size_t lane, double t) const noexcept {
+    if (lane >= live_track_gain.size()) return 1.0;
+    if (!lane_gain_curve[lane].empty()) {
+      return std::clamp(core::eval_keyframes(lane_gain_curve[lane], t), 0.0, core::kMaxGain);
+    }
+    return live_track_gain[lane].load(std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] double lane_pan_at(std::size_t lane, double t) const noexcept {
+    if (lane >= lane_pan.size()) return 0.0;
+    if (!lane_pan_curve[lane].empty()) {
+      return std::clamp(core::eval_keyframes(lane_pan_curve[lane], t), -1.0, 1.0);
+    }
+    return lane_pan[lane];
   }
 
   /// Scratch, reused across calls so mixing does not allocate per block.
@@ -554,13 +585,15 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
                                                audio::MeterSettings{.over = limiting.limit});
   impl->levels = impl->meter->read();
 
-  // A meter per lane that carries audio. Sized from the plan rather than from
-  // the project's track list, because the plan is what says which lanes have
-  // anything on them — and `only_track` means a mixer can legitimately hold a
-  // voice for one lane and nothing for the rest.
+  // A meter per audio track, whether or not anything is on it.
+  //
+  // Sized from the track list rather than from the plan, which is the change a
+  // submix forced: a bus has no clips, so the plan has nothing to say about it,
+  // and a lane sized out of existence is a bus that cannot be fed. Empty lanes
+  // cost a meter and a cleared block each.
   std::size_t lanes = 0;
-  for (const Voice& voice : impl->voices) {
-    lanes = std::max(lanes, static_cast<std::size_t>(voice.planned.track_index) + 1);
+  for (const core::Track& track : impl->project.tracks) {
+    if (track.kind == core::TrackKind::Audio) ++lanes;
   }
   impl->track_meters.reserve(lanes);
   for (std::size_t i = 0; i < lanes; ++i) {
@@ -576,28 +609,37 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
   impl->lane_of_track.assign(impl->project.tracks.size(), -1);
   impl->built_track_gain.assign(lanes, 1.0);
   impl->track_chains.resize(lanes);
+  impl->lane_gain_curve.assign(lanes, {});
+  impl->lane_pan.assign(lanes, 0.0);
+  impl->lane_pan_curve.assign(lanes, {});
+  impl->lane_audible.assign(lanes, true);
   int ordinal = 0;
   for (std::size_t i = 0; i < impl->project.tracks.size(); ++i) {
-    if (impl->project.tracks[i].kind != core::TrackKind::Audio) continue;
-    const int lane = ordinal++;
-    impl->lane_of_track[i] = lane;
+    const core::Track& track = impl->project.tracks[i];
+    if (track.kind != core::TrackKind::Audio) continue;
+    const auto lane = static_cast<std::size_t>(ordinal++);
+    impl->lane_of_track[i] = static_cast<int>(lane);
+    if (lane >= lanes) continue;
 
     // The lane's own stack. Built at zero because a track's effect keyframes
     // are in timeline seconds and the sequence starts there.
-    if (static_cast<std::size_t>(lane) < lanes &&
-        !impl->project.tracks[i].audio_effects.empty()) {
-      impl->track_chains[static_cast<std::size_t>(lane)] = audio::EffectChain::build(
-          impl->project.tracks[i].audio_effects, static_cast<double>(settings.sample_rate),
-          settings.channels, 0.0);
+    if (!track.audio_effects.empty()) {
+      impl->track_chains[lane] =
+          audio::EffectChain::build(track.audio_effects, static_cast<double>(settings.sample_rate),
+                                    settings.channels, 0.0);
     }
-    // The gain the lane was planned with, so a live fader can be a ratio
-    // against it. Read from the project rather than from the plan: the plan
-    // folds track gain into each clip's, and unpicking it from there would be
-    // reading a product for one of its factors.
-    if (static_cast<std::size_t>(lane) < lanes) {
-      impl->built_track_gain[static_cast<std::size_t>(lane)] = impl->project.tracks[i].gain;
-    }
+
+    // The fader and panner, read from the project rather than from the plan.
+    // The plan carries them too, folded into each clip, and that copy is for
+    // callers that mix a clip at a time; here the lane is the bus and its fader
+    // belongs to the lane.
+    impl->built_track_gain[lane] = std::clamp(track.gain, 0.0, core::kMaxGain);
+    impl->lane_pan[lane] = std::clamp(track.pan, -1.0, 1.0);
+    if (core::is_track_gain_animated(track)) impl->lane_gain_curve[lane] = track.gain_keyframes;
+    if (core::is_track_pan_animated(track)) impl->lane_pan_curve[lane] = track.pan_keyframes;
+    impl->lane_audible[lane] = core::is_track_audible(impl->project, track);
   }
+  impl->routes = core::bus_routes(impl->project);
   impl->live_track_gain = std::vector<std::atomic<double>>(lanes);
   for (std::size_t lane = 0; lane < lanes; ++lane) {
     impl->live_track_gain[lane].store(impl->built_track_gain[lane], std::memory_order_relaxed);
@@ -715,12 +757,6 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
     const std::size_t span = last - first;
     impl_->voice_block.assign(span * channels, 0.0f);
 
-    // Read once for the block rather than per sample. A fader moved mid-block
-    // lands on the next one, which is a millisecond or two — far below anything
-    // a hand can aim at, and it keeps the whole block on one gain rather than
-    // stepping partway through it.
-    const double trim = impl_->lane_trim(voice.planned.track_index);
-
     for (std::size_t i = 0; i < span; ++i) {
       const double now =
           static_cast<double>(base + static_cast<std::int64_t>(first + i)) / rate;
@@ -736,10 +772,11 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
       sample_into(*audio, position, channels, voice.planned.channel_map,
                   std::span(impl_->voice_block).subspan(i * channels, channels));
 
-      // Gain and fades before the effects, matching the reference's chain. The
-      // live trim rides on the same number, so a fader moved while playing
-      // lands exactly where the track's own gain already sits in the chain.
-      const auto gain = static_cast<float>(render::audio_gain_at(voice.planned, now) * trim);
+      // Gain and fades before the effects, matching the reference's chain.
+      // The clip's own, and only the clip's: the track's fader is applied to
+      // the lane below, after the lane's stack, which is where Premiere has it
+      // and the only place a pre-fader send can be tapped from.
+      const auto gain = static_cast<float>(render::clip_gain_at(voice.planned, now));
       for (std::size_t c = 0; c < channels; ++c) impl_->voice_block[i * channels + c] *= gain;
 
       // The panner, on the two sides of a stereo bus and nothing else. A bus
@@ -747,7 +784,7 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
       // has sides this control does not name — turning only the first two of a
       // 5.1 mix would be worse than leaving it alone.
       if (channels == 2) {
-        const render::StereoGain pan = render::audio_pan_at(voice.planned, now);
+        const render::StereoGain pan = render::clip_pan_at(voice.planned, now);
         impl_->voice_block[i * channels] *= static_cast<float>(pan.left);
         impl_->voice_block[i * channels + 1] *= static_cast<float>(pan.right);
       }
@@ -775,13 +812,94 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
     }
   }
 
-  // Each lane through its own stack, then into the mix.
-  for (std::size_t lane = 0; lane < impl_->track_blocks.size(); ++lane) {
+  // A copy of one bus into another, at a level. Never the same bus twice: the
+  // routes are loop-free by construction, so a lane cannot pour into itself.
+  const auto pour_into = [&](int to_lane, const std::vector<float>& from, double level) {
+    if (to_lane < 0 || static_cast<std::size_t>(to_lane) >= impl_->track_blocks.size()) return;
+    std::vector<float>& into = impl_->track_blocks[static_cast<std::size_t>(to_lane)];
+    const auto gain = static_cast<float>(level);
+    const std::size_t n = std::min(from.size(), into.size());
+    for (std::size_t i = 0; i < n; ++i) into[i] += from[i] * gain;
+  };
+
+  // Each lane through its own stack and its own fader, and then wherever it
+  // goes — another bus, or the mix.
+  //
+  // In feed order rather than lane order, which is the whole reason
+  // `bus_routes` exists: a submix cannot be run until everything pouring into
+  // it has been, and running it early does not fail — it plays the previous
+  // block through this block's compressor, one buffer late.
+  for (const core::BusRoute& route : impl_->routes) {
+    const auto lane = static_cast<std::size_t>(route.lane);
+    if (lane >= impl_->track_blocks.size()) continue;
     std::vector<float>& block = impl_->track_blocks[lane];
+
+    // The lane's stack, pre-fader.
     if (lane < impl_->track_chains.size() && !impl_->track_chains[lane].empty()) {
       run_chain_over(impl_->track_chains[lane], block, base, rate, channels, 0.0);
     }
-    for (std::size_t i = 0; i < block.size(); ++i) out[i] += block[i];
+
+    // Pre-fader sends are taken here, before the fader below touches the block.
+    // That is the whole difference between the two kinds: a pre-fader send goes
+    // on feeding its bus at the same level while the dry signal is ridden.
+    for (const core::SendRoute& send : route.sends) {
+      if (!send.pre_fader) continue;
+      pour_into(send.to_lane, block, send.level);
+    }
+
+    // The fader and panner. Per sample only when there is a curve to follow;
+    // otherwise one number for the block, which is every lane in nearly every
+    // project.
+    const bool gain_curve = lane < impl_->lane_gain_curve.size() &&
+                            !impl_->lane_gain_curve[lane].empty();
+    const bool pan_curve = lane < impl_->lane_pan_curve.size() &&
+                           !impl_->lane_pan_curve[lane].empty();
+    if (gain_curve || pan_curve) {
+      for (std::size_t i = 0; i < frames; ++i) {
+        const double now = static_cast<double>(base + static_cast<std::int64_t>(i)) / rate;
+        const auto gain = static_cast<float>(impl_->lane_gain_at(lane, now));
+        for (std::size_t c = 0; c < channels; ++c) block[i * channels + c] *= gain;
+        if (channels == 2) {
+          const double pan = impl_->lane_pan_at(lane, now);
+          block[i * channels] *= static_cast<float>(pan > 0.0 ? 1.0 - pan : 1.0);
+          block[i * channels + 1] *= static_cast<float>(pan < 0.0 ? 1.0 + pan : 1.0);
+        }
+      }
+    } else {
+      const auto gain = static_cast<float>(impl_->lane_gain_at(lane, begin));
+      if (gain != 1.0f) {
+        for (float& sample : block) sample *= gain;
+      }
+      const double pan = impl_->lane_pan_at(lane, begin);
+      if (channels == 2 && pan != 0.0) {
+        const auto left = static_cast<float>(pan > 0.0 ? 1.0 - pan : 1.0);
+        const auto right = static_cast<float>(pan < 0.0 ? 1.0 + pan : 1.0);
+        for (std::size_t i = 0; i < frames; ++i) {
+          block[i * channels] *= left;
+          block[i * channels + 1] *= right;
+        }
+      }
+    }
+
+    // Metered after the fader, which is what a strip shows: moving a fader has
+    // to move the meter beside it, or one of the two is lying.
+    if (lane < impl_->track_meters.size()) impl_->track_meters[lane]->process(block);
+
+    // A silenced lane is metered and then goes nowhere. The plan already drops
+    // the clips on a muted track, so this is what silences the one kind of lane
+    // it has nothing to say about: a bus, which has no clips to drop.
+    if (lane < impl_->lane_audible.size() && !impl_->lane_audible[lane]) continue;
+
+    for (const core::SendRoute& send : route.sends) {
+      if (send.pre_fader) continue;
+      pour_into(send.to_lane, block, send.level);
+    }
+
+    if (route.output_lane >= 0) {
+      pour_into(route.output_lane, block, 1.0);
+    } else {
+      for (std::size_t i = 0; i < block.size(); ++i) out[i] += block[i];
+    }
   }
 
   // The master fader, ahead of the limiter: pulling it down has to take a hot
@@ -813,13 +931,11 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
 
   impl_->meter->process(out);
 
-  // The lanes are metered *before* the master fader, unlike the mix. A track
-  // meter answers "what is this track putting out", and pulling the master down
-  // does not change that — a set of strips that all dropped together when the
-  // master moved would be five meters showing one thing.
-  for (std::size_t lane = 0; lane < impl_->track_meters.size(); ++lane) {
-    impl_->track_meters[lane]->process(impl_->track_blocks[lane]);
-  }
+  // The lanes were metered above, each as it was run, and *before* the master
+  // fader — unlike the mix. A track meter answers "what is this track putting
+  // out", and pulling the master down does not change that: a set of strips
+  // that all dropped together when the master moved would be five meters
+  // showing one thing.
 
   // One lock for the whole set, so a strip can never show a level from this
   // block beside a neighbour still showing the last.

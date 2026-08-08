@@ -32,6 +32,17 @@ NLOHMANN_JSON_SERIALIZE_ENUM(AutomationMode, {
                                                  {AutomationMode::Touch, "touch"},
                                              })
 
+// None first, so a role written by something newer reads as an unlabelled clip
+// rather than as a wrong label — being told nothing is better than being told
+// that the music is dialogue.
+NLOHMANN_JSON_SERIALIZE_ENUM(AudioRole, {
+                                            {AudioRole::None, "none"},
+                                            {AudioRole::Dialogue, "dialogue"},
+                                            {AudioRole::Music, "music"},
+                                            {AudioRole::Effects, "sfx"},
+                                            {AudioRole::Ambience, "ambience"},
+                                        })
+
 NLOHMANN_JSON_SERIALIZE_ENUM(BlendMode, {
                                             {BlendMode::Normal, "normal"},
                                             {BlendMode::Add, "add"},
@@ -241,6 +252,9 @@ json write(const Clip& c) {
   put_if_set(j, "hold", c.hold);
   put_unless_empty(j, "gain_keyframes", write(c.gain_keyframes));
   put_unless_empty(j, "channel_map", json(c.channel_map));
+  // Only when it has one, so a project from before roles existed writes exactly
+  // the JSON it always did.
+  if (c.role != AudioRole::None) j["role"] = c.role;
 
   if (c.transition_out.has_value()) {
     j["transition_out"] = json{{"kind", c.transition_out->kind},
@@ -288,6 +302,18 @@ json write(const Track& t) {
   json track_effects = json::array();
   for (const AudioClipEffect& e : t.audio_effects) track_effects.push_back(write(e));
   put_unless_empty(j, "audio_effects", track_effects);
+
+  // Routing, written only when it says something. A track feeding the master
+  // with no sends is every track in nearly every project.
+  if (t.submix) j["submix"] = true;
+  if (!t.output.empty()) j["output"] = t.output;
+  json sends = json::array();
+  for (const Send& s : t.sends) {
+    json send{{"to", s.to}, {"level", s.level}};
+    if (s.pre_fader) send["pre_fader"] = true;
+    sends.push_back(std::move(send));
+  }
+  put_unless_empty(j, "sends", sends);
 
   json clips = json::array();
   for (const Clip& c : t.clips) clips.push_back(write(c));
@@ -536,6 +562,8 @@ Clip read_clip(const json& j) {
     }
   }
 
+  c.role = read_or(j, "role", AudioRole::None);
+
   const auto transition = j.find("transition_out");
   if (transition != j.end() && transition->is_object()) {
     c.transition_out = Transition{
@@ -595,6 +623,22 @@ Track read_track(const json& j) {
   const auto track_effects = j.find("audio_effects");
   if (track_effects != j.end() && track_effects->is_array()) {
     for (const json& e : *track_effects) t.audio_effects.push_back(read_audio_effect(e));
+  }
+
+  t.submix = read_or(j, "submix", false);
+  t.output = read_or(j, "output", std::string{});
+  const auto sends = j.find("sends");
+  if (sends != j.end() && sends->is_array()) {
+    for (const json& s : *sends) {
+      if (!s.is_object()) continue;
+      Send send;
+      send.to = read_or(s, "to", std::string{});
+      send.level = read_or(s, "level", 1.0);
+      send.pre_fader = read_or(s, "pre_fader", false);
+      // A send to nowhere is not a send. Read back rather than kept, because
+      // the alternative is a row in the interface that names nothing.
+      if (!send.to.empty()) t.sends.push_back(std::move(send));
+    }
   }
 
   const auto clips = j.find("clips");

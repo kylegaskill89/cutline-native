@@ -65,6 +65,23 @@ struct AudioEffectDef {
 [[nodiscard]] bool audio_effects_animated(
     std::span<const core::AudioClipEffect> effects) noexcept;
 
+/// What one press of a role's preset puts on a clip — Premiere's Essential
+/// Sound, where saying "this is dialogue" is followed by "and give it what
+/// dialogue usually needs".
+///
+/// These are this catalogue's nearest equivalents rather than Adobe's exact
+/// chains, which are built from effects that are not here: Premiere's dialogue
+/// preset reaches for DeHum, DeEss and Reduce Noise, and none of those exists
+/// in a registry of ten filters, a compressor, a delay and a reverb. What is
+/// here is what each role is actually asked for — the rumble off the voice, a
+/// little presence, and a compressor to hold it steady.
+///
+/// Starting points, deliberately mild. A preset that made a big change would be
+/// one nobody dared press.
+///
+/// Empty for `AudioRole::None`: a clip with no role has nothing to be given.
+[[nodiscard]] std::vector<core::AudioClipEffect> role_preset(core::AudioRole role);
+
 /// A clip's effect stack, realised as something that can process samples.
 ///
 /// Built once for a given sample rate and channel count and then fed blocks.
