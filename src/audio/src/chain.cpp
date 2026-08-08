@@ -2,6 +2,8 @@
 
 #include "cutline/audio/biquad.hpp"
 #include "cutline/audio/compressor.hpp"
+#include "cutline/audio/delay.hpp"
+#include "cutline/audio/reverb.hpp"
 #include "cutline/core/keyframe.hpp"
 
 #include <algorithm>
@@ -36,6 +38,14 @@ constexpr std::array kNotchParams{
     AudioEffectParamDef{"q", "Q", 0.1, 20.0, 0.1, 4.0, ""}};
 constexpr std::array kGainParams{
     AudioEffectParamDef{"gain", "Gain", -24.0, 24.0, 0.5, 0.0, "dB"}};
+constexpr std::array kDelayParams{
+    AudioEffectParamDef{"time", "Time", 1.0, kMaxDelayMs, 1.0, 250.0, "ms"},
+    AudioEffectParamDef{"feedback", "Feedback", 0.0, 95.0, 1.0, 35.0, "%"},
+    AudioEffectParamDef{"mix", "Mix", 0.0, 100.0, 1.0, 30.0, "%"}};
+constexpr std::array kReverbParams{
+    AudioEffectParamDef{"size", "Size", 0.0, 100.0, 1.0, 50.0, "%"},
+    AudioEffectParamDef{"damping", "Damping", 0.0, 100.0, 1.0, 50.0, "%"},
+    AudioEffectParamDef{"mix", "Mix", 0.0, 100.0, 1.0, 25.0, "%"}};
 
 constexpr std::array kDefs{
     AudioEffectDef{"highpass", "High-Pass", kHighPassParams},
@@ -46,6 +56,8 @@ constexpr std::array kDefs{
     AudioEffectDef{"eqband", "EQ Band", kEqBandParams},
     AudioEffectDef{"notch", "Notch", kNotchParams},
     AudioEffectDef{"gain", "Gain", kGainParams},
+    AudioEffectDef{"delay", "Delay", kDelayParams},
+    AudioEffectDef{"reverb", "Reverb", kReverbParams},
 };
 
 /// FFmpeg's `bass` and `treble` corner frequencies, which the reference did not
@@ -116,11 +128,21 @@ struct Stage {
   core::AudioClipEffect source;
   std::vector<Biquad> filters;
   std::optional<Compressor> compressor;
+  std::optional<Delay> delay;
+  std::optional<Reverb> reverb;
   float gain = 1.0f;
 
   void process(std::span<float> interleaved, std::size_t channels) noexcept {
     if (compressor) {
       compressor->process(interleaved);
+      return;
+    }
+    if (delay) {
+      delay->process(interleaved);
+      return;
+    }
+    if (reverb) {
+      reverb->process(interleaved);
       return;
     }
     if (!filters.empty()) {
@@ -139,8 +161,25 @@ struct Stage {
   void reset() noexcept {
     for (Biquad& filter : filters) filter.reset();
     if (compressor) compressor->reset();
+    if (delay) delay->reset();
+    if (reverb) reverb->reset();
   }
 };
+
+/// The two delay-line effects read their controls as percentages, because that
+/// is what a mix and a feedback are to anybody setting them. The DSP wants
+/// fractions.
+[[nodiscard]] DelaySettings delay_shape(const core::AudioClipEffect& effect, double local_t) {
+  return DelaySettings{.time_ms = audio_effect_param(effect, "time", local_t),
+                       .feedback = audio_effect_param(effect, "feedback", local_t) / 100.0,
+                       .mix = audio_effect_param(effect, "mix", local_t) / 100.0};
+}
+
+[[nodiscard]] ReverbSettings reverb_shape(const core::AudioClipEffect& effect, double local_t) {
+  return ReverbSettings{.size = audio_effect_param(effect, "size", local_t) / 100.0,
+                        .damping = audio_effect_param(effect, "damping", local_t) / 100.0,
+                        .mix = audio_effect_param(effect, "mix", local_t) / 100.0};
+}
 
 /// The filter an effect describes at `local_t`, or nothing when it is not one
 /// of the filter types.
@@ -200,6 +239,11 @@ struct Stage {
   if (effect.type == "compressor") {
     return decided_by("ratio", [](double ratio) { return ratio <= 1.0; });
   }
+  // A delay line at no mix is inaudible and costs a buffer and a copy per
+  // sample, which is the most expensive nothing in the catalogue.
+  if (effect.type == "delay" || effect.type == "reverb") {
+    return decided_by("mix", [](double mix) { return mix <= 0.0; });
+  }
   return true;  // a filter is never neutral enough to be worth dropping
 }
 
@@ -237,6 +281,10 @@ EffectChain EffectChain::build(std::span<const core::AudioClipEffect> effects,
       stage.filters.assign(static_cast<std::size_t>(std::max(channels, 1)), *shape);
     } else if (effect.type == "compressor") {
       stage.compressor.emplace(compressor_shape(effect, local_t), sample_rate, channels);
+    } else if (effect.type == "delay") {
+      stage.delay.emplace(delay_shape(effect, local_t), sample_rate, channels);
+    } else if (effect.type == "reverb") {
+      stage.reverb.emplace(reverb_shape(effect, local_t), sample_rate, channels);
     } else if (effect.type == "gain") {
       stage.gain = static_cast<float>(db_to_linear(audio_effect_param(effect, "gain", local_t)));
     } else {
@@ -263,6 +311,10 @@ void EffectChain::retune(double local_t) noexcept {
       for (Biquad& filter : stage.filters) filter.retune(*shape);
     } else if (stage.compressor) {
       stage.compressor->retune(compressor_shape(stage.source, local_t), sample_rate);
+    } else if (stage.delay) {
+      stage.delay->retune(delay_shape(stage.source, local_t), sample_rate);
+    } else if (stage.reverb) {
+      stage.reverb->retune(reverb_shape(stage.source, local_t), sample_rate);
     } else {
       stage.gain =
           static_cast<float>(db_to_linear(audio_effect_param(stage.source, "gain", local_t)));

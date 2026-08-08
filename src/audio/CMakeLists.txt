@@ -2,7 +2,9 @@ add_library(cutline_audio
   src/biquad.cpp
   src/chain.cpp
   src/compressor.cpp
+  src/delay.cpp
   src/limiter.cpp
+  src/reverb.cpp
   src/meter.cpp
   src/stretch.cpp)
 add_library(cutline::audio ALIAS cutline_audio)

@@ -55,6 +55,146 @@ constexpr int kChannels = 2;
   return EffectChain::build(effects, kRate, kChannels);
 }
 
+// ------------------------------------------------------ delay and reverb --
+
+TEST(Delay, TheEchoArrivesWhenItWasAskedTo) {
+  // One sample in, silence after. The repeat should land a hundred
+  // milliseconds later and nowhere else.
+  EffectChain chain =
+      chain_of({effect("delay", {{"time", 100.0}, {"feedback", 0.0}, {"mix", 100.0}})});
+  std::vector<float> block(kChannels * 9600, 0.0f);
+  block[0] = 1.0f;
+  block[1] = 1.0f;
+  chain.process(block);
+
+  const auto expected = static_cast<std::size_t>(0.1 * kRate);
+  EXPECT_NEAR(block[expected * kChannels], 1.0f, 1e-5);
+  // And nothing in between: a delay that smeared would be a filter.
+  for (std::size_t i = 10; i < expected - 10; ++i) {
+    EXPECT_NEAR(block[i * kChannels], 0.0f, 1e-6) << i;
+  }
+}
+
+TEST(Delay, FeedbackRepeatsAndDecays) {
+  EffectChain chain =
+      chain_of({effect("delay", {{"time", 50.0}, {"feedback", 50.0}, {"mix", 100.0}})});
+  std::vector<float> block(kChannels * 9600, 0.0f);
+  block[0] = 1.0f;
+  block[1] = 1.0f;
+  chain.process(block);
+
+  const auto step = static_cast<std::size_t>(0.05 * kRate);
+  const double first = std::abs(block[step * kChannels]);
+  const double second = std::abs(block[2 * step * kChannels]);
+  const double third = std::abs(block[3 * step * kChannels]);
+
+  EXPECT_GT(first, 0.5);
+  EXPECT_NEAR(second, first * 0.5, 0.05) << "each repeat is half the last";
+  EXPECT_NEAR(third, second * 0.5, 0.05);
+}
+
+TEST(Delay, NoMixIsDroppedRatherThanRun) {
+  // A delay line at no mix is inaudible and costs a buffer and a copy per
+  // sample, which is the most expensive nothing in the catalogue.
+  EXPECT_TRUE(chain_of({effect("delay", {{"mix", 0.0}})}).empty());
+}
+
+TEST(Delay, SplittingABlockGivesTheSameSamples) {
+  // A delay line carries state across calls, which is exactly where a buffer
+  // boundary can go wrong.
+  const std::vector<float> input = stereo_sine(440.0, 0.5, 4800);
+
+  EffectChain whole =
+      chain_of({effect("delay", {{"time", 20.0}, {"feedback", 40.0}, {"mix", 50.0}})});
+  std::vector<float> once = input;
+  whole.process(once);
+
+  EffectChain split =
+      chain_of({effect("delay", {{"time", 20.0}, {"feedback", 40.0}, {"mix", 50.0}})});
+  std::vector<float> thrice = input;
+  const std::size_t third = (thrice.size() / kChannels / 3) * kChannels;
+  split.process(std::span(thrice).subspan(0, third));
+  split.process(std::span(thrice).subspan(third, third));
+  split.process(std::span(thrice).subspan(2 * third));
+
+  for (std::size_t i = 0; i < once.size(); ++i) EXPECT_FLOAT_EQ(once[i], thrice[i]) << i;
+}
+
+TEST(Reverb, ItKeepsRingingAfterTheSoundStops) {
+  // The whole of what a reverb is: sound arriving after the source stopped.
+  EffectChain chain =
+      chain_of({effect("reverb", {{"size", 80.0}, {"damping", 20.0}, {"mix", 100.0}})});
+  std::vector<float> block(kChannels * 24000, 0.0f);
+  for (std::size_t i = 0; i < 480; ++i) {
+    block[i * kChannels] = 0.5f;
+    block[i * kChannels + 1] = 0.5f;
+  }
+  chain.process(block);
+
+  double tail = 0.0;
+  for (std::size_t i = 12000; i < 24000; ++i) {
+    tail = std::max(tail, static_cast<double>(std::abs(block[i * kChannels])));
+  }
+  EXPECT_GT(tail, 1e-4) << "a quarter of a second after the burst, there is still a room";
+}
+
+TEST(Reverb, ABiggerRoomRingsForLonger) {
+  const auto tail_of = [](double size) {
+    EffectChain chain =
+        chain_of({effect("reverb", {{"size", size}, {"damping", 0.0}, {"mix", 100.0}})});
+    std::vector<float> block(kChannels * 24000, 0.0f);
+    for (std::size_t i = 0; i < 480; ++i) {
+      block[i * kChannels] = 0.5f;
+      block[i * kChannels + 1] = 0.5f;
+    }
+    chain.process(block);
+    double sum = 0.0;
+    for (std::size_t i = 12000; i < 24000; ++i) {
+      sum += static_cast<double>(block[i * kChannels]) * block[i * kChannels];
+    }
+    return sum;
+  };
+
+  EXPECT_GT(tail_of(95.0), tail_of(20.0));
+}
+
+TEST(Reverb, DampingTakesTheTopOffTheTail) {
+  // A damped room's tail is darker, so a bright source leaves less energy in it.
+  const auto tail_of = [](double damping) {
+    EffectChain chain =
+        chain_of({effect("reverb", {{"size", 80.0}, {"damping", damping}, {"mix", 100.0}})});
+    std::vector<float> block = stereo_sine(6000.0, 0.5, 24000);
+    chain.process(block);
+    double sum = 0.0;
+    for (std::size_t i = 18000; i < 24000; ++i) {
+      sum += static_cast<double>(block[i * kChannels]) * block[i * kChannels];
+    }
+    return sum;
+  };
+
+  EXPECT_LT(tail_of(100.0), tail_of(0.0));
+}
+
+TEST(Reverb, TheTwoSidesAreDifferentRoomsOfTheSameSize) {
+  // Two channels running identical lines are one channel heard twice.
+  EffectChain chain =
+      chain_of({effect("reverb", {{"size", 70.0}, {"damping", 30.0}, {"mix", 100.0}})});
+  std::vector<float> block(kChannels * 24000, 0.0f);
+  block[0] = 1.0f;
+  block[1] = 1.0f;
+  chain.process(block);
+
+  bool differ = false;
+  for (std::size_t i = 2000; i < 24000 && !differ; ++i) {
+    differ = std::abs(block[i * kChannels] - block[i * kChannels + 1]) > 1e-5;
+  }
+  EXPECT_TRUE(differ);
+}
+
+TEST(Reverb, NoMixIsDropped) {
+  EXPECT_TRUE(chain_of({effect("reverb", {{"mix", 0.0}})}).empty());
+}
+
 // ---------------------------------------------------------------- registry --
 
 TEST(AudioRegistry, EveryEffectTheReferenceHadIsPresent) {
@@ -64,13 +204,25 @@ TEST(AudioRegistry, EveryEffectTheReferenceHadIsPresent) {
                                     "eqband", "notch", "gain"}) {
     EXPECT_NE(audio_effect_def(id), nullptr) << id;
   }
-  EXPECT_EQ(audio_effect_defs().size(), 8u);
+}
+
+TEST(AudioRegistry, TheTimeBasedEffectsArePresentToo) {
+  // The catalogue was eight filters and a gain for a long time — nothing in it
+  // had a delay line, which made a reverb the most-missed effect in the
+  // application and made sends a route to nowhere.
+  EXPECT_NE(audio_effect_def("delay"), nullptr);
+  EXPECT_NE(audio_effect_def("reverb"), nullptr);
+  EXPECT_EQ(audio_effect_defs().size(), 10u);
 }
 
 TEST(AudioRegistry, AnUnknownEffectIsNotAnError) {
   // A project written by a newer build should still open and play.
-  EXPECT_EQ(audio_effect_def("reverb"), nullptr);
-  EXPECT_TRUE(chain_of({effect("reverb")}).empty());
+  //
+  // This used to use "reverb" as its example of something unknown, which is a
+  // small lesson in choosing one: a name picked because the application did not
+  // have it is a name the application may one day have.
+  EXPECT_EQ(audio_effect_def("no-such-effect"), nullptr);
+  EXPECT_TRUE(chain_of({effect("no-such-effect")}).empty());
 }
 
 TEST(AudioRegistry, EveryEffectDeclaresAtLeastOneParameter) {

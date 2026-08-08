@@ -391,8 +391,11 @@ TEST(AudioEffects, ANewOneCarriesEveryParameterAtItsDefault) {
 }
 
 TEST(AudioEffects, AnUnknownTypeIsNotAdded) {
+  // Not a real effect name. This used to say "reverb", picked because the
+  // application did not have one — which is a name the application may one day
+  // have, and now does.
   const Project before = one_clip();
-  EXPECT_EQ(add_audio_effect(before, "c1", "reverb"), before);
+  EXPECT_EQ(add_audio_effect(before, "c1", "no-such-effect"), before);
 }
 
 TEST(AudioEffects, RowsCarryTheRegistrysRangesAndUnits) {
@@ -454,12 +457,13 @@ TEST(AudioEffects, AnEffectThisBuildDoesNotKnowStillShowsUp) {
   // it names — and the stack should say something is there rather than leaving
   // a gap that reads as data lost.
   Project p = one_clip();
-  p.tracks[0].clips[0].audio_effects.push_back(core::AudioClipEffect{.type = "reverb"});
+  p.tracks[0].clips[0].audio_effects.push_back(
+      core::AudioClipEffect{.type = "no-such-effect"});
 
   const std::vector<EffectRow> rows = clip_audio_effects(p, "c1");
   ASSERT_EQ(rows.size(), 1u);
   EXPECT_TRUE(rows.front().unknown);
-  EXPECT_EQ(rows.front().name, "reverb");
+  EXPECT_EQ(rows.front().name, "no-such-effect");
   EXPECT_TRUE(rows.front().params.empty());
 }
 
