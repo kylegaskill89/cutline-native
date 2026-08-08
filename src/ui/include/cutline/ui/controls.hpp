@@ -474,6 +474,81 @@ class Fader : public Widget {
   std::function<void(double)> on_commit_;
 };
 
+/// A mixer's panner: a rotary dial with L and R either side of it.
+///
+/// Round because what it sets is round. A pan has a *centre* that both ends
+/// travel away from, and a knob says that in its shape — the pointer stands
+/// straight up at the middle, and how far it has fallen either way is the
+/// answer, readable across a room. A horizontal slider says the same thing with
+/// its centre marked, badly, and a numeric field says it only if you read it.
+///
+/// Dragged vertically rather than in a circle. Chasing a pointer round a dial
+/// is precise for the first ninety degrees and hopeless after that, because the
+/// hand has to travel further for the same change as the angle steepens; every
+/// mixer built since knobs stopped being physical takes an up-and-down drag,
+/// and so does Premiere.
+class PanKnob : public Widget {
+ public:
+  explicit PanKnob(double value = 0.0,
+                   ValueRange range = ValueRange{.minimum = -100.0, .maximum = 100.0});
+
+  [[nodiscard]] double value() const noexcept { return value_; }
+  /// Clamped. Silent, like every other control here: setting from code is the
+  /// panel following the document, not somebody turning the knob.
+  void set_value(double value);
+
+  [[nodiscard]] const ValueRange& range() const noexcept { return range_; }
+
+  void set_on_change(std::function<void(double)> on_change) { on_change_ = std::move(on_change); }
+  void set_on_commit(std::function<void(double)> on_commit) { on_commit_ = std::move(on_commit); }
+
+  /// Whether the L and R are drawn. Off in a strip with no width for them.
+  void set_shows_ends(bool shows) noexcept { shows_ends_ = shows; }
+  [[nodiscard]] bool shows_ends() const noexcept { return shows_ends_; }
+
+  /// The dial itself, which is square and centred in whatever it is given.
+  [[nodiscard]] Rect dial() const;
+
+  /// Where the pointer stands, in degrees clockwise from straight up. Public
+  /// for the same reason `Fader::y_of` is: the drawing and any test of it read
+  /// one mapping rather than two that can drift.
+  [[nodiscard]] double angle_of(double value) const;
+
+  /// How far either way the pointer swings. Not a full turn — a dial that can
+  /// come back round to where it started cannot be read at a glance.
+  static constexpr double kSweepDegrees = 135.0;
+
+  [[nodiscard]] Part part() const noexcept override { return Part::Slider; }
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  void layout(const LayoutContext& context) override;
+  void paint_content(Painter& painter, const Theme& theme) const override;
+
+  bool on_mouse_down(const MouseEvent& event) override;
+  bool on_mouse_move(const MouseEvent& event) override;
+  bool on_mouse_up(const MouseEvent& event) override;
+  bool on_key_down(const KeyEvent& event) override;
+
+ private:
+  void move_to(double value);
+  void finish();
+
+  ValueRange range_;
+  double value_ = 0.0;
+
+  bool dragging_ = false;
+  double press_y_ = 0.0;
+  double press_value_ = 0.0;
+  double gesture_start_ = 0.0;
+
+  bool shows_ends_ = true;
+  double dial_size_ = 34.0;
+  double font_size_ = 10.0;
+  double end_width_ = 8.0;
+
+  std::function<void(double)> on_change_;
+  std::function<void(double)> on_commit_;
+};
+
 /// A column of mutually exclusive choices, exactly one of them taken.
 ///
 /// The control every dialogue wants when a question has three or four answers

@@ -1405,15 +1405,16 @@ The whole lot is a single vertical column, master first, tracks below.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| Strips side by side, one per track | horizontal, scrolling when narrow | one vertical column | control |
-| Master at the right-hand end | yes | at the top of the column | control |
-| Pan as a **rotary knob** | with L and R either side and a number under it | a numeric field labelled Balance | control |
-| A **vertical fader** | with a dB scale printed down its left | a numeric field labelled Volume | control |
-| A **meter per track**, beside its fader | with its own scale down its right | none — only the master has a meter | wiring |
-| Numeric gain readout under the fader | yes | is the only control | — |
-| **M / S / R** buttons | mute, solo, record-arm | mute and solo on the track head only | control |
+| ~~Strips side by side, one per track~~ | horizontal, scrolling when narrow | **done** — a horizontal `ScrollView` | — |
+| ~~Master at the right-hand end~~ | yes | **done** | — |
+| ~~Pan as a **rotary knob**~~ | with L and R either side | **done** — `ui::PanKnob` | — |
+| ~~A **vertical fader**~~ | with a dB scale printed down its left | **done** — `ui::Fader`, master included | — |
+| A **meter per track**, beside its fader | with its own scale down its right | none — nothing publishes a track's level | **engine** |
+| ~~Numeric gain readout under the fader~~ | yes | **done** — follows every pixel of the drag | — |
+| ~~**M / S** buttons~~ | mute, solo | **done**, in the strip as well as on the track head | — |
+| **R** (record-arm) | arms a track for automation | none — see the row below | machinery |
 | Automation mode | Off / Read / Write / Latch / Touch | none, and nothing records automation | machinery |
-| Track number and name at the foot | `A1` and `Audio 1`, the name editable | the name, at the top | control |
+| ~~Track name at the foot~~ | `A1` and `Audio 1` | **done** — the same name the timeline shows | — |
 
 **The reason it looks like this is not a good one.** The comment on
 `build_track_strip` says numbers rather than faders because "the panel is as
@@ -1450,15 +1451,26 @@ so there is nothing to set a track fader *against*.
   the panel was docked.
 - **`ui::PanKnob`** — a rotary, dragged vertically, with L and R either side.
   The value already exists (`Track::pan`); this is a way of setting it.
-- **Per-track metering.** `MeterView` exists and the master feeds it. The mixer
-  does not publish per-track levels yet, so this is a real addition on the
-  engine side rather than only a widget: the mix already sums each track, so the
-  peak per track is available where the sum is taken.
-- **M / S / R in the strip.** Mute and solo are on the track head, and the note
-  saying a second pair would be "two controls for one flag" is wrong about what
-  a mixer is for — Premiere has both, because mixing and editing are two
-  activities and you do not want to leave one to reach the other. R is
-  record-arm for automation and follows the automation work.
+- **Per-track metering — the one piece left that matters, and the only one that
+  is not a widget.** `MeterView` exists and the master feeds it, but
+  `AudioMixer` measures the mix *after* the master fader and measures nothing
+  per track, and `Player` exposes one `levels()` for the whole thing. The mix
+  already sums each track, so the peak per track is available exactly where the
+  sum is taken — this is publishing it, not computing it. The strip leaves a
+  deliberate gap where the meter goes: a meter drawn beside a fader that never
+  moved would be worse than the space.
+
+  It also gates something the fader wants. A track's gain is baked into the mix
+  when the mix is built, so moving the fader only takes effect on release —
+  `set_master_gain` is the one live edit a player accepts. Setting a *track* by
+  ear needs the same treatment, and both belong in the same piece of work.
+- ~~**M / S in the strip.**~~ **Done.** They are on the track head too, and the
+  old note calling a second pair "two controls for one flag" was wrong about
+  what a mixer is for: it is one flag reachable from both of the places you are
+  when you want it. Premiere has both because mixing and editing are two
+  activities, and leaving one to reach the other is the thing a mixer exists to
+  avoid. **R** is record-arm for automation and waits on it — a button that
+  arms nothing is worse than no button.
 - **Automation modes** are the one row here that is genuinely machinery: Write,
   Latch and Touch mean recording fader moves into keyframes as the sequence
   plays. Track gain is not animatable yet — clip gain is — so this needs a

@@ -658,6 +658,151 @@ bool Fader::on_key_down(const KeyEvent& event) {
   return true;
 }
 
+// --------------------------------------------------------------- panners --
+
+namespace {
+/// How far the pointer travels for the whole sweep, in pixels.
+///
+/// A hundred and twenty is about the height of a mixer strip, which is the
+/// distance a hand expects to move to take a pan from one side to the other.
+/// Shorter and the knob is twitchy; longer and hard left needs two drags.
+constexpr double kPanTravel = 120.0;
+}  // namespace
+
+PanKnob::PanKnob(double value, ValueRange range) : range_(range) {
+  set_focusable(true);
+  set_value(value);
+}
+
+void PanKnob::set_value(double value) { value_ = range_.clamp(value); }
+
+double PanKnob::angle_of(double value) const {
+  // Straight up at the centre of the range, falling either way. `to_fraction`
+  // gives 0 at the left end and 1 at the right, so the middle is 0.5 and the
+  // shift by it is what puts the pointer upright.
+  return (range_.to_fraction(range_.clamp(value)) - 0.5) * 2.0 * kSweepDegrees;
+}
+
+void PanKnob::layout(const LayoutContext& context) {
+  const Metrics& metrics = context.metrics();
+  dial_size_ = metrics.control_height * 1.4;
+  font_size_ = std::max(8.0, metrics.font_size - 3.0);
+  end_width_ = shows_ends_ ? context.text.measure("L", font_size_, false) + metrics.spacing : 0.0;
+}
+
+LayoutItem PanKnob::sizing(Axis axis, const LayoutContext& context) const {
+  const Metrics& metrics = context.metrics();
+  const double dial = metrics.control_height * 1.4;
+  if (axis == Axis::Vertical) return LayoutItem::fixed(dial);
+  if (!shows_ends_) return LayoutItem::fixed(dial);
+  const double ends = context.text.measure("L", font_size_, false) + metrics.spacing;
+  return LayoutItem::fixed(dial + ends * 2.0);
+}
+
+Rect PanKnob::dial() const {
+  const Rect area = bounds();
+  const double size = std::min(dial_size_, std::min(area.width, area.height));
+  return Rect{area.x + (area.width - size) / 2.0, area.y + (area.height - size) / 2.0, size,
+              size};
+}
+
+void PanKnob::move_to(double value) {
+  const double next = range_.clamp(value);
+  if (next == value_) return;
+  value_ = next;
+  if (on_change_) on_change_(value_);
+}
+
+void PanKnob::finish() {
+  if (value_ == gesture_start_) return;
+  if (on_commit_) on_commit_(value_);
+}
+
+void PanKnob::paint_content(Painter& painter, const Theme& theme) const {
+  const SurfaceStyle& style = theme.style(Part::Slider, state());
+  const SurfaceStyle& mark = theme.style(Part::SliderThumb, state());
+
+  const Rect face = dial();
+  const double radius = face.width / 2.0;
+  painter.fill(face, radius, style.fill);
+  if (style.border_width > 0.0) {
+    painter.stroke(face, radius, style.border, style.border_width);
+  }
+
+  // The pointer, from the middle out to the rim. Drawn rather than filled
+  // because that is all a knob's mark ever is, and a line is the one primitive
+  // here that is not a rectangle.
+  const double centre_x = face.x + radius;
+  const double centre_y = face.y + radius;
+  const double radians = angle_of(value_) * std::numbers::pi / 180.0;
+  const double reach = radius * 0.78;
+  painter.line(centre_x, centre_y, centre_x + std::sin(radians) * reach,
+               centre_y - std::cos(radians) * reach, mark.text, 2.0);
+
+  if (!shows_ends_ || end_width_ <= 0.0) return;
+  const Rect area = bounds();
+  const Rect left{area.x, face.y, std::max(0.0, face.x - area.x), face.height};
+  const Rect right{face.right(), face.y, std::max(0.0, area.right() - face.right()), face.height};
+  painter.text(text_run(left, "L", style, font_size_, TextAlign::Right, false));
+  painter.text(text_run(right, "R", style, font_size_, TextAlign::Left, false));
+}
+
+bool PanKnob::on_mouse_down(const MouseEvent& event) {
+  if (event.button != MouseButton::Left) return false;
+  gesture_start_ = value_;
+
+  // A double-click centres it. Getting back to dead centre by hand is a fiddle
+  // and centre is where a pan spends most of its life.
+  if (event.click_count == 2) {
+    move_to(range_.from_fraction(0.5));
+    finish();
+    return true;
+  }
+
+  // Relative to where the press landed rather than jumping to it. A knob has
+  // no position under the pointer to jump *to* — the pointer is beside it, not
+  // on a track — so an absolute mapping would snap the value on every press.
+  dragging_ = true;
+  press_y_ = event.y;
+  press_value_ = value_;
+  return true;
+}
+
+bool PanKnob::on_mouse_move(const MouseEvent& event) {
+  if (!dragging_) return false;
+  const double span = range_.maximum - range_.minimum;
+  // Up is right, which is the way every knob of this kind turns.
+  move_to(press_value_ + (press_y_ - event.y) / kPanTravel * span);
+  return true;
+}
+
+bool PanKnob::on_mouse_up(const MouseEvent& event) {
+  if (event.button != MouseButton::Left || !dragging_) return false;
+  dragging_ = false;
+  finish();
+  return true;
+}
+
+bool PanKnob::on_key_down(const KeyEvent& event) {
+  if (!event.modifiers.none()) return false;
+
+  double step = 0.0;
+  switch (event.key) {
+    case Key::Left:
+    case Key::Down: step = -1.0; break;
+    case Key::Right:
+    case Key::Up: step = 1.0; break;
+    case Key::Home: step = range_.minimum - value_; break;
+    case Key::End: step = range_.maximum - value_; break;
+    default: return false;
+  }
+
+  gesture_start_ = value_;
+  move_to(value_ + step);
+  finish();
+  return true;
+}
+
 // ----------------------------------------------------------- radio groups --
 
 RadioGroup::RadioGroup(std::vector<std::string> options, std::size_t selected)

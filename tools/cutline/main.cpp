@@ -708,7 +708,7 @@ struct App {
   /// block to draw a bar that is about to be drawn again would be a lot of
   /// messages for nothing.
   cutline::ui::MeterView* meter = nullptr;
-  Slider* master_fader = nullptr;
+  cutline::ui::Fader* master_fader = nullptr;
   Label* master_reading = nullptr;
 
   /// True between the press and the release on a transform handle, which is
@@ -8226,76 +8226,132 @@ void open_library_menu(App& app, double x, double y) {
 /// The two belong together: a fader is moved by ear and by eye, and the eye
 /// part is the meter. Splitting them across panels would mean setting a level
 /// while watching something that might be behind another tab.
-/// One audio track's strip in the mixer: a fader and a panner.
+/// One audio track's strip in the mixer, in Premiere's order down the column:
+/// the panner, the mute and solo pair, the fader with its meter beside it, the
+/// level as a number, and the track's name at the foot.
 ///
 /// A mix has two levels for a reason. A clip's gain is what that take needed;
 /// a track's is what the whole stem needs against the others, and riding one to
 /// fix the other is how a mix stops being reversible.
 ///
-/// Numbers rather than a vertical fader per track. The panel is as likely to be
-/// a narrow column as a whole region, and a row of strips needs a width it
-/// cannot count on — the master fader learned that the hard way and is stacked
-/// for the same reason.
-void build_track_strip(App& app, Box& column, const cutline::core::Track& track,
+/// This used to be two numeric fields labelled Volume and Balance, stacked in
+/// one column, on the argument that a docked panel may be too narrow for a row
+/// of strips. That was a description of a layout problem rather than a reason
+/// to build different controls — Premiere has the same problem and scrolls
+/// horizontally, which is what the panel does now. A fader is not a number in
+/// a different costume: a mix is set by ear, with a hand on a long throw and an
+/// eye on a meter beside it, and a field can only be typed into or scrubbed.
+void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
                        std::size_t index) {
   const std::string track_id = track.id;
+  auto& strip = strips.emplace<Box>(Axis::Vertical);
 
-  // No mute or solo here. They are on the track head in the timeline, which is
-  // where Premiere keeps them too and where they are while you are editing —
-  // a second pair somewhere else is two controls for one flag.
-  // The same name the timeline shows. The raw id is an internal string and
-  // reading "a1" in one panel and "A1" in another is two names for one track.
-  column.emplace<Label>(cutline::editor::default_track_label(app.session.project(), index))
-      .set_bold(true);
+  auto& pan = strip.emplace<cutline::ui::PanKnob>(track.pan * 100.0);
+  pan.set_on_commit([&app, track_id](double value) {
+    app.session.apply(
+        cutline::core::set_track_pan(app.session.project(), track_id, value / 100.0));
+    app.inspector_stale = true;
+  });
 
-  auto& fader = column.emplace<Box>(Axis::Horizontal);
-  fader.emplace<Label>("Volume").set_small(true);
-  fader.emplace<Spacer>();
+  // Mute and solo are also on the track head in the timeline, and that is not
+  // two controls for one flag — it is one flag reachable from both of the
+  // places you are when you want it. Premiere has both for the same reason:
+  // mixing and editing are two activities, and leaving one to reach the other
+  // is what a mixer exists to avoid.
+  //
+  // No record-arm beside them. R arms a track for *automation*, and nothing
+  // here records fader moves yet — a button that arms nothing is worse than no
+  // button.
+  auto& switches = strip.emplace<Box>(Axis::Horizontal);
+  auto& mute = switches.emplace<Button>("M", [&app, track_id] {
+    const auto now = std::ranges::find(app.session.project().tracks, track_id,
+                                       &cutline::core::Track::id);
+    if (now == app.session.project().tracks.end()) return;
+    app.session.apply(cutline::core::update_track(
+        app.session.project(), track_id, cutline::core::TrackPropsPatch{.muted = !now->muted}));
+    refresh_all(app);
+  });
+  mute.set_selected(track.muted);
+  auto& solo = switches.emplace<Button>("S", [&app, track_id] {
+    const auto now = std::ranges::find(app.session.project().tracks, track_id,
+                                       &cutline::core::Track::id);
+    if (now == app.session.project().tracks.end()) return;
+    app.session.apply(cutline::core::update_track(
+        app.session.project(), track_id, cutline::core::TrackPropsPatch{.solo = !now->solo}));
+    refresh_all(app);
+  });
+  solo.set_selected(track.solo);
 
-  auto& volume = fader.emplace<cutline::ui::NumericField>(
+  // The throw. Premiere puts a meter immediately to its right, and that is the
+  // arrangement the whole panel is for — the level you are setting against the
+  // level you are getting. There is no meter here yet because nothing publishes
+  // one: `AudioMixer` measures the mix after the master fader and nothing
+  // measures a track. That is engine work rather than a widget, it is written
+  // up in §6.1, and a meter drawn beside this that never moved would be worse
+  // than the gap.
+  auto& fader = strip.emplace<cutline::ui::Fader>(
       cutline::ui::ValueRange{.minimum = cutline::ui::kGainFloorDb,
-                              .maximum = cutline::ui::gain_to_fader_db(
-                                  cutline::core::kMaxGain)},
+                              .maximum = cutline::ui::gain_to_fader_db(cutline::core::kMaxGain)},
       cutline::ui::gain_to_fader_db(track.gain));
-  volume.set_decimals(1);
-  volume.set_suffix("dB");
-  volume.set_default_value(0.0);
-  volume.set_on_commit([&app, track_id](double db) {
+  fader.set_default_value(0.0);
+
+  auto& reading = strip.emplace<Label>();
+  reading.set_small(true);
+  reading.set_text(std::format("{:.1f}", cutline::ui::gain_to_fader_db(track.gain)));
+
+  // The number follows every pixel of the drag even though the document does
+  // not: a fader with no readout until the button comes up cannot be set to a
+  // level somebody names. The mix itself only hears it on release, because a
+  // track's gain is baked into the mix and the master fader is the one thing
+  // that can be changed without rebuilding it.
+  fader.set_on_change([&app, out = &reading](double db) {
+    out->set_text(std::format("{:.1f}", db));
+    mark_dirty(app);
+  });
+  fader.set_on_commit([&app, track_id](double db) {
     app.session.apply(cutline::core::set_track_gain(
         app.session.project(), track_id,
         cutline::ui::fader_db_to_gain(db, cutline::core::kMaxGain)));
     app.inspector_stale = true;
   });
 
-  auto& panner = column.emplace<Box>(Axis::Horizontal);
-  panner.emplace<Label>("Balance").set_small(true);
-  panner.emplace<Spacer>();
-
-  auto& pan = panner.emplace<cutline::ui::NumericField>(
-      cutline::ui::ValueRange{.minimum = -100.0, .maximum = 100.0}, track.pan * 100.0);
-  pan.set_decimals(1);
-  pan.set_default_value(0.0);
-  pan.set_on_commit([&app, track_id](double value) {
-    app.session.apply(
-        cutline::core::set_track_pan(app.session.project(), track_id, value / 100.0));
-    app.inspector_stale = true;
-  });
+  // The same name the timeline shows, at the foot where Premiere puts it. The
+  // raw id is an internal string, and reading "a1" in one panel and "A1" in
+  // another is two names for one track.
+  strip.emplace<Label>(cutline::editor::default_track_label(app.session.project(), index))
+      .set_bold(true);
 }
 
 [[nodiscard]] std::unique_ptr<Widget> make_audio_panel(App* app) {
   auto panel = std::make_unique<Panel>();
 
-  // Stacked rather than side by side. The panel is as likely to be docked in a
-  // narrow column as given a whole region, and a fader beside a meter needs a
-  // width neither of them has on their own — the first attempt pushed the
-  // fader clean off the edge of the panel it was in.
-  auto& column = panel->emplace<Box>(Axis::Vertical);
+  // Side by side and scrolling, which is Premiere's arrangement and the answer
+  // to the problem that made an earlier version stack them: a docked panel is
+  // as likely to be a narrow column as a whole region, and a row of strips
+  // needs a width it cannot count on. Premiere has exactly the same problem and
+  // lets the strips run off the right-hand edge. Stacking them instead solved
+  // the layout and lost the mixer.
+  auto& scroll = panel->emplace<ScrollView>(Axis::Horizontal);
+  auto& strips = static_cast<Box&>(scroll.set_content(std::make_unique<Box>(Axis::Horizontal)));
+
+  // Tracks first and the master at the right-hand end, where a mixer puts it:
+  // signal flows left to right and the master is where it all arrives.
+  if (app != nullptr) {
+    const std::vector<cutline::core::Track>& tracks = app->session.project().tracks;
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+      if (tracks[i].kind != cutline::core::TrackKind::Audio) continue;
+      build_track_strip(*app, strips, tracks[i], i);
+    }
+  }
+
+  auto& column = strips.emplace<Box>(Axis::Vertical);
   column.emplace<Label>("Master").set_bold(true);
 
   const double gain = app == nullptr ? 1.0 : app->session.project().master_gain;
-  auto& fader = column.emplace<Slider>(
-      ValueRange{.minimum = cutline::ui::kGainFloorDb,
-                 .maximum = cutline::ui::gain_to_fader_db(cutline::core::kMaxMasterGain)},
+  auto& fader = column.emplace<cutline::ui::Fader>(
+      cutline::ui::ValueRange{
+          .minimum = cutline::ui::kGainFloorDb,
+          .maximum = cutline::ui::gain_to_fader_db(cutline::core::kMaxMasterGain)},
       cutline::ui::gain_to_fader_db(gain));
   // Unity, which is where a volume control resets to and where a project that
   // has never been touched sits.
@@ -8306,17 +8362,6 @@ void build_track_strip(App& app, Box& column, const cutline::core::Track& track,
 
   auto& bars = column.emplace<cutline::ui::MeterView>();
   if (app != nullptr) app->meter = &bars;
-
-  // A strip per audio track, under the master. Premiere calls this the audio
-  // mixer and puts the master at the right-hand end of it; stacked, the master
-  // going first is what the same arrangement reads as.
-  if (app != nullptr) {
-    const std::vector<cutline::core::Track>& tracks = app->session.project().tracks;
-    for (std::size_t i = 0; i < tracks.size(); ++i) {
-      if (tracks[i].kind != cutline::core::TrackKind::Audio) continue;
-      build_track_strip(*app, column, tracks[i], i);
-    }
-  }
 
   if (app != nullptr) {
     app->master_fader = &fader;

@@ -813,6 +813,152 @@ TEST(Fader, TheScaleTakesRoomOnlyWhenItIsShown) {
   EXPECT_DOUBLE_EQ(without.x, test.fader->bounds().x);
 }
 
+// --------------------------------------------------------------- panner --
+
+struct Panned {
+  Panned() {
+    host = std::make_unique<WidgetHost>(std::make_unique<Widget>());
+    knob = &host->root().emplace<PanKnob>(0.0);
+    knob->set_on_change([this](double v) {
+      ++changes;
+      last = v;
+    });
+    knob->set_on_commit([this](double v) {
+      ++commits;
+      committed = v;
+    });
+    host->resize(Rect{0.0, 0.0, 400.0, 400.0}, flat_context());
+    knob->arrange(Rect{0.0, 0.0, 60.0, 40.0}, flat_context());
+  }
+
+  std::unique_ptr<WidgetHost> host;
+  PanKnob* knob = nullptr;
+  int changes = 0;
+  int commits = 0;
+  double last = 0.0;
+  double committed = 0.0;
+};
+
+TEST(PanKnob, TheCentreStandsStraightUp) {
+  // What makes a knob readable across a room: centred is upright, and how far
+  // it has fallen either way is the answer.
+  Panned test;
+  EXPECT_DOUBLE_EQ(test.knob->angle_of(0.0), 0.0);
+}
+
+TEST(PanKnob, EitherEndFallsTheSameAmountTheOppositeWay) {
+  Panned test;
+  EXPECT_DOUBLE_EQ(test.knob->angle_of(100.0), PanKnob::kSweepDegrees);
+  EXPECT_DOUBLE_EQ(test.knob->angle_of(-100.0), -PanKnob::kSweepDegrees);
+}
+
+TEST(PanKnob, ItNeverComesBackRoundToWhereItStarted) {
+  // A dial that can travel a full turn cannot be read at a glance.
+  EXPECT_LT(PanKnob::kSweepDegrees, 180.0);
+}
+
+TEST(PanKnob, DraggingUpGoesRight) {
+  Panned test;
+  test.host->mouse_down(press(30.0, 20.0));
+  test.host->mouse_move(press(30.0, 0.0));
+
+  EXPECT_GT(test.knob->value(), 0.0);
+  EXPECT_GT(test.changes, 0);
+}
+
+TEST(PanKnob, DraggingDownGoesLeft) {
+  Panned test;
+  test.host->mouse_down(press(30.0, 20.0));
+  test.host->mouse_move(press(30.0, 60.0));
+  EXPECT_LT(test.knob->value(), 0.0);
+}
+
+TEST(PanKnob, ThePressDoesNotMoveIt) {
+  // A knob has no position under the pointer to jump to. An absolute mapping
+  // would snap the value every time somebody touched it.
+  Panned test;
+  test.knob->set_value(40.0);
+  test.host->mouse_down(press(10.0, 5.0));
+
+  EXPECT_DOUBLE_EQ(test.knob->value(), 40.0);
+  EXPECT_EQ(test.changes, 0);
+}
+
+TEST(PanKnob, TheDragIsRelativeToWhereItStarted) {
+  Panned test;
+  test.knob->set_value(-20.0);
+  test.host->mouse_down(press(30.0, 30.0));
+  test.host->mouse_move(press(30.0, 30.0));
+  EXPECT_DOUBLE_EQ(test.knob->value(), -20.0) << "no movement, no change";
+
+  test.host->mouse_move(press(30.0, 0.0));
+  EXPECT_GT(test.knob->value(), -20.0);
+}
+
+TEST(PanKnob, DraggingPastEitherEndIsClamped) {
+  Panned test;
+  test.host->mouse_down(press(30.0, 20.0));
+  test.host->mouse_move(press(30.0, -5000.0));
+  EXPECT_DOUBLE_EQ(test.knob->value(), 100.0);
+  test.host->mouse_move(press(30.0, 5000.0));
+  EXPECT_DOUBLE_EQ(test.knob->value(), -100.0);
+}
+
+TEST(PanKnob, TheLevelIsWrittenOnceAtTheEndOfADrag) {
+  Panned test;
+  test.host->mouse_down(press(30.0, 20.0));
+  test.host->mouse_move(press(30.0, 10.0));
+  test.host->mouse_move(press(30.0, 0.0));
+  test.host->mouse_up(press(30.0, 0.0));
+
+  EXPECT_GT(test.changes, 1);
+  EXPECT_EQ(test.commits, 1);
+  EXPECT_DOUBLE_EQ(test.committed, test.knob->value());
+}
+
+TEST(PanKnob, ADoubleClickCentresIt) {
+  // Centre is where a pan spends most of its life, and finding dead centre by
+  // hand is a fiddle.
+  Panned test;
+  test.knob->set_value(-73.0);
+  MouseEvent twice = press(30.0, 20.0);
+  twice.click_count = 2;
+  test.host->mouse_down(twice);
+
+  EXPECT_DOUBLE_EQ(test.knob->value(), 0.0);
+  EXPECT_EQ(test.commits, 1);
+}
+
+TEST(PanKnob, TheArrowsNudgeItEitherWay) {
+  Panned test;
+  test.host->set_focus(test.knob);
+  test.host->key_down(KeyEvent{.key = Key::Right});
+  EXPECT_DOUBLE_EQ(test.knob->value(), 1.0);
+  test.host->key_down(KeyEvent{.key = Key::Left});
+  EXPECT_DOUBLE_EQ(test.knob->value(), 0.0);
+  test.host->key_down(KeyEvent{.key = Key::Home});
+  EXPECT_DOUBLE_EQ(test.knob->value(), -100.0);
+  test.host->key_down(KeyEvent{.key = Key::End});
+  EXPECT_DOUBLE_EQ(test.knob->value(), 100.0);
+}
+
+TEST(PanKnob, SettingItFromCodeDoesNotCallBack) {
+  Panned test;
+  test.knob->set_value(50.0);
+  EXPECT_EQ(test.changes, 0);
+  EXPECT_EQ(test.commits, 0);
+}
+
+TEST(PanKnob, TheDialIsRoundAndCentredInWhatItIsGiven) {
+  Panned test;
+  const Rect face = test.knob->dial();
+  EXPECT_DOUBLE_EQ(face.width, face.height) << "a dial, not an oval";
+
+  const Rect area = test.knob->bounds();
+  EXPECT_NEAR(face.x + face.width / 2.0, area.x + area.width / 2.0, 1e-9);
+  EXPECT_NEAR(face.y + face.height / 2.0, area.y + area.height / 2.0, 1e-9);
+}
+
 // ------------------------------------------------------------ radio group --
 
 struct Radios {
