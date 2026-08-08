@@ -184,6 +184,22 @@ Project set_clip_fade(Project p, std::string_view clip_id, ClipEdge edge, double
   return p;
 }
 
+Project set_clip_channel_map(Project p, std::string_view clip_id, std::vector<int> map) {
+  const std::vector<std::string> member_ids = group_members(p, clip_id);
+  const std::unordered_set<std::string> members(member_ids.begin(), member_ids.end());
+
+  for (Track& t : p.tracks) {
+    for (Clip& c : t.clips) {
+      // The audio clips of the group only. A picture has no channels, and
+      // giving it a map would be a field that means nothing and reads as
+      // something somebody set.
+      if (!members.contains(c.id) || c.kind != TrackKind::Audio) continue;
+      c.channel_map = map;
+    }
+  }
+  return p;
+}
+
 Project set_clip_speed(Project p, std::string_view clip_id, double speed,
                        std::optional<bool> reverse) {
   const std::vector<std::string> member_ids = group_members(p, clip_id);

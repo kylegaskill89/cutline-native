@@ -59,6 +59,17 @@ namespace cutline::core {
 [[nodiscard]] Project set_clip_fade(Project p, std::string_view clip_id, ClipEdge edge,
                                     double duration);
 
+/// Sets which source channel feeds each output channel on a clip.
+///
+/// Applied across the **linked group**, so mapping the picture's sound also
+/// maps the sound that came with it — an A/V pair is one take, and a lapel mic
+/// that is on channel one is on channel one for all of it.
+///
+/// An empty map restores the default, which is what "Reset" means and is not
+/// the same as a map full of silence.
+[[nodiscard]] Project set_clip_channel_map(Project p, std::string_view clip_id,
+                                           std::vector<int> map);
+
 /// Sets playback speed, and optionally reverse, across the linked group so
 /// video and its audio retime together. The source in and out are kept, so the
 /// timeline length changes. Fades are re-clamped to the new duration.

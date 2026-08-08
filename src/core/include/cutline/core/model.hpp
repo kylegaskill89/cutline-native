@@ -402,6 +402,23 @@ struct Clip {
   /// Clips sharing a group move and cut together (Premiere-style A/V link).
   std::optional<std::string> group_id;
 
+  /// Which source channel feeds each output channel.
+  ///
+  /// Premiere's Audio Channels, and the answer to a completely ordinary shoot:
+  /// a camera with a lapel mic on channel one and a shotgun on channel two.
+  /// Without it both are heard at once and there is no way to choose, which is
+  /// not a stereo recording — it is two different microphones being added
+  /// together.
+  ///
+  /// Indexed by *output* channel; the value is the source channel that feeds
+  /// it, or a negative number for silence. Empty means the default, which is
+  /// what every project written before this reads back as: channel for channel,
+  /// with a mono source feeding every output.
+  ///
+  /// So `{0, 0}` is "the lapel, in both ears", `{1, 1}` is the shotgun, and
+  /// `{1, 0}` swaps a pair that was wired backwards.
+  std::vector<int> channel_map;
+
   /// Per-clip linear audio gain; 1 is unity.
   double gain = 1.0;
   /// Volume automation, clip-local. Non-empty overrides `gain`.

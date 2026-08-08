@@ -272,7 +272,7 @@ struct Voice {
 /// a non-integer step: point sampling would quantise it to whole samples and
 /// add a rasp of quantisation noise on top of the retime.
 void sample_into(const media::AudioBuffer& source, double position, std::size_t channels,
-                 std::span<float> frame) noexcept {
+                 std::span<const int> channel_map, std::span<float> frame) noexcept {
   const auto frames = source.frame_count();
   if (frames == 0 || position < 0.0) return;
 
@@ -285,10 +285,23 @@ void sample_into(const media::AudioBuffer& source, double position, std::size_t 
   const std::size_t next = std::min(index + 1, frames - 1);
 
   for (std::size_t c = 0; c < channels; ++c) {
-    // A mono source feeds every output channel; a source with more channels
-    // than the mix has is truncated rather than downmixed, which is what the
+    // The clip's map when it has one, and the default when it does not: a mono
+    // source feeds every output channel, and a source with more channels than
+    // the mix has is truncated rather than downmixed, which is what the
     // decoder's own resampling already arranged for.
-    const std::size_t source_channel = std::min(c, source_channels - 1);
+    //
+    // A map naming a channel the source does not have is silence rather than a
+    // clamp to the nearest. Somebody asking for channel four of a stereo file
+    // has said something about the shoot that turned out not to be true, and
+    // quietly giving them channel two would hide it.
+    int wanted = static_cast<int>(std::min(c, source_channels - 1));
+    if (c < channel_map.size()) wanted = channel_map[c];
+    if (wanted < 0 || static_cast<std::size_t>(wanted) >= source_channels) {
+      frame[c] = 0.0f;
+      continue;
+    }
+
+    const auto source_channel = static_cast<std::size_t>(wanted);
     const float a = source.samples[index * source_channels + source_channel];
     const float b = source.samples[next * source_channels + source_channel];
     frame[c] = a + (b - a) * fraction;
@@ -719,7 +732,7 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
               ? (now - voice.planned.start) * rate
               : (render::audio_source_time_at(voice.planned, now) - audio->start_time) * rate;
 
-      sample_into(*audio, position, channels,
+      sample_into(*audio, position, channels, voice.planned.channel_map,
                   std::span(impl_->voice_block).subspan(i * channels, channels));
 
       // Gain and fades before the effects, matching the reference's chain. The

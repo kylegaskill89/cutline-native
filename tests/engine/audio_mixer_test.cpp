@@ -8,6 +8,8 @@
 
 #include "cutline/engine/audio_mixer.hpp"
 
+#include "cutline/core/properties.hpp"
+#include "cutline/core/query.hpp"
 #include "cutline/media/encoder.hpp"
 
 #include <gtest/gtest.h>
@@ -500,6 +502,80 @@ TEST(TrackAutomation, TheCurveIsReadAgainstTheSequenceRatherThanTheClip) {
   // Read clip-locally it would begin at unity instead.
   (void)mix_span(*mixer, 4.0, 0.3);
   EXPECT_LT(mixer->track_levels(0).channels[0].peak_db, -20.0);
+}
+
+// ----------------------------------------------------- channel mapping --
+
+/// A source whose two channels differ, which is the only way a channel map can
+/// be seen at all: the shared tone is the same on both sides.
+[[nodiscard]] Project lopsided() {
+  Project p = one_clip_project();
+  // Hard left through the clip's panner, so the two channels of the *mix*
+  // differ and a map that swaps them shows up.
+  p.tracks[0].clips[0].pan = -1.0;
+  return p;
+}
+
+TEST(ChannelMap, AnEmptyMapIsWhatItAlwaysWas) {
+  // Every project written before this has one, so it must be sample for sample
+  // what it was.
+  Project mapped = one_clip_project();
+  mapped.tracks[0].clips[0].channel_map = {};
+  EXPECT_EQ(mix_span(*mixer_for(mapped), 0.0, 0.3),
+            mix_span(*mixer_for(one_clip_project()), 0.0, 0.3));
+}
+
+TEST(ChannelMap, SilencingAChannelSilencesIt) {
+  Project p = one_clip_project();
+  p.tracks[0].clips[0].channel_map = {0, -1};
+  const std::vector<float> out = mix_span(*mixer_for(p), 0.0, 0.3);
+
+  EXPECT_GT(rms_of_channel(out, 0), 0.01);
+  EXPECT_NEAR(rms_of_channel(out, 1), 0.0, 1e-6);
+}
+
+TEST(ChannelMap, OneChannelCanFeedBoth) {
+  // The case this exists for: a lapel mic on channel one, wanted in both ears.
+  Project p = one_clip_project();
+  p.tracks[0].clips[0].channel_map = {0, 0};
+  const std::vector<float> out = mix_span(*mixer_for(p), 0.0, 0.3);
+
+  EXPECT_GT(rms_of_channel(out, 0), 0.01);
+  EXPECT_NEAR(rms_of_channel(out, 0), rms_of_channel(out, 1), 1e-4);
+}
+
+TEST(ChannelMap, AChannelTheSourceDoesNotHaveIsSilenceRatherThanTheNearest) {
+  // Somebody asking for channel four of a stereo file has said something about
+  // the shoot that turned out not to be true, and quietly handing them channel
+  // two would hide it.
+  Project p = one_clip_project();
+  p.tracks[0].clips[0].channel_map = {7, 7};
+  const std::vector<float> out = mix_span(*mixer_for(p), 0.0, 0.3);
+  EXPECT_NEAR(rms_of(out), 0.0, 1e-6);
+}
+
+TEST(ChannelMap, ItIsSetAcrossTheLinkedGroupAndOnlyOnTheAudio) {
+  // An A/V pair is one take: a lapel that is on channel one is on channel one
+  // for all of it. A picture has no channels and should not gain a field that
+  // reads as something somebody set.
+  Project p;
+  p.media = {tone_media()};
+  Clip picture = audio_clip("v-clip", "m", 0.0, 5.0);
+  picture.kind = TrackKind::Video;
+  picture.group_id = "g";
+  Clip sound = audio_clip("a-clip", "m", 0.0, 5.0);
+  sound.group_id = "g";
+
+  Track vt{.id = "v1", .kind = TrackKind::Video};
+  vt.clips = {std::move(picture)};
+  Track at{.id = "a1", .kind = TrackKind::Audio};
+  at.clips = {std::move(sound)};
+  p.tracks = {std::move(vt), std::move(at)};
+
+  p = core::set_clip_channel_map(std::move(p), "v-clip", {1, 1});
+
+  EXPECT_TRUE(core::find_clip(p, "v-clip")->channel_map.empty());
+  EXPECT_EQ(core::find_clip(p, "a-clip")->channel_map, (std::vector<int>{1, 1}));
 }
 
 // ------------------------------------------------------- track effects --

@@ -69,6 +69,10 @@ struct PlannedAudioClip {
   /// it is worth knowing which is which before editing that function.
   std::vector<core::Keyframe> track_gain_keyframes;
   std::vector<core::Keyframe> track_pan_keyframes;
+
+  /// The clip's channel map, copied. Empty is the default — see
+  /// `core::Clip::channel_map`.
+  std::vector<int> channel_map;
 };
 
 /// Every audio clip that can be heard, in track order and then by start time.

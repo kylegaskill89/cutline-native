@@ -60,6 +60,7 @@ std::vector<PlannedAudioClip> plan_audio(const core::Project& project) {
       entry.speed = core::clip_speed(clip);
       entry.reverse = clip.reverse;
       entry.track_index = index;
+      entry.channel_map = clip.channel_map;
       entry.track_gain = std::clamp(track.gain, 0.0, core::kMaxGain);
       entry.track_pan = std::clamp(track.pan, -1.0, 1.0);
       // Through the query rather than copied straight off the track, so a lane

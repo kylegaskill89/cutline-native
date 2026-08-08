@@ -240,6 +240,7 @@ json write(const Clip& c) {
   put_if_set(j, "group_id", c.group_id);
   put_if_set(j, "hold", c.hold);
   put_unless_empty(j, "gain_keyframes", write(c.gain_keyframes));
+  put_unless_empty(j, "channel_map", json(c.channel_map));
 
   if (c.transition_out.has_value()) {
     j["transition_out"] = json{{"kind", c.transition_out->kind},
@@ -527,6 +528,13 @@ Clip read_clip(const json& j) {
 
   const auto gain_keyframes = j.find("gain_keyframes");
   if (gain_keyframes != j.end()) c.gain_keyframes = read_keyframes(*gain_keyframes);
+
+  const auto channel_map = j.find("channel_map");
+  if (channel_map != j.end() && channel_map->is_array()) {
+    for (const json& entry : *channel_map) {
+      if (entry.is_number_integer()) c.channel_map.push_back(entry.get<int>());
+    }
+  }
 
   const auto transition = j.find("transition_out");
   if (transition != j.end() && transition->is_object()) {

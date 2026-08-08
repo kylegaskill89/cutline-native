@@ -1099,6 +1099,7 @@ void choose_scope(App& app, cutline::ui::ScopeKind kind);
 void show_master_gain(App& app, double gain);
 void refresh_meter(App& app);
 void record_automation(App& app);
+void open_channel_dialog(App& app, std::span<const std::string> clips);
 void commit_automation(App& app);
 void refresh_handles(App& app);
 void refresh_title(App& app);
@@ -7715,6 +7716,10 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
       ticks.push_back(false);
       labels.emplace_back("Fill Frame");
       ticks.push_back(false);
+      // Premiere's Modify ▸ Audio Channels, and the answer to a camera with a
+      // lapel on one channel and a shotgun on the other.
+      labels.emplace_back("Audio Channels...");
+      ticks.push_back(false);
     }
     if (!selected.empty()) {
       const bool enabled = std::ranges::all_of(selected, [&](const std::string& id) {
@@ -7779,6 +7784,10 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
         invalidate_preview(*app);
         app->inspector_stale = true;
         mark_dirty(*app);
+        return;
+      }
+      if (index == commands.size() + 5) {
+        open_channel_dialog(*app, selected);
         return;
       }
       {
@@ -8281,6 +8290,79 @@ void open_library_menu(App& app, double x, double y) {
 /// The two belong together: a fader is moved by ear and by eye, and the eye
 /// part is the meter. Splitting them across panels would mean setting a level
 /// while watching something that might be behind another tab.
+/// Premiere's Audio Channels: which source channel feeds each output channel.
+///
+/// The presets are the shoot, not the arithmetic. "Channel 1 to both" is what
+/// somebody means when they say the lapel was on the left; nobody thinks of it
+/// as a permutation, and offering the permutation instead is how a dialogue
+/// ends up correct and unusable.
+void open_channel_dialog(App& app, std::span<const std::string> clips) {
+  if (app.main.host == nullptr || clips.empty()) return;
+
+  struct Choice {
+    std::string_view label;
+    std::vector<int> map;
+  };
+  const std::vector<Choice> kChoices{
+      {"Stereo — as recorded", {}},
+      {"Channel 1 to both (mono)", {0, 0}},
+      {"Channel 2 to both (mono)", {1, 1}},
+      {"Swap left and right", {1, 0}},
+      {"Left only, right silent", {0, -1}},
+      {"Right only, left silent", {-1, 1}},
+  };
+
+  // What the selection is already set to, so the box opens on the answer it
+  // currently has rather than on the first row.
+  std::size_t current = 0;
+  if (const cutline::core::Clip* first =
+          cutline::core::find_clip(app.session.project(), clips.front());
+      first != nullptr) {
+    for (std::size_t i = 0; i < kChoices.size(); ++i) {
+      if (kChoices[i].map == first->channel_map) {
+        current = i;
+        break;
+      }
+    }
+  }
+
+  auto panel = std::make_unique<Panel>();
+  panel->emplace<Label>("Audio Channels").set_bold(true);
+
+  std::vector<std::string> names;
+  names.reserve(kChoices.size());
+  for (const Choice& choice : kChoices) names.emplace_back(choice.label);
+  auto& group = panel->emplace<cutline::ui::RadioGroup>(std::move(names), current);
+
+  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
+  buttons.emplace<Button>(
+      "OK", [&app, chosen = &group, kChoices,
+             ids = std::vector<std::string>(clips.begin(), clips.end())] {
+        const std::size_t index = chosen->selected();
+        if (app.main.host != nullptr) app.main.host->close_popup();
+        if (index >= kChoices.size()) return;
+
+        // One project, edited once per clip, applied once — so mapping six
+        // takes is one press of undo rather than six.
+        cutline::core::Project next = app.session.project();
+        for (const std::string& id : ids) {
+          next = cutline::core::set_clip_channel_map(std::move(next), id, kChoices[index].map);
+        }
+        app.session.apply(std::move(next));
+        refresh_all(app);
+        invalidate_preview(app);
+        // The mix is built from the document, so a channel change is heard
+        // only once the player is rebuilt.
+        stop_playback(app);
+        mark_dirty(app);
+      });
+  buttons.emplace<Button>("Cancel", [&app] {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+  });
+
+  app.main.host->open_popup(std::move(panel), settings_anchor());
+}
+
 /// The effect stack on a mixer strip, as a box that can be opened from it.
 ///
 /// `track_id` empty means the master, which has one stack and no id to name it
