@@ -1506,10 +1506,25 @@ Two more came from the same session, both invisible to a test:
   activities, and leaving one to reach the other is the thing a mixer exists to
   avoid. **R** is record-arm for automation and waits on it — a button that
   arms nothing is worse than no button.
-- **Automation modes** are the one row here that is genuinely machinery: Write,
-  Latch and Touch mean recording fader moves into keyframes as the sequence
-  plays. Track gain is not animatable yet — clip gain is — so this needs a
-  keyframe list on the track before it needs a dropdown.
+- **Automation modes and record-arm** are what is left of this section, and the
+  order they have to be built in is fixed by what they depend on:
+
+  1. **A track's gain and pan have to become animatable.** `Clip` already
+     carries keyframes and `is_gain_animated` reads them; `Track::gain` is a
+     plain double. That is the model change, and it is the whole of why the
+     dropdown cannot come first — Read has nothing to read.
+  2. **`render::audio_gain_at` has to evaluate the track's curve** rather than
+     folding a constant into each clip's gain at plan time. The live trim added
+     for the fader becomes a trim over a curve instead of over a number, which
+     is the same arithmetic in the same place.
+  3. **Then the modes.** Off ignores the curve; Read follows it; Write records
+     the fader into it while the sequence plays; Latch and Touch differ only in
+     when they start and stop recording. Record-arm (**R**) is the switch that
+     says a strip is one of the writing ones.
+
+  Nothing here is blocked. It is written down in order because the first step
+  is a model change that everything else waits on, and starting at the dropdown
+  would mean building a control with nothing behind it.
 
 ### 6.2 The rest of section 6
 

@@ -304,6 +304,14 @@ belongs in the C# helper. And **PowerShell parameter names are case-insensitive*
 a local `$h` inside a function taking `[IntPtr]$H` *is* the handle, so assigning
 a height to it corrupts the window being drawn.
 
+**Two things called an index agree until they do not.** `render::plan_audio`
+numbers *audio* tracks 0, 1, 2 and skips the video ones; everything else in the
+application counts tracks as the project lists them. The two are identical for
+any project that is all audio — which is what every mixer test was — so a mixer
+strip asked for lane 1 in an ordinary V1+A1 project, got silence, and its meter
+simply stayed dark past a green suite. If a number could be counted two ways,
+the test that catches it is the one with *both* kinds present.
+
 **To fill a pool, paste rather than click.** The file dialog's filename box
 accepts a whole multiple selection as quoted names separated by spaces —
 `"a.mp4" "b.mp4" …` — so navigating to the folder and pasting forty of them
@@ -1152,14 +1160,23 @@ rest of that section put together.
 Everything is committed and green. Nothing is half-finished, no branch is open,
 and there is no work in progress to reconstruct.
 
-- 2788 tests pass under the `ui` preset, 2408 under `release`. Set
+- 2891 tests pass under the `ui` preset, 2496 under `release`. Set
   `CUTLINE_TEST_MEDIA_DIR` or about fifty decode tests skip while the run still
   says everything passed.
-- `--check` reports 2592 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
+- `--check` reports 2615 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
   all four themes — run it with something *in* the media cache as well as with
   it empty, since the Delete button only exists when there is something to
   delete.
-- 31 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
+- **Where the work is:** sections 1 to 5 of the gaps document are closed.
+  Section 6 (Audio) is open and its mixer subsection is done bar automation,
+  which is written up in §6.1 in the order it has to be built — a track's gain
+  becoming animatable first, because Read has nothing to read until it is.
+  Nothing in it is blocked.
+- **Not driven yet:** the Fit Clip dialogue (it needs a project carrying four
+  marks, so it is absent from the `--check` scene too), and the application on
+  WARP for more than a few minutes. The mixer *has* been driven — meters moving
+  under playback and a fader read at -18.8 dB.
+- 37 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
   the owner's standing instruction is that releases happen after major features,
   not per commit.
 
