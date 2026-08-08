@@ -306,6 +306,8 @@ json write(const Project& p) {
          {"master_gain", p.master_gain},
          {"use_proxies", p.use_proxies},
          {"drop_frame", p.drop_frame}};
+  put_unless_empty(j, "master_gain_keyframes", write(p.master_gain_keyframes));
+  if (p.master_automation != AutomationMode::Read) j["master_automation"] = p.master_automation;
 
   json media = json::array();
   for (const Media& m : p.media) media.push_back(write(m));
@@ -589,6 +591,9 @@ Project read_project(const json& j) {
   p.master_gain = read_or(j, "master_gain", p.master_gain);
   p.use_proxies = read_or(j, "use_proxies", p.use_proxies);
   p.drop_frame = read_or(j, "drop_frame", p.drop_frame);
+  const auto master_keys = j.find("master_gain_keyframes");
+  if (master_keys != j.end()) p.master_gain_keyframes = read_keyframes(*master_keys);
+  p.master_automation = read_or(j, "master_automation", AutomationMode::Read);
 
   const auto media = j.find("media");
   if (media != j.end() && media->is_array()) {

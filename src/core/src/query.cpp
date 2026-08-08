@@ -202,6 +202,15 @@ double track_pan_at(const Track& t, double time) noexcept {
   return std::clamp(eval_keyframes(t.pan_keyframes, time), -1.0, 1.0);
 }
 
+bool is_master_gain_animated(const Project& p) noexcept {
+  return p.master_automation != AutomationMode::Off && !p.master_gain_keyframes.empty();
+}
+
+double master_gain_at(const Project& p, double time) noexcept {
+  if (!is_master_gain_animated(p)) return std::clamp(p.master_gain, 0.0, kMaxMasterGain);
+  return std::clamp(eval_keyframes(p.master_gain_keyframes, time), 0.0, kMaxMasterGain);
+}
+
 bool is_track_audible(const Project& p, const Track& track) noexcept {
   if (track.muted) return false;
   const bool any_solo = std::ranges::any_of(p.tracks, [](const Track& t) {

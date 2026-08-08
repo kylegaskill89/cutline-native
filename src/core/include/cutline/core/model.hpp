@@ -600,6 +600,14 @@ struct Project {
   /// gets a project *out* of limiting rather than quietly leaving it in.
   double master_gain = 1.0;
 
+  /// The master fader's automation, in timeline seconds, and what it does with
+  /// it. The same pair a `Track` carries, one level up — Premiere's master
+  /// strip has a mode like every other strip, and for the same reason: a
+  /// programme that has to come down under a voiceover comes down on the
+  /// master.
+  std::vector<Keyframe> master_gain_keyframes;
+  AutomationMode master_automation = AutomationMode::Read;
+
   /// Whether to cut against proxies where a source has one.
   ///
   /// Premiere's "Toggle Proxies", and a property of the *project* rather than

@@ -737,6 +737,8 @@ struct App {
     std::vector<cutline::core::Keyframe> written;
   };
   std::vector<AutomationPass> automation;
+  /// The master's, which has no track id to be found by.
+  AutomationPass master_automation;
   Label* master_reading = nullptr;
 
   /// True between the press and the release on a transform handle, which is
@@ -8324,6 +8326,12 @@ void record_automation(App& app) {
     if (!pass.written.empty() && now <= pass.written.back().t) continue;
     pass.written.push_back(cutline::core::Keyframe{.t = now, .v = pass.gain});
   }
+
+  App::AutomationPass& master = app.master_automation;
+  if (pass_is_writing(app.session.project().master_automation, master) &&
+      (master.written.empty() || now > master.written.back().t)) {
+    master.written.push_back(cutline::core::Keyframe{.t = now, .v = master.gain});
+  }
 }
 
 /// Lays every recorded pass into the document, as one edit.
@@ -8341,6 +8349,15 @@ void commit_automation(App& app) {
     pass.written.clear();
     pass.latched = false;
   }
+
+  App::AutomationPass& master = app.master_automation;
+  if (master.written.size() >= 2) {
+    next = cutline::core::write_master_gain_pass(std::move(next), master.written);
+    any = true;
+  }
+  master.written.clear();
+  master.latched = false;
+
   if (!any) return;
 
   app.session.apply(std::move(next));
@@ -8530,12 +8547,34 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
   // control rather than the same one at the end of the row. A master has
   // nothing to pan and nothing to solo, so the space stays empty — which is
   // what Premiere leaves there too.
-  // One per row a track strip has above its fader: the panner, the automation
-  // mode, and the mute/solo pair. Premiere's master carries a mode of its own
-  // rather than a gap here, and it should — that is the row below.
+  // A gap where a track strip carries its panner — a master has nothing to pan
+  // — then its own automation mode, which Premiere's master has like every
+  // other strip, then a gap where the mute and solo pair go, which a master
+  // also has nothing to do with.
   const double control = 24.0;
   column.emplace<Spacer>(Axis::Vertical, control * 1.4);
-  column.emplace<Spacer>(Axis::Vertical, control);
+
+  static constexpr std::array<cutline::core::AutomationMode, 5> kMasterModes{
+      cutline::core::AutomationMode::Off, cutline::core::AutomationMode::Read,
+      cutline::core::AutomationMode::Write, cutline::core::AutomationMode::Latch,
+      cutline::core::AutomationMode::Touch};
+  const cutline::core::AutomationMode mode =
+      app == nullptr ? cutline::core::AutomationMode::Read
+                     : app->session.project().master_automation;
+  const auto at_mode = std::ranges::find(kMasterModes, mode);
+  auto& master_modes = column.emplace<Dropdown>(
+      std::vector<std::string>{"Off", "Read", "Write", "Latch", "Touch"},
+      at_mode == kMasterModes.end() ? 1u
+                                    : static_cast<std::size_t>(at_mode - kMasterModes.begin()));
+  if (app != nullptr) {
+    master_modes.set_on_change([app](std::size_t index) {
+      if (index >= kMasterModes.size()) return;
+      app->session.apply(
+          cutline::core::set_master_automation(app->session.project(), kMasterModes[index]));
+      refresh_all(*app);
+    });
+  }
+
   column.emplace<Spacer>(Axis::Vertical, control);
 
   const double gain = app == nullptr ? 1.0 : app->session.project().master_gain;
@@ -8570,12 +8609,23 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
     // only took effect on release could not be set by ear, which is the only
     // way anybody sets one. The model is left alone until the button comes up,
     // so one gesture is still one undo entry.
+    app->master_automation.gain = gain;
     fader.set_on_change([app](double db) {
       const double moved = cutline::ui::fader_db_to_gain(db, cutline::core::kMaxMasterGain);
+      app->master_automation.gain = moved;
+      // A move is the touch, which is what Latch and Touch key off.
+      app->master_automation.holding = true;
+      app->master_automation.latched = true;
       if (app->player != nullptr) app->player->set_master_gain(moved);
       show_master_gain(*app, moved);
     });
     fader.set_on_commit([app](double db) {
+      app->master_automation.holding = false;
+      // A fader recording a pass does not also write the constant underneath
+      // it: the pass is what is being set, and both would disagree.
+      if (pass_is_writing(app->session.project().master_automation, app->master_automation)) {
+        return;
+      }
       app->session.apply(cutline::core::set_master_gain(
           app->session.project(),
           cutline::ui::fader_db_to_gain(db, cutline::core::kMaxMasterGain)));

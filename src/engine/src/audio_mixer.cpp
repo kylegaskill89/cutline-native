@@ -4,6 +4,7 @@
 #include "cutline/audio/limiter.hpp"
 #include "cutline/audio/meter.hpp"
 #include "cutline/audio/stretch.hpp"
+#include "cutline/core/query.hpp"
 #include "cutline/media/audio.hpp"
 #include "cutline/render/mix.hpp"
 
@@ -286,6 +287,11 @@ struct AudioMixer::Impl {
   /// every block while the interface writes it from the message loop.
   std::atomic<double> master_gain{1.0};
 
+  /// The master's automation, copied at build time. Empty when there is none or
+  /// the mode is Off, so the mix reads the live fader instead — deciding it
+  /// here rather than per block keeps `mix` free of what Off means.
+  std::vector<core::Keyframe> master_curve;
+
   /// The meter belongs to whichever thread is mixing; its reading is published
   /// under a lock for whoever is drawing. A reading is a few dozen bytes and is
   /// taken once a block, so the lock is never contended for long enough to
@@ -464,6 +470,7 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
   impl->missing.assign(missing.begin(), missing.end());
   impl->master_gain.store(std::clamp(project.master_gain, 0.0, core::kMaxMasterGain),
                           std::memory_order_relaxed);
+  if (core::is_master_gain_animated(project)) impl->master_curve = project.master_gain_keyframes;
   const audio::LimiterSettings limiting;
   impl->limiter = std::make_unique<audio::Limiter>(
       limiting, static_cast<double>(settings.sample_rate), settings.channels);
@@ -721,7 +728,15 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
   // The master fader, ahead of the limiter: pulling it down has to take a hot
   // mix *out* of limiting, and after the limiter it would only make an already
   // squashed mix quieter.
-  const double master = impl_->master_gain.load(std::memory_order_relaxed);
+  //
+  // The curve wins over the live fader when there is one, exactly as a track's
+  // does: an automated fader is being *played back*, and letting the atomic
+  // override it would mean the number the interface last wrote silently
+  // flattening somebody's pass.
+  const double master = impl_->master_curve.empty()
+                            ? impl_->master_gain.load(std::memory_order_relaxed)
+                            : std::clamp(core::eval_keyframes(impl_->master_curve, begin), 0.0,
+                                         core::kMaxMasterGain);
   if (master != 1.0) {
     const auto gain = static_cast<float>(master);
     for (float& sample : out) sample *= gain;

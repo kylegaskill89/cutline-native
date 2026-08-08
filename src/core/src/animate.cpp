@@ -130,26 +130,53 @@ Project set_track_automation(Project p, std::string_view track_id, AutomationMod
   return p;
 }
 
-Project write_track_gain_pass(Project p, std::string_view track_id,
-                              std::span<const Keyframe> pass) {
-  Track* t = find_track_for(p, track_id);
-  if (t == nullptr || pass.empty()) return p;
+namespace {
 
+/// Lays a pass over a curve, replacing only what it covers.
+///
+/// Shared by the tracks and the master rather than written twice: punching in
+/// means the same thing wherever the fader is, and two copies of that rule is
+/// one copy and a future disagreement.
+void lay_pass_over(std::vector<Keyframe>& curve, std::span<const Keyframe> pass) {
+  if (pass.empty()) return;
   const double from = pass.front().t;
   const double to = pass.back().t;
 
-  // Out with what the pass covers, in with the pass. Inclusive at both ends,
-  // so a keyframe exactly under where the hand started is replaced rather than
-  // left sitting a fraction of a frame away from the one that replaced it.
+  // Inclusive at both ends, so a keyframe exactly under where the hand started
+  // is replaced rather than left sitting a fraction of a frame from the one
+  // that replaced it.
   std::vector<Keyframe> kept;
-  kept.reserve(t->gain_keyframes.size() + pass.size());
-  for (const Keyframe& key : t->gain_keyframes) {
+  kept.reserve(curve.size() + pass.size());
+  for (const Keyframe& key : curve) {
     if (key.t < from || key.t > to) kept.push_back(key);
   }
   kept.insert(kept.end(), pass.begin(), pass.end());
   std::ranges::sort(kept, {}, &Keyframe::t);
+  curve = std::move(kept);
+}
 
-  t->gain_keyframes = std::move(kept);
+}  // namespace
+
+Project set_master_automation(Project p, AutomationMode mode) {
+  p.master_automation = mode;
+  return p;
+}
+
+Project clear_master_gain_keyframes(Project p) {
+  p.master_gain_keyframes.clear();
+  return p;
+}
+
+Project write_master_gain_pass(Project p, std::span<const Keyframe> pass) {
+  lay_pass_over(p.master_gain_keyframes, pass);
+  return p;
+}
+
+Project write_track_gain_pass(Project p, std::string_view track_id,
+                              std::span<const Keyframe> pass) {
+  Track* t = find_track_for(p, track_id);
+  if (t == nullptr) return p;
+  lay_pass_over(t->gain_keyframes, pass);
   return p;
 }
 

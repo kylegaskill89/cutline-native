@@ -152,6 +152,10 @@ struct SourceRange {
 [[nodiscard]] double track_gain_at(const Track& t, double time) noexcept;
 [[nodiscard]] double track_pan_at(const Track& t, double time) noexcept;
 
+/// The same pair for the master fader.
+[[nodiscard]] bool is_master_gain_animated(const Project& p) noexcept;
+[[nodiscard]] double master_gain_at(const Project& p, double time) noexcept;
+
 /// Whether an audio track is heard: not muted, and — if any audio track is
 /// soloed — only soloed tracks play.
 [[nodiscard]] bool is_track_audible(const Project& p, const Track& track) noexcept;

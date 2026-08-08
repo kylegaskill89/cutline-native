@@ -1414,7 +1414,7 @@ The whole lot is a single vertical column, master first, tracks below.
 | ~~**M / S** buttons~~ | mute, solo | **done**, in the strip as well as on the track head | — |
 | **R** (record-arm) | arms a track for recording an input onto it | **won't do** — this application has no audio capture at all | — |
 | ~~Automation mode~~ | Off / Read / Write / Latch / Touch | **done** — all five, recording a pass and committing it as one edit | — |
-| Automation on the **master** | the master strip has a mode too | none — `Project::master_gain` is a plain number | model |
+| ~~Automation on the **master**~~ | the master strip has a mode too | **done** — the same five, one level up | — |
 | ~~Track name at the foot~~ | `A1` and `Audio 1` | **done** — the same name the timeline shows | — |
 
 **The reason it looks like this is not a good one.** The comment on
@@ -1532,10 +1532,19 @@ Two more came from the same session, both invisible to a test:
   than no button. It is not the automation switch it looks like: the automation
   modes are the dropdown above it, and they are built.
 
-- **The master has no automation**, and in Premiere it has a mode like every
-  other strip. `Project::master_gain` is a plain number where a track now
-  carries a curve and a mode. The machinery all exists; this is the model
-  change to match, and the master strip leaves a gap where its dropdown goes.
+- ~~**The master has no automation**~~ — **done**, the same five modes one level
+  up. A programme that has to come down under a voiceover comes down on the
+  master, so the strip needs it as much as any track does. `lay_pass_over` is
+  shared between them rather than written twice: punching in means the same
+  thing wherever the fader is, and two copies of that rule would be one copy
+  and a future disagreement.
+
+  The curve wins over the live fader when there is one, exactly as a track's
+  does. An automated fader is being *played back*, and letting the atomic the
+  interface writes override it would mean the last number typed silently
+  flattening somebody's pass.
+
+**Section 6.1 is closed.**
 
 ### 6.2 Submixes, sends, Essential Sound and loudness
 

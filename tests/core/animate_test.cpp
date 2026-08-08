@@ -582,5 +582,44 @@ TEST(TrackPass, ClearingLeavesTheModeAlone) {
   EXPECT_EQ(only_track(p).automation, AutomationMode::Latch);
 }
 
+TEST(MasterAutomation, ThePassBecomesTheCurveAndOffIgnoresIt) {
+  Project p = one_audio_track();
+  p.master_gain = 0.5;
+  const std::vector<Keyframe> pass{{.t = 0.0, .v = 1.0}, {.t = 2.0, .v = 0.25}};
+  p = write_master_gain_pass(std::move(p), pass);
+
+  ASSERT_EQ(p.master_gain_keyframes.size(), 2u);
+  EXPECT_TRUE(is_master_gain_animated(p));
+  EXPECT_DOUBLE_EQ(master_gain_at(p, 0.0), 1.0);
+
+  p = set_master_automation(std::move(p), AutomationMode::Off);
+  EXPECT_FALSE(is_master_gain_animated(p));
+  EXPECT_DOUBLE_EQ(master_gain_at(p, 0.0), 0.5) << "the constant, and the curve is kept";
+  EXPECT_EQ(p.master_gain_keyframes.size(), 2u);
+}
+
+TEST(MasterAutomation, APassReplacesOnlyWhatItCovers) {
+  // The same rule as a track's, and it is the same code — punching in on the
+  // master means what it means anywhere else.
+  Project p;
+  p = write_master_gain_pass(std::move(p), std::vector<Keyframe>{{.t = 0.0, .v = 1.0},
+                                                                 {.t = 10.0, .v = 1.0}});
+  p = write_master_gain_pass(std::move(p), std::vector<Keyframe>{{.t = 4.0, .v = 0.2},
+                                                                 {.t = 6.0, .v = 0.3}});
+
+  ASSERT_EQ(p.master_gain_keyframes.size(), 4u);
+  EXPECT_DOUBLE_EQ(p.master_gain_keyframes[0].t, 0.0);
+  EXPECT_DOUBLE_EQ(p.master_gain_keyframes[3].t, 10.0);
+}
+
+TEST(MasterAutomation, ClearingLeavesTheModeAlone) {
+  Project p = set_master_automation(Project{}, AutomationMode::Touch);
+  p = write_master_gain_pass(std::move(p), std::vector<Keyframe>{{.t = 1.0, .v = 0.5}});
+  p = clear_master_gain_keyframes(std::move(p));
+
+  EXPECT_TRUE(p.master_gain_keyframes.empty());
+  EXPECT_EQ(p.master_automation, AutomationMode::Touch);
+}
+
 }  // namespace
 }  // namespace cutline::core

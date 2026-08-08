@@ -106,4 +106,9 @@ namespace cutline::core {
 [[nodiscard]] Project write_track_gain_pass(Project p, std::string_view track_id,
                                             std::span<const Keyframe> pass);
 
+/// The same three for the master fader, which has no id to name it by.
+[[nodiscard]] Project set_master_automation(Project p, AutomationMode mode);
+[[nodiscard]] Project clear_master_gain_keyframes(Project p);
+[[nodiscard]] Project write_master_gain_pass(Project p, std::span<const Keyframe> pass);
+
 }  // namespace cutline::core
