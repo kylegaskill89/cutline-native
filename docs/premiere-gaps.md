@@ -1470,12 +1470,35 @@ so there is nothing to set a track fader *against*.
   A lane with nothing on it reads as silence rather than being absent, so a
   caller never has to ask whether a track has an entry before drawing one.
 
-- **A track fader cannot be set by ear.** Left over from the row above, and a
-  separate piece of work. A track's gain is baked into the mix when the mix is
-  built, so moving the fader only takes effect on release; `set_master_gain` is
-  the one live edit a player accepts today. Setting a track against what you
-  are hearing needs the same treatment — a live per-track trim the mixing
-  thread reads, applied where the voice block is scaled.
+- ~~**A track fader cannot be set by ear.**~~ **Done.** `set_track_gain` is a
+  live trim the mixing thread reads, applied exactly where the track's own gain
+  already sits in the chain. Kept as a *ratio* against the gain the mix was
+  built with rather than replacing it, so a mixer nobody has touched multiplies
+  by exactly one and an export is bit-for-bit what it always was — there is a
+  test asserting two mixers produce identical samples when one has had its
+  fader set to the value it already had.
+
+**Driving it found the one fault none of this had a test for.** The plan
+numbers audio tracks 0, 1, 2 and skips the video ones; everything else counts
+tracks as the project lists them. The two agree exactly when a project is all
+audio — which every test here was — so the strip asked for lane 1 in a V1+A1
+project and got silence, and the meter simply stayed dark. The public API now
+takes the project's numbering and maps inside, and there is a test with a video
+track above an audio one, which is what every real project looks like and what
+none of the tests had.
+
+Two more came from the same session, both invisible to a test:
+
+- **The throw was linear in decibels**, so unity sat nine tenths of the way up
+  and the few decibels either side of it — where mixing happens — were squeezed
+  into the last centimetre, while half the travel covered "very quiet" to
+  "silent". It is tapered now, unity three quarters up, half way reading about
+  -12, which is where a console puts it. A test can ask where a level sits and
+  gets a consistent answer either way; what it cannot ask is whether the answer
+  leaves you anywhere to put your hand.
+- **The scale printed all nine marks whatever the height**, so on a strip two
+  hundred pixels tall the top six ran together into one unreadable row. Marks
+  that will not fit are skipped now, and unity is always drawn.
 - ~~**M / S in the strip.**~~ **Done.** They are on the track head too, and the
   old note calling a second pair "two controls for one flag" was wrong about
   what a mixer is for: it is one flag reachable from both of the places you are

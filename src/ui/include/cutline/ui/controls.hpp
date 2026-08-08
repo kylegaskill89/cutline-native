@@ -430,7 +430,27 @@ class Fader : public Widget {
   void set_shows_scale(bool shows) noexcept { shows_scale_ = shows; }
   [[nodiscard]] bool shows_scale() const noexcept { return shows_scale_; }
 
-  [[nodiscard]] double fraction() const noexcept { return range_.to_fraction(value_); }
+  /// Where the thumb sits along the throw, 0 at the bottom and 1 at the top.
+  ///
+  /// **Tapered, not linear in decibels.** A throw spread evenly from -60 to +6
+  /// puts unity nine tenths of the way up and leaves the region anybody
+  /// actually mixes in — the few decibels either side of it — squeezed into the
+  /// last centimetre, while half the travel is spent between "very quiet" and
+  /// "silent", where nobody is working. Every console ever built tapers this,
+  /// and so does Premiere: unity sits about three quarters up and the bottom
+  /// half of the throw covers everything below about -12.
+  ///
+  /// Found by looking at it. The linear version passed every test it had,
+  /// because a test asks where a level is and gets a consistent answer either
+  /// way — what it cannot ask is whether the answer leaves you anywhere to put
+  /// your hand.
+  [[nodiscard]] double fraction() const noexcept { return fraction_of(value_); }
+  [[nodiscard]] double fraction_of(double db) const noexcept;
+  [[nodiscard]] double db_at(double fraction) const noexcept;
+
+  /// Where unity sits along the throw. Premiere's proportion.
+  static constexpr double kUnityAt = 0.75;
+
   /// The throw the thumb travels in, and the cap itself.
   [[nodiscard]] Rect groove() const;
   [[nodiscard]] Rect thumb() const;

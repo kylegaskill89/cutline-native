@@ -8322,13 +8322,20 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
   reading.set_small(true);
   reading.set_text(std::format("{:.1f}", cutline::ui::gain_to_fader_db(track.gain)));
 
-  // The number follows every pixel of the drag even though the document does
-  // not: a fader with no readout until the button comes up cannot be set to a
-  // level somebody names. The mix itself only hears it on release, because a
-  // track's gain is baked into the mix and the master fader is the one thing
-  // that can be changed without rebuilding it.
-  fader.set_on_change([&app, out = &reading](double db) {
+  // Straight to the mix on every pixel of the drag, and to the number beside
+  // it. A track fader is balanced against the other tracks, by ear, while they
+  // are all playing — one that only took effect on release could not be used
+  // that way. The document waits for the button to come up, so one gesture is
+  // still one undo entry, and applying it rebuilds the mix with the new gain
+  // baked in, which is where the live trim goes back to one.
+  fader.set_on_change([&app, index, out = &reading](double db) {
     out->set_text(std::format("{:.1f}", db));
+#if CUTLINE_HAVE_PREVIEW
+    if (app.player != nullptr) {
+      app.player->set_track_gain(static_cast<int>(index),
+                                 cutline::ui::fader_db_to_gain(db, cutline::core::kMaxGain));
+    }
+#endif
     mark_dirty(app);
   });
   fader.set_on_commit([&app, track_id](double db) {
@@ -8373,10 +8380,20 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
   }
 
   auto& column = strips.emplace<Box>(Axis::Vertical);
-  column.emplace<Label>("Master").set_bold(true);
+
+  // Gaps where a track strip carries its panner and its switches, so every
+  // fader in the panel starts at the same height. Found by looking at it: the
+  // master's throw sat an inch above the others and read as a different kind of
+  // control rather than the same one at the end of the row. A master has
+  // nothing to pan and nothing to solo, so the space stays empty — which is
+  // what Premiere leaves there too.
+  const double control = 24.0;
+  column.emplace<Spacer>(Axis::Vertical, control * 1.4);
+  column.emplace<Spacer>(Axis::Vertical, control);
 
   const double gain = app == nullptr ? 1.0 : app->session.project().master_gain;
-  auto& fader = column.emplace<cutline::ui::Fader>(
+  auto& master_row = column.emplace<Box>(Axis::Horizontal);
+  auto& fader = master_row.emplace<cutline::ui::Fader>(
       cutline::ui::ValueRange{
           .minimum = cutline::ui::kGainFloorDb,
           .maximum = cutline::ui::gain_to_fader_db(cutline::core::kMaxMasterGain)},
@@ -8385,11 +8402,17 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
   // has never been touched sits.
   fader.set_default_value(0.0);
 
+  // Beside the fader, not under it — the same arrangement every track strip
+  // has, and the reason a mixer is shaped this way at all. Stacked, the master
+  // read as a fader and a separate meter that happened to be near each other.
+  auto& bars = master_row.emplace<cutline::ui::MeterView>();
+  if (app != nullptr) app->meter = &bars;
+
   auto& reading = column.emplace<Label>();
   reading.set_small(true);
 
-  auto& bars = column.emplace<cutline::ui::MeterView>();
-  if (app != nullptr) app->meter = &bars;
+  // The name at the foot, where every other strip carries its own.
+  column.emplace<Label>("Master").set_bold(true);
 
   if (app != nullptr) {
     app->master_fader = &fader;

@@ -793,6 +793,59 @@ TEST(Fader, SettingTheValueFromCodeDoesNotCallBack) {
   EXPECT_EQ(test.commits, 0);
 }
 
+TEST(Fader, UnityIsThreeQuartersUpRatherThanNearTheTop) {
+  // The fault driving found. Spread evenly from -60 to +6, unity lands nine
+  // tenths of the way up and the few decibels either side of it — the region
+  // anybody actually mixes in — are squeezed into the last centimetre, while
+  // half the throw is spent between very quiet and silent.
+  Thrown test;
+  EXPECT_NEAR(test.fader->fraction_of(0.0), Fader::kUnityAt, 1e-9);
+}
+
+TEST(Fader, HalfWayUpIsAboutTwelveDown) {
+  // Where a console puts it, and what the taper is chosen to give.
+  Thrown test;
+  EXPECT_NEAR(test.fader->db_at(0.5), -12.0, 2.0);
+}
+
+TEST(Fader, TheTaperKeepsBothEndsExact) {
+  Thrown test;
+  EXPECT_DOUBLE_EQ(test.fader->db_at(1.0), 6.0);
+  EXPECT_DOUBLE_EQ(test.fader->db_at(0.0), -60.0);
+  EXPECT_DOUBLE_EQ(test.fader->fraction_of(6.0), 1.0);
+  EXPECT_DOUBLE_EQ(test.fader->fraction_of(-60.0), 0.0);
+}
+
+TEST(Fader, ThePositionAndTheLevelAreInversesOfEachOther) {
+  // The two are used by drawing and by dragging respectively. If they drift,
+  // the cap does not end up where the pointer left it.
+  Thrown test;
+  for (const double db : {6.0, 3.0, 0.0, -3.0, -12.0, -30.0, -60.0}) {
+    EXPECT_NEAR(test.fader->db_at(test.fader->fraction_of(db)), db, 1e-6) << db;
+  }
+  for (const double f : {0.0, 0.1, 0.4, 0.75, 0.9, 1.0}) {
+    EXPECT_NEAR(test.fader->fraction_of(test.fader->db_at(f)), f, 1e-6) << f;
+  }
+}
+
+TEST(Fader, TheTaperGivesTheUsefulRegionMoreRoomThanEvenSpacingWould) {
+  // The whole point, stated as a comparison: three decibels either side of
+  // unity should be worth more travel than three decibels down at the bottom.
+  Thrown test;
+  const double near_unity =
+      test.fader->fraction_of(0.0) - test.fader->fraction_of(-3.0);
+  const double near_floor =
+      test.fader->fraction_of(-45.0) - test.fader->fraction_of(-48.0);
+  EXPECT_GT(near_unity, near_floor * 2.0);
+}
+
+TEST(Fader, ARangeWithNoUnityOnItFallsBackToEvenSpacing) {
+  // There is no unity to spread the travel around, so there is no taper to
+  // apply and pretending otherwise would put the ends in the wrong place.
+  const Fader quiet{ValueRange{.minimum = -60.0, .maximum = -6.0}};
+  EXPECT_NEAR(quiet.db_at(0.5), -33.0, 1e-6);
+}
+
 TEST(Fader, TheScaleIsPrintedLoudestFirstAndIncludesUnity) {
   const std::span<const double> marks = Fader::scale_marks();
   ASSERT_FALSE(marks.empty());

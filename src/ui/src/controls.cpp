@@ -496,6 +496,15 @@ namespace {
 /// hear and wants to place exactly; twelve decibels down is a region rather
 /// than a number.
 constexpr std::array<double, 9> kFaderMarks{6.0, 3.0, 0.0, -3.0, -6.0, -9.0, -15.0, -24.0, -48.0};
+
+/// How sharply the throw below unity is bent.
+///
+/// Chosen so that half way up reads about -12 dB, which is where a console
+/// puts it. One and a half rather than a measured constant because the shape
+/// is the point and the exact exponent is not: anything between about 1.3 and
+/// 1.7 gives a fader that feels right, and a round number is easier to
+/// recognise than a fitted one.
+constexpr double kFaderTaper = 1.5;
 }  // namespace
 
 Fader::Fader(ValueRange range, double value) : range_(range) {
@@ -504,6 +513,24 @@ Fader::Fader(ValueRange range, double value) : range_(range) {
 }
 
 std::span<const double> Fader::scale_marks() noexcept { return kFaderMarks; }
+
+double Fader::fraction_of(double db) const noexcept {
+  const double level = range_.clamp(db);
+  // A range that does not straddle unity has no taper to apply — there is no
+  // unity on it to spread the travel around — so it falls back to even.
+  if (range_.maximum <= 0.0 || range_.minimum >= 0.0) return range_.to_fraction(level);
+
+  if (level >= 0.0) return kUnityAt + (level / range_.maximum) * (1.0 - kUnityAt);
+  return kUnityAt - kUnityAt * std::pow(level / range_.minimum, 1.0 / kFaderTaper);
+}
+
+double Fader::db_at(double fraction) const noexcept {
+  const double f = std::clamp(fraction, 0.0, 1.0);
+  if (range_.maximum <= 0.0 || range_.minimum >= 0.0) return range_.from_fraction(f);
+
+  if (f >= kUnityAt) return (f - kUnityAt) / (1.0 - kUnityAt) * range_.maximum;
+  return range_.minimum * std::pow((kUnityAt - f) / kUnityAt, kFaderTaper);
+}
 
 void Fader::set_value(double value) { value_ = range_.clamp(value); }
 
@@ -558,7 +585,7 @@ double Fader::y_of(double db) const {
   const double travel = std::max(0.0, track.height - height);
   // Measured at the thumb's centre, so a mark lines up with the middle of the
   // cap rather than its top edge.
-  return track.y + height / 2.0 + (1.0 - range_.to_fraction(db)) * travel;
+  return track.y + height / 2.0 + (1.0 - fraction_of(db)) * travel;
 }
 
 double Fader::value_at(double y) const {
@@ -566,7 +593,7 @@ double Fader::value_at(double y) const {
   const double height = std::min(thumb_height_, track.height);
   const double travel = track.height - height;
   if (travel <= 0.0) return range_.maximum;
-  return range_.from_fraction(1.0 - (y - track.y - height / 2.0) / travel);
+  return db_at(1.0 - (y - track.y - height / 2.0) / travel);
 }
 
 void Fader::move_to(double value) {
@@ -589,9 +616,19 @@ void Fader::paint_content(Painter& painter, const Theme& theme) const {
   const SurfaceStyle& cap = theme.style(Part::SliderThumb, state());
   if (shows_scale_ && scale_width_ > 0.0) {
     const Rect area = bounds();
+    // Marks that will not fit are left out rather than printed on top of one
+    // another. A short strip cannot carry nine numbers, and a scale that turns
+    // into a smear when a panel is made narrow is worse than one that thins
+    // out — found by looking at a fader two hundred pixels tall, where the top
+    // six ran together into a single unreadable row.
+    double last_y = std::numeric_limits<double>::lowest();
     for (const double mark : kFaderMarks) {
       if (mark > range_.maximum || mark < range_.minimum) continue;
       const double y = y_of(mark);
+      // Unity is always drawn: it is the mark the whole scale is read against,
+      // and a fader that hides it has lost the one number that matters.
+      if (mark != 0.0 && y - last_y < font_size_) continue;
+      last_y = y;
       // A tick into the throw as well as the number, so the eye can find the
       // level without reading. Unity gets a full-width one — it is the mark
       // anybody is actually looking for.

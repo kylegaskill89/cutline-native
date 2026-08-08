@@ -115,6 +115,26 @@ class AudioMixer {
   void set_master_gain(double gain) noexcept;
   [[nodiscard]] double master_gain() const noexcept;
 
+  /// Changes one track's fader while mixing continues.
+  ///
+  /// The same argument as the master's, one level down: a track fader is
+  /// balanced *against the others*, by ear, while they are all playing. One
+  /// that only took effect after the mix had been torn down and rebuilt could
+  /// not be used that way — and rebuilding is what applying the edit to the
+  /// document does, so the document waits for the gesture to end.
+  ///
+  /// Kept as a ratio against the gain the mix was **built** with rather than
+  /// replacing it, so a mixer whose faders nobody has touched multiplies by
+  /// exactly one and an export is bit-for-bit what it always was.
+  ///
+  /// A track gain is a constant per lane today. When it becomes animatable —
+  /// which is what the automation modes need — this becomes a trim over the
+  /// curve rather than over a number, and that is the same arithmetic.
+  void set_track_gain(int track_index, double gain) noexcept;
+  /// What the fader is set to now, which is the built gain until somebody
+  /// moves it. Silence for a lane this mixer has none of.
+  [[nodiscard]] double track_gain(int track_index) const noexcept;
+
   /// Levels of the mix as of the last block, for a meter to draw.
   ///
   /// Measured after the master fader and before the limiter, so it reads what

@@ -507,6 +507,10 @@ void Player::set_master_gain(double gain) {
   if (impl_->mixer != nullptr) impl_->mixer->set_master_gain(gain);
 }
 
+void Player::set_track_gain(int track_index, double gain) {
+  if (impl_->mixer != nullptr) impl_->mixer->set_track_gain(track_index, gain);
+}
+
 audio::MeterReading Player::levels() const {
   audio::MeterReading silent;
   silent.count = impl_->channels;

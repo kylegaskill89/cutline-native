@@ -196,6 +196,49 @@ constexpr double kSilenceDb = -90.0;
   return p;
 }
 
+/// A video track above an audio one, which is what every real project looks
+/// like and what none of the tests around this used to have.
+[[nodiscard]] Project video_over_audio() {
+  Project p;
+  p.media = {tone_media()};
+  Track picture;
+  picture.id = "v1";
+  picture.kind = TrackKind::Video;
+  p.tracks = {std::move(picture), audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0)})};
+  return p;
+}
+
+TEST(TrackMeters, ATrackIsNamedTheWayTheProjectNumbersItRatherThanThePlan) {
+  // The fault driving found, and the reason it survived a green suite: the
+  // plan numbers audio tracks 0, 1, 2 and skips the video ones, while
+  // everything else counts tracks as the project lists them. The two agree
+  // exactly when a project is all audio — which every test here was.
+  auto mixer = mixer_for(video_over_audio());
+  ASSERT_NE(mixer, nullptr);
+  (void)mix_span(*mixer, 0.0, 0.5);
+
+  EXPECT_GT(mixer->track_levels(1).channels[0].peak_db, kSilenceDb)
+      << "track 1 is the audio lane, as the project lists it";
+  EXPECT_LE(mixer->track_levels(0).channels[0].peak_db, kSilenceDb)
+      << "track 0 is the video lane and carries no sound";
+}
+
+TEST(TrackFader, ItAlsoTakesTheProjectsNumbering) {
+  Project p = video_over_audio();
+  p.tracks[1].gain = 0.5;
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+
+  EXPECT_DOUBLE_EQ(mixer->track_gain(1), 0.5) << "the audio lane's own built gain";
+  EXPECT_DOUBLE_EQ(mixer->track_gain(0), 0.0) << "a video lane has no fader";
+
+  (void)mix_span(*mixer, 0.0, 0.2);
+  const double before = mixer->track_levels(1).channels[0].peak_db;
+  mixer->set_track_gain(1, 0.125);
+  (void)mix_span(*mixer, 0.2, 2.0);
+  EXPECT_NEAR(before - mixer->track_levels(1).channels[0].peak_db, 12.0, 2.0);
+}
+
 TEST(TrackMeters, ALaneWithNothingOnItReadsAsSilence) {
   // And does not need asking about first, which is what saves every caller a
   // check it would get wrong.
@@ -286,6 +329,93 @@ TEST(TrackMeters, AMutedLaneReadsAsSilence) {
 
   EXPECT_LE(mixer->track_levels(0).channels[0].peak_db, kSilenceDb);
   EXPECT_GT(mixer->track_levels(1).channels[0].peak_db, kSilenceDb);
+}
+
+// ------------------------------------------------------ live track faders --
+
+TEST(TrackFader, AMixNobodyHasTouchedIsUnchanged) {
+  // The property that makes this safe to add: the trim is a ratio against the
+  // gain the mix was built with, so an untouched fader multiplies by exactly
+  // one and an export is what it always was.
+  auto plain = mixer_for(two_lanes());
+  auto same = mixer_for(two_lanes());
+  ASSERT_NE(plain, nullptr);
+  ASSERT_NE(same, nullptr);
+
+  same->set_track_gain(0, same->track_gain(0));
+  EXPECT_EQ(mix_span(*plain, 0.0, 0.2), mix_span(*same, 0.0, 0.2));
+}
+
+TEST(TrackFader, ItStartsAtWhatTheMixWasBuiltWith) {
+  auto mixer = mixer_for(two_lanes());
+  ASSERT_NE(mixer, nullptr);
+  EXPECT_DOUBLE_EQ(mixer->track_gain(0), 1.0);
+  EXPECT_DOUBLE_EQ(mixer->track_gain(1), 0.25);
+}
+
+TEST(TrackFader, MovingItIsHeardOnTheNextBlock) {
+  auto mixer = mixer_for(two_lanes());
+  ASSERT_NE(mixer, nullptr);
+
+  const double before = rms_of(mix_span(*mixer, 0.0, 0.2));
+  mixer->set_track_gain(0, 0.5);
+  const double after = rms_of(mix_span(*mixer, 0.2, 0.2));
+  EXPECT_LT(after, before);
+}
+
+TEST(TrackFader, ItMovesOnlyTheTrackItNames) {
+  auto mixer = mixer_for(two_lanes());
+  ASSERT_NE(mixer, nullptr);
+  (void)mix_span(*mixer, 0.0, 0.2);
+  const double other_before = mixer->track_levels(1).channels[0].peak_db;
+
+  // Two seconds after the move, not two hundred milliseconds. A peak meter
+  // falls at about twenty decibels a second by design — that is what makes a
+  // transient readable — so a short block after a large cut is still showing
+  // the peak on its way down rather than the level it is heading for. Getting
+  // this wrong reads as the fader not working.
+  mixer->set_track_gain(0, 0.1);
+  (void)mix_span(*mixer, 0.2, 2.0);
+
+  EXPECT_LT(mixer->track_levels(0).channels[0].peak_db, -20.0);
+  EXPECT_NEAR(mixer->track_levels(1).channels[0].peak_db, other_before, 1.0);
+}
+
+TEST(TrackFader, TheTracksOwnMeterFollowsIt) {
+  // The fader and the meter beside it have to agree, or the strip is showing a
+  // level from before the hand moved.
+  auto mixer = mixer_for(two_lanes());
+  ASSERT_NE(mixer, nullptr);
+  (void)mix_span(*mixer, 0.0, 0.2);
+  const double before = mixer->track_levels(0).channels[0].peak_db;
+
+  mixer->set_track_gain(0, 0.25);
+  (void)mix_span(*mixer, 0.2, 2.0);
+  const double after = mixer->track_levels(0).channels[0].peak_db;
+
+  EXPECT_NEAR(before - after, 12.0, 2.0);
+}
+
+TEST(TrackFader, ALaneTheMixerHasNoneOfIsIgnored) {
+  auto mixer = mixer_for(two_lanes());
+  ASSERT_NE(mixer, nullptr);
+  mixer->set_track_gain(-1, 0.5);
+  mixer->set_track_gain(9999, 0.5);
+  EXPECT_DOUBLE_EQ(mixer->track_gain(0), 1.0);
+}
+
+TEST(TrackFader, ALaneBuiltSilentStaysWhereTheMixPlannedIt) {
+  // Zero has no ratio that brings it back, so moving the fader off it is a
+  // rebuild rather than a trim. What matters is that it does not divide by
+  // nothing and hand the mixing thread an infinity.
+  Project p = two_lanes();
+  p.tracks[0].gain = 0.0;
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+
+  mixer->set_track_gain(0, 1.0);
+  const std::vector<float> out = mix_span(*mixer, 0.0, 0.2);
+  for (const float sample : out) EXPECT_TRUE(std::isfinite(sample));
 }
 
 // ----------------------------------------------------------------- content --

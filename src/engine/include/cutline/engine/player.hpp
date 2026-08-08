@@ -92,6 +92,11 @@ class Player {
   /// ear against what is playing.
   void set_master_gain(double gain);
 
+  /// Moves one track's fader, taking effect on the next block. The same
+  /// argument as the master's one level down: a track is balanced against the
+  /// others, by ear, while they are all playing.
+  void set_track_gain(int track_index, double gain);
+
   /// The mix's levels as of the last block. Safe to poll at frame rate.
   ///
   /// Reads as silence while paused: levels fall only while audio is being

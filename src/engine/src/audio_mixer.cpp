@@ -309,6 +309,47 @@ struct AudioMixer::Impl {
   std::vector<std::unique_ptr<audio::Meter>> track_meters;
   std::vector<audio::MeterReading> track_levels;
 
+  /// What each lane's fader was set to when the mix was planned, and what it is
+  /// set to now. The mix multiplies by the ratio, so a mixer nobody has touched
+  /// multiplies by exactly one — an export is unchanged by this existing.
+  ///
+  /// Atomic for the same reason the master's is: the render thread reads them
+  /// on every block while the interface writes them from the message loop.
+  std::vector<double> built_track_gain;
+  std::vector<std::atomic<double>> live_track_gain;
+
+  /// Which meter belongs to a project track, or -1 for one carrying no audio.
+  ///
+  /// Two things have been called a track index. The **plan** numbers audio
+  /// tracks 0, 1, 2 and skips the video ones; everything above counts tracks as
+  /// the project lists them. The two agree exactly when a project is all audio,
+  /// which is what let the confusion past a green suite and a set of tests —
+  /// and then showed up on screen as a meter that stayed dark on the one
+  /// arrangement anybody actually has, a video track with sound under it.
+  ///
+  /// The public API takes the *project's* numbering, because that is what
+  /// "track 1" means everywhere else. Inside, a lane is the plan's.
+  std::vector<int> lane_of_track;
+
+  [[nodiscard]] int lane_for(int track_index) const noexcept {
+    if (track_index < 0) return -1;
+    const auto at = static_cast<std::size_t>(track_index);
+    return at < lane_of_track.size() ? lane_of_track[at] : -1;
+  }
+
+  /// The ratio to apply to a lane, by the plan's numbering.
+  [[nodiscard]] double lane_trim(int lane_index) const noexcept {
+    if (lane_index < 0) return 1.0;
+    const auto lane = static_cast<std::size_t>(lane_index);
+    if (lane >= built_track_gain.size()) return 1.0;
+    const double built = built_track_gain[lane];
+    // A lane built silent has no ratio that can bring it back, so moving its
+    // fader off zero is a rebuild rather than a trim. Returning 1 leaves it as
+    // the mix was planned rather than dividing by nothing.
+    if (built <= 0.0) return 1.0;
+    return live_track_gain[lane].load(std::memory_order_relaxed) / built;
+  }
+
   /// Scratch, reused across calls so mixing does not allocate per block.
   std::vector<float> voice_block;
   /// One block's worth per track, summed as the voices go by. A track can hold
@@ -451,6 +492,28 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
   impl->track_levels.assign(lanes, impl->meter->read());
   impl->track_blocks.resize(lanes);
 
+  // Which lane each project track owns, walked in the same order the plan
+  // walks them so the two numberings cannot disagree.
+  impl->lane_of_track.assign(impl->project.tracks.size(), -1);
+  impl->built_track_gain.assign(lanes, 1.0);
+  int ordinal = 0;
+  for (std::size_t i = 0; i < impl->project.tracks.size(); ++i) {
+    if (impl->project.tracks[i].kind != core::TrackKind::Audio) continue;
+    const int lane = ordinal++;
+    impl->lane_of_track[i] = lane;
+    // The gain the lane was planned with, so a live fader can be a ratio
+    // against it. Read from the project rather than from the plan: the plan
+    // folds track gain into each clip's, and unpicking it from there would be
+    // reading a product for one of its factors.
+    if (static_cast<std::size_t>(lane) < lanes) {
+      impl->built_track_gain[static_cast<std::size_t>(lane)] = impl->project.tracks[i].gain;
+    }
+  }
+  impl->live_track_gain = std::vector<std::atomic<double>>(lanes);
+  for (std::size_t lane = 0; lane < lanes; ++lane) {
+    impl->live_track_gain[lane].store(impl->built_track_gain[lane], std::memory_order_relaxed);
+  }
+
   // Only when something can actually run out. Every source held whole means
   // there is nothing for a reader to do, which is the ordinary project.
   const bool anything_windowed =
@@ -563,6 +626,12 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
     const std::size_t span = last - first;
     impl_->voice_block.assign(span * channels, 0.0f);
 
+    // Read once for the block rather than per sample. A fader moved mid-block
+    // lands on the next one, which is a millisecond or two — far below anything
+    // a hand can aim at, and it keeps the whole block on one gain rather than
+    // stepping partway through it.
+    const double trim = impl_->lane_trim(voice.planned.track_index);
+
     for (std::size_t i = 0; i < span; ++i) {
       const double now =
           static_cast<double>(base + static_cast<std::int64_t>(first + i)) / rate;
@@ -578,8 +647,10 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
       sample_into(*audio, position, channels,
                   std::span(impl_->voice_block).subspan(i * channels, channels));
 
-      // Gain and fades before the effects, matching the reference's chain.
-      const auto gain = static_cast<float>(render::audio_gain_at(voice.planned, now));
+      // Gain and fades before the effects, matching the reference's chain. The
+      // live trim rides on the same number, so a fader moved while playing
+      // lands exactly where the track's own gain already sits in the chain.
+      const auto gain = static_cast<float>(render::audio_gain_at(voice.planned, now) * trim);
       for (std::size_t c = 0; c < channels; ++c) impl_->voice_block[i * channels + c] *= gain;
 
       // The panner, on the two sides of a stereo bus and nothing else. A bus
@@ -698,17 +769,31 @@ audio::MeterReading AudioMixer::levels() const noexcept {
 
 audio::MeterReading AudioMixer::track_levels(int track_index) const noexcept {
   const std::lock_guard lock(impl_->levels_lock);
-  if (track_index < 0 || static_cast<std::size_t>(track_index) >= impl_->track_levels.size()) {
-    // A lane with nothing on it, or one this mixer was not built for. Silence
+  const int lane = impl_->lane_for(track_index);
+  if (lane < 0 || static_cast<std::size_t>(lane) >= impl_->track_levels.size()) {
+    // A track carrying no audio, or one this mixer was not built for. Silence
     // is the true answer and saves every caller a check it would get wrong.
     audio::MeterReading quiet;
     quiet.count = impl_->settings.channels;
     return quiet;
   }
-  return impl_->track_levels[static_cast<std::size_t>(track_index)];
+  return impl_->track_levels[static_cast<std::size_t>(lane)];
 }
 
 std::size_t AudioMixer::track_count() const noexcept { return impl_->track_levels.size(); }
+
+void AudioMixer::set_track_gain(int track_index, double gain) noexcept {
+  const int lane = impl_->lane_for(track_index);
+  if (lane < 0 || static_cast<std::size_t>(lane) >= impl_->live_track_gain.size()) return;
+  impl_->live_track_gain[static_cast<std::size_t>(lane)].store(
+      std::clamp(gain, 0.0, core::kMaxGain), std::memory_order_relaxed);
+}
+
+double AudioMixer::track_gain(int track_index) const noexcept {
+  const int lane = impl_->lane_for(track_index);
+  if (lane < 0 || static_cast<std::size_t>(lane) >= impl_->live_track_gain.size()) return 0.0;
+  return impl_->live_track_gain[static_cast<std::size_t>(lane)].load(std::memory_order_relaxed);
+}
 
 void AudioMixer::flush(std::span<float> out) { impl_->limiter->flush(out); }
 

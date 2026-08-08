@@ -27,11 +27,30 @@
 
 namespace cutline::ui {
 
-/// Empty, and takes whatever room is going.
+/// Empty, and takes whatever room is going — or exactly what it is told to.
 ///
-/// How a toolbar pushes the rest of its contents to the far end without anyone
-/// computing a gap.
-class Spacer final : public Widget {};
+/// With no size, the flexible kind: how a toolbar pushes the rest of its
+/// contents to the far end without anyone computing a gap.
+///
+/// With one, a gap of a stated size along the axis it is laid out on. That is
+/// what aligns two columns holding different controls — a mixer's master strip
+/// has no panner and no mute, and without gaps where they would be its fader
+/// starts an inch above every other fader in the row and reads as a different
+/// kind of control rather than the same one at the end.
+///
+/// Flexible across the other axis either way, so a sized spacer in a column
+/// still lets the column be as wide as its widest control.
+class Spacer final : public Widget {
+ public:
+  Spacer() = default;
+  explicit Spacer(Axis along, double size) : along_(along), size_(size) {}
+
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+
+ private:
+  std::optional<Axis> along_;
+  double size_ = 0.0;
+};
 
 /// A run of text.
 class Label : public Widget {

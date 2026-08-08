@@ -10,6 +10,13 @@ namespace cutline::ui {
 
 Label::Label(std::string text, Part part) : text_(std::move(text)), part_(part) {}
 
+LayoutItem Spacer::sizing(Axis axis, const LayoutContext& context) const {
+  // Fixed only along the axis it was given, so a sized gap in a column does not
+  // also pin the column's width to the same number.
+  if (along_.has_value() && *along_ == axis) return LayoutItem::fixed(size_);
+  return Widget::sizing(axis, context);
+}
+
 double Label::font_size(const Metrics& metrics) const noexcept {
   return small_ ? metrics.small_font_size : metrics.font_size;
 }
