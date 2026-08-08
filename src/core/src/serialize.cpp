@@ -21,6 +21,17 @@ NLOHMANN_JSON_SERIALIZE_ENUM(TrackKind, {
                                             {TrackKind::Audio, "audio"},
                                         })
 
+// Read first, so an unrecognised name in a file written by something newer
+// reads as Read rather than as Off — following a curve is the safe answer, and
+// silently ignoring somebody's automation is not.
+NLOHMANN_JSON_SERIALIZE_ENUM(AutomationMode, {
+                                                 {AutomationMode::Read, "read"},
+                                                 {AutomationMode::Off, "off"},
+                                                 {AutomationMode::Write, "write"},
+                                                 {AutomationMode::Latch, "latch"},
+                                                 {AutomationMode::Touch, "touch"},
+                                             })
+
 NLOHMANN_JSON_SERIALIZE_ENUM(BlendMode, {
                                             {BlendMode::Normal, "normal"},
                                             {BlendMode::Add, "add"},
@@ -269,6 +280,9 @@ json write(const Track& t) {
   // exactly as it always did.
   put_unless_empty(j, "gain_keyframes", write(t.gain_keyframes));
   put_unless_empty(j, "pan_keyframes", write(t.pan_keyframes));
+  // Only when it is not the default, so a track nobody has automated writes
+  // exactly the JSON it always did.
+  if (t.automation != AutomationMode::Read) j["automation"] = t.automation;
 
   json clips = json::array();
   for (const Clip& c : t.clips) clips.push_back(write(c));
@@ -558,6 +572,7 @@ Track read_track(const json& j) {
   if (track_gain_keys != j.end()) t.gain_keyframes = read_keyframes(*track_gain_keys);
   const auto track_pan_keys = j.find("pan_keyframes");
   if (track_pan_keys != j.end()) t.pan_keyframes = read_keyframes(*track_pan_keys);
+  t.automation = read_or(j, "automation", AutomationMode::Read);
 
   const auto clips = j.find("clips");
   if (clips != j.end() && clips->is_array()) {

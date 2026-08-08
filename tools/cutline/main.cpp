@@ -22,6 +22,7 @@
 #include "cutline/core/effects.hpp"
 #include "cutline/core/model.hpp"
 #include "cutline/core/pool.hpp"
+#include "cutline/core/animate.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/core/time.hpp"
@@ -716,6 +717,26 @@ struct App {
     cutline::ui::MeterView* view = nullptr;
   };
   std::vector<TrackMeter> track_meters;
+
+  /// A fader laying down automation while the sequence plays.
+  ///
+  /// The keyframes are held here rather than written to the document as they
+  /// arrive: a pass is one point per displayed frame, so applying them as they
+  /// came would be sixty undo entries a second. The whole pass goes in as one
+  /// edit when playback stops, which is also what makes taking it back one
+  /// press.
+  struct AutomationPass {
+    std::string track_id;
+    /// The fader's position, in linear gain, as the strip last set it.
+    double gain = 1.0;
+    /// Whether the hand is on it right now — what Touch writes on and Latch
+    /// waits for.
+    bool holding = false;
+    /// Latch has been touched, so it goes on writing until the sequence stops.
+    bool latched = false;
+    std::vector<cutline::core::Keyframe> written;
+  };
+  std::vector<AutomationPass> automation;
   Label* master_reading = nullptr;
 
   /// True between the press and the release on a transform handle, which is
@@ -1074,6 +1095,8 @@ void refresh_scopes(App& app);
 void choose_scope(App& app, cutline::ui::ScopeKind kind);
 void show_master_gain(App& app, double gain);
 void refresh_meter(App& app);
+void record_automation(App& app);
+void commit_automation(App& app);
 void refresh_handles(App& app);
 void refresh_title(App& app);
 void show_snapping(App& app);
@@ -5486,6 +5509,11 @@ void stop_playback(App& app) {
   // Once more with the sound stopped, or the bars stay where the last thing
   // playing left them and the meter goes on claiming there is audio.
   refresh_meter(app);
+
+  // The pass ends when the sequence does. Applied here rather than as it was
+  // recorded, so riding a fader through a passage is one edit and one undo
+  // rather than one per displayed frame.
+  commit_automation(app);
   mark_dirty(app);
 #else
   (void)app;
@@ -5728,6 +5756,11 @@ void advance_playback(App& app) {
   // doubles to say it.
   refresh_meter(app);
   mark_dirty(app);
+
+  // And a point from every fader that is writing. Also before the frame check,
+  // because a pass is a shape drawn by hand and the hand does not wait for a
+  // new picture to be decoded.
+  record_automation(app);
 
   const double at = app.player->position();
   if (app.player->finished()) {
@@ -8245,6 +8278,75 @@ void open_library_menu(App& app, double x, double y) {
 /// The two belong together: a fader is moved by ear and by eye, and the eye
 /// part is the meter. Splitting them across panels would mean setting a level
 /// while watching something that might be behind another tab.
+/// The pass being recorded for a track, made if there is not one yet.
+App::AutomationPass& automation_pass(App& app, const std::string& track_id) {
+  const auto found = std::ranges::find(app.automation, track_id, &App::AutomationPass::track_id);
+  if (found != app.automation.end()) return *found;
+  app.automation.push_back(App::AutomationPass{.track_id = track_id});
+  return app.automation.back();
+}
+
+/// Whether a track is writing automation at this moment.
+///
+/// The three writing modes differ only here, which is the whole of what
+/// separates them: Write records the length of the pass whether or not anybody
+/// is touching the fader, Latch starts at the first touch and carries on to the
+/// end, and Touch records only while the fader is actually held.
+[[nodiscard]] bool pass_is_writing(cutline::core::AutomationMode mode,
+                                   const App::AutomationPass& pass) noexcept {
+  switch (mode) {
+    case cutline::core::AutomationMode::Write: return true;
+    case cutline::core::AutomationMode::Latch: return pass.latched;
+    case cutline::core::AutomationMode::Touch: return pass.holding;
+    case cutline::core::AutomationMode::Off:
+    case cutline::core::AutomationMode::Read: return false;
+  }
+  return false;
+}
+
+/// Takes one point from every writing fader, at the playhead.
+///
+/// Called once per displayed frame while the sequence runs. A pass is a shape
+/// somebody drew with their hand, and the frame rate is the resolution that
+/// hand has.
+void record_automation(App& app) {
+  if (app.automation.empty()) return;
+  const double now = app.session.playhead();
+
+  for (App::AutomationPass& pass : app.automation) {
+    const auto track = std::ranges::find(app.session.project().tracks, pass.track_id,
+                                         &cutline::core::Track::id);
+    if (track == app.session.project().tracks.end()) continue;
+    if (!pass_is_writing(track->automation, pass)) continue;
+
+    // Never backwards. A pass is walked forwards, and a seek during one would
+    // otherwise leave two points at times that cross.
+    if (!pass.written.empty() && now <= pass.written.back().t) continue;
+    pass.written.push_back(cutline::core::Keyframe{.t = now, .v = pass.gain});
+  }
+}
+
+/// Lays every recorded pass into the document, as one edit.
+///
+/// Called when the sequence stops. One edit for all of them together, because
+/// riding two faders through the same passage is one thing somebody did.
+void commit_automation(App& app) {
+  bool any = false;
+  cutline::core::Project next = app.session.project();
+  for (App::AutomationPass& pass : app.automation) {
+    if (pass.written.size() >= 2) {
+      next = cutline::core::write_track_gain_pass(std::move(next), pass.track_id, pass.written);
+      any = true;
+    }
+    pass.written.clear();
+    pass.latched = false;
+  }
+  if (!any) return;
+
+  app.session.apply(std::move(next));
+  refresh_all(app);
+}
+
 /// One audio track's strip in the mixer, in Premiere's order down the column:
 /// the panner, the mute and solo pair, the fader with its meter beside it, the
 /// level as a number, and the track's name at the foot.
@@ -8270,6 +8372,22 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
     app.session.apply(
         cutline::core::set_track_pan(app.session.project(), track_id, value / 100.0));
     app.inspector_stale = true;
+  });
+
+  // What the fader does with its curve. Premiere's five, in Premiere's order.
+  static constexpr std::array<cutline::core::AutomationMode, 5> kModes{
+      cutline::core::AutomationMode::Off, cutline::core::AutomationMode::Read,
+      cutline::core::AutomationMode::Write, cutline::core::AutomationMode::Latch,
+      cutline::core::AutomationMode::Touch};
+  const auto at_mode = std::ranges::find(kModes, track.automation);
+  auto& modes = strip.emplace<Dropdown>(
+      std::vector<std::string>{"Off", "Read", "Write", "Latch", "Touch"},
+      at_mode == kModes.end() ? 1u : static_cast<std::size_t>(at_mode - kModes.begin()));
+  modes.set_on_change([&app, track_id](std::size_t index) {
+    if (index >= kModes.size()) return;
+    app.session.apply(
+        cutline::core::set_track_automation(app.session.project(), track_id, kModes[index]));
+    refresh_all(app);
   });
 
   // Mute and solo are also on the track head in the timeline, and that is not
@@ -8328,17 +8446,42 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
   // that way. The document waits for the button to come up, so one gesture is
   // still one undo entry, and applying it rebuilds the mix with the new gain
   // baked in, which is where the live trim goes back to one.
-  fader.set_on_change([&app, index, out = &reading](double db) {
+  // The pass exists from the moment the strip does, holding the fader's
+  // position, so a Write pass has something to record before anybody touches
+  // anything — which is exactly what Write means.
+  automation_pass(app, track_id).gain = track.gain;
+
+  fader.set_on_change([&app, index, track_id, out = &reading](double db) {
     out->set_text(std::format("{:.1f}", db));
+    const double gain = cutline::ui::fader_db_to_gain(db, cutline::core::kMaxGain);
+
+    App::AutomationPass& pass = automation_pass(app, track_id);
+    pass.gain = gain;
+    // A move *is* the touch. Latch and Touch both key off the hand being on
+    // the fader, and the change handler is the only thing that knows.
+    pass.holding = true;
+    pass.latched = true;
+
 #if CUTLINE_HAVE_PREVIEW
-    if (app.player != nullptr) {
-      app.player->set_track_gain(static_cast<int>(index),
-                                 cutline::ui::fader_db_to_gain(db, cutline::core::kMaxGain));
-    }
+    if (app.player != nullptr) app.player->set_track_gain(static_cast<int>(index), gain);
 #endif
     mark_dirty(app);
   });
   fader.set_on_commit([&app, track_id](double db) {
+    // The hand is off. Touch stops writing here and goes back to the curve;
+    // Latch keeps going, which is the whole difference between them.
+    automation_pass(app, track_id).holding = false;
+
+    // A track that is recording a pass does not also take the fader as its
+    // constant — the pass is what is being set, and writing the constant too
+    // would leave the curve and the number underneath it disagreeing.
+    const auto track = std::ranges::find(app.session.project().tracks, track_id,
+                                         &cutline::core::Track::id);
+    if (track != app.session.project().tracks.end() &&
+        pass_is_writing(track->automation, automation_pass(app, track_id))) {
+      return;
+    }
+
     app.session.apply(cutline::core::set_track_gain(
         app.session.project(), track_id,
         cutline::ui::fader_db_to_gain(db, cutline::core::kMaxGain)));
@@ -8387,8 +8530,12 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
   // control rather than the same one at the end of the row. A master has
   // nothing to pan and nothing to solo, so the space stays empty — which is
   // what Premiere leaves there too.
+  // One per row a track strip has above its fader: the panner, the automation
+  // mode, and the mute/solo pair. Premiere's master carries a mode of its own
+  // rather than a gap here, and it should — that is the row below.
   const double control = 24.0;
   column.emplace<Spacer>(Axis::Vertical, control * 1.4);
+  column.emplace<Spacer>(Axis::Vertical, control);
   column.emplace<Spacer>(Axis::Vertical, control);
 
   const double gain = app == nullptr ? 1.0 : app->session.project().master_gain;

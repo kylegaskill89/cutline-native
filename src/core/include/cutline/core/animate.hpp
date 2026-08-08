@@ -9,6 +9,7 @@
 
 #include "cutline/core/model.hpp"
 
+#include <span>
 #include <string_view>
 
 namespace cutline::core {
@@ -58,5 +59,51 @@ namespace cutline::core {
 
 /// Clears all volume automation, returning the clip to constant gain.
 [[nodiscard]] Project clear_gain_keyframes(Project p, std::string_view clip_id);
+
+// ------------------------------------------------------ track automation --
+
+/// Sets, or replaces, a keyframe on a track's fader or panner at **timeline**
+/// `time`.
+///
+/// Timeline rather than track-local, because a track has no local time. Every
+/// other function in this header takes clip-local seconds, so the odd one out
+/// is named in its signature as well as here.
+///
+/// What the mixer's Write, Latch and Touch modes call as a pass runs: one
+/// keyframe per fader position, laid down at the moment it was passing.
+[[nodiscard]] Project set_track_gain_keyframe(Project p, std::string_view track_id, double time,
+                                              double v);
+[[nodiscard]] Project set_track_pan_keyframe(Project p, std::string_view track_id, double time,
+                                             double v);
+
+[[nodiscard]] Project remove_track_gain_keyframe_at(Project p, std::string_view track_id,
+                                                    double time);
+
+/// Throws the curve away and leaves the constant. What the Clear on an
+/// automated fader does — and it deliberately does *not* touch the mode, since
+/// clearing a pass to record another one is the ordinary reason to do it.
+[[nodiscard]] Project clear_track_gain_keyframes(Project p, std::string_view track_id);
+[[nodiscard]] Project clear_track_pan_keyframes(Project p, std::string_view track_id);
+
+/// Sets what a track's fader does with its automation.
+[[nodiscard]] Project set_track_automation(Project p, std::string_view track_id,
+                                           AutomationMode mode);
+
+/// Lays a recorded pass over a track's fader curve.
+///
+/// What Write, Latch and Touch commit when the sequence stops. The pass
+/// **replaces** the curve across the span it covers and leaves the rest alone,
+/// which is what punching in means: riding the fader through one passage should
+/// not disturb what was set either side of it.
+///
+/// One edit rather than one per keyframe, and that is the whole reason this
+/// exists as a function. A pass is a keyframe every displayed frame, so writing
+/// them as they arrived would put sixty entries a second in the undo stack and
+/// make taking a pass back a matter of holding Ctrl+Z down.
+///
+/// `pass` is expected in timeline order; an empty one changes nothing, which is
+/// what a mode that was armed and never touched produces.
+[[nodiscard]] Project write_track_gain_pass(Project p, std::string_view track_id,
+                                            std::span<const Keyframe> pass);
 
 }  // namespace cutline::core

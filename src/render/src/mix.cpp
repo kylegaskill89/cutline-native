@@ -62,8 +62,12 @@ std::vector<PlannedAudioClip> plan_audio(const core::Project& project) {
       entry.track_index = index;
       entry.track_gain = std::clamp(track.gain, 0.0, core::kMaxGain);
       entry.track_pan = std::clamp(track.pan, -1.0, 1.0);
-      entry.track_gain_keyframes = track.gain_keyframes;
-      entry.track_pan_keyframes = track.pan_keyframes;
+      // Through the query rather than copied straight off the track, so a lane
+      // switched to Off plans as the constant it is now using. Copying the
+      // curve and deciding later would mean the mixer, the exporter and the
+      // interface each needing to know what Off means.
+      if (core::is_track_gain_animated(track)) entry.track_gain_keyframes = track.gain_keyframes;
+      if (core::is_track_pan_animated(track)) entry.track_pan_keyframes = track.pan_keyframes;
       planned.push_back(entry);
     }
   }

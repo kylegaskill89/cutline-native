@@ -433,5 +433,154 @@ TEST(MaskAnimation, AMaskKeyframeCountsAsOneOnTheClip) {
   EXPECT_DOUBLE_EQ(times[0], 1.5);
 }
 
+// ------------------------------------------------------- track automation --
+
+Project one_audio_track() {
+  Project p;
+  Track a;
+  a.id = "a1";
+  a.kind = TrackKind::Audio;
+  a.gain = 0.5;
+  p.tracks = {a};
+  return p;
+}
+
+const Track& only_track(const Project& p) { return p.tracks[0]; }
+
+TEST(TrackAutomation, AKeyframeIsSetAtATimelineTime) {
+  Project p = one_audio_track();
+  p = set_track_gain_keyframe(std::move(p), "a1", 4.0, 0.25);
+
+  ASSERT_EQ(only_track(p).gain_keyframes.size(), 1u);
+  EXPECT_DOUBLE_EQ(only_track(p).gain_keyframes[0].t, 4.0);
+  EXPECT_DOUBLE_EQ(only_track(p).gain_keyframes[0].v, 0.25);
+}
+
+TEST(TrackAutomation, SettingOneTwiceAtTheSameTimeReplacesIt) {
+  Project p = one_audio_track();
+  p = set_track_gain_keyframe(std::move(p), "a1", 2.0, 0.5);
+  p = set_track_gain_keyframe(std::move(p), "a1", 2.0, 0.75);
+
+  ASSERT_EQ(only_track(p).gain_keyframes.size(), 1u);
+  EXPECT_DOUBLE_EQ(only_track(p).gain_keyframes[0].v, 0.75);
+}
+
+TEST(TrackAutomation, ValuesAreClampedToWhatAFaderCanReach) {
+  Project p = one_audio_track();
+  p = set_track_gain_keyframe(std::move(p), "a1", 0.0, -5.0);
+  p = set_track_pan_keyframe(std::move(p), "a1", 0.0, 9.0);
+
+  EXPECT_DOUBLE_EQ(only_track(p).gain_keyframes[0].v, 0.0);
+  EXPECT_DOUBLE_EQ(only_track(p).pan_keyframes[0].v, 1.0);
+}
+
+TEST(TrackAutomation, NamingATrackThatIsNotThereChangesNothing) {
+  const Project before = one_audio_track();
+  EXPECT_EQ(set_track_gain_keyframe(before, "nobody", 1.0, 0.5), before);
+  EXPECT_EQ(set_track_automation(before, "nobody", AutomationMode::Write), before);
+}
+
+TEST(TrackAutomation, OffMeansTheCurveIsNotRead) {
+  // Off does not throw the curve away — it stops it being followed, so a fader
+  // that was automated can go back to being a plain fader and then back again.
+  Project p = one_audio_track();
+  p = set_track_gain_keyframe(std::move(p), "a1", 0.0, 1.0);
+  ASSERT_TRUE(is_track_gain_animated(only_track(p)));
+
+  p = set_track_automation(std::move(p), "a1", AutomationMode::Off);
+  EXPECT_FALSE(is_track_gain_animated(only_track(p)));
+  EXPECT_FALSE(only_track(p).gain_keyframes.empty()) << "the curve is kept";
+  EXPECT_DOUBLE_EQ(track_gain_at(only_track(p), 0.0), 0.5) << "the constant is used";
+
+  p = set_track_automation(std::move(p), "a1", AutomationMode::Read);
+  EXPECT_DOUBLE_EQ(track_gain_at(only_track(p), 0.0), 1.0);
+}
+
+TEST(TrackAutomation, WriteLatchAndTouchAllFollowTheCurveToo) {
+  // They differ in when they *record*, not in what they play back.
+  for (const AutomationMode mode :
+       {AutomationMode::Write, AutomationMode::Latch, AutomationMode::Touch}) {
+    Project p = one_audio_track();
+    p = set_track_gain_keyframe(std::move(p), "a1", 0.0, 1.0);
+    p = set_track_automation(std::move(p), "a1", mode);
+    EXPECT_TRUE(is_track_gain_animated(only_track(p)));
+  }
+}
+
+TEST(TrackPass, APassBecomesTheCurve) {
+  Project p = one_audio_track();
+  const std::vector<Keyframe> pass{{.t = 1.0, .v = 1.0}, {.t = 2.0, .v = 0.5}};
+  p = write_track_gain_pass(std::move(p), "a1", pass);
+
+  ASSERT_EQ(only_track(p).gain_keyframes.size(), 2u);
+  EXPECT_DOUBLE_EQ(only_track(p).gain_keyframes[1].v, 0.5);
+}
+
+TEST(TrackPass, ItReplacesOnlyWhatItCovers) {
+  // Punching in: riding the fader through one passage must not disturb what was
+  // set either side of it.
+  Project p = one_audio_track();
+  p = set_track_gain_keyframe(std::move(p), "a1", 0.0, 1.0);
+  p = set_track_gain_keyframe(std::move(p), "a1", 5.0, 1.0);
+  p = set_track_gain_keyframe(std::move(p), "a1", 10.0, 1.0);
+
+  const std::vector<Keyframe> pass{{.t = 4.0, .v = 0.2}, {.t = 6.0, .v = 0.3}};
+  p = write_track_gain_pass(std::move(p), "a1", pass);
+
+  const std::vector<Keyframe>& keys = only_track(p).gain_keyframes;
+  ASSERT_EQ(keys.size(), 4u);
+  EXPECT_DOUBLE_EQ(keys[0].t, 0.0) << "before the pass, untouched";
+  EXPECT_DOUBLE_EQ(keys[1].t, 4.0);
+  EXPECT_DOUBLE_EQ(keys[2].t, 6.0);
+  EXPECT_DOUBLE_EQ(keys[3].t, 10.0) << "after the pass, untouched";
+}
+
+TEST(TrackPass, AKeyframeExactlyUnderEitherEndIsReplaced) {
+  // Inclusive at both ends, or a point would be left sitting a fraction of a
+  // frame from the one that replaced it.
+  Project p = one_audio_track();
+  p = set_track_gain_keyframe(std::move(p), "a1", 2.0, 1.0);
+  p = set_track_gain_keyframe(std::move(p), "a1", 4.0, 1.0);
+
+  const std::vector<Keyframe> pass{{.t = 2.0, .v = 0.1}, {.t = 4.0, .v = 0.2}};
+  p = write_track_gain_pass(std::move(p), "a1", pass);
+
+  const std::vector<Keyframe>& keys = only_track(p).gain_keyframes;
+  ASSERT_EQ(keys.size(), 2u);
+  EXPECT_DOUBLE_EQ(keys[0].v, 0.1);
+  EXPECT_DOUBLE_EQ(keys[1].v, 0.2);
+}
+
+TEST(TrackPass, AnEmptyPassChangesNothing) {
+  // What a mode that was armed and never touched produces.
+  Project p = one_audio_track();
+  p = set_track_gain_keyframe(std::move(p), "a1", 1.0, 0.5);
+  const Project before = p;
+
+  EXPECT_EQ(write_track_gain_pass(before, "a1", {}), before);
+}
+
+TEST(TrackPass, TheResultIsStillSortedByTime) {
+  Project p = one_audio_track();
+  p = set_track_gain_keyframe(std::move(p), "a1", 9.0, 1.0);
+
+  const std::vector<Keyframe> pass{{.t = 1.0, .v = 0.4}, {.t = 3.0, .v = 0.6}};
+  p = write_track_gain_pass(std::move(p), "a1", pass);
+
+  const std::vector<Keyframe>& keys = only_track(p).gain_keyframes;
+  for (std::size_t i = 1; i < keys.size(); ++i) EXPECT_LT(keys[i - 1].t, keys[i].t);
+}
+
+TEST(TrackPass, ClearingLeavesTheModeAlone) {
+  // Clearing a pass to record another one is the ordinary reason to clear.
+  Project p = one_audio_track();
+  p = set_track_automation(std::move(p), "a1", AutomationMode::Latch);
+  p = set_track_gain_keyframe(std::move(p), "a1", 1.0, 0.5);
+  p = clear_track_gain_keyframes(std::move(p), "a1");
+
+  EXPECT_TRUE(only_track(p).gain_keyframes.empty());
+  EXPECT_EQ(only_track(p).automation, AutomationMode::Latch);
+}
+
 }  // namespace
 }  // namespace cutline::core

@@ -1412,8 +1412,9 @@ The whole lot is a single vertical column, master first, tracks below.
 | ~~A **meter per track**, beside its fader~~ | with its own scale down its right | **done** — `AudioMixer::track_levels` | — |
 | ~~Numeric gain readout under the fader~~ | yes | **done** — follows every pixel of the drag | — |
 | ~~**M / S** buttons~~ | mute, solo | **done**, in the strip as well as on the track head | — |
-| **R** (record-arm) | arms a track for automation | none — see the row below | machinery |
-| Automation mode | Off / Read / Write / Latch / Touch | none, and nothing records automation | machinery |
+| **R** (record-arm) | arms a track for recording an input onto it | **won't do** — this application has no audio capture at all | — |
+| ~~Automation mode~~ | Off / Read / Write / Latch / Touch | **done** — all five, recording a pass and committing it as one edit | — |
+| Automation on the **master** | the master strip has a mode too | none — `Project::master_gain` is a plain number | model |
 | ~~Track name at the foot~~ | `A1` and `Audio 1` | **done** — the same name the timeline shows | — |
 
 **The reason it looks like this is not a good one.** The comment on
@@ -1506,25 +1507,35 @@ Two more came from the same session, both invisible to a test:
   activities, and leaving one to reach the other is the thing a mixer exists to
   avoid. **R** is record-arm for automation and waits on it — a button that
   arms nothing is worse than no button.
-- **Automation modes and record-arm** are what is left of this section, and the
-  order they have to be built in is fixed by what they depend on:
+- ~~**Automation modes**~~ — **done**, all five. Only two of them change what is
+  *heard*: Off ignores the curve and Read follows it. The other three follow it
+  too and differ only in when moving the fader starts writing a new one, which
+  is a question about the gesture rather than about the mix — Write records the
+  whole pass whether or not anybody is holding the fader, Latch starts at the
+  first touch and runs to the end, Touch records only while it is held.
 
-  1. **A track's gain and pan have to become animatable.** `Clip` already
-     carries keyframes and `is_gain_animated` reads them; `Track::gain` is a
-     plain double. That is the model change, and it is the whole of why the
-     dropdown cannot come first — Read has nothing to read.
-  2. **`render::audio_gain_at` has to evaluate the track's curve** rather than
-     folding a constant into each clip's gain at plan time. The live trim added
-     for the fader becomes a trim over a curve instead of over a number, which
-     is the same arithmetic in the same place.
-  3. **Then the modes.** Off ignores the curve; Read follows it; Write records
-     the fader into it while the sequence plays; Latch and Touch differ only in
-     when they start and stop recording. Record-arm (**R**) is the switch that
-     says a strip is one of the writing ones.
+  **A pass is held and committed once.** One keyframe per displayed frame means
+  sixty a second; applying them as they arrived would put sixty entries a
+  second in the undo stack and make taking a pass back a matter of holding
+  Ctrl+Z down. `write_track_gain_pass` lays the whole thing in as one edit, and
+  it **replaces only the span it covers** — punching in through one passage
+  must not disturb what was set either side of it.
 
-  Nothing here is blocked. It is written down in order because the first step
-  is a model change that everything else waits on, and starting at the dropdown
-  would mean building a control with nothing behind it.
+  Driven: A1 set to Write, the sequence played, the fader ridden down, and the
+  saved file holds 102 keyframes from t=0 at unity to t=3.37 at 0.574. That is
+  the shape of a hand, which is the only thing that could have confirmed it.
+
+- **Record-arm (R) — won't do.** In Premiere, R arms a track for recording an
+  *input* onto it — a voiceover through a microphone. This application has no
+  audio capture at all, and §5 already declined Premiere's Capture and Device
+  Control panes on exactly those grounds. A button that arms nothing is worse
+  than no button. It is not the automation switch it looks like: the automation
+  modes are the dropdown above it, and they are built.
+
+- **The master has no automation**, and in Premiere it has a mode like every
+  other strip. `Project::master_gain` is a plain number where a track now
+  carries a curve and a mode. The machinery all exists; this is the model
+  change to match, and the master strip leaves a gap where its dropdown goes.
 
 ### 6.2 Submixes, sends, Essential Sound and loudness
 

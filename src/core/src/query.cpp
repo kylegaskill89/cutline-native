@@ -182,8 +182,15 @@ double gain_at(const Clip& c, double local_t) noexcept {
   return std::clamp(eval_keyframes(c.gain_keyframes, local_t), 0.0, kMaxGain);
 }
 
-bool is_track_gain_animated(const Track& t) noexcept { return !t.gain_keyframes.empty(); }
-bool is_track_pan_animated(const Track& t) noexcept { return !t.pan_keyframes.empty(); }
+// A curve that is switched off is not automation as far as anything reading it
+// is concerned. Asking here rather than at each call site is what keeps Off
+// meaning the same thing to the mixer, the exporter and the interface.
+bool is_track_gain_animated(const Track& t) noexcept {
+  return t.automation != AutomationMode::Off && !t.gain_keyframes.empty();
+}
+bool is_track_pan_animated(const Track& t) noexcept {
+  return t.automation != AutomationMode::Off && !t.pan_keyframes.empty();
+}
 
 double track_gain_at(const Track& t, double time) noexcept {
   if (!is_track_gain_animated(t)) return std::clamp(t.gain, 0.0, kMaxGain);

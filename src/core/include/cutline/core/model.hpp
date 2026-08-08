@@ -465,6 +465,32 @@ struct Clip {
 
 // ------------------------------------------------------------------- track --
 
+/// What a track's fader does with its automation. Premiere's five modes.
+///
+/// Only two of them change what is *heard*: `Off` ignores the curve and `Read`
+/// follows it. The other three follow it too, and differ only in when moving
+/// the fader starts writing a new one — which is a question about the gesture
+/// rather than about the mix, and is why they are one enum rather than a mode
+/// and a separate arming flag.
+enum class AutomationMode {
+  /// The curve is ignored and the constant is used. What a fader that has been
+  /// automated and then wants to be a plain fader again does, without throwing
+  /// the curve away.
+  Off,
+  /// Follow the curve. What a track with automation does by default, and what
+  /// every project written before these existed reads back as.
+  Read,
+  /// Record the fader continuously while the sequence plays, whether or not
+  /// anybody is holding it. The mode that overwrites a pass wholesale.
+  Write,
+  /// Record from the moment the fader is first touched until playback stops.
+  /// The pass keeps whatever was there before the touch.
+  Latch,
+  /// Record only while the fader is held, and go back to the curve on release.
+  /// The mode for fixing one moment without disturbing the rest.
+  Touch,
+};
+
 /// An ordered lane of clips. Display order is the array order, and clips within
 /// a track are kept sorted by start time.
 struct Track {
@@ -524,6 +550,11 @@ struct Track {
   /// these existed.
   std::vector<Keyframe> gain_keyframes;
   std::vector<Keyframe> pan_keyframes;
+
+  /// What the fader does with those curves. `Read` by default, which is what a
+  /// project written before automation existed means: it has no curve, so
+  /// following one costs nothing and setting the fader still works.
+  AutomationMode automation = AutomationMode::Read;
 
   /// Custom lane height in pixels, overriding the default for its kind.
   std::optional<double> height;
