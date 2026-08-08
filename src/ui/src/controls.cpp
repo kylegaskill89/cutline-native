@@ -1,6 +1,7 @@
 #include "cutline/ui/controls.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -484,6 +485,178 @@ bool NumericField::on_key_down(const KeyEvent& event) {
 }
 
 // ---------------------------------------------------------------- checkbox --
+
+// ---------------------------------------------------------------- faders --
+
+namespace {
+/// The levels a fader prints beside its throw, loudest first.
+///
+/// Premiere's own set, which is not evenly spaced on purpose: the marks crowd
+/// where the ear does. A decibel either side of unity is a change anybody can
+/// hear and wants to place exactly; twelve decibels down is a region rather
+/// than a number.
+constexpr std::array<double, 9> kFaderMarks{6.0, 3.0, 0.0, -3.0, -6.0, -9.0, -15.0, -24.0, -48.0};
+}  // namespace
+
+Fader::Fader(ValueRange range, double value) : range_(range) {
+  set_focusable(true);
+  set_value(value);
+}
+
+std::span<const double> Fader::scale_marks() noexcept { return kFaderMarks; }
+
+void Fader::set_value(double value) { value_ = range_.clamp(value); }
+
+void Fader::set_range(const ValueRange& range) {
+  range_ = range;
+  value_ = range_.clamp(value_);
+}
+
+void Fader::layout(const LayoutContext& context) {
+  const Metrics& metrics = context.metrics();
+  thumb_height_ = metrics.control_height * 0.55;
+  throw_width_ = metrics.control_height * 0.7;
+  font_size_ = std::max(8.0, metrics.font_size - 3.0);
+  // Wide enough for the widest mark it will print. "-48" is three characters
+  // and a minus, and measuring it is cheaper than being wrong about the font.
+  scale_width_ = shows_scale_ ? context.text.measure("-48", font_size_, false) + metrics.spacing
+                              : 0.0;
+}
+
+LayoutItem Fader::sizing(Axis axis, const LayoutContext& context) const {
+  const Metrics& metrics = context.metrics();
+  if (axis == Axis::Vertical) {
+    // A fader wants length. Four control heights is the least that is still a
+    // throw rather than a switch, and it takes more gladly.
+    return LayoutItem::flexible(1.0, metrics.control_height * 4.0);
+  }
+  const double thrown = metrics.control_height * 0.7;
+  if (!shows_scale_) return LayoutItem::fixed(thrown);
+  return LayoutItem::fixed(thrown + context.text.measure("-48", font_size_, false) +
+                           metrics.spacing);
+}
+
+Rect Fader::groove() const {
+  const Rect area = bounds();
+  // The scale sits to the left, as Premiere prints it, so the throw is against
+  // the meter that will be drawn beside it.
+  const double x = area.x + std::min(scale_width_, area.width);
+  return Rect{x, area.y, std::max(0.0, std::min(throw_width_, area.right() - x)), area.height};
+}
+
+Rect Fader::thumb() const {
+  const Rect track = groove();
+  const double height = std::min(thumb_height_, track.height);
+  const double travel = std::max(0.0, track.height - height);
+  // Upside down, because loud is up: a fader at its maximum sits at the top.
+  return Rect{track.x, track.y + (1.0 - fraction()) * travel, track.width, height};
+}
+
+double Fader::y_of(double db) const {
+  const Rect track = groove();
+  const double height = std::min(thumb_height_, track.height);
+  const double travel = std::max(0.0, track.height - height);
+  // Measured at the thumb's centre, so a mark lines up with the middle of the
+  // cap rather than its top edge.
+  return track.y + height / 2.0 + (1.0 - range_.to_fraction(db)) * travel;
+}
+
+double Fader::value_at(double y) const {
+  const Rect track = groove();
+  const double height = std::min(thumb_height_, track.height);
+  const double travel = track.height - height;
+  if (travel <= 0.0) return range_.maximum;
+  return range_.from_fraction(1.0 - (y - track.y - height / 2.0) / travel);
+}
+
+void Fader::move_to(double value) {
+  const double next = range_.clamp(value);
+  if (next == value_) return;
+  value_ = next;
+  if (on_change_) on_change_(value_);
+}
+
+void Fader::finish() {
+  if (value_ == gesture_start_) return;
+  if (on_commit_) on_commit_(value_);
+}
+
+void Fader::paint_content(Painter& painter, const Theme& theme) const {
+  const SurfaceStyle& style = theme.style(Part::Slider, state());
+  const Rect track = groove();
+  paint_surface(painter, track, style);
+
+  const SurfaceStyle& cap = theme.style(Part::SliderThumb, state());
+  if (shows_scale_ && scale_width_ > 0.0) {
+    const Rect area = bounds();
+    for (const double mark : kFaderMarks) {
+      if (mark > range_.maximum || mark < range_.minimum) continue;
+      const double y = y_of(mark);
+      // A tick into the throw as well as the number, so the eye can find the
+      // level without reading. Unity gets a full-width one — it is the mark
+      // anybody is actually looking for.
+      const double reach = mark == 0.0 ? track.width : track.width * 0.4;
+      painter.line(track.x, y, track.x + reach, y, cap.text, 1.0);
+
+      const Rect text{area.x, y - font_size_, std::max(0.0, scale_width_ - 2.0),
+                      font_size_ * 2.0};
+      painter.text(text_run(text, std::format("{:g}", mark), style, font_size_,
+                            TextAlign::Right, false));
+    }
+  }
+
+  paint_surface(painter, thumb(), cap);
+}
+
+bool Fader::on_mouse_down(const MouseEvent& event) {
+  if (event.button != MouseButton::Left) return false;
+  gesture_start_ = value_;
+
+  if (event.click_count == 2 && default_.has_value()) {
+    move_to(*default_);
+    finish();
+    return true;
+  }
+
+  dragging_ = true;
+  move_to(value_at(event.y));
+  return true;
+}
+
+bool Fader::on_mouse_move(const MouseEvent& event) {
+  if (!dragging_) return false;
+  move_to(value_at(event.y));
+  return true;
+}
+
+bool Fader::on_mouse_up(const MouseEvent& event) {
+  if (event.button != MouseButton::Left || !dragging_) return false;
+  dragging_ = false;
+  finish();
+  return true;
+}
+
+bool Fader::on_key_down(const KeyEvent& event) {
+  if (!event.modifiers.none()) return false;
+
+  // A decibel a press, and six with a page. Both are levels somebody means
+  // rather than fractions of a travel whose length depends on the layout.
+  double step = 0.0;
+  switch (event.key) {
+    case Key::Up: step = 1.0; break;
+    case Key::Down: step = -1.0; break;
+    case Key::PageUp: step = 6.0; break;
+    case Key::PageDown: step = -6.0; break;
+    case Key::Home: step = range_.maximum - value_; break;
+    case Key::End: step = range_.minimum - value_; break;
+    default: return false;
+  }
+
+  gesture_start_ = value_;
+  move_to(value_ + step);
+  finish();
+  return true;
+}
 
 // ----------------------------------------------------------- radio groups --
 

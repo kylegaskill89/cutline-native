@@ -1438,9 +1438,16 @@ so there is nothing to set a track fader *against*.
 
 - **Horizontal strips with a scroll.** The arrangement, and it is what makes
   everything below it fit. Master last, as Premiere has it.
-- **`ui::Fader`** — a vertical throw with a dB scale drawn beside it. Not
-  `Slider` rotated: the scale marks are the point, they are not linear in dB,
-  and they belong to the widget that knows where the throw is.
+- ~~**`ui::Fader`**~~ — **built.** A vertical throw with the dB scale printed
+  beside it, values in decibels with the travel linear in them, so the marks
+  are evenly spaced and honest. Not `Slider` stood on its end: a slider is a
+  value between two ends and its look says nothing about what the numbers mean,
+  while a fader is *read against a scale* — knowing you are 3 dB down is the
+  whole of what the control is for. `y_of` is public so the marks and the
+  thumb cannot drift apart, which is the fault every scaled control has. The
+  arrows move by a decibel and the page keys by six, because those are levels
+  somebody means rather than fractions of a travel whose length depends on how
+  the panel was docked.
 - **`ui::PanKnob`** — a rotary, dragged vertically, with L and R either side.
   The value already exists (`Track::pan`); this is a way of setting it.
 - **Per-track metering.** `MeterView` exists and the master feeds it. The mixer

@@ -655,6 +655,164 @@ TEST(NumericField, DrawsTheFieldInsteadOfTheNumberWhileEditing) {
   EXPECT_EQ(drawn, 1);
 }
 
+// ----------------------------------------------------------------- fader --
+
+struct Thrown {
+  Thrown() {
+    host = std::make_unique<WidgetHost>(std::make_unique<Widget>());
+    fader = &host->root().emplace<Fader>(ValueRange{.minimum = -60.0, .maximum = 6.0}, 0.0);
+    fader->set_default_value(0.0);
+    fader->set_on_change([this](double db) {
+      ++changes;
+      last = db;
+    });
+    fader->set_on_commit([this](double db) {
+      ++commits;
+      committed = db;
+    });
+    host->resize(Rect{0.0, 0.0, 400.0, 400.0}, flat_context());
+    fader->arrange(Rect{0.0, 0.0, 48.0, 200.0}, flat_context());
+  }
+
+  std::unique_ptr<WidgetHost> host;
+  Fader* fader = nullptr;
+  int changes = 0;
+  int commits = 0;
+  double last = 0.0;
+  double committed = 0.0;
+};
+
+TEST(Fader, LoudIsUp) {
+  // The one thing a fader must get right. A throw where the maximum is at the
+  // bottom is not a fader, it is a bug with a scale printed on it.
+  Thrown test;
+  const double top = test.fader->y_of(6.0);
+  const double bottom = test.fader->y_of(-60.0);
+  EXPECT_LT(top, bottom);
+}
+
+TEST(Fader, TheThumbAndTheScaleAgreeAboutWhereALevelIs) {
+  // The fault every scaled control has: two mappings that drift apart, so the
+  // cap sits a little off the number it is meant to be on.
+  Thrown test;
+  for (const double db : {6.0, 0.0, -12.0, -60.0}) {
+    test.fader->set_value(db);
+    const Rect cap = test.fader->thumb();
+    EXPECT_NEAR(cap.y + cap.height / 2.0, test.fader->y_of(db), 1e-9) << db;
+  }
+}
+
+TEST(Fader, DraggingSetsTheLevelUnderThePointer) {
+  Thrown test;
+  const double at = test.fader->y_of(-12.0);
+  test.host->mouse_down(press(24.0, at));
+
+  EXPECT_NEAR(test.fader->value(), -12.0, 1e-6);
+  EXPECT_GT(test.changes, 0);
+}
+
+TEST(Fader, TheLevelFollowsTheDragAndIsWrittenOnceAtTheEnd) {
+  // A fader that only took effect on release could not be set by ear, and one
+  // that wrote on every pixel would be a hundred undo entries for one move.
+  Thrown test;
+  test.host->mouse_down(press(24.0, test.fader->y_of(-6.0)));
+  test.host->mouse_move(press(24.0, test.fader->y_of(-18.0)));
+  test.host->mouse_up(press(24.0, test.fader->y_of(-18.0)));
+
+  EXPECT_NEAR(test.fader->value(), -18.0, 1e-6);
+  EXPECT_GT(test.changes, 1);
+  EXPECT_EQ(test.commits, 1);
+  EXPECT_NEAR(test.committed, -18.0, 1e-6);
+}
+
+TEST(Fader, DraggingBeyondEitherEndIsClamped) {
+  // Pressed inside first, because that is what takes the capture — a press
+  // outside never reaches the widget at all. Dragging past either end is the
+  // ordinary case: a hand keeps going after the throw has stopped.
+  Thrown test;
+  test.host->mouse_down(press(24.0, test.fader->y_of(0.0)));
+
+  test.host->mouse_move(press(24.0, -500.0));
+  EXPECT_DOUBLE_EQ(test.fader->value(), 6.0);
+
+  test.host->mouse_move(press(24.0, 5000.0));
+  EXPECT_DOUBLE_EQ(test.fader->value(), -60.0);
+}
+
+TEST(Fader, ADoubleClickReturnsToUnity) {
+  Thrown test;
+  test.fader->set_value(-24.0);
+  MouseEvent twice = press(24.0, 10.0);
+  twice.click_count = 2;
+  test.host->mouse_down(twice);
+
+  EXPECT_DOUBLE_EQ(test.fader->value(), 0.0);
+  EXPECT_EQ(test.commits, 1);
+}
+
+TEST(Fader, TheArrowsMoveByADecibelAndThePageKeysBySix) {
+  // Levels somebody means, rather than fractions of a travel whose length
+  // depends on how the panel was docked.
+  Thrown test;
+  test.host->set_focus(test.fader);
+
+  test.host->key_down(KeyEvent{.key = Key::Down});
+  EXPECT_DOUBLE_EQ(test.fader->value(), -1.0);
+  test.host->key_down(KeyEvent{.key = Key::Up});
+  EXPECT_DOUBLE_EQ(test.fader->value(), 0.0);
+  test.host->key_down(KeyEvent{.key = Key::PageDown});
+  EXPECT_DOUBLE_EQ(test.fader->value(), -6.0);
+  test.host->key_down(KeyEvent{.key = Key::PageUp});
+  EXPECT_DOUBLE_EQ(test.fader->value(), 0.0);
+}
+
+TEST(Fader, HomeAndEndReachEitherEndOfTheThrow) {
+  Thrown test;
+  test.host->set_focus(test.fader);
+  test.host->key_down(KeyEvent{.key = Key::Home});
+  EXPECT_DOUBLE_EQ(test.fader->value(), 6.0);
+  test.host->key_down(KeyEvent{.key = Key::End});
+  EXPECT_DOUBLE_EQ(test.fader->value(), -60.0);
+}
+
+TEST(Fader, AKeyThatChangesNothingCommitsNothing) {
+  Thrown test;
+  test.host->set_focus(test.fader);
+  test.host->key_down(KeyEvent{.key = Key::Home});
+  ASSERT_EQ(test.commits, 1);
+  test.host->key_down(KeyEvent{.key = Key::Up});
+  EXPECT_EQ(test.commits, 1) << "already at the top";
+}
+
+TEST(Fader, SettingTheValueFromCodeDoesNotCallBack) {
+  // The mix follows the fader; the fader also follows the mix. A set that
+  // fired the handler would be a loop.
+  Thrown test;
+  test.fader->set_value(-9.0);
+  EXPECT_EQ(test.changes, 0);
+  EXPECT_EQ(test.commits, 0);
+}
+
+TEST(Fader, TheScaleIsPrintedLoudestFirstAndIncludesUnity) {
+  const std::span<const double> marks = Fader::scale_marks();
+  ASSERT_FALSE(marks.empty());
+  for (std::size_t i = 1; i < marks.size(); ++i) {
+    EXPECT_LT(marks[i], marks[i - 1]) << "printed loudest first";
+  }
+  EXPECT_NE(std::ranges::find(marks, 0.0), marks.end()) << "unity is the mark anybody looks for";
+}
+
+TEST(Fader, TheScaleTakesRoomOnlyWhenItIsShown) {
+  Thrown test;
+  const Rect with = test.fader->groove();
+  test.fader->set_shows_scale(false);
+  test.fader->arrange(Rect{0.0, 0.0, 48.0, 200.0}, flat_context());
+  const Rect without = test.fader->groove();
+
+  EXPECT_GT(with.x, without.x) << "the numbers sit to the left of the throw";
+  EXPECT_DOUBLE_EQ(without.x, test.fader->bounds().x);
+}
+
 // ------------------------------------------------------------ radio group --
 
 struct Radios {

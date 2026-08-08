@@ -390,6 +390,90 @@ class NumericField : public Widget {
   std::function<void(double)> on_commit_;
 };
 
+/// A mixer's fader: a vertical throw with a dB scale printed beside it.
+///
+/// Not `Slider` stood on its end. A slider is a value between two ends and its
+/// look says nothing about what the numbers mean; a fader is read against a
+/// *scale*, and the marks are not decoration — knowing you are 3 dB down is the
+/// whole of what the control is for, and no slider can say it.
+///
+/// The reason this exists at all is that a mix is set by ear, with a hand on a
+/// long throw and an eye on a meter beside it. That is why every mixer ever
+/// built is shaped this way, and why the numeric fields this replaces were
+/// never going to do: a number can be typed or scrubbed, and neither is riding
+/// a level.
+///
+/// Values are **decibels**, not gain, and the travel is linear in them — which
+/// is what makes the printed marks evenly spaced and honest. The conversion to
+/// a gain multiplier belongs to the caller, where `gain_to_fader_db` already
+/// lives.
+class Fader : public Widget {
+ public:
+  explicit Fader(ValueRange range = {}, double value = 0.0);
+
+  [[nodiscard]] double value() const noexcept { return value_; }
+  /// Clamped. Does not call the change handler — that is for things the user
+  /// did, so following the mix cannot loop back into it.
+  void set_value(double value);
+
+  [[nodiscard]] const ValueRange& range() const noexcept { return range_; }
+  void set_range(const ValueRange& range);
+
+  /// What a double-click returns to. Unity, for everything that has one.
+  void set_default_value(std::optional<double> value) { default_ = value; }
+
+  void set_on_change(std::function<void(double)> on_change) { on_change_ = std::move(on_change); }
+  void set_on_commit(std::function<void(double)> on_commit) { on_commit_ = std::move(on_commit); }
+
+  /// Whether the numbers are drawn beside the throw. Off in a strip too narrow
+  /// to carry them, where the throw alone is still a fader.
+  void set_shows_scale(bool shows) noexcept { shows_scale_ = shows; }
+  [[nodiscard]] bool shows_scale() const noexcept { return shows_scale_; }
+
+  [[nodiscard]] double fraction() const noexcept { return range_.to_fraction(value_); }
+  /// The throw the thumb travels in, and the cap itself.
+  [[nodiscard]] Rect groove() const;
+  [[nodiscard]] Rect thumb() const;
+
+  /// Where a level sits, in absolute y. Public so the marks and the thumb
+  /// cannot disagree about the mapping — the fault every scaled control has.
+  [[nodiscard]] double y_of(double db) const;
+
+  /// The levels the scale prints, loudest first. Premiere's own set.
+  [[nodiscard]] static std::span<const double> scale_marks() noexcept;
+
+  [[nodiscard]] Part part() const noexcept override { return Part::Slider; }
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  void layout(const LayoutContext& context) override;
+  void paint_content(Painter& painter, const Theme& theme) const override;
+
+  bool on_mouse_down(const MouseEvent& event) override;
+  bool on_mouse_move(const MouseEvent& event) override;
+  bool on_mouse_up(const MouseEvent& event) override;
+  bool on_key_down(const KeyEvent& event) override;
+
+ private:
+  [[nodiscard]] double value_at(double y) const;
+  void move_to(double value);
+  void finish();
+
+  ValueRange range_;
+  double value_ = 0.0;
+  std::optional<double> default_;
+
+  bool dragging_ = false;
+  double gesture_start_ = 0.0;
+
+  bool shows_scale_ = true;
+  double thumb_height_ = 14.0;
+  double throw_width_ = 16.0;
+  double scale_width_ = 26.0;
+  double font_size_ = 10.0;
+
+  std::function<void(double)> on_change_;
+  std::function<void(double)> on_commit_;
+};
+
 /// A column of mutually exclusive choices, exactly one of them taken.
 ///
 /// The control every dialogue wants when a question has three or four answers
