@@ -582,10 +582,28 @@ placement.
   Offering to "fit" a source that already fits would be a command that retimes
   by 100%.
 
-Trimming the source to fit instead — Premiere's other answer, and the one that
-needs a dialog to choose between them — is not built. It is a control rather
-than machinery now that the marks resolve, and it is worth doing the next time
-anybody is in a modal.
+**All five of Premiere's answers are built**, in `core::fit_media` and covered
+by tests: change the speed (keeps every mark), trim the source's head or its
+tail (gives up one source mark), or ignore the sequence in or out (gives up one
+destination mark). Each is an overwrite with a different pair of "where" and
+"how much of the source" — which is why this is a small function rather than a
+subsystem, and why leaving four of them out would have been a choice rather
+than a saving.
+
+**What is not built is the box**, and it is blocked on a widget rather than on
+effort. Premiere's Fit Clip is a column of **radio buttons**, and the widget
+layer has a Checkbox and a Dropdown and nothing that is exclusive and visible
+at once. Building the group out of checkboxes would draw ticked squares where
+Premiere draws filled circles; a dropdown would hide four of the five choices
+behind a click. Either is inventing an arrangement instead of matching one.
+
+So **`ui::RadioGroup` is the next piece of work here**, and it is not only for
+this: a radio group is the control Premiere reaches for whenever a question has
+three or four mutually exclusive answers, and this application has been
+answering those with dropdowns because it has nothing else. Until then Fit to
+Fill is on the Timeline menu, greyed unless the marks actually conflict, and it
+is the choice anybody would pick first anyway — it is the only one that keeps
+all four marks.
 
 What stands in for the source monitor is the **pool's selection**, which is
 already what a double-click places. That is also why source patching does not
@@ -1351,6 +1369,83 @@ it stays on the handoff's waiting list.
 
 ---
 
+## 6. Audio
+
+### 6.1 The mixer, which is the whole panel and not a row of numbers
+
+Asked for directly, with a screenshot of Premiere's Audio Clip Mixer to build
+against. Worth writing out in full, because what is here now is not a smaller
+version of Premiere's mixer — it is a different thing that happens to set the
+same two values.
+
+**What is here now.** `build_track_strip` gives each audio track two rows: a
+**Volume** label with a numeric dB field, and a **Balance** label with a numeric
+field from -100 to 100. The master is a horizontal slider with a meter under it.
+The whole lot is a single vertical column, master first, tracks below.
+
+**What Premiere has**, top to bottom in each strip:
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Strips side by side, one per track | horizontal, scrolling when narrow | one vertical column | control |
+| Master at the right-hand end | yes | at the top of the column | control |
+| Pan as a **rotary knob** | with L and R either side and a number under it | a numeric field labelled Balance | control |
+| A **vertical fader** | with a dB scale printed down its left | a numeric field labelled Volume | control |
+| A **meter per track**, beside its fader | with its own scale down its right | none — only the master has a meter | wiring |
+| Numeric gain readout under the fader | yes | is the only control | — |
+| **M / S / R** buttons | mute, solo, record-arm | mute and solo on the track head only | control |
+| Automation mode | Off / Read / Write / Latch / Touch | none, and nothing records automation | machinery |
+| Track number and name at the foot | `A1` and `Audio 1`, the name editable | the name, at the top | control |
+
+**The reason it looks like this is not a good one.** The comment on
+`build_track_strip` says numbers rather than faders because "the panel is as
+likely to be a narrow column as a whole region, and a row of strips needs a
+width it cannot count on", and `make_audio_panel` stacks the master for the same
+reason. That is a description of a layout problem, not a reason to build a
+different control — and Premiere has exactly the same problem and answers it by
+**scrolling horizontally**, which is visible in the screenshot: the strips run
+off the right-hand edge of the panel and the master sits at the end of them. A
+`ScrollView` on the horizontal axis is the whole of the fix, and the application
+already has one.
+
+**A fader is not a number in a different costume.** A mix is set by ear, with a
+hand on the control, watching a meter next to it. That is why every mixer ever
+built puts a long throw beside a moving meter: the gesture is continuous, the
+feedback is continuous, and the value is the least interesting part. A numeric
+field can only be typed into or dragged as a scrub, and neither is riding a
+level. The meter is half of it and there is currently no per-track meter at all,
+so there is nothing to set a track fader *against*.
+
+**What each piece needs.**
+
+- **Horizontal strips with a scroll.** The arrangement, and it is what makes
+  everything below it fit. Master last, as Premiere has it.
+- **`ui::Fader`** — a vertical throw with a dB scale drawn beside it. Not
+  `Slider` rotated: the scale marks are the point, they are not linear in dB,
+  and they belong to the widget that knows where the throw is.
+- **`ui::PanKnob`** — a rotary, dragged vertically, with L and R either side.
+  The value already exists (`Track::pan`); this is a way of setting it.
+- **Per-track metering.** `MeterView` exists and the master feeds it. The mixer
+  does not publish per-track levels yet, so this is a real addition on the
+  engine side rather than only a widget: the mix already sums each track, so the
+  peak per track is available where the sum is taken.
+- **M / S / R in the strip.** Mute and solo are on the track head, and the note
+  saying a second pair would be "two controls for one flag" is wrong about what
+  a mixer is for — Premiere has both, because mixing and editing are two
+  activities and you do not want to leave one to reach the other. R is
+  record-arm for automation and follows the automation work.
+- **Automation modes** are the one row here that is genuinely machinery: Write,
+  Latch and Touch mean recording fader moves into keyframes as the sequence
+  plays. Track gain is not animatable yet — clip gain is — so this needs a
+  keyframe list on the track before it needs a dropdown.
+
+### 6.2 The rest of section 6
+
+Not yet audited, and listed here so the section has its shape: submixes and
+sends, the Essential Sound panel, and loudness normalisation.
+
+---
+
 ## Found by audit, listed nowhere else
 
 Walking the spec's own parity checklist and Premiere's menus against the source,
@@ -1414,8 +1509,9 @@ The rest of the application, in the order it seems worth walking:
 - ~~**Application settings**~~ — audited, written up as section 5, and **closed**:
   every row is built or declined with a reason, bar keyboard customisation,
   which was pulled out into a section of its own below.
-- **Audio** — the Audio Track Mixer, submixes, sends, the essential sound panel,
-  loudness normalisation.
+- ~~**Audio**~~ — the mixer is audited and written up as section 6 above.
+  Submixes, sends, the essential sound panel and loudness normalisation are
+  still to walk.
 - **Titles and graphics** — the Essential Graphics panel, layered graphics,
   responsive design, styles.
 - **Colour** — the Lumetri Color panel and its scopes workflow.

@@ -883,6 +883,46 @@ Project overwrite_media_at(Project p, std::string_view media_id, double at_time,
   return place_media(std::move(p), media_id, at_time, resolved, range);
 }
 
+Project fit_media(Project p, std::string_view media_id, const EditPoints& points,
+                  FitChoice choice, std::string_view track_id) {
+  const auto media_it = std::ranges::find(p.media, media_id, &Media::id);
+  if (media_it == p.media.end()) return p;
+
+  const double span = points.destination;
+  const PlacementRange marked =
+      points.source.value_or(PlacementRange{0.0, media_it->duration});
+
+  switch (choice) {
+    case FitChoice::ChangeSpeed:
+      return fit_media_to(std::move(p), media_id, points.at, span, track_id, points.source);
+
+    case FitChoice::TrimHead: {
+      // The out is kept and the in moves forward to meet it, so what survives
+      // is the end of the marked part. Clamped at the start of the file: a span
+      // longer than the source cannot be filled by trimming, only by slowing.
+      const PlacementRange kept{std::max(0.0, marked.out - span), marked.out};
+      return overwrite_media_at(std::move(p), media_id, points.at, track_id, kept);
+    }
+
+    case FitChoice::TrimTail: {
+      const PlacementRange kept{marked.in, std::min(media_it->duration, marked.in + span)};
+      return overwrite_media_at(std::move(p), media_id, points.at, track_id, kept);
+    }
+
+    case FitChoice::IgnoreSequenceIn: {
+      // The sequence out is the mark being kept, so the clip is back-timed to
+      // end on it and runs for as long as the marked source is.
+      const double length = placed_length(*media_it, points.source);
+      const double at = std::max(0.0, points.at + span - length);
+      return overwrite_media_at(std::move(p), media_id, at, track_id, points.source);
+    }
+
+    case FitChoice::IgnoreSequenceOut:
+      return overwrite_media_at(std::move(p), media_id, points.at, track_id, points.source);
+  }
+  return p;
+}
+
 Project fit_media_to(Project p, std::string_view media_id, double at, double duration,
                      std::string_view track_id, std::optional<PlacementRange> range) {
   const auto media_it = std::ranges::find(p.media, media_id, &Media::id);

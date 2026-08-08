@@ -331,6 +331,148 @@ TEST(EditPoints, ANegativePlayheadNeverPlacesBeforeTheStart) {
   EXPECT_DOUBLE_EQ(edit_points(p, "m1", -3.0).at, 0.0);
 }
 
+// ------------------------------------------ resolving four marks --
+
+/// Four marks that disagree: three seconds of source (2 to 5) asked to fill six
+/// seconds of sequence (10 to 16).
+[[nodiscard]] Project over_determined() {
+  Project p = marked_source(2.0, 5.0);
+  p = set_in_point(std::move(p), 10.0);
+  p = set_out_point(std::move(p), 16.0);
+  return p;
+}
+
+[[nodiscard]] const Clip& placed_video(const Project& p) {
+  return track_by_id(p, "v1").clips.at(0);
+}
+
+TEST(FitMedia, ChangingSpeedKeepsEveryMark) {
+  const Project before = over_determined();
+  const Project p =
+      fit_media(before, "m1", edit_points(before, "m1", 0.0), FitChoice::ChangeSpeed);
+
+  const Clip& c = placed_video(p);
+  EXPECT_DOUBLE_EQ(c.start, 10.0);
+  EXPECT_DOUBLE_EQ(clip_end(c), 16.0);
+  EXPECT_DOUBLE_EQ(c.source_in, 2.0);
+  EXPECT_DOUBLE_EQ(c.source_out, 5.0);
+  EXPECT_DOUBLE_EQ(c.speed, 0.5);
+}
+
+TEST(FitMedia, TrimmingTheHeadKeepsTheSourceOutAndReachesBackForTheSpan) {
+  // The tail is what was chosen, so it is the end that stays put. Marked 4 to
+  // 7 so there is head to reach back into: six seconds back from 7 is 1.
+  Project before = marked_source(4.0, 7.0);
+  before = set_in_point(std::move(before), 10.0);
+  before = set_out_point(std::move(before), 16.0);
+  const Project p =
+      fit_media(before, "m1", edit_points(before, "m1", 0.0), FitChoice::TrimHead);
+
+  const Clip& c = placed_video(p);
+  EXPECT_DOUBLE_EQ(c.start, 10.0);
+  EXPECT_DOUBLE_EQ(clip_end(c), 16.0);
+  EXPECT_DOUBLE_EQ(c.source_out, 7.0) << "the marked out is the one kept";
+  EXPECT_DOUBLE_EQ(c.source_in, 1.0) << "reached back six seconds for the span";
+  EXPECT_DOUBLE_EQ(c.speed, 1.0) << "trimming, not retiming";
+}
+
+TEST(FitMedia, TrimmingTheHeadCannotReachBackPastTheStartOfTheFile) {
+  // Marked 2 to 5, asked for six seconds: there are only five before the out.
+  // Trimming cannot make footage, so it fills what it can and leaves the span
+  // short rather than naming source that is not there — which is exactly why
+  // Change Speed is the choice offered first.
+  const Project before = over_determined();
+  const Project p =
+      fit_media(before, "m1", edit_points(before, "m1", 0.0), FitChoice::TrimHead);
+
+  const Clip& c = placed_video(p);
+  EXPECT_DOUBLE_EQ(c.source_in, 0.0);
+  EXPECT_DOUBLE_EQ(c.source_out, 5.0);
+  EXPECT_DOUBLE_EQ(clip_end(c), 15.0) << "five of the six seconds asked for";
+}
+
+TEST(FitMedia, TrimmingTheTailKeepsTheSourceIn) {
+  const Project before = over_determined();
+  const Project p =
+      fit_media(before, "m1", edit_points(before, "m1", 0.0), FitChoice::TrimTail);
+
+  const Clip& c = placed_video(p);
+  EXPECT_DOUBLE_EQ(c.source_in, 2.0) << "the marked in is the one kept";
+  EXPECT_DOUBLE_EQ(c.source_out, 8.0) << "ran forward six seconds from it";
+  EXPECT_DOUBLE_EQ(c.speed, 1.0);
+}
+
+TEST(FitMedia, TrimmingCannotReachPastTheEndsOfTheFile) {
+  // Ten seconds of source asked to fill twenty. Trimming cannot make footage,
+  // so it gives what there is rather than naming source that is not there.
+  Project before = marked_source(0.0, 10.0);
+  before = set_in_point(std::move(before), 0.0);
+  before = set_out_point(std::move(before), 20.0);
+  const Project p =
+      fit_media(before, "m1", edit_points(before, "m1", 0.0), FitChoice::TrimTail);
+
+  const Clip& c = placed_video(p);
+  EXPECT_DOUBLE_EQ(c.source_in, 0.0);
+  EXPECT_DOUBLE_EQ(c.source_out, 10.0);
+}
+
+TEST(FitMedia, IgnoringTheSequenceInBackTimesToTheOut) {
+  // The sequence out is the mark being kept, so the clip ends on it and runs
+  // for as long as the marked source is — three seconds, ending at 16.
+  const Project before = over_determined();
+  const Project p =
+      fit_media(before, "m1", edit_points(before, "m1", 0.0), FitChoice::IgnoreSequenceIn);
+
+  const Clip& c = placed_video(p);
+  EXPECT_DOUBLE_EQ(c.start, 13.0);
+  EXPECT_DOUBLE_EQ(clip_end(c), 16.0);
+  EXPECT_DOUBLE_EQ(c.source_in, 2.0);
+  EXPECT_DOUBLE_EQ(c.source_out, 5.0);
+}
+
+TEST(FitMedia, IgnoringTheSequenceOutStartsOnTheInAndRunsPastTheMark) {
+  const Project before = over_determined();
+  const Project p =
+      fit_media(before, "m1", edit_points(before, "m1", 0.0), FitChoice::IgnoreSequenceOut);
+
+  const Clip& c = placed_video(p);
+  EXPECT_DOUBLE_EQ(c.start, 10.0);
+  EXPECT_DOUBLE_EQ(clip_end(c), 13.0) << "three seconds of source, past the mark at 16";
+  EXPECT_DOUBLE_EQ(c.speed, 1.0);
+}
+
+TEST(FitMedia, EveryChoiceGivesUpExactlyOneMark) {
+  // The property that makes these five the whole set: each keeps three of the
+  // four and lets one go, and no two give up the same one.
+  const Project before = over_determined();
+  const EditPoints points = edit_points(before, "m1", 0.0);
+
+  const Clip& speed = placed_video(fit_media(before, "m1", points, FitChoice::ChangeSpeed));
+  EXPECT_NE(speed.speed, 1.0);
+
+  const Clip& head = placed_video(fit_media(before, "m1", points, FitChoice::TrimHead));
+  EXPECT_NE(head.source_in, 2.0);
+  EXPECT_DOUBLE_EQ(head.source_out, 5.0);
+
+  const Clip& tail = placed_video(fit_media(before, "m1", points, FitChoice::TrimTail));
+  EXPECT_DOUBLE_EQ(tail.source_in, 2.0);
+  EXPECT_NE(tail.source_out, 5.0);
+
+  const Clip& no_in = placed_video(fit_media(before, "m1", points, FitChoice::IgnoreSequenceIn));
+  EXPECT_NE(no_in.start, 10.0);
+  EXPECT_DOUBLE_EQ(clip_end(no_in), 16.0);
+
+  const Clip& no_out = placed_video(fit_media(before, "m1", points, FitChoice::IgnoreSequenceOut));
+  EXPECT_DOUBLE_EQ(no_out.start, 10.0);
+  EXPECT_NE(clip_end(no_out), 16.0);
+}
+
+TEST(FitMedia, AMediaThatIsNotThereChangesNothing) {
+  const Project before = over_determined();
+  EXPECT_EQ(fit_media(before, "nobody", edit_points(before, "m1", 0.0), FitChoice::TrimTail),
+            before);
+}
+
 TEST(PlacedLength, StillsIgnoreTheRange) {
   Media image;
   image.is_image = true;

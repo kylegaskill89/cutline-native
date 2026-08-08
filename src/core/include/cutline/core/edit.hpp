@@ -130,6 +130,45 @@ struct EditPoints {
 [[nodiscard]] EditPoints edit_points(const Project& p, std::string_view media_id,
                                      double playhead) noexcept;
 
+/// How an over-determined edit is resolved. Premiere's Fit Clip dialogue, whose
+/// five rows these are.
+///
+/// Four marks fix more than an edit has freedom for, and every way out gives up
+/// exactly one of them. Naming them as a choice rather than picking one is the
+/// point: which mark matters least is a judgement about the cut, and nothing in
+/// the model can make it.
+enum class FitChoice {
+  /// Keep all four. The source runs from its in to its out across the marked
+  /// span, retimed to whatever rate that takes.
+  ChangeSpeed,
+  /// Give up the source **in**. The source ends on its out as marked and starts
+  /// however far back the span reaches — so the tail is what was chosen and the
+  /// head is what got cut.
+  TrimHead,
+  /// Give up the source **out**. The mirror: the head is kept and the tail is
+  /// trimmed off.
+  TrimTail,
+  /// Give up the sequence **in**. The marked source goes down whole, ending on
+  /// the sequence out — back-timed, and as long as it is.
+  IgnoreSequenceIn,
+  /// Give up the sequence **out**. The marked source goes down whole, starting
+  /// on the sequence in and running past the mark.
+  IgnoreSequenceOut,
+};
+
+/// Resolves an over-determined edit the way `choice` asks.
+///
+/// Every one of the five is an overwrite with a different pair of "where" and
+/// "how much of the source" — only `ChangeSpeed` needs anything the placement
+/// operations did not already do. That is worth saying because it is why this
+/// is a small function and not a subsystem: the marks decide two numbers, and
+/// giving one up decides them differently.
+///
+/// An overwrite rather than an insert throughout, because the destination is a
+/// span somebody marked and rippling would move the mark out from under itself.
+[[nodiscard]] Project fit_media(Project p, std::string_view media_id, const EditPoints& points,
+                                FitChoice choice, std::string_view track_id = {});
+
 /// Overwrites a span with a media retimed to fill it exactly.
 ///
 /// Premiere's Fit to Fill, and the answer to four-point editing that keeps all

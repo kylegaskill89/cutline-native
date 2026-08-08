@@ -7073,6 +7073,18 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
   app.main.host->open_popup(std::move(panel), settings_anchor());
 }
 
+// Premiere's **Fit Clip** dialogue belongs here: five rows saying which of the
+// four marks to give up, of which only Fit to Fill is reachable today. All five
+// are built and tested in `core::fit_media`; what is missing is the box.
+//
+// It is blocked on a widget rather than on effort. Fit Clip is a column of
+// radio buttons, and there is no `ui::RadioGroup` — the widget layer has a
+// Checkbox and a Dropdown and nothing exclusive-and-visible. Building the
+// group out of checkboxes would draw ticked squares where Premiere draws
+// filled circles, which is inventing an arrangement rather than matching one,
+// and a dropdown would hide four of the five choices behind the sixth click.
+// The widget comes first; see docs/premiere-gaps.md §2.1.
+
 /// A marker's name, note, colour and length. Premiere's marker dialogue.
 ///
 /// Opened from a double-click on the marker itself, which is the only gesture
