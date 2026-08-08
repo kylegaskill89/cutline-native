@@ -403,18 +403,33 @@ much they cost somebody:
    panel is the same loop. The sound is retuned on a fixed grid of frames
    aligned to the *timeline* rather than to the caller's buffer, so the preview
    and the export follow the same curve.
-4. **An effect applies to one clip, not the selection.** The double-click and
-   the drop both take the whole selection now; what is still true is narrower —
-   nothing else that edits a stack does. Worth re-checking rather than trusted.
+4. ~~**An effect applies to one clip, not the selection.**~~ **Done.** Re-checked
+   rather than trusted, which was the right call: Paste already took the whole
+   selection and two things did not. **Add Effect** in the panel and **Clear**
+   beside it now take it too, through `editor::add_effect_to` and
+   `clear_effects_on` — one project in, one out, so blurring six clips is one
+   press of undo. A clip the effect does not suit is passed over rather than
+   given one it cannot run: `core::add_clip_effect` does not look at a clip's
+   kind, so a plain loop over a mixed selection would put a blur on a waveform,
+   where it would sit in the file and draw an fx badge and never be run by
+   anything. The batch goes through `library_entry_fits`, which is where that
+   rule already lived.
+
+   What deliberately stays per-clip is everything reached by *index* — toggle,
+   move up, move down, remove. The panel shows one clip's stack, and "remove the
+   third effect" means a different effect on every clip in a selection.
 5. ~~**Effects cannot be reordered by dragging.**~~ **Done.** The up and down
    buttons stay; `ui::GrabRow` adds the drag, with an insertion line across the
    top of the card it would land above.
 6. ~~**Only the whole stack can be copied.**~~ **Done** — right-click a card's
    header. It fills the same clipboard, so a paste still *replaces*; copying one
    effect to *add* to another stack is a different operation and does not exist.
-7. **Effect Controls never says which clip it is showing.** Premiere titles the
-   panel with the clip and the sequence. With one clip selected it is obvious;
-   with a timeline full of similar takes it is not.
+7. ~~**Effect Controls never says which clip it is showing.**~~ **Done**, and
+   this entry is the one that was stale. `refresh_inspector` names the clip —
+   the media's name, bold, above Motion, falling back to the clip id if the
+   pool entry has gone. It is a plain `Label` rather than an `inspector_heading`
+   because it is held in `App::clip_heading`: a matte's name follows its colour,
+   and the swatches deliberately do not rebuild the panel.
 
 **Already listed, and now closed.** Everything that was listed is done: paired
 X/Y, a visible reset per row, resetting a whole effect, greying a governed
@@ -423,14 +438,20 @@ handles, effects as passes, masks and dragging them on the picture, nested
 folders, dropping an effect on the picture, named presets, user bins, and a
 free-drawn mask path.
 
-This paragraph used to end by counting **Effect Controls naming the clip it is
-showing** among them, "which turned out to have been done already and listed
-anyway". It had not been done, and saying so twice on one page did not make it
-so — `refresh_inspector` has seven headings and every one of them is a category
-(Motion, Text, Keyframes, Transition), never the clip. Item 7 above is open and
-this paragraph was wrong. Recorded rather than quietly deleted, because a
-document that contradicts itself is a document somebody trusted the wrong half
-of, and the fix is to check the source rather than to read more carefully.
+…and **Effect Controls naming the clip it is showing**, which this page has said
+twice, in two places, in two different tenses. It is done. Item 7 above was the
+stale half and now says so.
+
+Worth keeping the way that was got wrong, because it was got wrong twice. The
+first pass read the two paragraphs, saw them disagree, and believed the one
+listing it as open. The second pass went to the source — and grepped
+`inspector_heading`, found seven calls, saw that all seven name a category, and
+concluded the clip is never named. Both were wrong, and the second was worse for
+looking like verification. The clip's name is not an `inspector_heading` at all:
+it is a plain bold `Label`, because it has to be held in `App::clip_heading` so
+that a matte's name can follow its colour without rebuilding the panel. Grepping
+for the helper you expect a thing to be built from only ever confirms that it
+was built that way.
 
 **A mask animates through the machinery effects already had.** Each of its seven
 numbers answers to a reserved parameter name — `mask.x`, `mask.feather` and so
@@ -446,11 +467,11 @@ And dragging the shape goes through the same setter a number does, so it writes
 a keyframe when the property is animated — found on screen, where a drag moved
 the outline and the render ignored it.
 
-**The shape of what is left.** Two rows, both small, both above: the panel does
-not say which clip it is showing (7), and editing a stack acts on one clip
-rather than on the selection (4). Everything else in section 1 is done, and the
+**The shape of what is left.** Nothing. Every row in section 1 is done, and the
 catalogue is a branch at a time rather than a budget whenever anybody wants more
-of it.
+of it. This paragraph has said "nothing" before while two rows above it were
+open, so: rows 4 and 7 were the last two, 7 turned out to have been done all
+along, and 4 was finished by taking Add Effect and Clear across the selection.
 
 The anti-flicker filter went in where the source is *read* rather than as a pass,
 which is the whole of what it is: a still full of one-pixel detail shimmers
@@ -533,14 +554,38 @@ overwrite both pass it — so the *source* half of three-point editing is done a
 has been for a while. What is left is smaller than the row implied and is two
 specific things:
 
-- **The destination is the playhead, not the sequence in-point.** `Command::Insert`
-  and `Command::Overwrite` place at `session.playhead()`. Premiere's third point
-  is a mark, and marking where an edit should land and then having to also park
-  the playhead there is the mark not being used for the one thing it is for.
-- **Four-point editing does not exist at all.** Four marks over-determine the
-  edit — the source span and the destination span are both fixed and need not
-  agree — so it is a question rather than a placement: fit to fill by retiming,
-  or trim the source to fit. Premiere asks. Nothing here asks anything.
+Both are now done, through one pure function. `core::edit_points` takes the
+project, the source and the playhead and answers where the edit lands and which
+part of the source fills it; insert and overwrite go through it. With neither
+sequence mark set it answers "the playhead", so the common case is byte for byte
+what it was — which is the property that made it safe to put in front of every
+placement.
+
+- **A sequence in is where the edit lands.** It used to be ignored: the mark was
+  stored, saved and drawn on the ruler, and the placement used the playhead
+  regardless, so marking where an edit should go did nothing at all.
+- **A sequence out alone back-times the edit** — the source is placed so that it
+  *ends* on the mark. "Be out of this shot at exactly this moment" is a thing
+  people mark, and it is the half of three-point editing that parking the
+  playhead cannot do.
+- **Both sequence marks derive the source's unmarked end.** Marked at the head,
+  the source runs forward from its in for exactly the span; marked at the tail,
+  it runs back from its out. Clamped to the file, so asking for twenty seconds
+  out of a ten-second source takes the ten there are rather than inventing the
+  rest.
+- **Four marks that disagree are reported rather than resolved.** Nothing can
+  satisfy all four, and choosing between retiming and trimming is a question,
+  not an arrangement — so `edit_points` says `over_determined` and leaves it.
+  **Fit to Fill** is the answer that keeps every mark: `core::fit_media_to`
+  overwrites the marked span with the marked source retimed to whatever rate
+  fills it, on the Timeline menu, greyed unless there is an actual conflict.
+  Offering to "fit" a source that already fits would be a command that retimes
+  by 100%.
+
+Trimming the source to fit instead — Premiere's other answer, and the one that
+needs a dialog to choose between them — is not built. It is a control rather
+than machinery now that the marks resolve, and it is worth doing the next time
+anybody is in a modal.
 
 What stands in for the source monitor is the **pool's selection**, which is
 already what a double-click places. That is also why source patching does not
@@ -562,7 +607,7 @@ it.
 | Source patch (V1/A1 indicators) | drag to choose which track receives | not separately — targeting does both jobs while there is one source | control |
 | Track targeting for keyboard edits | per track, toggled | **done** — a T in every header, and what insert and overwrite aim at | — |
 | Insert (`,`) and Overwrite (`.`) | from the source monitor at the playhead | **done** — from the pool's selection, on Premiere's own keys | — |
-| Three- and four-point editing | in/out on source and sequence | **partly** — the source half is honoured; the sequence marks are not the destination, and four-point does not exist | wiring + control |
+| Three- and four-point editing | in/out on source and sequence | **done** — `core::edit_points` resolves all four marks; four-point is Fit to Fill | — |
 | Sync lock | which tracks ripple together | **done** — on by default, on the header's own menu | — |
 | Mute / solo / lock / hide | yes | **done** | — |
 

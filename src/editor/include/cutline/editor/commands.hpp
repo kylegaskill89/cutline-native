@@ -57,6 +57,11 @@ enum class Command {
   /// stop, and the one that leaves the sequence exactly as long as it was
   /// unless the source runs off the end of it.
   Overwrite,
+  /// Four-point editing: the source fills the marked span exactly, retimed to
+  /// whatever rate that takes. Offered only when all four marks are set and
+  /// the two spans disagree — with three marks the fourth is derived and
+  /// there is nothing to fit, and with four that agree it is an overwrite.
+  FitToFill,
 
   // -- the marked span
   /// Marks the in point at the playhead — or clears it, when it is already

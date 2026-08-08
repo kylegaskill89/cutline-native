@@ -344,6 +344,33 @@ inline constexpr std::string_view kPresetPrefix = "preset:";
 [[nodiscard]] bool library_entry_fits(const core::Project& project, std::string_view clip_id,
                                       std::string_view id);
 
+/// Adds one effect to every clip named, skipping any it does not suit.
+///
+/// The kind check is why this exists rather than a loop at the call site.
+/// `core::add_clip_effect` does not look at a clip's kind — nothing that far
+/// down does — so a plain loop over a mixed selection puts a blur on a
+/// waveform, where it sits in the file, draws an fx badge, and is never run by
+/// anything. `library_entry_fits` is where that rule already lives, so this
+/// goes through it and inherits it rather than restating it.
+///
+/// One project in and one out, so the caller applies once: adding an effect to
+/// six clips is one thing somebody did and should be one press of undo.
+///
+/// `audio` says which catalogue `type` came from, which is what decides the
+/// kind of clip it can land on.
+[[nodiscard]] core::Project add_effect_to(core::Project project,
+                                          std::span<const std::string> clip_ids,
+                                          std::string_view type, bool audio);
+
+/// Takes every effect off every clip named, both stacks.
+///
+/// Both stacks because "clear the effects" on a clip means all of them, and
+/// only one is ever non-empty in practice — a clip is video or audio. Needs no
+/// kind check for the same reason: clearing a stack a clip does not have is
+/// already nothing.
+[[nodiscard]] core::Project clear_effects_on(core::Project project,
+                                             std::span<const std::string> clip_ids);
+
 // ------------------------------------------------------------- copy/paste --
 
 /// One clip's effects, taken off it and held.

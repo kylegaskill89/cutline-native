@@ -940,6 +940,113 @@ TEST(EffectLibrary, EveryEntryCanBeApplied) {
   }
 }
 
+// ------------------------------------------- adding across a selection --
+
+/// Two video clips and one audio clip, so a selection can be mixed.
+[[nodiscard]] Project three_clips() {
+  Project p = both_kinds();
+  Clip second;
+  second.id = "c2";
+  second.media_id = "m1";
+  second.kind = TrackKind::Video;
+  second.source_out = 5.0;
+  second.start = 5.0;
+  p.tracks.front().clips.push_back(std::move(second));
+  return p;
+}
+
+TEST(AddEffectTo, EveryClipNamedGetsIt) {
+  const std::vector<std::string> both{"c1", "c2"};
+  const Project p = add_effect_to(three_clips(), both, "blur", false);
+
+  EXPECT_EQ(core::find_clip(p, "c1")->effects.size(), 1u);
+  EXPECT_EQ(core::find_clip(p, "c2")->effects.size(), 1u);
+}
+
+TEST(AddEffectTo, AClipTheEffectDoesNotSuitIsPassedOver) {
+  // The point of the function. `core::add_clip_effect` does not look at a
+  // clip's kind, so a plain loop would put a blur on the waveform — where it
+  // would sit in the file, draw an fx badge, and never be run by anything.
+  const std::vector<std::string> mixed{"c1", "a1"};
+  const Project p = add_effect_to(three_clips(), mixed, "blur", false);
+
+  EXPECT_EQ(core::find_clip(p, "c1")->effects.size(), 1u);
+  EXPECT_TRUE(core::find_clip(p, "a1")->effects.empty());
+}
+
+TEST(AddEffectTo, AnAudioEffectGoesToTheAudioClipAndNoFurther) {
+  const std::vector<std::string> mixed{"c1", "a1"};
+  const Project p = add_effect_to(three_clips(), mixed, "lowpass", true);
+
+  EXPECT_EQ(core::find_clip(p, "a1")->audio_effects.size(), 1u);
+  EXPECT_TRUE(core::find_clip(p, "c1")->audio_effects.empty());
+}
+
+TEST(AddEffectTo, AddingTwiceStacksTwo) {
+  // Adding appends, unlike pasting, which replaces. Two blurs is a legitimate
+  // thing to want and the panel offers no other way to say it.
+  const std::vector<std::string> one{"c1"};
+  Project p = add_effect_to(three_clips(), one, "blur", false);
+  p = add_effect_to(std::move(p), one, "blur", false);
+
+  EXPECT_EQ(core::find_clip(p, "c1")->effects.size(), 2u);
+}
+
+TEST(AddEffectTo, NamingNobodyChangesNothing) {
+  const Project before = three_clips();
+  EXPECT_EQ(add_effect_to(before, {}, "blur", false), before);
+}
+
+TEST(AddEffectTo, AnUnknownTypeChangesNothing) {
+  const Project before = three_clips();
+  const std::vector<std::string> one{"c1"};
+  EXPECT_EQ(add_effect_to(before, one, "no-such-effect", false), before);
+}
+
+TEST(AddEffectTo, AClipThatIsNotThereIsSkippedAndTheRestStillGetIt) {
+  const std::vector<std::string> some{"gone", "c1"};
+  const Project p = add_effect_to(three_clips(), some, "blur", false);
+
+  EXPECT_EQ(core::find_clip(p, "c1")->effects.size(), 1u);
+}
+
+TEST(ClearEffectsOn, EveryClipNamedIsStripped) {
+  Project p = three_clips();
+  const std::vector<std::string> both{"c1", "c2"};
+  p = add_effect_to(std::move(p), both, "blur", false);
+  p = clear_effects_on(std::move(p), both);
+
+  EXPECT_TRUE(core::find_clip(p, "c1")->effects.empty());
+  EXPECT_TRUE(core::find_clip(p, "c2")->effects.empty());
+}
+
+TEST(ClearEffectsOn, BothStacksGo) {
+  // "Clear the effects" on a clip means all of them, and the button sits next
+  // to neither stack.
+  Project p = three_clips();
+  const std::vector<std::string> audio{"a1"};
+  p = add_effect_to(std::move(p), audio, "lowpass", true);
+  p = clear_effects_on(std::move(p), audio);
+
+  EXPECT_TRUE(core::find_clip(p, "a1")->audio_effects.empty());
+}
+
+TEST(ClearEffectsOn, AClipNotNamedKeepsWhatItHad) {
+  Project p = three_clips();
+  const std::vector<std::string> both{"c1", "c2"};
+  p = add_effect_to(std::move(p), both, "blur", false);
+  p = clear_effects_on(std::move(p), std::vector<std::string>{"c1"});
+
+  EXPECT_TRUE(core::find_clip(p, "c1")->effects.empty());
+  EXPECT_EQ(core::find_clip(p, "c2")->effects.size(), 1u);
+}
+
+TEST(ClearEffectsOn, ClearingWhatIsAlreadyCleanChangesNothing) {
+  const Project before = three_clips();
+  const std::vector<std::string> both{"c1", "c2"};
+  EXPECT_EQ(clear_effects_on(before, both), before);
+}
+
 TEST(ApplyLibraryEntry, RefusesAVideoEffectOnAnAudioClip) {
   const Project p = both_kinds();
   EXPECT_EQ(apply_library_entry(p, "a1", "video:blur"), p);

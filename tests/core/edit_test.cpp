@@ -1,10 +1,12 @@
 #include "cutline/core/edit.hpp"
 
 #include "cutline/core/id.hpp"
+#include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -149,6 +151,184 @@ TEST(SourceRange, AMarkedSourceIsPlacedAsTheMarkedPartOnly) {
   const Clip& audio = track_by_id(p, "a1").clips.at(0);
   EXPECT_DOUBLE_EQ(audio.source_in, 2.0);
   EXPECT_DOUBLE_EQ(audio.source_out, 5.0);
+}
+
+// ------------------------------------------------- three-point editing --
+
+/// The pool with one ten-second source in it, marked as asked.
+[[nodiscard]] Project marked_source(std::optional<double> in, std::optional<double> out) {
+  Media m = footage();
+  m.in_point = in;
+  m.out_point = out;
+  return add_media(empty_project(), std::move(m));
+}
+
+TEST(EditPoints, WithNoSequenceMarksTheEditLandsAtThePlayhead) {
+  // The common case, and the reason this is safe to put in front of every
+  // placement: with nothing marked it answers exactly what was there before.
+  const Project p = marked_source(std::nullopt, std::nullopt);
+  const EditPoints points = edit_points(p, "m1", 4.0);
+
+  EXPECT_DOUBLE_EQ(points.at, 4.0);
+  EXPECT_FALSE(points.source.has_value());
+  EXPECT_FALSE(points.over_determined);
+}
+
+TEST(EditPoints, ASourceMarkStillTravelsWhenTheSequenceIsUnmarked) {
+  const Project p = marked_source(2.0, 5.0);
+  const EditPoints points = edit_points(p, "m1", 4.0);
+
+  EXPECT_DOUBLE_EQ(points.at, 4.0);
+  ASSERT_TRUE(points.source.has_value());
+  EXPECT_DOUBLE_EQ(points.source->in, 2.0);
+  EXPECT_DOUBLE_EQ(points.source->out, 5.0);
+}
+
+TEST(EditPoints, ASequenceInIsWhereTheEditLands) {
+  // The whole gap this closes: the mark used to be ignored and the playhead
+  // used instead, so marking where an edit should go did nothing.
+  Project p = marked_source(std::nullopt, std::nullopt);
+  p = set_in_point(std::move(p), 7.0);
+  const EditPoints points = edit_points(p, "m1", 1.0);
+
+  EXPECT_DOUBLE_EQ(points.at, 7.0);
+}
+
+TEST(EditPoints, ASequenceOutAloneBackTimesTheEdit) {
+  // "Be out of this shot at exactly this moment." The source runs up to the
+  // mark rather than starting on it, which is the half of three-point editing
+  // that parking the playhead cannot do.
+  Project p = marked_source(std::nullopt, std::nullopt);
+  p = set_out_point(std::move(p), 30.0);
+  const EditPoints points = edit_points(p, "m1", 1.0);
+
+  // Ten seconds of source, ending at 30.
+  EXPECT_DOUBLE_EQ(points.at, 20.0);
+}
+
+TEST(EditPoints, BackTimingUsesTheMarkedLengthRatherThanTheWholeSource) {
+  Project p = marked_source(2.0, 5.0);
+  p = set_out_point(std::move(p), 30.0);
+  const EditPoints points = edit_points(p, "m1", 1.0);
+
+  EXPECT_DOUBLE_EQ(points.at, 27.0);
+}
+
+TEST(EditPoints, BackTimingPastTheStartIsClampedRatherThanNegative) {
+  Project p = marked_source(std::nullopt, std::nullopt);
+  p = set_out_point(std::move(p), 4.0);
+  const EditPoints points = edit_points(p, "m1", 1.0);
+
+  EXPECT_DOUBLE_EQ(points.at, 0.0);
+}
+
+TEST(EditPoints, BothSequenceMarksAndASourceInDerivesTheSourceOut) {
+  // Three points: source in, sequence in, sequence out. The fourth follows.
+  Project p = marked_source(2.0, std::nullopt);
+  p = set_in_point(std::move(p), 10.0);
+  p = set_out_point(std::move(p), 13.0);
+  const EditPoints points = edit_points(p, "m1", 0.0);
+
+  EXPECT_DOUBLE_EQ(points.at, 10.0);
+  ASSERT_TRUE(points.source.has_value());
+  EXPECT_DOUBLE_EQ(points.source->in, 2.0);
+  EXPECT_DOUBLE_EQ(points.source->out, 5.0);
+  EXPECT_FALSE(points.over_determined);
+}
+
+TEST(EditPoints, BothSequenceMarksAndASourceOutDerivesTheSourceIn) {
+  // Marked at the tail instead, so the source runs *back* from its own mark —
+  // the same rule as back-timing, one level down.
+  Project p = marked_source(std::nullopt, 8.0);
+  p = set_in_point(std::move(p), 10.0);
+  p = set_out_point(std::move(p), 13.0);
+  const EditPoints points = edit_points(p, "m1", 0.0);
+
+  ASSERT_TRUE(points.source.has_value());
+  EXPECT_DOUBLE_EQ(points.source->in, 5.0);
+  EXPECT_DOUBLE_EQ(points.source->out, 8.0);
+}
+
+TEST(EditPoints, BothSequenceMarksAndNoSourceMarkTakesTheHeadOfTheSource) {
+  Project p = marked_source(std::nullopt, std::nullopt);
+  p = set_in_point(std::move(p), 10.0);
+  p = set_out_point(std::move(p), 14.0);
+  const EditPoints points = edit_points(p, "m1", 0.0);
+
+  ASSERT_TRUE(points.source.has_value());
+  EXPECT_DOUBLE_EQ(points.source->in, 0.0);
+  EXPECT_DOUBLE_EQ(points.source->out, 4.0);
+}
+
+TEST(EditPoints, ADerivedSourceOutCannotRunPastTheEndOfTheFile) {
+  // Asking for twenty seconds out of a ten-second source. The span cannot be
+  // filled, and inventing footage past the end is not the answer.
+  Project p = marked_source(std::nullopt, std::nullopt);
+  p = set_in_point(std::move(p), 0.0);
+  p = set_out_point(std::move(p), 20.0);
+  const EditPoints points = edit_points(p, "m1", 0.0);
+
+  ASSERT_TRUE(points.source.has_value());
+  EXPECT_DOUBLE_EQ(points.source->out, 10.0);
+}
+
+TEST(EditPoints, FourMarksThatDisagreeAreReportedRatherThanResolved) {
+  // Over-determined: three seconds of source asked to fill five seconds of
+  // sequence. Retiming it or trimming it are both answers, and choosing
+  // between them is not this function's business.
+  Project p = marked_source(2.0, 5.0);
+  p = set_in_point(std::move(p), 10.0);
+  p = set_out_point(std::move(p), 15.0);
+  const EditPoints points = edit_points(p, "m1", 0.0);
+
+  EXPECT_TRUE(points.over_determined);
+  EXPECT_DOUBLE_EQ(points.destination, 5.0);
+  EXPECT_DOUBLE_EQ(points.at, 10.0);
+  // The source marks are left exactly as marked, so a caller resolving this
+  // still knows what was asked for.
+  ASSERT_TRUE(points.source.has_value());
+  EXPECT_DOUBLE_EQ(points.source->in, 2.0);
+  EXPECT_DOUBLE_EQ(points.source->out, 5.0);
+}
+
+TEST(EditPoints, FourMarksThatAgreeAreNotAConflict) {
+  Project p = marked_source(2.0, 5.0);
+  p = set_in_point(std::move(p), 10.0);
+  p = set_out_point(std::move(p), 13.0);
+  const EditPoints points = edit_points(p, "m1", 0.0);
+
+  EXPECT_FALSE(points.over_determined);
+}
+
+TEST(EditPoints, AStillTakesTheDestinationSpanAndNeverConflicts) {
+  // A still has no length of its own, so there is nothing for four marks to
+  // disagree about.
+  Media m;
+  m.id = "still";
+  m.duration = 5.0;
+  m.is_image = true;
+  m.has_video = true;
+  Project p = add_media(empty_project(), std::move(m));
+  p = set_in_point(std::move(p), 10.0);
+  p = set_out_point(std::move(p), 18.0);
+  const EditPoints points = edit_points(p, "still", 0.0);
+
+  EXPECT_DOUBLE_EQ(points.at, 10.0);
+  EXPECT_DOUBLE_EQ(points.destination, 8.0);
+  EXPECT_FALSE(points.over_determined);
+}
+
+TEST(EditPoints, AMediaThatIsNotThereFallsBackToThePlayhead) {
+  const Project p = marked_source(std::nullopt, std::nullopt);
+  const EditPoints points = edit_points(p, "nobody", 6.0);
+
+  EXPECT_DOUBLE_EQ(points.at, 6.0);
+  EXPECT_FALSE(points.source.has_value());
+}
+
+TEST(EditPoints, ANegativePlayheadNeverPlacesBeforeTheStart) {
+  const Project p = marked_source(std::nullopt, std::nullopt);
+  EXPECT_DOUBLE_EQ(edit_points(p, "m1", -3.0).at, 0.0);
 }
 
 TEST(PlacedLength, StillsIgnoreTheRange) {

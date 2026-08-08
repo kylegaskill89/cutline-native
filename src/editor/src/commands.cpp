@@ -172,6 +172,7 @@ std::string_view to_string(Command command) noexcept {
     case Command::TrimNextToPlayhead: return "trim_next_to_playhead";
     case Command::Insert: return "insert";
     case Command::Overwrite: return "overwrite";
+    case Command::FitToFill: return "fit_to_fill";
     case Command::Copy: return "copy";
     case Command::Cut: return "cut";
     case Command::Paste: return "paste";
@@ -230,6 +231,14 @@ bool can_run(const Session& session, Command command) {
     case Command::Insert:
     case Command::Overwrite:
       return can_place(session);
+
+    // Only when there is a conflict to resolve. With three marks the fourth is
+    // derived and an overwrite already lands it exactly; offering to "fit" a
+    // source that already fits would be a command that retimes by 100%.
+    case Command::FitToFill:
+      return can_place(session) &&
+             core::edit_points(session.project(), session.source_media(), session.playhead())
+                 .over_determined;
 
     case Command::ClearMarks:
       return core::has_marks(session.project());
@@ -370,22 +379,35 @@ bool run(Session& session, Command command) {
     // `match_sequence_to` first, and inside the same `apply`, so the sequence
     // taking the footage's shape and the footage landing on it are one edit and
     // one undo entry. It does nothing unless the sequence is still empty.
+    // Both go through `edit_points`, which is what makes a sequence mark mean
+    // anything: with neither mark set it answers "the playhead", so the common
+    // case is exactly what it was, and with them set the edit lands where it
+    // was told to rather than where the playhead happens to be parked.
     case Command::Insert: {
       if (!can_place(session)) return false;
       core::Project ready = core::match_sequence_to(project, session.source_media());
       const std::string target = edit_target(ready);
-      const auto range = core::source_range(ready, session.source_media());
+      const auto points = core::edit_points(ready, session.source_media(), session.playhead());
       return session.apply(core::insert_media_at(std::move(ready), session.source_media(),
-                                                 session.playhead(), target, range));
+                                                 points.at, target, points.source));
     }
 
     case Command::Overwrite: {
       if (!can_place(session)) return false;
       core::Project ready = core::match_sequence_to(project, session.source_media());
       const std::string target = edit_target(ready);
-      const auto range = core::source_range(ready, session.source_media());
+      const auto points = core::edit_points(ready, session.source_media(), session.playhead());
       return session.apply(core::overwrite_media_at(std::move(ready), session.source_media(),
-                                                    session.playhead(), target, range));
+                                                    points.at, target, points.source));
+    }
+
+    case Command::FitToFill: {
+      if (!can_run(session, Command::FitToFill)) return false;
+      core::Project ready = core::match_sequence_to(project, session.source_media());
+      const std::string target = edit_target(ready);
+      const auto points = core::edit_points(ready, session.source_media(), session.playhead());
+      return session.apply(core::fit_media_to(std::move(ready), session.source_media(), points.at,
+                                              points.destination, target, points.source));
     }
 
     case Command::ClearMarks:

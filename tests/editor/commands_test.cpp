@@ -60,6 +60,7 @@ constexpr std::array kAllCommands{
     Command::AddAudioTrack, Command::RemoveTrack,
     Command::Copy,          Command::Cut,           Command::Paste,
     Command::PasteInsert,   Command::Insert,        Command::Overwrite,
+    Command::FitToFill,
     Command::Undo,          Command::Redo,
     Command::TrimPreviousToPlayhead,
     Command::TrimNextToPlayhead,
@@ -858,6 +859,140 @@ TEST(Commands, AnOverwriteTakesTheMarkedPartToo) {
   const Clip& placed = session.project().tracks[0].clips.at(0);
   EXPECT_DOUBLE_EQ(placed.source_in, 0.0);
   EXPECT_DOUBLE_EQ(placed.source_out, 3.0);
+}
+
+TEST(Commands, AnOverwriteLandsOnTheSequenceInPointRatherThanThePlayhead) {
+  // The half of three-point editing that had never been wired. Marking where
+  // an edit should go did nothing: the mark was stored, saved and drawn, and
+  // the placement used the playhead regardless.
+  Project project = targetable_project();
+  project.tracks[0].targeted = true;
+  project = core::set_in_point(std::move(project), 6.0);
+  Session session(std::move(project));
+  session.set_source_media("m2");
+  session.set_playhead(1.0);
+
+  ASSERT_TRUE(run(session, Command::Overwrite));
+  EXPECT_DOUBLE_EQ(session.project().tracks[0].clips.at(0).start, 6.0);
+}
+
+TEST(Commands, AnInsertBackTimesToASequenceOut) {
+  Project project = targetable_project();
+  project.tracks[0].targeted = true;
+  project = core::set_out_point(std::move(project), 20.0);
+  Session session(std::move(project));
+  session.set_source_media("m2");
+  session.set_playhead(1.0);
+
+  ASSERT_TRUE(run(session, Command::Insert));
+  // Eight seconds of source, ending on the mark.
+  EXPECT_DOUBLE_EQ(session.project().tracks[0].clips.at(0).start, 12.0);
+}
+
+TEST(Commands, BothSequenceMarksDecideHowMuchOfTheSourceGoesDown) {
+  Project project = targetable_project();
+  project.tracks[0].targeted = true;
+  project = core::set_source_in_point(std::move(project), "m2", 1.0);
+  project = core::set_in_point(std::move(project), 4.0);
+  project = core::set_out_point(std::move(project), 6.5);
+  Session session(std::move(project));
+  session.set_source_media("m2");
+  session.set_playhead(0.0);
+
+  ASSERT_TRUE(run(session, Command::Overwrite));
+  const Clip& placed = session.project().tracks[0].clips.at(0);
+  EXPECT_DOUBLE_EQ(placed.start, 4.0);
+  EXPECT_DOUBLE_EQ(placed.source_in, 1.0);
+  EXPECT_DOUBLE_EQ(placed.source_out, 3.5) << "the span decided the unmarked end";
+}
+
+TEST(Commands, WithNoSequenceMarksPlacingIsExactlyWhatItWas) {
+  // The guard on the whole change: an unmarked sequence has to behave as it
+  // did before, or every placement in the application moved.
+  Project project = targetable_project();
+  project.tracks[0].targeted = true;
+  Session session(std::move(project));
+  session.set_source_media("m2");
+  session.set_playhead(3.0);
+
+  ASSERT_TRUE(run(session, Command::Overwrite));
+  EXPECT_DOUBLE_EQ(session.project().tracks[0].clips.at(0).start, 3.0);
+}
+
+/// All four marks set, with the source three seconds long and the destination
+/// six — so it has to run at half speed to fill it.
+[[nodiscard]] Project four_marks() {
+  Project project = targetable_project();
+  project.tracks[0].targeted = true;
+  project = core::set_source_in_point(std::move(project), "m2", 1.0);
+  project = core::set_source_out_point(std::move(project), "m2", 4.0);
+  project = core::set_in_point(std::move(project), 10.0);
+  project = core::set_out_point(std::move(project), 16.0);
+  return project;
+}
+
+TEST(Commands, FitToFillIsOnlyOfferedWhenTheMarksActuallyConflict) {
+  // Three marks derive the fourth and an overwrite already lands it exactly.
+  // Offering to "fit" something that fits would retime it by 100%.
+  Project three = targetable_project();
+  three.tracks[0].targeted = true;
+  three = core::set_source_in_point(std::move(three), "m2", 1.0);
+  three = core::set_in_point(std::move(three), 10.0);
+  three = core::set_out_point(std::move(three), 16.0);
+  Session loose(std::move(three));
+  loose.set_source_media("m2");
+  EXPECT_FALSE(can_run(loose, Command::FitToFill));
+
+  Session tight(four_marks());
+  tight.set_source_media("m2");
+  EXPECT_TRUE(can_run(tight, Command::FitToFill));
+}
+
+TEST(Commands, FitToFillIsNotOfferedWithoutASourceToPlace) {
+  Session session(four_marks());
+  EXPECT_FALSE(can_run(session, Command::FitToFill));
+}
+
+TEST(Commands, FitToFillFillsTheMarkedSpanExactly) {
+  Session session(four_marks());
+  session.set_source_media("m2");
+  session.set_playhead(0.0);
+
+  ASSERT_TRUE(run(session, Command::FitToFill));
+
+  const Clip& placed = session.project().tracks[0].clips.at(0);
+  EXPECT_DOUBLE_EQ(placed.start, 10.0);
+  EXPECT_DOUBLE_EQ(core::clip_end(placed), 16.0);
+}
+
+TEST(Commands, FitToFillKeepsTheMarkedPartOfTheSourceAndRetimesIt) {
+  // Every mark is kept, which is the point: the source runs from its in to its
+  // out, over the span that was marked for it, at whatever rate that takes.
+  Session session(four_marks());
+  session.set_source_media("m2");
+
+  ASSERT_TRUE(run(session, Command::FitToFill));
+
+  const Clip& placed = session.project().tracks[0].clips.at(0);
+  EXPECT_DOUBLE_EQ(placed.source_in, 1.0);
+  EXPECT_DOUBLE_EQ(placed.source_out, 4.0);
+  EXPECT_DOUBLE_EQ(placed.speed, 0.5) << "three seconds stretched across six";
+}
+
+TEST(Commands, FitToFillSpeedsUpAsWellAsSlowsDown) {
+  Project project = targetable_project();
+  project.tracks[0].targeted = true;
+  project = core::set_source_in_point(std::move(project), "m2", 0.0);
+  project = core::set_source_out_point(std::move(project), "m2", 8.0);
+  project = core::set_in_point(std::move(project), 0.0);
+  project = core::set_out_point(std::move(project), 2.0);
+  Session session(std::move(project));
+  session.set_source_media("m2");
+
+  ASSERT_TRUE(run(session, Command::FitToFill));
+  const Clip& placed = session.project().tracks[0].clips.at(0);
+  EXPECT_DOUBLE_EQ(placed.speed, 4.0);
+  EXPECT_DOUBLE_EQ(core::clip_end(placed), 2.0);
 }
 
 TEST(Commands, AnOverwriteLeavesTheSequenceTheLengthItWas) {

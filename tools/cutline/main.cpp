@@ -1502,13 +1502,23 @@ void open_effect_menu(App& app, const std::string& clip_id, const Rect& anchor, 
   auto list = std::make_unique<MenuList>(std::move(names));
   list->set_on_choose([&app, clip_id, choices, audio](std::size_t index) {
     if (index >= choices.size()) return;
-    app.session.apply(
-        audio ? cutline::editor::add_audio_effect(app.session.project(), clip_id,
-                                                  choices[index].type)
-              : cutline::editor::add_effect(app.session.project(), clip_id,
-                                            choices[index].type));
+
+    // The whole selection, exactly as the library's double-click and drop
+    // already do. The panel shows one clip because a stack is a clip's, but
+    // *adding* one is the same gesture wherever it is reached from, and this
+    // was the last place it meant only the clip on show. A clip the effect
+    // does not suit is passed over rather than given one it cannot run.
+    const auto selection = app.session.selection();
+    std::vector<std::string> clip_ids(selection.begin(), selection.end());
+    // The panel's clip is what the button belongs to, so it takes the effect
+    // even when the selection has moved on beneath it.
+    if (std::ranges::find(clip_ids, clip_id) == clip_ids.end()) clip_ids.push_back(clip_id);
+
+    app.session.apply(cutline::editor::add_effect_to(app.session.project(), clip_ids,
+                                                     choices[index].type, audio));
     if (app.main.host != nullptr) app.main.host->close_popup();
     app.inspector_stale = true;
+    refresh_timeline(app);
     invalidate_preview(app);
   });
 
@@ -1774,13 +1784,15 @@ void build_effect_clipboard_row(App& app, const std::string& clip_id) {
   paste.set_enabled(!app.effect_clipboard.empty());
 
   auto& clear = row.emplace<Button>("Clear", [&app, clip_id] {
-    // Both stacks, because the button is next to neither of them and "clear
-    // the effects" on a clip means all of them. Only one is ever non-empty in
-    // practice — a clip is video or audio.
-    cutline::core::Project next =
-        cutline::core::clear_clip_effects(app.session.project(), clip_id);
-    next = cutline::core::clear_audio_effects(std::move(next), clip_id);
-    app.session.apply(std::move(next));
+    // The whole selection, because Paste beside it already takes the whole
+    // selection and the two are the same gesture in opposite directions:
+    // putting a look on several shots, and taking it off again. Clearing one
+    // at a time was the fiddle that made stripping a sequence back a chore.
+    const auto selection = app.session.selection();
+    std::vector<std::string> clip_ids(selection.begin(), selection.end());
+    if (std::ranges::find(clip_ids, clip_id) == clip_ids.end()) clip_ids.push_back(clip_id);
+
+    app.session.apply(cutline::editor::clear_effects_on(app.session.project(), clip_ids));
     refresh_timeline(app);
     invalidate_preview(app);
     app.inspector_stale = true;
@@ -8915,6 +8927,11 @@ void refresh_dock(App& app) {
       {"Insert", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Insert); }},
       {"Overwrite",
        [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Overwrite); }},
+      // Greyed unless all four marks are set and disagree, which is the only
+      // time there is anything to fit. No key: Premiere reaches it from a menu
+      // too, and it is not an edit anybody makes in a hurry.
+      {"Fit to Fill",
+       [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::FitToFill); }},
   });
 
   menu("Project", {

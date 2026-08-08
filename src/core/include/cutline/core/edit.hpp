@@ -80,6 +80,77 @@ struct PlacementRange {
 [[nodiscard]] std::optional<PlacementRange> source_range(const Project& p,
                                                          std::string_view media_id) noexcept;
 
+/// What the marks add up to: where an edit lands, and which part of the source
+/// fills it.
+///
+/// Three-point editing is the rule that any three of the four marks — source
+/// in, source out, sequence in, sequence out — determine the fourth. Until this
+/// existed, only the source pair was read: insert and overwrite honoured a
+/// marked source and then put it at the *playhead*, so marking where an edit
+/// should land did nothing, and the mark was left doing the one job it is for
+/// by hand.
+struct EditPoints {
+  /// Where on the timeline the source lands.
+  double at = 0.0;
+  /// Which part of the source, or nothing for the whole of it.
+  std::optional<PlacementRange> source;
+  /// Whether the sequence marks fix the *length* as well as the start.
+  ///
+  /// Only true when all four marks are set and the two spans disagree, which is
+  /// four-point editing: the edit is over-determined and something has to give.
+  /// Resolving it is a question rather than an arrangement — retime the source
+  /// to fill, or trim it — so this reports the conflict and lets the caller
+  /// decide rather than picking silently.
+  bool over_determined = false;
+  /// How long the destination is when the sequence marks fix it. Zero when they
+  /// do not.
+  double destination = 0.0;
+};
+
+/// Resolves the four marks against the playhead.
+///
+/// The rules, which are Premiere's:
+///
+/// - **Neither sequence mark.** The playhead is the in point, which is what
+///   makes the common case — no marks at all — exactly what it was before.
+/// - **Sequence in only.** The edit lands there.
+/// - **Sequence out only.** The edit *back-times*: it is placed so that it
+///   ends on the mark. "Get me out of this shot at exactly this moment" is a
+///   thing people mark, and it is the half of three-point editing that cannot
+///   be done by parking the playhead.
+/// - **Both sequence marks.** The destination span is fixed. If the source is
+///   marked at one end or neither, the missing end is *derived* from the span,
+///   which is three-point editing proper. If the source is marked at both ends
+///   and the two spans disagree, nothing can satisfy all four and
+///   `over_determined` says so.
+///
+/// A still has no length of its own and so cannot be back-timed against one;
+/// it takes the destination span when there is one and its own placement
+/// length otherwise.
+[[nodiscard]] EditPoints edit_points(const Project& p, std::string_view media_id,
+                                     double playhead) noexcept;
+
+/// Overwrites a span with a media retimed to fill it exactly.
+///
+/// Premiere's Fit to Fill, and the answer to four-point editing that keeps all
+/// four marks rather than throwing one away: the source runs from its in to its
+/// out, the edit runs from the sequence in to the sequence out, and the speed
+/// is whatever makes those the same length. Ten seconds of action across six
+/// seconds of sequence is a clip at 167%.
+///
+/// An overwrite rather than an insert, because the destination span is a span
+/// somebody marked: rippling would move the mark's own meaning out from under
+/// it.
+///
+/// Nothing happens when the destination has no length, when the source has
+/// none, or when the media is not there. A still is retimed like anything else
+/// — `clip_duration` is the source span over the speed whatever the media is,
+/// so the arithmetic lands on the right length either way, and a rate on a
+/// picture that shows one frame changes nothing else about it.
+[[nodiscard]] Project fit_media_to(Project p, std::string_view media_id, double at,
+                                   double duration, std::string_view track_id = {},
+                                   std::optional<PlacementRange> range = std::nullopt);
+
 // ----------------------------------------------------------------- cutting --
 
 /// Razor cut: splits every listed clip that strictly spans `time` into two

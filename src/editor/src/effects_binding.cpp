@@ -704,4 +704,25 @@ core::Project apply_library_entry(core::Project project, std::string_view clip_i
   return project;
 }
 
+core::Project add_effect_to(core::Project project, std::span<const std::string> clip_ids,
+                            std::string_view type, bool audio) {
+  // Built back into a library id so the one rule about what may land on what
+  // stays in one place. The alternative is a kind check here kept in step with
+  // the one in `library_entry_fits`, and two copies of a rule is one copy and a
+  // future disagreement.
+  const std::string id = std::string(audio ? kAudioPrefix : kVideoPrefix) + std::string(type);
+  for (const std::string& clip_id : clip_ids) {
+    project = apply_library_entry(std::move(project), clip_id, id);
+  }
+  return project;
+}
+
+core::Project clear_effects_on(core::Project project, std::span<const std::string> clip_ids) {
+  for (const std::string& clip_id : clip_ids) {
+    project = core::clear_clip_effects(std::move(project), clip_id);
+    project = core::clear_audio_effects(std::move(project), clip_id);
+  }
+  return project;
+}
+
 }  // namespace cutline::editor

@@ -1,6 +1,7 @@
 #include "cutline/core/edit.hpp"
 
 #include "cutline/core/id.hpp"
+#include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 
 #include <algorithm>
@@ -131,6 +132,70 @@ std::optional<PlacementRange> source_range(const Project& p,
                                            std::string_view media_id) noexcept {
   const auto it = std::ranges::find_if(p.media, [&](const Media& m) { return m.id == media_id; });
   return it == p.media.end() ? std::nullopt : source_range(*it);
+}
+
+EditPoints edit_points(const Project& p, std::string_view media_id, double playhead) noexcept {
+  EditPoints points;
+  points.at = std::max(0.0, playhead);
+  points.source = source_range(p, media_id);
+
+  const auto it = std::ranges::find_if(p.media, [&](const Media& m) { return m.id == media_id; });
+  if (it == p.media.end()) return points;
+  const Media& media = *it;
+
+  const std::optional<double> in = p.in_point;
+  const std::optional<double> out = p.out_point;
+  if (!in.has_value() && !out.has_value()) return points;
+
+  // How long the source would run as it stands, which is what a back-time is
+  // measured back from and what a fixed destination is compared against.
+  const double length = placed_length(media, points.source);
+
+  if (in.has_value() && !out.has_value()) {
+    points.at = std::max(0.0, *in);
+    return points;
+  }
+
+  if (!in.has_value() && out.has_value()) {
+    // Back-timed: placed so that it *ends* on the mark. Clamped at zero rather
+    // than started before the sequence does, which would put the tail somewhere
+    // other than the mark — but the mark is the thing being asked for, and a
+    // negative start cannot be honoured at all.
+    points.at = std::max(0.0, *out - length);
+    return points;
+  }
+
+  // Both. The destination span is fixed, and how the source fills it depends on
+  // how much of the source has been decided already.
+  const double span = std::max(0.0, *out - *in);
+  points.at = std::max(0.0, *in);
+  points.destination = span;
+
+  // A still has no length of its own, so there is nothing to disagree: it is
+  // simply as long as the destination.
+  if (is_still_like(media)) return points;
+
+  const bool both_ends = media.in_point.has_value() && media.out_point.has_value();
+  if (both_ends) {
+    // Four marks. Nothing can satisfy all of them unless the two spans happen
+    // to agree, and when they do there is no conflict to report.
+    points.over_determined = std::abs(length - span) > 1e-9;
+    return points;
+  }
+
+  // Three marks: the unmarked end of the source is the one the span decides.
+  // From the source in when there is one, so "start here and run for exactly
+  // this long" is what marking an in and a destination span means.
+  const double source_in = media.in_point.value_or(0.0);
+  if (media.out_point.has_value()) {
+    // Marked at the out instead: the *in* is what the span decides, so the
+    // source runs back from the mark. Same rule as back-timing, one level down.
+    const double source_out = *media.out_point;
+    points.source = PlacementRange{std::max(0.0, source_out - span), source_out};
+  } else {
+    points.source = PlacementRange{source_in, std::min(media.duration, source_in + span)};
+  }
+  return points;
 }
 
 namespace {
@@ -816,6 +881,39 @@ Project overwrite_media_at(Project p, std::string_view media_id, double at_time,
   const std::string resolved =
       lanes.video.has_value() ? p.tracks[*lanes.video].id : std::string(track_id);
   return place_media(std::move(p), media_id, at_time, resolved, range);
+}
+
+Project fit_media_to(Project p, std::string_view media_id, double at, double duration,
+                     std::string_view track_id, std::optional<PlacementRange> range) {
+  const auto media_it = std::ranges::find(p.media, media_id, &Media::id);
+  if (media_it == p.media.end() || duration <= 0.0) return p;
+
+  // What the source would run for at its own rate, which is the numerator of
+  // the whole thing. Measured before the placement, because afterwards the
+  // clip's own length is what is being changed.
+  const double length = placed_length(*media_it, range);
+  if (length <= 0.0) return p;
+
+  p = overwrite_media_at(std::move(p), media_id, at, track_id, range);
+
+  // The clip just laid down: naming this media and starting exactly where the
+  // placement was asked for. The overwrite carved that span clear first, so
+  // nothing else can be starting there. Any one of the group will do —
+  // `set_clip_speed` retimes all of it together, which is what keeps a
+  // picture and its sound at the same rate.
+  std::string placed;
+  for (const Track& track : p.tracks) {
+    const auto found = std::ranges::find_if(track.clips, [&](const Clip& c) {
+      return c.media_id == media_id && std::abs(c.start - at) < 1e-9;
+    });
+    if (found != track.clips.end()) {
+      placed = found->id;
+      break;
+    }
+  }
+  if (placed.empty()) return p;
+
+  return set_clip_speed(std::move(p), placed, length / duration);
 }
 
 // ------------------------------------------------------------ copy / paste --
