@@ -99,6 +99,13 @@ class Player {
   /// was pressed says something untrue.
   [[nodiscard]] audio::MeterReading levels() const;
 
+  /// One track's own levels as of the last block, for a mixer strip's meter.
+  ///
+  /// Reads as silence while paused, for the same reason `levels` does: a meter
+  /// falls only while audio is going past it, so one frozen at whatever was
+  /// playing when the space bar was pressed is saying something untrue.
+  [[nodiscard]] audio::MeterReading track_levels(int track_index) const;
+
   /// Timeline length, so a caller knows where playback will stop.
   [[nodiscard]] double duration() const noexcept;
 

@@ -519,6 +519,14 @@ audio::MeterReading Player::levels() const {
   return impl_->mixer->levels();
 }
 
+audio::MeterReading Player::track_levels(int track_index) const {
+  audio::MeterReading silent;
+  silent.count = impl_->channels;
+  if (impl_->mixer == nullptr) return silent;
+  if (!impl_->running.load(std::memory_order_acquire)) return silent;
+  return impl_->mixer->track_levels(track_index);
+}
+
 void Player::seek(double seconds) {
   const std::lock_guard lock(impl_->control);
   impl_->seek_pending = true;

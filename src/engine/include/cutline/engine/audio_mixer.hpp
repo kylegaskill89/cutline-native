@@ -121,6 +121,27 @@ class AudioMixer {
   /// the limiter is being asked to hold back rather than what it let through.
   [[nodiscard]] audio::MeterReading levels() const noexcept;
 
+  /// Levels of one track's own output as of the last block.
+  ///
+  /// What a mixer strip's meter shows, and the reason it is worth having beside
+  /// the master's: a mix that is too hot says nothing about which track is
+  /// making it so, and finding out by soloing each one in turn is the job a
+  /// meter per strip exists to remove.
+  ///
+  /// Measured **before** the master fader, unlike `levels`. A track meter
+  /// answers "what is this track putting out", and pulling the master down does
+  /// not change that — strips that all dropped together when the master moved
+  /// would be several meters showing one thing.
+  ///
+  /// Everything that makes the track's sound is in it: clip gain, fades, the
+  /// panner and the effect chain, summed across every clip that lane has
+  /// playing at once. A lane with nothing on it, or an index this mixer was
+  /// not built for, reads as silence rather than as an error.
+  [[nodiscard]] audio::MeterReading track_levels(int track_index) const noexcept;
+
+  /// How many lanes have a meter — one past the highest that carries audio.
+  [[nodiscard]] std::size_t track_count() const noexcept;
+
   /// Drains the limiter's look-ahead into `out`, which should hold
   /// `latency_frames()` frames. The tail of a timeline is lost without it.
   void flush(std::span<float> out);

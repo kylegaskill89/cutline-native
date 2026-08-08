@@ -295,8 +295,27 @@ struct AudioMixer::Impl {
   mutable std::mutex levels_lock;
   audio::MeterReading levels;
 
+  /// One meter per track lane, so a mixer strip can show what its own track is
+  /// putting into the mix rather than what the mix came to.
+  ///
+  /// Indexed by the plan's `track_index`, and as long as the highest lane that
+  /// carries audio — a lane with nothing on it keeps a meter that reads silence
+  /// rather than being absent, so a caller never has to ask whether a track has
+  /// an entry before it can draw one.
+  ///
+  /// They share `levels_lock` with the master's reading. The whole set is
+  /// published in one place once a block, which is also what stops a strip
+  /// showing a level from one block beside a neighbour showing the last.
+  std::vector<std::unique_ptr<audio::Meter>> track_meters;
+  std::vector<audio::MeterReading> track_levels;
+
   /// Scratch, reused across calls so mixing does not allocate per block.
   std::vector<float> voice_block;
+  /// One block's worth per track, summed as the voices go by. A track can hold
+  /// several clips at once, so a track's level is not any one voice's — it is
+  /// what they come to together, which is only known once they have all been
+  /// through.
+  std::vector<std::vector<float>> track_blocks;
 };
 
 AudioMixer::AudioMixer(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -415,6 +434,23 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
                                                audio::MeterSettings{.over = limiting.limit});
   impl->levels = impl->meter->read();
 
+  // A meter per lane that carries audio. Sized from the plan rather than from
+  // the project's track list, because the plan is what says which lanes have
+  // anything on them — and `only_track` means a mixer can legitimately hold a
+  // voice for one lane and nothing for the rest.
+  std::size_t lanes = 0;
+  for (const Voice& voice : impl->voices) {
+    lanes = std::max(lanes, static_cast<std::size_t>(voice.planned.track_index) + 1);
+  }
+  impl->track_meters.reserve(lanes);
+  for (std::size_t i = 0; i < lanes; ++i) {
+    impl->track_meters.push_back(std::make_unique<audio::Meter>(
+        static_cast<double>(settings.sample_rate), settings.channels,
+        audio::MeterSettings{.over = limiting.limit}));
+  }
+  impl->track_levels.assign(lanes, impl->meter->read());
+  impl->track_blocks.resize(lanes);
+
   // Only when something can actually run out. Every source held whole means
   // there is nothing for a reader to do, which is the ordinary project.
   const bool anything_windowed =
@@ -465,6 +501,11 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
   std::ranges::fill(out, 0.0f);
   const std::size_t frames = out.size() / channels;
   if (frames == 0) return {};
+
+  // Cleared rather than reallocated. `assign` on a vector that has already held
+  // a block of this size keeps its storage, which is what keeps the mixing
+  // thread free of the allocator — the same reason `voice_block` is a member.
+  for (std::vector<float>& lane : impl_->track_blocks) lane.assign(out.size(), 0.0f);
 
   const double rate = static_cast<double>(impl_->settings.sample_rate);
 
@@ -591,6 +632,19 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
     // A plain sum: `normalize=0`, so tracks add rather than being scaled down
     // by how many of them there are.
     for (std::size_t i = 0; i < span * channels; ++i) out[first * channels + i] += impl_->voice_block[i];
+
+    // And into the lane's own block, which is the same sum kept separately so
+    // a strip can be told what its track is contributing. Everything that makes
+    // a track's sound is already in `voice_block` by this point — clip gain,
+    // fades, the panner, the effect chain — so this is the track's output and
+    // not an estimate of it.
+    const auto lane = static_cast<std::size_t>(voice.planned.track_index);
+    if (lane < impl_->track_blocks.size()) {
+      std::vector<float>& into = impl_->track_blocks[lane];
+      for (std::size_t i = 0; i < span * channels; ++i) {
+        into[first * channels + i] += impl_->voice_block[i];
+      }
+    }
   }
 
   // The master fader, ahead of the limiter: pulling it down has to take a hot
@@ -605,9 +659,23 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
   // Metered here, between the fader and the limiter: this is the mix as it was
   // made, which is what a meter is for. See `levels`.
   impl_->meter->process(out);
+
+  // The lanes are metered *before* the master fader, unlike the mix. A track
+  // meter answers "what is this track putting out", and pulling the master down
+  // does not change that — a set of strips that all dropped together when the
+  // master moved would be five meters showing one thing.
+  for (std::size_t lane = 0; lane < impl_->track_meters.size(); ++lane) {
+    impl_->track_meters[lane]->process(impl_->track_blocks[lane]);
+  }
+
+  // One lock for the whole set, so a strip can never show a level from this
+  // block beside a neighbour still showing the last.
   {
     const std::lock_guard lock(impl_->levels_lock);
     impl_->levels = impl_->meter->read();
+    for (std::size_t lane = 0; lane < impl_->track_meters.size(); ++lane) {
+      impl_->track_levels[lane] = impl_->track_meters[lane]->read();
+    }
   }
 
   impl_->limiter->process(out);
@@ -627,6 +695,20 @@ audio::MeterReading AudioMixer::levels() const noexcept {
   const std::lock_guard lock(impl_->levels_lock);
   return impl_->levels;
 }
+
+audio::MeterReading AudioMixer::track_levels(int track_index) const noexcept {
+  const std::lock_guard lock(impl_->levels_lock);
+  if (track_index < 0 || static_cast<std::size_t>(track_index) >= impl_->track_levels.size()) {
+    // A lane with nothing on it, or one this mixer was not built for. Silence
+    // is the true answer and saves every caller a check it would get wrong.
+    audio::MeterReading quiet;
+    quiet.count = impl_->settings.channels;
+    return quiet;
+  }
+  return impl_->track_levels[static_cast<std::size_t>(track_index)];
+}
+
+std::size_t AudioMixer::track_count() const noexcept { return impl_->track_levels.size(); }
 
 void AudioMixer::flush(std::span<float> out) { impl_->limiter->flush(out); }
 

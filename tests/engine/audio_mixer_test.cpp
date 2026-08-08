@@ -177,6 +177,117 @@ TEST(AudioMixer, ARateOrChannelCountOfZeroIsRejected) {
   EXPECT_FALSE(AudioMixer::create(Project{}, {.channels = 0}).has_value());
 }
 
+// ---------------------------------------------------------- track meters --
+
+/// Below this is silence as far as a meter is concerned. A reading floors at
+/// its own bottom rather than at negative infinity, so "quiet" is a threshold
+/// rather than an exact number.
+constexpr double kSilenceDb = -90.0;
+
+/// Two lanes, the second quieter than the first, so their meters have to
+/// disagree for the feature to mean anything.
+[[nodiscard]] Project two_lanes() {
+  Project p;
+  p.media = {tone_media()};
+  Track loud = audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0)});
+  Track quiet = audio_track("a2", {audio_clip("c2", "m", 0.0, 5.0)});
+  quiet.gain = 0.25;
+  p.tracks = {std::move(loud), std::move(quiet)};
+  return p;
+}
+
+TEST(TrackMeters, ALaneWithNothingOnItReadsAsSilence) {
+  // And does not need asking about first, which is what saves every caller a
+  // check it would get wrong.
+  const auto mixer = mixer_for(Project{});
+  ASSERT_NE(mixer, nullptr);
+  EXPECT_EQ(mixer->track_count(), 0u);
+  EXPECT_LE(mixer->track_levels(0).channels[0].peak_db, kSilenceDb);
+  EXPECT_LE(mixer->track_levels(-1).channels[0].peak_db, kSilenceDb);
+  EXPECT_LE(mixer->track_levels(9999).channels[0].peak_db, kSilenceDb);
+}
+
+TEST(TrackMeters, EachLaneIsMeteredSeparately) {
+  auto mixer = mixer_for(two_lanes());
+  ASSERT_NE(mixer, nullptr);
+  ASSERT_EQ(mixer->track_count(), 2u);
+  (void)mix_span(*mixer, 0.0, 0.5);
+
+  const double loud = mixer->track_levels(0).channels[0].peak_db;
+  const double quiet = mixer->track_levels(1).channels[0].peak_db;
+  EXPECT_GT(loud, kSilenceDb);
+  EXPECT_GT(quiet, kSilenceDb);
+  // A quarter of the amplitude is about twelve decibels down. The point is that
+  // the two meters say different things about the same moment.
+  EXPECT_NEAR(loud - quiet, 12.0, 2.0);
+}
+
+TEST(TrackMeters, ALaneReadsItsOwnLevelRatherThanTheMix) {
+  // The reason a strip's meter is worth having: a mix that is too hot says
+  // nothing about which track is making it so.
+  auto mixer = mixer_for(two_lanes());
+  ASSERT_NE(mixer, nullptr);
+  (void)mix_span(*mixer, 0.0, 0.5);
+
+  const double mix = mixer->levels().channels[0].peak_db;
+  const double quiet = mixer->track_levels(1).channels[0].peak_db;
+  EXPECT_GT(mix, quiet) << "the sum of both lanes is louder than the quieter one";
+}
+
+TEST(TrackMeters, TheMasterFaderDoesNotMoveThem) {
+  // A track meter answers "what is this track putting out". Strips that all
+  // dropped together when the master moved would be several meters showing one
+  // thing.
+  auto mixer = mixer_for(two_lanes());
+  ASSERT_NE(mixer, nullptr);
+
+  (void)mix_span(*mixer, 0.0, 0.5);
+  const double before = mixer->track_levels(0).channels[0].peak_db;
+  const double mix_before = mixer->levels().channels[0].peak_db;
+
+  mixer->set_master_gain(0.25);
+  (void)mix_span(*mixer, 0.5, 0.5);
+  const double after = mixer->track_levels(0).channels[0].peak_db;
+  const double mix_after = mixer->levels().channels[0].peak_db;
+
+  EXPECT_NEAR(before, after, 1.0) << "the lane is unchanged";
+  EXPECT_LT(mix_after, mix_before - 6.0) << "the mix followed the fader";
+}
+
+TEST(TrackMeters, ALaneWithSeveralClipsAtOnceMetersTheirSum) {
+  // A track's level is not any one clip's. Two clips overlapping on one lane
+  // are louder together than either is alone.
+  Project one;
+  one.media = {tone_media()};
+  one.tracks = {audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0)})};
+
+  Project both;
+  both.media = {tone_media()};
+  both.tracks = {audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0),
+                                    audio_clip("c2", "m", 0.0, 5.0, 1.0)})};
+
+  auto alone = mixer_for(one);
+  auto together = mixer_for(both);
+  ASSERT_NE(alone, nullptr);
+  ASSERT_NE(together, nullptr);
+  (void)mix_span(*alone, 0.0, 0.5);
+  (void)mix_span(*together, 0.0, 0.5);
+
+  EXPECT_GT(together->track_levels(0).channels[0].peak_db,
+            alone->track_levels(0).channels[0].peak_db);
+}
+
+TEST(TrackMeters, AMutedLaneReadsAsSilence) {
+  Project p = two_lanes();
+  p.tracks[0].muted = true;
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  (void)mix_span(*mixer, 0.0, 0.5);
+
+  EXPECT_LE(mixer->track_levels(0).channels[0].peak_db, kSilenceDb);
+  EXPECT_GT(mixer->track_levels(1).channels[0].peak_db, kSilenceDb);
+}
+
 // ----------------------------------------------------------------- content --
 
 TEST(AudioMixer, AClipIsHeardAtItsOwnLevel) {

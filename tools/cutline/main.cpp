@@ -709,6 +709,13 @@ struct App {
   /// messages for nothing.
   cutline::ui::MeterView* meter = nullptr;
   cutline::ui::Fader* master_fader = nullptr;
+  /// A mixer strip's meter, and which lane it draws. Rebuilt with the panel, so
+  /// the list is cleared whenever the strips are.
+  struct TrackMeter {
+    std::size_t index = 0;
+    cutline::ui::MeterView* view = nullptr;
+  };
+  std::vector<TrackMeter> track_meters;
   Label* master_reading = nullptr;
 
   /// True between the press and the release on a transform handle, which is
@@ -5341,11 +5348,23 @@ void show_master_gain(App& app, double gain) {
 /// away and the ballistics carry across it.
 void refresh_meter([[maybe_unused]] App& app) {
 #if CUTLINE_HAVE_PREVIEW
-  if (app.meter == nullptr) return;
   // A player that has not been made yet reads as silence, which is true: there
   // is nothing playing.
-  app.meter->set_levels(app.player == nullptr ? cutline::audio::MeterReading{}
-                                              : app.player->levels());
+  if (app.meter != nullptr) {
+    app.meter->set_levels(app.player == nullptr ? cutline::audio::MeterReading{}
+                                                : app.player->levels());
+  }
+
+  // And every strip's own meter. Polled here rather than pushed from the mixer
+  // for the same reason the master's is: this runs at frame rate, a level is a
+  // few dozen bytes, and a display where a missed update is invisible does not
+  // need a notification.
+  for (const App::TrackMeter& strip : app.track_meters) {
+    if (strip.view == nullptr) continue;
+    strip.view->set_levels(app.player == nullptr
+                               ? cutline::audio::MeterReading{}
+                               : app.player->track_levels(static_cast<int>(strip.index)));
+  }
 #endif
 }
 
@@ -8282,18 +8301,22 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
   });
   solo.set_selected(track.solo);
 
-  // The throw. Premiere puts a meter immediately to its right, and that is the
-  // arrangement the whole panel is for — the level you are setting against the
-  // level you are getting. There is no meter here yet because nothing publishes
-  // one: `AudioMixer` measures the mix after the master fader and nothing
-  // measures a track. That is engine work rather than a widget, it is written
-  // up in §6.1, and a meter drawn beside this that never moved would be worse
-  // than the gap.
-  auto& fader = strip.emplace<cutline::ui::Fader>(
+  // The throw and its meter side by side, which is the arrangement the whole
+  // panel exists for: the level you are setting, against the level you are
+  // getting.
+  auto& throw_row = strip.emplace<Box>(Axis::Horizontal);
+  auto& fader = throw_row.emplace<cutline::ui::Fader>(
       cutline::ui::ValueRange{.minimum = cutline::ui::kGainFloorDb,
                               .maximum = cutline::ui::gain_to_fader_db(cutline::core::kMaxGain)},
       cutline::ui::gain_to_fader_db(track.gain));
   fader.set_default_value(0.0);
+
+  auto& bars = throw_row.emplace<cutline::ui::MeterView>();
+  // No numbers on a strip's meter. The fader beside it already prints a scale,
+  // and two sets of decibels a few pixels apart is one set too many to read —
+  // which is also how Premiere draws it.
+  bars.set_shows_scale(false);
+  app.track_meters.push_back(App::TrackMeter{.index = index, .view = &bars});
 
   auto& reading = strip.emplace<Label>();
   reading.set_small(true);
@@ -8333,6 +8356,11 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
   // the layout and lost the mixer.
   auto& scroll = panel->emplace<ScrollView>(Axis::Horizontal);
   auto& strips = static_cast<Box&>(scroll.set_content(std::make_unique<Box>(Axis::Horizontal)));
+
+  // The old strips are about to be destroyed, so the pointers to their meters
+  // are too. Cleared before they are rebuilt rather than after, since a panel
+  // built twice would otherwise leave the first set dangling in the list.
+  if (app != nullptr) app->track_meters.clear();
 
   // Tracks first and the master at the right-hand end, where a mixer puts it:
   // signal flows left to right and the master is where it all arrives.

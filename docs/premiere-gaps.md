@@ -1409,7 +1409,7 @@ The whole lot is a single vertical column, master first, tracks below.
 | ~~Master at the right-hand end~~ | yes | **done** | — |
 | ~~Pan as a **rotary knob**~~ | with L and R either side | **done** — `ui::PanKnob` | — |
 | ~~A **vertical fader**~~ | with a dB scale printed down its left | **done** — `ui::Fader`, master included | — |
-| A **meter per track**, beside its fader | with its own scale down its right | none — nothing publishes a track's level | **engine** |
+| ~~A **meter per track**, beside its fader~~ | with its own scale down its right | **done** — `AudioMixer::track_levels` | — |
 | ~~Numeric gain readout under the fader~~ | yes | **done** — follows every pixel of the drag | — |
 | ~~**M / S** buttons~~ | mute, solo | **done**, in the strip as well as on the track head | — |
 | **R** (record-arm) | arms a track for automation | none — see the row below | machinery |
@@ -1451,19 +1451,31 @@ so there is nothing to set a track fader *against*.
   the panel was docked.
 - **`ui::PanKnob`** — a rotary, dragged vertically, with L and R either side.
   The value already exists (`Track::pan`); this is a way of setting it.
-- **Per-track metering — the one piece left that matters, and the only one that
-  is not a widget.** `MeterView` exists and the master feeds it, but
-  `AudioMixer` measures the mix *after* the master fader and measures nothing
-  per track, and `Player` exposes one `levels()` for the whole thing. The mix
-  already sums each track, so the peak per track is available exactly where the
-  sum is taken — this is publishing it, not computing it. The strip leaves a
-  deliberate gap where the meter goes: a meter drawn beside a fader that never
-  moved would be worse than the space.
+- ~~**Per-track metering**~~ — **done**, and it was publishing rather than
+  computing: every voice is already summed into a block that carries the
+  track's clip gain, fades, panner and effect chain, so a lane's own sum was
+  one addition away. `AudioMixer` keeps a meter per lane beside the master's,
+  `Player::track_levels` reads it, and each strip polls its own at frame rate
+  exactly as the master's does.
 
-  It also gates something the fader wants. A track's gain is baked into the mix
-  when the mix is built, so moving the fader only takes effect on release —
-  `set_master_gain` is the one live edit a player accepts. Setting a *track* by
-  ear needs the same treatment, and both belong in the same piece of work.
+  Three decisions worth keeping. The lanes are metered **before** the master
+  fader, unlike the mix — a track meter answers "what is this track putting
+  out", and strips that all dropped together when the master moved would be
+  several meters showing one thing. A lane's level is the **sum of every clip
+  playing on it at once**, not any one voice's, which is why the block is
+  accumulated across the voice loop and metered after it. And the whole set is
+  published under one lock with the master's, so no strip can show a level from
+  this block beside a neighbour still showing the last.
+
+  A lane with nothing on it reads as silence rather than being absent, so a
+  caller never has to ask whether a track has an entry before drawing one.
+
+- **A track fader cannot be set by ear.** Left over from the row above, and a
+  separate piece of work. A track's gain is baked into the mix when the mix is
+  built, so moving the fader only takes effect on release; `set_master_gain` is
+  the one live edit a player accepts today. Setting a track against what you
+  are hearing needs the same treatment — a live per-track trim the mixing
+  thread reads, applied where the voice block is scaled.
 - ~~**M / S in the strip.**~~ **Done.** They are on the track head too, and the
   old note calling a second pair "two controls for one flag" was wrong about
   what a mixer is for: it is one flag reachable from both of the places you are
