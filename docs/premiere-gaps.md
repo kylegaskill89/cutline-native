@@ -1589,15 +1589,25 @@ first two steps are done:**
 2. ~~**An effect stack on the master**~~ — done, after its fader and before the
    limiter. The limiter stays last: it catches whatever the rest of the chain
    produced, and a stack after it would process something already squashed.
-3. **What is left**, in the order the remaining rows depend on each other:
-   a reverb and a delay (nothing else needs them, but sends do), channel
-   mapping (independent, and the one a real shoot hits soonest), roles and
-   their presets, loudness measurement and then normalisation, and finally
-   submixes and sends, which want the reverb to be worth routing to.
+3. ~~**A reverb and a delay**~~ — done. The catalogue had eight effects and
+   every one was a filter or a gain; nothing in it had a delay line, which made
+   a reverb the most-missed effect in its own right and made sends a route to
+   nowhere.
+4. ~~**Channel mapping**~~ — done, and it was the row a real shoot hits
+   soonest.
+5. ~~**Loudness**~~ — done, measurement and normalisation both.
 
-The shared machinery is now in place for all of them: `run_chain_over` runs a
-chain on the control grid for a clip, a track or the master, and the lane
-blocks are the buses a submix would sum.
+**What is left of section 6.2 is two rows: roles and submix/send routing.**
+They are related, which is why they are last: Premiere's roles largely exist to
+drive submixes — Dialogue goes to a dialogue bus, Music to a music bus, and the
+processing is on the bus rather than on each clip. Building roles first would
+give a label with nothing behind it; building sends first would give a route
+with nothing to route to, which is why the reverb came before them.
+
+The shared machinery is in place for both. `run_chain_over` runs a chain on the
+control grid for a clip, a track or the master; the lane blocks are already the
+buses a submix would sum, and they are summed in one place; and `Track` has
+everything a submix needs except a kind and an output.
 
 #### What Premiere has that we do not
 
@@ -1607,14 +1617,14 @@ blocks are the buses a submix would sum.
 | ~~Master effects~~ | a stack on the master | **done** — after the fader, before the limiter | — |
 | Submix tracks | a bus fed by other tracks, with its own stack and fader | none | model + machinery |
 | Sends | per track, pre or post fader, with a level | none | model + machinery |
-| A reverb | Studio Reverb, Convolution Reverb | **none** — there is no time-based effect in the catalogue at all | machinery |
-| A delay | yes | none | machinery |
+| ~~A reverb~~ | Studio Reverb, Convolution Reverb | **done** — Schroeder/Freeverb, size, damping and mix | — |
+| ~~A delay~~ | yes | **done** — time, feedback and mix | — |
 | Essential Sound roles | Dialogue / Music / SFX / Ambience on a clip | none — a clip has no role | model |
 | Role presets | one press applies a set of effects for that role | none | wiring, once roles exist |
 | Ducking | music follows dialogue automatically | none | machinery |
-| Loudness measurement | LUFS to ITU-R BS.1770 | RMS over a third of a second | machinery |
-| Loudness normalisation | measure and match to a target | none | wiring, once measurement exists |
-| Channel mapping | which source channel feeds which output | fixed stereo | model |
+| ~~Loudness measurement~~ | LUFS to ITU-R BS.1770 | **done** — `audio::LoudnessMeter`, K-weighted and twice gated | — |
+| ~~Loudness normalisation~~ | measure and match to a target | **done** — Project ▸ Normalise Loudness | — |
+| ~~Channel mapping~~ | which source channel feeds which output | **done** — Premiere's Audio Channels, on the clip menu | — |
 
 **A reverb is the row worth noticing.** The catalogue is eight effects and
 every one of them is a filter or a gain — there is nothing with a delay line in

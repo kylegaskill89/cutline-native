@@ -31,7 +31,7 @@ measurements and the one correction they forced.
 | | |
 |---|---|
 | Repo | `github.com/kylegaskill89/cutline-native`, branch `main`, GPL-3.0-or-later |
-| Released | **0.3.0**, as an unsigned NSIS installer. `docs/releasing.md`. 29 commits since the tag, unreleased |
+| Released | **0.4.0**, as an unsigned NSIS installer. `docs/releasing.md` |
 | Local | `d:\Videos\cutline-native` |
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
@@ -1169,9 +1169,15 @@ and there is no work in progress to reconstruct.
   delete.
 - **Where the work is:** sections 1 to 5 of the gaps document are closed, and so
   is §6.1 — the mixer is Premiere's arrangement with Premiere's controls, five
-  automation modes included. §6.2 is audited and its first two steps are built:
-  a track carries an effect stack and so does the master. What is left of it is
-  listed in §6.2 in dependency order, and none of it is blocked.
+  automation modes included. §6.2 is audited and all but two of its rows are
+  built: track and master effect stacks, a delay, a reverb, channel mapping,
+  and loudness measurement and normalisation.
+- **§6.2's last two rows are roles and submix/send routing**, and they are last
+  together on purpose: Premiere's roles largely exist to drive submixes, so
+  roles alone would be a label with nothing behind them. Everything they need
+  is in place — `run_chain_over` works at any level, the lane blocks are the
+  buses and are summed in one place, and `Track` wants only a kind and an
+  output.
 - **Not driven yet:** the Fit Clip dialogue (it needs a project carrying four
   marks, so it is absent from the `--check` scene too), and the application on
   WARP for more than a few minutes. Everything in section 6 *has* been driven:
@@ -1181,7 +1187,9 @@ and there is no work in progress to reconstruct.
 - **Neither effects box is in the `--check` scene.** Fit Clip and the strip's
   fx popup are both built from a project state the check does not set up, so
   their layout is covered by driving alone.
-- 42 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
+- Released as **`v0.4.0`**. The tag is what the workflow builds the installer
+  from, and `CMakeLists.txt` has to agree with it or the release refuses to
+  start — which is the first thing that can fail, deliberately. **Do not tag** without being asked —
   the owner's standing instruction is that releases happen after major features,
   not per commit.
 
