@@ -418,6 +418,90 @@ TEST(TrackFader, ALaneBuiltSilentStaysWhereTheMixPlannedIt) {
   for (const float sample : out) EXPECT_TRUE(std::isfinite(sample));
 }
 
+// ------------------------------------------------------- track automation --
+
+TEST(TrackAutomation, AnUnautomatedTrackStillUsesItsConstant) {
+  // The guard on the whole change: a project whose faders were set and left is
+  // every project written before this existed.
+  Project p = two_lanes();
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  (void)mix_span(*mixer, 0.0, 0.5);
+  EXPECT_NEAR(mixer->track_levels(0).channels[0].peak_db -
+                  mixer->track_levels(1).channels[0].peak_db,
+              12.0, 2.0);
+}
+
+TEST(TrackAutomation, TheFaderFollowsItsCurveDownTheSequence) {
+  // A ramp from unity at the start to a quarter four seconds in. The curve is
+  // in *timeline* seconds, unlike every other keyframe list in the model.
+  Project p;
+  p.media = {tone_media()};
+  Track lane = audio_track("a1", {audio_clip("c1", "m", 0.0, 8.0)});
+  lane.gain_keyframes = {core::Keyframe{.t = 0.0, .v = 1.0},
+                         core::Keyframe{.t = 4.0, .v = 0.25}};
+  p.tracks = {std::move(lane)};
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  const double head = rms_of(mix_span(*mixer, 0.0, 0.3));
+  mixer->reset();
+  const double tail = rms_of(mix_span(*mixer, 3.7, 0.3));
+
+  EXPECT_GT(head, tail * 2.0) << "the ramp took it down";
+}
+
+TEST(TrackAutomation, ACurveBeatsTheConstantBesideIt) {
+  Project p;
+  p.media = {tone_media()};
+  Track lane = audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0)});
+  lane.gain = 0.01;  // ignored: the curve is what is read
+  lane.gain_keyframes = {core::Keyframe{.t = 0.0, .v = 1.0}};
+  p.tracks = {std::move(lane)};
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  (void)mix_span(*mixer, 0.0, 0.3);
+  EXPECT_GT(mixer->track_levels(0).channels[0].peak_db, -20.0);
+}
+
+TEST(TrackAutomation, ThePannerFollowsItsCurveToo) {
+  Project p;
+  p.media = {tone_media()};
+  Track lane = audio_track("a1", {audio_clip("c1", "m", 0.0, 8.0)});
+  lane.pan_keyframes = {core::Keyframe{.t = 0.0, .v = -1.0},
+                        core::Keyframe{.t = 4.0, .v = 1.0}};
+  p.tracks = {std::move(lane)};
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  const std::vector<float> head = mix_span(*mixer, 0.0, 0.3);
+  mixer->reset();
+  const std::vector<float> tail = mix_span(*mixer, 3.7, 0.3);
+
+  EXPECT_GT(rms_of_channel(head, 0), rms_of_channel(head, 1)) << "hard left at the start";
+  EXPECT_GT(rms_of_channel(tail, 1), rms_of_channel(tail, 0)) << "hard right by the end";
+}
+
+TEST(TrackAutomation, TheCurveIsReadAgainstTheSequenceRatherThanTheClip) {
+  // The trap this is most likely to be broken by. A clip starting four seconds
+  // in would read the curve at zero if the clock were clip-local, and the ramp
+  // would be at the wrong place entirely.
+  Project p;
+  p.media = {tone_media()};
+  Track lane = audio_track("a1", {audio_clip("c1", "m", 4.0, 4.0)});
+  lane.gain_keyframes = {core::Keyframe{.t = 0.0, .v = 1.0},
+                         core::Keyframe{.t = 4.0, .v = 0.05}};
+  p.tracks = {std::move(lane)};
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  // The clip begins at timeline 4, where the curve has already fallen to 0.05.
+  // Read clip-locally it would begin at unity instead.
+  (void)mix_span(*mixer, 4.0, 0.3);
+  EXPECT_LT(mixer->track_levels(0).channels[0].peak_db, -20.0);
+}
+
 // ----------------------------------------------------------------- content --
 
 TEST(AudioMixer, AClipIsHeardAtItsOwnLevel) {

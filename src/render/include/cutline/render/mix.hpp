@@ -58,6 +58,17 @@ struct PlannedAudioClip {
   /// changed underneath it.
   double track_gain = 1.0;
   double track_pan = 0.0;
+
+  /// The track's automation, in **timeline** seconds, when it has any. Copied
+  /// for the same reason the constants are, and read in preference to them.
+  ///
+  /// A clip's own keyframes are clip-local and these are not, which is the one
+  /// place in the audio path where two keyframe lists on the same entry answer
+  /// to different clocks. `audio_gain_at` is given timeline time and derives
+  /// the local one from it, so both are available where they are needed — but
+  /// it is worth knowing which is which before editing that function.
+  std::vector<core::Keyframe> track_gain_keyframes;
+  std::vector<core::Keyframe> track_pan_keyframes;
 };
 
 /// Every audio clip that can be heard, in track order and then by start time.

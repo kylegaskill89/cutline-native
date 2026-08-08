@@ -508,6 +508,23 @@ struct Track {
   double gain = 1.0;
   double pan = 0.0;
 
+  /// Fader and panner automation, in **timeline** seconds. Non-empty overrides
+  /// the constant beside it, exactly as a clip's `gain_keyframes` does.
+  ///
+  /// Timeline time rather than track-local, because a track has no local time:
+  /// it starts when the sequence does and runs as long as the sequence does.
+  /// That is the one thing that makes this different from a clip's automation
+  /// and it is worth being explicit about, since every other keyframe list in
+  /// this model is clip-local and reading one against the wrong clock puts the
+  /// curve somewhere else entirely.
+  ///
+  /// What the mixer's automation modes read and write: Read follows the curve,
+  /// Write records the fader into it as the sequence plays. Empty is a fader
+  /// that has simply been set and left, which is every project written before
+  /// these existed.
+  std::vector<Keyframe> gain_keyframes;
+  std::vector<Keyframe> pan_keyframes;
+
   /// Custom lane height in pixels, overriding the default for its kind.
   std::optional<double> height;
 

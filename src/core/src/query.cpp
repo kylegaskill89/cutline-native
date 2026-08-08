@@ -182,6 +182,19 @@ double gain_at(const Clip& c, double local_t) noexcept {
   return std::clamp(eval_keyframes(c.gain_keyframes, local_t), 0.0, kMaxGain);
 }
 
+bool is_track_gain_animated(const Track& t) noexcept { return !t.gain_keyframes.empty(); }
+bool is_track_pan_animated(const Track& t) noexcept { return !t.pan_keyframes.empty(); }
+
+double track_gain_at(const Track& t, double time) noexcept {
+  if (!is_track_gain_animated(t)) return std::clamp(t.gain, 0.0, kMaxGain);
+  return std::clamp(eval_keyframes(t.gain_keyframes, time), 0.0, kMaxGain);
+}
+
+double track_pan_at(const Track& t, double time) noexcept {
+  if (!is_track_pan_animated(t)) return std::clamp(t.pan, -1.0, 1.0);
+  return std::clamp(eval_keyframes(t.pan_keyframes, time), -1.0, 1.0);
+}
+
 bool is_track_audible(const Project& p, const Track& track) noexcept {
   if (track.muted) return false;
   const bool any_solo = std::ranges::any_of(p.tracks, [](const Track& t) {

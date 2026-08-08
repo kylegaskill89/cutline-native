@@ -265,6 +265,10 @@ json write(const Track& t) {
          {"sync_locked", t.sync_locked}};
   if (!t.label.empty()) j["label"] = t.label;
   put_if_set(j, "height", t.height);
+  // Only when there is any, so a project whose faders were set and left reads
+  // exactly as it always did.
+  put_unless_empty(j, "gain_keyframes", write(t.gain_keyframes));
+  put_unless_empty(j, "pan_keyframes", write(t.pan_keyframes));
 
   json clips = json::array();
   for (const Clip& c : t.clips) clips.push_back(write(c));
@@ -547,6 +551,13 @@ Track read_track(const json& j) {
   t.targeted = read_or(j, "targeted", false);
   t.sync_locked = read_or(j, "sync_locked", true);
   t.height = read_optional<double>(j, "height");
+
+  // Absent is a fader that was set and left, which is every project written
+  // before automation existed.
+  const auto track_gain_keys = j.find("gain_keyframes");
+  if (track_gain_keys != j.end()) t.gain_keyframes = read_keyframes(*track_gain_keys);
+  const auto track_pan_keys = j.find("pan_keyframes");
+  if (track_pan_keys != j.end()) t.pan_keyframes = read_keyframes(*track_pan_keys);
 
   const auto clips = j.find("clips");
   if (clips != j.end() && clips->is_array()) {

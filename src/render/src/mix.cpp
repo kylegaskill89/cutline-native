@@ -62,6 +62,8 @@ std::vector<PlannedAudioClip> plan_audio(const core::Project& project) {
       entry.track_index = index;
       entry.track_gain = std::clamp(track.gain, 0.0, core::kMaxGain);
       entry.track_pan = std::clamp(track.pan, -1.0, 1.0);
+      entry.track_gain_keyframes = track.gain_keyframes;
+      entry.track_pan_keyframes = track.pan_keyframes;
       planned.push_back(entry);
     }
   }
@@ -96,7 +98,15 @@ double audio_gain_at(const PlannedAudioClip& planned, double t) noexcept {
     gain *= std::max(0.0, tail / clip.fade_out);
   }
 
-  return std::max(gain * planned.track_gain, 0.0);
+  // The track's fader last, and read at *timeline* time. The clip's own
+  // automation above is clip-local; a track has no local time, so its curve is
+  // anchored to the sequence. Both clocks are in play on one entry and this is
+  // the line where they meet.
+  const double track = planned.track_gain_keyframes.empty()
+                           ? planned.track_gain
+                           : std::clamp(core::eval_keyframes(planned.track_gain_keyframes, t),
+                                        0.0, core::kMaxGain);
+  return std::max(gain * track, 0.0);
 }
 
 StereoGain audio_pan_at(const PlannedAudioClip& planned, double t) noexcept {
@@ -116,7 +126,12 @@ StereoGain audio_pan_at(const PlannedAudioClip& planned, double t) noexcept {
   // clip hard left on a track panned hard right is silent, which is what two
   // balances in series give and what adding the two pans would not.
   const StereoGain clip = sides(core::pan_at(*planned.clip, local));
-  const StereoGain track = sides(planned.track_pan);
+  // Timeline time for the track's, clip-local for the clip's — see
+  // `audio_gain_at`.
+  const StereoGain track =
+      sides(planned.track_pan_keyframes.empty()
+                ? planned.track_pan
+                : std::clamp(core::eval_keyframes(planned.track_pan_keyframes, t), -1.0, 1.0));
   return {.left = clip.left * track.left, .right = clip.right * track.right};
 }
 

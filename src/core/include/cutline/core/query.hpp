@@ -138,6 +138,20 @@ struct SourceRange {
 /// where -1 is hard left and 1 hard right.
 [[nodiscard]] double pan_at(const Clip& c, double local_t) noexcept;
 
+/// Whether a track's fader or panner is automated.
+[[nodiscard]] bool is_track_gain_animated(const Track& t) noexcept;
+[[nodiscard]] bool is_track_pan_animated(const Track& t) noexcept;
+
+/// The track's fader and panner at **timeline** time `t`, from automation when
+/// present and the constant otherwise.
+///
+/// Timeline rather than track-local, because a track has no local time. Every
+/// other keyframe list in this model is clip-local, so the clock is worth
+/// naming at every point it is read — a curve evaluated against the wrong one
+/// is not slightly out, it is somewhere else.
+[[nodiscard]] double track_gain_at(const Track& t, double time) noexcept;
+[[nodiscard]] double track_pan_at(const Track& t, double time) noexcept;
+
 /// Whether an audio track is heard: not muted, and — if any audio track is
 /// soloed — only soloed tracks play.
 [[nodiscard]] bool is_track_audible(const Project& p, const Track& track) noexcept;
