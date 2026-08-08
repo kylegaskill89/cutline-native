@@ -1526,10 +1526,88 @@ Two more came from the same session, both invisible to a test:
   is a model change that everything else waits on, and starting at the dropdown
   would mean building a control with nothing behind it.
 
-### 6.2 The rest of section 6
+### 6.2 Submixes, sends, Essential Sound and loudness
 
-Not yet audited, and listed here so the section has its shape: submixes and
-sends, the Essential Sound panel, and loudness normalisation.
+Audited by walking the source rather than this page, which is the only way that
+has ever produced a right answer here.
+
+#### What is here now
+
+| | Where it is now |
+|---|---|
+| Eight audio effects | `audio::audio_effect_defs` — high-pass, low-pass, bass, treble, compressor, EQ band, notch, gain |
+| An effect chain with animatable parameters | `audio::EffectChain`, retuned on a timeline-aligned grid |
+| A clip's own fader, panner and fades | `Clip::gain`, `pan`, `gain_keyframes`, `fade_in`/`fade_out` |
+| A track's fader and panner, now automatable | `Track::gain`, `pan`, and the keyframe lists added in §6.1 |
+| Metering per track and on the master | `AudioMixer::track_levels` / `levels` — peak, RMS, hold, over |
+| A master limiter | `audio::Limiter`, fixed settings, always on |
+| Stems on export | `ExportSettings::separate_audio` — one stream per track that has anything on it |
+
+#### The finding that matters more than any row below
+
+**There is no track-level audio processing at all.** `Clip` carries
+`audio_effects`; `Track` carries a gain, a pan and now two keyframe lists, and
+nothing else. The master carries a limiter that is hard-wired — no chain, no
+settings, no way to reach it.
+
+Every row in this subsection sits on top of that. A submix is a track whose
+input is other tracks and whose point is that you can put a compressor across
+the group. A send is a route into such a track. Essential Sound writes
+processing onto a *role*, which is a group. Loudness normalisation across a
+programme is a measurement plus a gain applied somewhere above the clips. None
+of them mean anything while the only place an effect can go is on one clip.
+
+So the order is fixed, and it is not the order the rows are listed in:
+
+1. **An effect stack on a `Track`**, and a chain per track in the mixer. The
+   voice loop already sums each lane separately — that sum is exactly where a
+   track's chain would run, and §6.1's per-track metering put the buffer there.
+   This is the piece everything else waits on.
+2. **An effect stack on the master**, which is the same change one level up and
+   turns the fixed limiter into the last entry of a chain somebody can see.
+3. Then submixes, sends and roles, in whatever order they are wanted.
+
+#### What Premiere has that we do not
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Track effects | a stack per track, pre-fader | none — clips only | **machinery**, and see above |
+| Master effects | a stack on the master | a fixed limiter, unreachable | machinery |
+| Submix tracks | a bus fed by other tracks, with its own stack and fader | none | model + machinery |
+| Sends | per track, pre or post fader, with a level | none | model + machinery |
+| A reverb | Studio Reverb, Convolution Reverb | **none** — there is no time-based effect in the catalogue at all | machinery |
+| A delay | yes | none | machinery |
+| Essential Sound roles | Dialogue / Music / SFX / Ambience on a clip | none — a clip has no role | model |
+| Role presets | one press applies a set of effects for that role | none | wiring, once roles exist |
+| Ducking | music follows dialogue automatically | none | machinery |
+| Loudness measurement | LUFS to ITU-R BS.1770 | RMS over a third of a second | machinery |
+| Loudness normalisation | measure and match to a target | none | wiring, once measurement exists |
+| Channel mapping | which source channel feeds which output | fixed stereo | model |
+
+**A reverb is the row worth noticing.** The catalogue is eight effects and
+every one of them is a filter or a gain — there is nothing with a delay line in
+it. That matters twice over: it is the most-missed audio effect on its own, and
+it is the reason sends exist. Building sends first would give a route to
+nowhere.
+
+**Loudness is two things and only one is hard.** Normalising to a target is
+arithmetic once the number exists. Getting the number means K-weighting, mean
+square over 400 ms blocks, and the two-stage gate BS.1770 specifies — a real
+piece of DSP, but a well-specified one, and `audio::Meter` is already the right
+shape to hang it beside: it walks blocks, keeps per-channel state, and publishes
+a reading under a lock.
+
+**Channel mapping was not on the list and should be.** Every source is treated
+as stereo. A camera recording a lapel mic on channel one and a shotgun on
+channel two is completely ordinary, and today both are heard at once with no way
+to choose. That is arguably worth more than any row above it and is a smaller
+piece of work than most.
+
+#### Nothing here is declined
+
+Every row is buildable. What none of it should be started with is the row it is
+named after: begin at the track effect stack, because it is what four of these
+rows are made of.
 
 ---
 
@@ -1596,9 +1674,9 @@ The rest of the application, in the order it seems worth walking:
 - ~~**Application settings**~~ — audited, written up as section 5, and **closed**:
   every row is built or declined with a reason, bar keyboard customisation,
   which was pulled out into a section of its own below.
-- ~~**Audio**~~ — the mixer is audited and written up as section 6 above.
-  Submixes, sends, the essential sound panel and loudness normalisation are
-  still to walk.
+- ~~**Audio**~~ — audited and written up as section 6 above, both halves. The
+  mixer is built bar its automation modes; §6.2 found that nothing in it can be
+  started before a track carries an effect stack.
 - **Titles and graphics** — the Essential Graphics panel, layered graphics,
   responsive design, styles.
 - **Colour** — the Lumetri Color panel and its scopes workflow.
