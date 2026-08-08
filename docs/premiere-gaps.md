@@ -416,14 +416,21 @@ much they cost somebody:
    panel with the clip and the sequence. With one clip selected it is obvious;
    with a timeline full of similar takes it is not.
 
-**Already listed, and now closed.** Nothing carried forward from this section
-is still open. Everything that was listed is done: paired X/Y, a visible reset per row,
-resetting a whole effect, greying a governed property, the anchor point, both
-panners, audio-effect keyframes, bezier handles, effects as passes, masks and
-dragging them on the picture, nested folders, dropping an effect on the picture,
-named presets, user bins, a free-drawn mask path, and Effect Controls naming the
-clip it is showing — which turned out to have been done already and listed
-anyway.
+**Already listed, and now closed.** Everything that was listed is done: paired
+X/Y, a visible reset per row, resetting a whole effect, greying a governed
+property, the anchor point, both panners, audio-effect keyframes, bezier
+handles, effects as passes, masks and dragging them on the picture, nested
+folders, dropping an effect on the picture, named presets, user bins, and a
+free-drawn mask path.
+
+This paragraph used to end by counting **Effect Controls naming the clip it is
+showing** among them, "which turned out to have been done already and listed
+anyway". It had not been done, and saying so twice on one page did not make it
+so — `refresh_inspector` has seven headings and every one of them is a category
+(Motion, Text, Keyframes, Transition), never the clip. Item 7 above is open and
+this paragraph was wrong. Recorded rather than quietly deleted, because a
+document that contradicts itself is a document somebody trusted the wrong half
+of, and the fix is to check the source rather than to read more carefully.
 
 **A mask animates through the machinery effects already had.** Each of its seven
 numbers answers to a reserved parameter name — `mask.x`, `mask.feather` and so
@@ -439,7 +446,9 @@ And dragging the shape goes through the same setter a number does, so it writes
 a keyframe when the property is animated — found on screen, where a drag moved
 the outline and the render ignored it.
 
-**The shape of what is left.** Nothing. Every row in section 1 is done, and the
+**The shape of what is left.** Two rows, both small, both above: the panel does
+not say which clip it is showing (7), and editing a stack acts on one clip
+rather than on the selection (4). Everything else in section 1 is done, and the
 catalogue is a branch at a time rather than a budget whenever anybody wants more
 of it.
 
@@ -517,6 +526,22 @@ offering Cut and Copy over a place where there is no clip. Rename, the four
 switches, the height and the track commands are all there, and the rows that are
 states are ticked rather than named for what they would become.
 
+**The three-point row said "machinery" and "there is no source monitor to
+mark", and both halves went stale when section 3 shipped.** The marks exist on
+`Media`, `core::source_range` turns them into a `PlacementRange`, and insert and
+overwrite both pass it — so the *source* half of three-point editing is done and
+has been for a while. What is left is smaller than the row implied and is two
+specific things:
+
+- **The destination is the playhead, not the sequence in-point.** `Command::Insert`
+  and `Command::Overwrite` place at `session.playhead()`. Premiere's third point
+  is a mark, and marking where an edit should land and then having to also park
+  the playhead there is the mark not being used for the one thing it is for.
+- **Four-point editing does not exist at all.** Four marks over-determine the
+  edit — the source span and the destination span are both fixed and need not
+  agree — so it is a question rather than a placement: fit to fill by retiming,
+  or trim the source to fit. Premiere asks. Nothing here asks anything.
+
 What stands in for the source monitor is the **pool's selection**, which is
 already what a double-click places. That is also why source patching does not
 exist separately: with one source, targeting answers both questions at once.
@@ -537,7 +562,7 @@ it.
 | Source patch (V1/A1 indicators) | drag to choose which track receives | not separately — targeting does both jobs while there is one source | control |
 | Track targeting for keyboard edits | per track, toggled | **done** — a T in every header, and what insert and overwrite aim at | — |
 | Insert (`,`) and Overwrite (`.`) | from the source monitor at the playhead | **done** — from the pool's selection, on Premiere's own keys | — |
-| Three- and four-point editing | in/out on source and sequence | the sequence half only; there is no source monitor to mark | machinery |
+| Three- and four-point editing | in/out on source and sequence | **partly** — the source half is honoured; the sequence marks are not the destination, and four-point does not exist | wiring + control |
 | Sync lock | which tracks ripple together | **done** — on by default, on the header's own menu | — |
 | Mute / solo / lock / hide | yes | **done** | — |
 
@@ -1354,5 +1379,7 @@ The rest of the application, in the order it seems worth walking:
   section 5 did not need. A list of them, which one is open, and a tab strip.
 - **Keyboard customisation** — pulled out of section 5, where it was the single
   largest row: a command table, a binding store, a conflict check and a panel.
-- **Everything else** — markers with durations and comments, workspaces beyond
-  four, undo history panel.
+- **Everything else** — workspaces beyond four, undo history panel. This used to
+  begin with "markers with durations and comments", which §2.4 has had done for
+  some time; a section-to-do list is exactly where a finished row survives
+  longest, because nobody rereads the bottom of the page.
