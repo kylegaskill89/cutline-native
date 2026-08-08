@@ -22,6 +22,7 @@
 #include "cutline/core/effects.hpp"
 #include "cutline/core/model.hpp"
 #include "cutline/core/pool.hpp"
+#include "cutline/audio/chain.hpp"
 #include "cutline/core/animate.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
@@ -8280,6 +8281,135 @@ void open_library_menu(App& app, double x, double y) {
 /// The two belong together: a fader is moved by ear and by eye, and the eye
 /// part is the meter. Splitting them across panels would mean setting a level
 /// while watching something that might be behind another tab.
+/// The effect stack on a mixer strip, as a box that can be opened from it.
+///
+/// `track_id` empty means the master, which has one stack and no id to name it
+/// by. The two are one function because everything about editing a stack is the
+/// same either way — only which project operation is called differs, and
+/// writing it twice is how the two would come to disagree about what a disabled
+/// entry looks like.
+///
+/// A popup rather than rows in the strip. Premiere puts inserts in a disclosure
+/// at the head of each strip, and a strip is a narrow column: five effects with
+/// three parameters each is taller than the panel and would push the fader —
+/// the one control the panel exists for — off the bottom.
+void open_strip_effects(App& app, const std::string& track_id) {
+  if (app.main.host == nullptr) return;
+  const bool master = track_id.empty();
+
+  const auto stack_of = [&app, track_id, master]() -> std::vector<cutline::core::AudioClipEffect> {
+    if (master) return app.session.project().master_effects;
+    const auto found = std::ranges::find(app.session.project().tracks, track_id,
+                                         &cutline::core::Track::id);
+    return found == app.session.project().tracks.end()
+               ? std::vector<cutline::core::AudioClipEffect>{}
+               : found->audio_effects;
+  };
+
+  auto panel = std::make_unique<Panel>();
+  auto& heading = panel->emplace<Box>(Axis::Horizontal);
+  heading.emplace<Label>(master ? "Master Effects" : "Track Effects").set_bold(true);
+  heading.emplace<Spacer>();
+
+  auto& add = heading.emplace<Button>("Add");
+  add.set_on_click([&app, track_id, master, control = &add] {
+    std::vector<std::string> names;
+    for (const cutline::audio::AudioEffectDef& def : cutline::audio::audio_effect_defs()) {
+      names.emplace_back(def.name);
+    }
+    auto list = std::make_unique<MenuList>(std::move(names));
+    list->set_on_choose([&app, track_id, master](std::size_t index) {
+      const std::span<const cutline::audio::AudioEffectDef> defs =
+          cutline::audio::audio_effect_defs();
+      if (index >= defs.size()) return;
+      // Every parameter written out at its default, for the reason the clip
+      // stack does it: the panel reads what is stored, and an effect added
+      // with an empty map would show its controls at the registry's values
+      // while the file said nothing.
+      std::map<std::string, double> params;
+      for (const cutline::audio::AudioEffectParamDef& param : defs[index].params) {
+        params.emplace(std::string(param.key), param.fallback);
+      }
+      const std::string type{defs[index].id};
+      app.session.apply(master ? cutline::core::add_master_audio_effect(app.session.project(),
+                                                                       type, std::move(params))
+                               : cutline::core::add_track_audio_effect(
+                                     app.session.project(), track_id, type, std::move(params)));
+      if (app.main.host != nullptr) app.main.host->close_popup();
+      refresh_all(app);
+      open_strip_effects(app, track_id);
+    });
+    if (app.main.host != nullptr) app.main.host->open_popup(std::move(list), control->bounds());
+  });
+
+  const std::vector<cutline::core::AudioClipEffect> stack = stack_of();
+  if (stack.empty()) {
+    panel->emplace<Label>("No effects").set_small(true);
+  }
+
+  for (std::size_t i = 0; i < stack.size(); ++i) {
+    const cutline::core::AudioClipEffect& effect = stack[i];
+    const cutline::audio::AudioEffectDef* def = cutline::audio::audio_effect_def(effect.type);
+
+    auto& row = panel->emplace<Box>(Axis::Horizontal);
+    auto& on = row.emplace<Checkbox>(def == nullptr ? effect.type : std::string(def->name),
+                                     effect.enabled);
+    on.set_on_change([&app, track_id, master, i](bool) {
+      app.session.apply(master
+                            ? cutline::core::toggle_master_audio_effect(app.session.project(), i)
+                            : cutline::core::toggle_track_audio_effect(app.session.project(),
+                                                                       track_id, i));
+      refresh_all(app);
+      open_strip_effects(app, track_id);
+    });
+    row.emplace<Spacer>();
+    row.emplace<Button>("Remove", [&app, track_id, master, i] {
+      app.session.apply(master
+                            ? cutline::core::remove_master_audio_effect(app.session.project(), i)
+                            : cutline::core::remove_track_audio_effect(app.session.project(),
+                                                                       track_id, i));
+      if (app.main.host != nullptr) app.main.host->close_popup();
+      refresh_all(app);
+      open_strip_effects(app, track_id);
+    });
+
+    if (def == nullptr) {
+      panel->emplace<Label>("Not available in this version").set_small(true);
+      continue;
+    }
+
+    for (const cutline::audio::AudioEffectParamDef& param : def->params) {
+      auto& line = panel->emplace<Box>(Axis::Horizontal);
+      line.emplace<Label>(std::string(param.label)).set_small(true);
+      line.emplace<Spacer>();
+
+      const auto held = effect.params.find(std::string(param.key));
+      auto& field = line.emplace<cutline::ui::NumericField>(
+          cutline::ui::ValueRange{.minimum = param.minimum, .maximum = param.maximum},
+          held == effect.params.end() ? param.fallback : held->second);
+      field.set_decimals(param.step < 1.0 ? 2 : 1);
+      field.set_default_value(param.fallback);
+      if (!param.unit.empty()) field.set_suffix(std::string(param.unit));
+      // On release only. A track stack is baked into the mix when the mix is
+      // built, so there is no way to hear a value the document does not hold —
+      // unlike a fader, which the mixer takes live.
+      field.set_on_commit([&app, track_id, master, i, key = std::string(param.key)](double v) {
+        app.session.apply(
+            master ? cutline::core::set_master_audio_effect_param(app.session.project(), i, key, v)
+                   : cutline::core::set_track_audio_effect_param(app.session.project(), track_id,
+                                                                 i, key, v));
+        refresh_all(app);
+      });
+    }
+  }
+
+  panel->emplace<Button>("Close", [&app] {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+  });
+
+  app.main.host->open_popup(std::move(panel), settings_anchor());
+}
+
 /// The pass being recorded for a track, made if there is not one yet.
 App::AutomationPass& automation_pass(App& app, const std::string& track_id) {
   const auto found = std::ranges::find(app.automation, track_id, &App::AutomationPass::track_id);
@@ -8417,6 +8547,14 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
   // here records fader moves yet — a button that arms nothing is worse than no
   // button.
   auto& switches = strip.emplace<Box>(Axis::Horizontal);
+  // Premiere's insert slots, as one button rather than five rows: a strip is a
+  // narrow column and five effects with three parameters each would push the
+  // fader off the bottom of it. Lit when the track has a stack, so a strip says
+  // whether anything is on it without being opened.
+  auto& fx = switches.emplace<Button>("fx", [&app, track_id] {
+    open_strip_effects(app, track_id);
+  });
+  fx.set_selected(!track.audio_effects.empty());
   auto& mute = switches.emplace<Button>("M", [&app, track_id] {
     const auto now = std::ranges::find(app.session.project().tracks, track_id,
                                        &cutline::core::Track::id);
@@ -8575,7 +8713,14 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
     });
   }
 
-  column.emplace<Spacer>(Axis::Vertical, control);
+  // Where a track strip carries fx, mute and solo. The master has a stack of
+  // its own but nothing to mute or solo, so it gets the one button.
+  auto& master_switches = column.emplace<Box>(Axis::Horizontal);
+  auto& master_fx = master_switches.emplace<Button>("fx");
+  if (app != nullptr) {
+    master_fx.set_on_click([app] { open_strip_effects(*app, {}); });
+    master_fx.set_selected(!app->session.project().master_effects.empty());
+  }
 
   const double gain = app == nullptr ? 1.0 : app->session.project().master_gain;
   auto& master_row = column.emplace<Box>(Axis::Horizontal);

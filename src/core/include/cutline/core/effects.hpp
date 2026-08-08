@@ -171,6 +171,24 @@ inline constexpr std::string_view kMaskParamPrefix = "mask.";
 
 [[nodiscard]] Project clear_track_audio_effects(Project p, std::string_view track_id);
 
+// ----------------------------------------------------- the master's stack --
+//
+// The same again with nothing to name it by, since there is one master.
+
+[[nodiscard]] Project add_master_audio_effect(Project p, std::string type,
+                                              std::map<std::string, double> params);
+
+[[nodiscard]] Project remove_master_audio_effect(Project p, std::size_t index);
+
+[[nodiscard]] Project toggle_master_audio_effect(Project p, std::size_t index);
+
+[[nodiscard]] Project move_master_audio_effect(Project p, std::size_t index, int direction);
+
+[[nodiscard]] Project set_master_audio_effect_param(Project p, std::size_t index,
+                                                    std::string key, double value);
+
+[[nodiscard]] Project clear_master_audio_effects(Project p);
+
 // -------------------------------------------- audio effect param keyframes --
 //
 // The same four operations the visual stack has, on the same shape of map. They

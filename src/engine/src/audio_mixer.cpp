@@ -374,6 +374,8 @@ struct AudioMixer::Impl {
   /// the mix. Empty for a track with no stack, which is nearly all of them and
   /// costs nothing to skip.
   std::vector<audio::EffectChain> track_chains;
+  /// The master's, run on the whole mix after the fader and before the limiter.
+  audio::EffectChain master_chain;
 
   /// Which meter belongs to a project track, or -1 for one carrying no audio.
   ///
@@ -522,6 +524,11 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
   impl->master_gain.store(std::clamp(project.master_gain, 0.0, core::kMaxMasterGain),
                           std::memory_order_relaxed);
   if (core::is_master_gain_animated(project)) impl->master_curve = project.master_gain_keyframes;
+  if (!project.master_effects.empty()) {
+    impl->master_chain =
+        audio::EffectChain::build(project.master_effects, static_cast<double>(settings.sample_rate),
+                                  settings.channels, 0.0);
+  }
   const audio::LimiterSettings limiting;
   impl->limiter = std::make_unique<audio::Limiter>(
       limiting, static_cast<double>(settings.sample_rate), settings.channels);
@@ -782,6 +789,14 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
 
   // Metered here, between the fader and the limiter: this is the mix as it was
   // made, which is what a meter is for. See `levels`.
+  // The master's own stack, after its fader and before the limiter. The
+  // limiter is last on purpose: it exists to catch whatever the rest of the
+  // chain produced, and a stack after it would be processing something already
+  // squashed and could push it back over the ceiling it had just come under.
+  if (!impl_->master_chain.empty()) {
+    run_chain_over(impl_->master_chain, out, base, rate, channels, 0.0);
+  }
+
   impl_->meter->process(out);
 
   // The lanes are metered *before* the master fader, unlike the mix. A track
@@ -860,6 +875,7 @@ void AudioMixer::reset() {
   // carries a memory of what came before, and after a seek what came before is
   // not what is about to be played.
   for (audio::EffectChain& chain : impl_->track_chains) chain.reset();
+  impl_->master_chain.reset();
   impl_->limiter->reset();
 
   // The meter too: levels only fall while audio is being measured, so a seek

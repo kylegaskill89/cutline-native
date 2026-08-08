@@ -313,6 +313,10 @@ json write(const Project& p) {
   put_unless_empty(j, "master_gain_keyframes", write(p.master_gain_keyframes));
   if (p.master_automation != AutomationMode::Read) j["master_automation"] = p.master_automation;
 
+  json master_effects = json::array();
+  for (const AudioClipEffect& e : p.master_effects) master_effects.push_back(write(e));
+  put_unless_empty(j, "master_effects", master_effects);
+
   json media = json::array();
   for (const Media& m : p.media) media.push_back(write(m));
   put_unless_empty(j, "media", media);
@@ -603,6 +607,10 @@ Project read_project(const json& j) {
   const auto master_keys = j.find("master_gain_keyframes");
   if (master_keys != j.end()) p.master_gain_keyframes = read_keyframes(*master_keys);
   p.master_automation = read_or(j, "master_automation", AutomationMode::Read);
+  const auto master_effects = j.find("master_effects");
+  if (master_effects != j.end() && master_effects->is_array()) {
+    for (const json& e : *master_effects) p.master_effects.push_back(read_audio_effect(e));
+  }
 
   const auto media = j.find("media");
   if (media != j.end() && media->is_array()) {

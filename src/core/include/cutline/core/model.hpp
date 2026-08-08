@@ -625,6 +625,15 @@ struct Project {
   std::vector<Keyframe> master_gain_keyframes;
   AutomationMode master_automation = AutomationMode::Read;
 
+  /// The master's own effect stack, run on the whole mix after the master fader
+  /// and before the limiter.
+  ///
+  /// Before the limiter for the reason the fader is: the limiter is the last
+  /// thing in the chain and exists to catch whatever the rest of it produced.
+  /// A stack after it would be processing something already squashed, and could
+  /// push it back over the ceiling the limiter had just brought it under.
+  std::vector<AudioClipEffect> master_effects;
+
   /// Whether to cut against proxies where a source has one.
   ///
   /// Premiere's "Toggle Proxies", and a property of the *project* rather than
