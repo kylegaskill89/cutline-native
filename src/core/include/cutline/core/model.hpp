@@ -556,6 +556,23 @@ struct Track {
   /// following one costs nothing and setting the fader still works.
   AutomationMode automation = AutomationMode::Read;
 
+  /// The track's own effect stack, run on everything the lane sums to, before
+  /// its fader.
+  ///
+  /// The other half of what a mix has two levels for. A clip's stack is what
+  /// that take needed; a track's is what the whole stem needs — one compressor
+  /// across all the dialogue rather than a different one on each line, which is
+  /// the difference between a mix and a pile of clips that were each fixed
+  /// separately.
+  ///
+  /// `AudioClipEffect` by name and by type. It is an id, a parameter map and a
+  /// keyframe map, and none of that is about clips; renaming it would touch
+  /// every audio effect in the application to say something the type already
+  /// says. The one thing that differs is the clock: a clip's effect keyframes
+  /// are clip-local and these are in **timeline** seconds, for the same reason
+  /// `gain_keyframes` above is.
+  std::vector<AudioClipEffect> audio_effects;
+
   /// Custom lane height in pixels, overriding the default for its kind.
   std::optional<double> height;
 

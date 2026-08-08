@@ -349,6 +349,75 @@ Project set_audio_effect_param(Project p, std::string_view clip_id, std::size_t 
   return p;
 }
 
+namespace {
+
+/// The track by id, and the entry in its stack. Null for either miss, so every
+/// operation below is a no-op on a name that is not there — the same contract
+/// the clip versions keep.
+[[nodiscard]] Track* find_audio_track(Project& p, std::string_view track_id) noexcept {
+  const auto found = std::ranges::find(p.tracks, track_id, &Track::id);
+  return found == p.tracks.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] AudioClipEffect* find_track_audio_effect(Project& p, std::string_view track_id,
+                                                       std::size_t index) noexcept {
+  Track* t = find_audio_track(p, track_id);
+  if (t == nullptr || index >= t->audio_effects.size()) return nullptr;
+  return &t->audio_effects[index];
+}
+
+}  // namespace
+
+Project add_track_audio_effect(Project p, std::string_view track_id, std::string type,
+                               std::map<std::string, double> params) {
+  Track* t = find_audio_track(p, track_id);
+  if (t == nullptr) return p;
+  t->audio_effects.push_back(AudioClipEffect{
+      .type = std::move(type),
+      .params = std::move(params),
+  });
+  return p;
+}
+
+Project remove_track_audio_effect(Project p, std::string_view track_id, std::size_t index) {
+  Track* t = find_audio_track(p, track_id);
+  if (t == nullptr || index >= t->audio_effects.size()) return p;
+  t->audio_effects.erase(t->audio_effects.begin() + static_cast<std::ptrdiff_t>(index));
+  return p;
+}
+
+Project toggle_track_audio_effect(Project p, std::string_view track_id, std::size_t index) {
+  AudioClipEffect* effect = find_track_audio_effect(p, track_id, index);
+  if (effect == nullptr) return p;
+  effect->enabled = !effect->enabled;
+  return p;
+}
+
+Project move_track_audio_effect(Project p, std::string_view track_id, std::size_t index,
+                                int direction) {
+  Track* t = find_audio_track(p, track_id);
+  if (t == nullptr || index >= t->audio_effects.size()) return p;
+  const auto to = static_cast<std::ptrdiff_t>(index) + direction;
+  if (to < 0 || static_cast<std::size_t>(to) >= t->audio_effects.size()) return p;
+  std::swap(t->audio_effects[index], t->audio_effects[static_cast<std::size_t>(to)]);
+  return p;
+}
+
+Project set_track_audio_effect_param(Project p, std::string_view track_id, std::size_t index,
+                                     std::string key, double value) {
+  AudioClipEffect* effect = find_track_audio_effect(p, track_id, index);
+  if (effect == nullptr) return p;
+  effect->params[std::move(key)] = value;
+  return p;
+}
+
+Project clear_track_audio_effects(Project p, std::string_view track_id) {
+  Track* t = find_audio_track(p, track_id);
+  if (t == nullptr) return p;
+  t->audio_effects.clear();
+  return p;
+}
+
 Project append_audio_effects(Project p, std::string_view clip_id,
                              std::span<const AudioClipEffect> effects) {
   if (effects.empty()) return p;

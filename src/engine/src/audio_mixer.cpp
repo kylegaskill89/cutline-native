@@ -153,6 +153,52 @@ struct StreamedSource {
 /// same.
 constexpr std::int64_t kControlBlock = 64;
 
+/// Runs a chain over one interleaved block, retuning animated parameters on the
+/// control grid.
+///
+/// An animated stack is retuned on a fixed grid **aligned to the timeline**,
+/// not once per call. Retuning per call would have been simpler and would have
+/// made the preview and the export disagree: they ask for different buffer
+/// sizes, so a sweep would land on different coefficients in each. Aligning the
+/// grid to absolute sample positions means splitting a buffer anywhere gives
+/// the same samples, which is the guarantee the rest of this mixer keeps.
+///
+/// Per sample would be both expensive and wrong — moving an IIR filter's
+/// coefficients under state that assumes the old ones is how a filter is made
+/// to ring.
+///
+/// `origin` is what the chain's keyframe times are measured from: a clip's
+/// start for a clip's stack, and zero for a track's, whose keyframes are in
+/// timeline seconds. Shared by both so the grid cannot come to mean two things.
+void run_chain_over(audio::EffectChain& chain, std::span<float> block,
+                    std::int64_t first_sample, double rate, std::size_t channels,
+                    double origin) {
+  if (channels == 0) return;
+  const std::size_t frames = block.size() / channels;
+  if (frames == 0) return;
+
+  if (chain.fixed()) {
+    chain.process(block);
+    return;
+  }
+
+  std::size_t at = 0;
+  while (at < frames) {
+    const std::int64_t absolute = first_sample + static_cast<std::int64_t>(at);
+    const std::int64_t into = ((absolute % kControlBlock) + kControlBlock) % kControlBlock;
+    const auto until = static_cast<std::size_t>(kControlBlock - into);
+    const std::size_t chunk = std::min(frames - at, until);
+
+    // Retuned to the time of the grid step this chunk sits *in*, not to where
+    // the chunk happens to begin. A call that starts halfway through a step has
+    // to use the coefficients that step already had, or the sound would depend
+    // on where the caller's buffer boundaries fell.
+    chain.retune(static_cast<double>(absolute - into) / rate - origin);
+    chain.process(block.subspan(at * channels, chunk * channels));
+    at += chunk;
+  }
+}
+
 /// One planned clip, with the samples and DSP it needs.
 struct Voice {
   render::PlannedAudioClip planned;
@@ -323,6 +369,11 @@ struct AudioMixer::Impl {
   /// on every block while the interface writes them from the message loop.
   std::vector<double> built_track_gain;
   std::vector<std::atomic<double>> live_track_gain;
+
+  /// One effect chain per lane, run on what the lane sums to before it reaches
+  /// the mix. Empty for a track with no stack, which is nearly all of them and
+  /// costs nothing to skip.
+  std::vector<audio::EffectChain> track_chains;
 
   /// Which meter belongs to a project track, or -1 for one carrying no audio.
   ///
@@ -503,11 +554,21 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
   // walks them so the two numberings cannot disagree.
   impl->lane_of_track.assign(impl->project.tracks.size(), -1);
   impl->built_track_gain.assign(lanes, 1.0);
+  impl->track_chains.resize(lanes);
   int ordinal = 0;
   for (std::size_t i = 0; i < impl->project.tracks.size(); ++i) {
     if (impl->project.tracks[i].kind != core::TrackKind::Audio) continue;
     const int lane = ordinal++;
     impl->lane_of_track[i] = lane;
+
+    // The lane's own stack. Built at zero because a track's effect keyframes
+    // are in timeline seconds and the sequence starts there.
+    if (static_cast<std::size_t>(lane) < lanes &&
+        !impl->project.tracks[i].audio_effects.empty()) {
+      impl->track_chains[static_cast<std::size_t>(lane)] = audio::EffectChain::build(
+          impl->project.tracks[i].audio_effects, static_cast<double>(settings.sample_rate),
+          settings.channels, 0.0);
+    }
     // The gain the lane was planned with, so a live fader can be a ratio
     // against it. Read from the project rather than from the plan: the plan
     // folds track gain into each clip's, and unpicking it from there would be
@@ -671,51 +732,19 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
       }
     }
 
-    if (voice.chain.fixed()) {
-      voice.chain.process(impl_->voice_block);
-    } else {
-      // An animated stack is retuned on a fixed grid **aligned to the
-      // timeline**, not once per call.
-      //
-      // Retuning per call would have been simpler and would have made the
-      // preview and the export disagree: they ask for different buffer sizes,
-      // so a sweep would land on different coefficients in each. Aligning the
-      // grid to absolute sample positions means splitting a buffer anywhere
-      // gives the same samples, which is the guarantee the rest of this mixer
-      // already keeps.
-      //
-      // Per sample would be both expensive and wrong — moving an IIR filter's
-      // coefficients under state that assumes the old ones is how a filter is
-      // made to ring. A grid step is a millisecond and a half at 48 kHz, which
-      // no sweep anybody writes can outrun.
-      std::size_t at = 0;
-      while (at < span) {
-        const std::int64_t absolute = base + static_cast<std::int64_t>(first + at);
-        const std::int64_t into = ((absolute % kControlBlock) + kControlBlock) % kControlBlock;
-        const auto until = static_cast<std::size_t>(kControlBlock - into);
-        const std::size_t chunk = std::min(span - at, until);
+    // Clip-local, because a clip's effect keyframes are.
+    run_chain_over(voice.chain, impl_->voice_block, base + static_cast<std::int64_t>(first), rate,
+                   channels, voice.planned.start);
 
-        // Retuned to the time of the grid step this chunk sits *in*, not to
-        // where the chunk happens to begin. A call that starts halfway through
-        // a step has to use the coefficients that step already had, or the
-        // sound would depend on where the caller's buffer boundaries fell —
-        // which is the whole thing this grid exists to prevent.
-        voice.chain.retune(static_cast<double>(absolute - into) / rate - voice.planned.start);
-        voice.chain.process(
-            std::span(impl_->voice_block).subspan(at * channels, chunk * channels));
-        at += chunk;
-      }
-    }
-
-    // A plain sum: `normalize=0`, so tracks add rather than being scaled down
-    // by how many of them there are.
-    for (std::size_t i = 0; i < span * channels; ++i) out[first * channels + i] += impl_->voice_block[i];
-
-    // And into the lane's own block, which is the same sum kept separately so
-    // a strip can be told what its track is contributing. Everything that makes
-    // a track's sound is already in `voice_block` by this point — clip gain,
-    // fades, the panner, the effect chain — so this is the track's output and
-    // not an estimate of it.
+    // Into the lane's own block rather than straight into the mix. A plain sum:
+    // `normalize=0`, so clips add rather than being scaled down by how many of
+    // them there are.
+    //
+    // This used to add into `out` as well, with the lane block kept alongside
+    // as a tap for the meter. It cannot any more: a track has an effect stack
+    // now, and a stack has to run on what the lane came to before that reaches
+    // the mix. So the lane block *is* the signal path, and the sum into `out`
+    // happens once per lane after its chain, below.
     const auto lane = static_cast<std::size_t>(voice.planned.track_index);
     if (lane < impl_->track_blocks.size()) {
       std::vector<float>& into = impl_->track_blocks[lane];
@@ -723,6 +752,15 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
         into[first * channels + i] += impl_->voice_block[i];
       }
     }
+  }
+
+  // Each lane through its own stack, then into the mix.
+  for (std::size_t lane = 0; lane < impl_->track_blocks.size(); ++lane) {
+    std::vector<float>& block = impl_->track_blocks[lane];
+    if (lane < impl_->track_chains.size() && !impl_->track_chains[lane].empty()) {
+      run_chain_over(impl_->track_chains[lane], block, base, rate, channels, 0.0);
+    }
+    for (std::size_t i = 0; i < block.size(); ++i) out[i] += block[i];
   }
 
   // The master fader, ahead of the limiter: pulling it down has to take a hot
@@ -818,14 +856,23 @@ std::size_t AudioMixer::latency_frames() const noexcept {
 
 void AudioMixer::reset() {
   for (Voice& voice : impl_->voices) voice.chain.reset();
+  // The track stacks as well, for exactly the reason the voices' are: a filter
+  // carries a memory of what came before, and after a seek what came before is
+  // not what is about to be played.
+  for (audio::EffectChain& chain : impl_->track_chains) chain.reset();
   impl_->limiter->reset();
 
   // The meter too: levels only fall while audio is being measured, so a seek
   // that lands somewhere quiet would otherwise leave the bars where the last
   // loud thing left them.
   impl_->meter->reset();
+  for (const std::unique_ptr<audio::Meter>& meter : impl_->track_meters) meter->reset();
+
   const std::lock_guard lock(impl_->levels_lock);
   impl_->levels = impl_->meter->read();
+  for (std::size_t lane = 0; lane < impl_->track_meters.size(); ++lane) {
+    impl_->track_levels[lane] = impl_->track_meters[lane]->read();
+  }
 }
 
 bool AudioMixer::silent() const noexcept {

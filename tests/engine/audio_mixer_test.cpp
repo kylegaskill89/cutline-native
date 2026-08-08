@@ -502,6 +502,114 @@ TEST(TrackAutomation, TheCurveIsReadAgainstTheSequenceRatherThanTheClip) {
   EXPECT_LT(mixer->track_levels(0).channels[0].peak_db, -20.0);
 }
 
+// ------------------------------------------------------- track effects --
+
+TEST(TrackEffects, ALaneWithNoStackIsUnchanged) {
+  // The guard on restructuring the mix loop: lanes now sum into their own
+  // block and are added to the mix after their chain, where they used to add
+  // straight in. A project with no track effects must be sample-for-sample
+  // what it was.
+  auto plain = mixer_for(two_lanes());
+  auto same = mixer_for(two_lanes());
+  ASSERT_NE(plain, nullptr);
+  ASSERT_NE(same, nullptr);
+  EXPECT_EQ(mix_span(*plain, 0.0, 0.3), mix_span(*same, 0.0, 0.3));
+}
+
+TEST(TrackEffects, AStackOnATrackIsHeard) {
+  Project quiet = one_clip_project();
+  quiet.tracks[0].audio_effects.push_back(
+      core::AudioClipEffect{.type = "gain", .params = {{"gain", -20.0}}});
+
+  const double plain = rms_of(mix_span(*mixer_for(one_clip_project()), 0.0, 0.3));
+  const double cut = rms_of(mix_span(*mixer_for(quiet), 0.0, 0.3));
+  EXPECT_LT(cut, plain * 0.5);
+}
+
+TEST(TrackEffects, ItRunsOnWhatTheWholeLaneSumsTo) {
+  // The whole point of a track stack, and what a clip stack cannot do: one
+  // compressor across everything on the lane rather than one per clip. Two
+  // clips at once through a -20 dB track gain come out quieter than the same
+  // two clips with nothing on the track.
+  Project both;
+  both.media = {tone_media()};
+  both.tracks = {audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0),
+                                    audio_clip("c2", "m", 0.0, 5.0, 1.0)})};
+  Project cut = both;
+  cut.tracks[0].audio_effects.push_back(
+      core::AudioClipEffect{.type = "gain", .params = {{"gain", -20.0}}});
+
+  EXPECT_LT(rms_of(mix_span(*mixer_for(cut), 0.0, 0.3)),
+            rms_of(mix_span(*mixer_for(both), 0.0, 0.3)) * 0.5);
+}
+
+TEST(TrackEffects, ADisabledEntryContributesNothing) {
+  Project off = one_clip_project();
+  off.tracks[0].audio_effects.push_back(core::AudioClipEffect{
+      .type = "gain", .enabled = false, .params = {{"gain", -20.0}}});
+
+  EXPECT_EQ(mix_span(*mixer_for(off), 0.0, 0.3),
+            mix_span(*mixer_for(one_clip_project()), 0.0, 0.3));
+}
+
+TEST(TrackEffects, OneLanesStackDoesNotReachAnother) {
+  Project p = two_lanes();
+  p.tracks[0].audio_effects.push_back(
+      core::AudioClipEffect{.type = "gain", .params = {{"gain", -24.0}}});
+
+  auto mixer = mixer_for(p);
+  ASSERT_NE(mixer, nullptr);
+  (void)mix_span(*mixer, 0.0, 0.3);
+
+  // The stacked lane is well below the untouched one, which is the whole
+  // claim. Stated as a difference rather than as two absolute levels, so it
+  // does not depend on where a peak meter happens to have fallen to.
+  EXPECT_LT(mixer->track_levels(0).channels[0].peak_db,
+            mixer->track_levels(1).channels[0].peak_db - 10.0);
+}
+
+TEST(TrackEffects, TheMeterReadsTheLaneAfterItsStack) {
+  // A strip's meter answers "what is this track putting into the mix", and
+  // after a track stack that is not what the clips summed to.
+  Project p = one_clip_project();
+  Project cut = p;
+  cut.tracks[0].audio_effects.push_back(
+      core::AudioClipEffect{.type = "gain", .params = {{"gain", -20.0}}});
+
+  auto plain = mixer_for(p);
+  auto quiet = mixer_for(cut);
+  ASSERT_NE(plain, nullptr);
+  ASSERT_NE(quiet, nullptr);
+  (void)mix_span(*plain, 0.0, 0.3);
+  (void)mix_span(*quiet, 0.0, 0.3);
+
+  EXPECT_NEAR(plain->track_levels(0).channels[0].peak_db -
+                  quiet->track_levels(0).channels[0].peak_db,
+              20.0, 3.0);
+}
+
+TEST(TrackEffects, SplittingABlockGivesTheSameSamples) {
+  // The guarantee the whole mixer keeps, now that a second chain runs on the
+  // same grid: mixing a span in one call and in three must agree.
+  Project p = one_clip_project();
+  p.tracks[0].audio_effects.push_back(
+      core::AudioClipEffect{.type = "lowpass", .params = {{"frequency", 800.0}}});
+
+  auto whole = mixer_for(p);
+  auto split = mixer_for(p);
+  ASSERT_NE(whole, nullptr);
+  ASSERT_NE(split, nullptr);
+
+  const std::vector<float> once = mix_span(*whole, 0.0, 0.3);
+  std::vector<float> thrice;
+  for (int i = 0; i < 3; ++i) {
+    const std::vector<float> part = mix_span(*split, 0.1 * i, 0.1);
+    thrice.insert(thrice.end(), part.begin(), part.end());
+  }
+  ASSERT_EQ(once.size(), thrice.size());
+  for (std::size_t i = 0; i < once.size(); ++i) EXPECT_FLOAT_EQ(once[i], thrice[i]) << i;
+}
+
 // ----------------------------------------------------------------- content --
 
 TEST(AudioMixer, AClipIsHeardAtItsOwnLevel) {

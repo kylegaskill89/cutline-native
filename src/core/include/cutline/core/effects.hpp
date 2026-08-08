@@ -142,6 +142,35 @@ inline constexpr std::string_view kMaskParamPrefix = "mask.";
 [[nodiscard]] Project set_audio_effect_param(Project p, std::string_view clip_id,
                                              std::size_t index, std::string key, double value);
 
+// ------------------------------------------------------ the track's stack --
+//
+// The same five operations on a **track's** audio stack rather than a clip's.
+// A clip's stack is what that take needed; a track's is what the whole stem
+// needs — one compressor across all the dialogue rather than a different one on
+// each line. They are separate functions rather than one taking a flag because
+// a track and a clip are found by different means and the id spaces are
+// different: passing a clip id to one of these should find nothing, and it
+// does.
+
+[[nodiscard]] Project add_track_audio_effect(Project p, std::string_view track_id,
+                                             std::string type,
+                                             std::map<std::string, double> params);
+
+[[nodiscard]] Project remove_track_audio_effect(Project p, std::string_view track_id,
+                                                std::size_t index);
+
+[[nodiscard]] Project toggle_track_audio_effect(Project p, std::string_view track_id,
+                                                std::size_t index);
+
+[[nodiscard]] Project move_track_audio_effect(Project p, std::string_view track_id,
+                                              std::size_t index, int direction);
+
+[[nodiscard]] Project set_track_audio_effect_param(Project p, std::string_view track_id,
+                                                   std::size_t index, std::string key,
+                                                   double value);
+
+[[nodiscard]] Project clear_track_audio_effects(Project p, std::string_view track_id);
+
 // -------------------------------------------- audio effect param keyframes --
 //
 // The same four operations the visual stack has, on the same shape of map. They

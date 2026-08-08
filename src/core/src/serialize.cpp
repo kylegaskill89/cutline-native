@@ -284,6 +284,10 @@ json write(const Track& t) {
   // exactly the JSON it always did.
   if (t.automation != AutomationMode::Read) j["automation"] = t.automation;
 
+  json track_effects = json::array();
+  for (const AudioClipEffect& e : t.audio_effects) track_effects.push_back(write(e));
+  put_unless_empty(j, "audio_effects", track_effects);
+
   json clips = json::array();
   for (const Clip& c : t.clips) clips.push_back(write(c));
   put_unless_empty(j, "clips", clips);
@@ -575,6 +579,11 @@ Track read_track(const json& j) {
   const auto track_pan_keys = j.find("pan_keyframes");
   if (track_pan_keys != j.end()) t.pan_keyframes = read_keyframes(*track_pan_keys);
   t.automation = read_or(j, "automation", AutomationMode::Read);
+
+  const auto track_effects = j.find("audio_effects");
+  if (track_effects != j.end() && track_effects->is_array()) {
+    for (const json& e : *track_effects) t.audio_effects.push_back(read_audio_effect(e));
+  }
 
   const auto clips = j.find("clips");
   if (clips != j.end() && clips->is_array()) {
