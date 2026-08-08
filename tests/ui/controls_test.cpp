@@ -655,6 +655,153 @@ TEST(NumericField, DrawsTheFieldInsteadOfTheNumberWhileEditing) {
   EXPECT_EQ(drawn, 1);
 }
 
+// ------------------------------------------------------------ radio group --
+
+struct Radios {
+  Radios() {
+    host = std::make_unique<WidgetHost>(std::make_unique<Widget>());
+    group = &host->root().emplace<RadioGroup>(
+        std::vector<std::string>{"Change speed", "Trim head", "Trim tail"}, 0u);
+    group->set_on_change([this](std::size_t index) {
+      ++changes;
+      last = index;
+    });
+    host->resize(Rect{0.0, 0.0, 400.0, 200.0}, flat_context());
+    group->arrange(Rect{0.0, 0.0, 200.0, 72.0}, flat_context());
+  }
+
+  std::unique_ptr<WidgetHost> host;
+  RadioGroup* group = nullptr;
+  int changes = 0;
+  std::size_t last = 0;
+};
+
+TEST(RadioGroup, OneIsAlwaysTaken) {
+  // A group with nothing chosen is a question that was not asked properly.
+  const RadioGroup fresh{{"a", "b"}};
+  EXPECT_EQ(fresh.selected(), 0u);
+}
+
+TEST(RadioGroup, ClickingARowTakesIt) {
+  Radios test;
+  const Rect second = test.group->row_rect(1);
+  test.host->mouse_down(press(8.0, second.y + 2.0));
+  test.host->mouse_up(press(8.0, second.y + 2.0));
+
+  EXPECT_EQ(test.group->selected(), 1u);
+  EXPECT_EQ(test.changes, 1);
+  EXPECT_EQ(test.last, 1u);
+}
+
+TEST(RadioGroup, ClickingTheLabelTakesItToo) {
+  // The circle is fourteen pixels. The row is the target.
+  Radios test;
+  const Rect third = test.group->row_rect(2);
+  test.host->mouse_down(press(150.0, third.y + 2.0));
+  test.host->mouse_up(press(150.0, third.y + 2.0));
+  EXPECT_EQ(test.group->selected(), 2u);
+}
+
+TEST(RadioGroup, ClickingWhatIsAlreadyTakenSaysNothingChanged) {
+  Radios test;
+  const Rect first = test.group->row_rect(0);
+  test.host->mouse_down(press(8.0, first.y + 2.0));
+  test.host->mouse_up(press(8.0, first.y + 2.0));
+
+  EXPECT_EQ(test.group->selected(), 0u);
+  EXPECT_EQ(test.changes, 0) << "a choice that was already made is not a change";
+}
+
+TEST(RadioGroup, SlidingOffBeforeReleasingCancels) {
+  Radios test;
+  const Rect second = test.group->row_rect(1);
+  test.host->mouse_down(press(8.0, second.y + 2.0));
+  test.host->mouse_move(press(900.0, second.y + 2.0));
+  test.host->mouse_up(press(900.0, second.y + 2.0));
+
+  EXPECT_EQ(test.group->selected(), 0u);
+  EXPECT_EQ(test.changes, 0);
+}
+
+TEST(RadioGroup, TheArrowsMoveTheSelectionRatherThanAHighlight) {
+  // What a radio group does everywhere on this platform, and the reason the
+  // whole group is one tab stop rather than a row of them.
+  Radios test;
+  test.host->set_focus(test.group);
+
+  test.host->key_down(KeyEvent{.key = Key::Down});
+  EXPECT_EQ(test.group->selected(), 1u);
+  test.host->key_down(KeyEvent{.key = Key::Down});
+  EXPECT_EQ(test.group->selected(), 2u);
+  test.host->key_down(KeyEvent{.key = Key::Up});
+  EXPECT_EQ(test.group->selected(), 1u);
+  EXPECT_EQ(test.changes, 3);
+}
+
+TEST(RadioGroup, TheArrowsStopAtEitherEndRatherThanWrapping) {
+  Radios test;
+  test.host->set_focus(test.group);
+
+  test.host->key_down(KeyEvent{.key = Key::Up});
+  EXPECT_EQ(test.group->selected(), 0u) << "already at the top";
+
+  test.host->key_down(KeyEvent{.key = Key::End});
+  EXPECT_EQ(test.group->selected(), 2u);
+  test.host->key_down(KeyEvent{.key = Key::Down});
+  EXPECT_EQ(test.group->selected(), 2u) << "already at the bottom";
+}
+
+TEST(RadioGroup, HomeAndEndReachEitherEnd) {
+  Radios test;
+  test.host->set_focus(test.group);
+  test.host->key_down(KeyEvent{.key = Key::End});
+  EXPECT_EQ(test.group->selected(), 2u);
+  test.host->key_down(KeyEvent{.key = Key::Home});
+  EXPECT_EQ(test.group->selected(), 0u);
+}
+
+TEST(RadioGroup, ANewListDoesNotKeepTheOldIndex) {
+  // The old index named a row in the old list, which is to say the wrong one.
+  Radios test;
+  test.host->set_focus(test.group);
+  test.host->key_down(KeyEvent{.key = Key::End});
+  ASSERT_EQ(test.group->selected(), 2u);
+
+  test.group->set_options({"only", "two"});
+  EXPECT_EQ(test.group->selected(), 0u);
+}
+
+TEST(RadioGroup, SelectingPastTheEndIsIgnoredRatherThanLeavingNothingTaken) {
+  Radios test;
+  test.group->select(99);
+  EXPECT_EQ(test.group->selected(), 0u);
+}
+
+TEST(RadioGroup, TheRowsStackAndTheCirclesSitInThem) {
+  Radios test;
+  const Rect first = test.group->row_rect(0);
+  const Rect second = test.group->row_rect(1);
+  EXPECT_DOUBLE_EQ(second.y, first.y + first.height);
+
+  const Rect circle = test.group->dot(1);
+  EXPECT_GT(circle.width, 0.0);
+  EXPECT_DOUBLE_EQ(circle.width, circle.height) << "a circle, not an oval";
+  EXPECT_GE(circle.y, second.y);
+  EXPECT_LE(circle.bottom(), second.bottom());
+}
+
+TEST(RadioGroup, APointOutsideAnyRowIsNoRow) {
+  Radios test;
+  EXPECT_EQ(test.group->row_at(1000.0), test.group->options().size());
+  EXPECT_EQ(test.group->row_at(-10.0), test.group->options().size());
+}
+
+TEST(RadioGroup, AnEmptyGroupIsHarmless) {
+  RadioGroup nothing;
+  EXPECT_TRUE(nothing.options().empty());
+  EXPECT_EQ(nothing.row_at(0.0), 0u);
+}
+
 // --------------------------------------------------------------- checkbox --
 
 struct Ticked {

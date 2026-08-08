@@ -7073,17 +7073,68 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
   app.main.host->open_popup(std::move(panel), settings_anchor());
 }
 
-// Premiere's **Fit Clip** dialogue belongs here: five rows saying which of the
-// four marks to give up, of which only Fit to Fill is reachable today. All five
-// are built and tested in `core::fit_media`; what is missing is the box.
-//
-// It is blocked on a widget rather than on effort. Fit Clip is a column of
-// radio buttons, and there is no `ui::RadioGroup` — the widget layer has a
-// Checkbox and a Dropdown and nothing exclusive-and-visible. Building the
-// group out of checkboxes would draw ticked squares where Premiere draws
-// filled circles, which is inventing an arrangement rather than matching one,
-// and a dropdown would hide four of the five choices behind the sixth click.
-// The widget comes first; see docs/premiere-gaps.md §2.1.
+/// The five choices in `core::FitChoice`, in Premiere's own order.
+///
+/// Change Speed leads because it is the only one that keeps all four marks. The
+/// two trims come next: giving up part of the source is a smaller thing than
+/// giving up where the edit lands.
+constexpr std::array<std::pair<std::string_view, cutline::core::FitChoice>, 5> kFitChoices{{
+    {"Change clip speed (fit to fill)", cutline::core::FitChoice::ChangeSpeed},
+    {"Trim source's head (left side)", cutline::core::FitChoice::TrimHead},
+    {"Trim source's tail (right side)", cutline::core::FitChoice::TrimTail},
+    {"Ignore sequence in point", cutline::core::FitChoice::IgnoreSequenceIn},
+    {"Ignore sequence out point", cutline::core::FitChoice::IgnoreSequenceOut},
+}};
+
+/// Premiere's Fit Clip: what to give up when all four marks are set and they
+/// disagree.
+///
+/// Four marks fix more than an edit has freedom for, and every way out gives up
+/// exactly one of them. Which one matters least is a judgement about the cut,
+/// and nothing in the model can make it — which is why this is a question
+/// rather than a rule, and why all five are offered rather than the one that
+/// was easiest to build.
+void open_fit_dialog(App& app) {
+  if (app.main.host == nullptr) return;
+  if (!cutline::editor::can_run(app.session, cutline::editor::Command::FitToFill)) return;
+
+  auto panel = std::make_unique<Panel>();
+  panel->emplace<Label>("Fit Clip").set_bold(true);
+  panel->emplace<Label>("The source and the marked span are different lengths.")
+      .set_small(true);
+
+  std::vector<std::string> names;
+  names.reserve(kFitChoices.size());
+  for (const auto& [label, choice] : kFitChoices) names.emplace_back(label);
+  auto& choices = panel->emplace<cutline::ui::RadioGroup>(std::move(names), 0u);
+
+  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
+  buttons.emplace<Button>("OK", [&app, chosen = &choices] {
+    const std::size_t index = chosen->selected();
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    if (index >= kFitChoices.size()) return;
+
+    // Read again rather than captured at the point the box opened: the marks,
+    // the source and the targeted track can all move while it is up, and the
+    // edit should be the one the sequence asks for now.
+    if (!cutline::editor::can_run(app.session, cutline::editor::Command::FitToFill)) return;
+    cutline::core::Project ready =
+        cutline::core::match_sequence_to(app.session.project(), app.session.source_media());
+    const std::string target = cutline::editor::edit_target(ready);
+    const auto points = cutline::core::edit_points(ready, app.session.source_media(),
+                                                   app.session.playhead());
+    app.session.apply(cutline::core::fit_media(std::move(ready), app.session.source_media(),
+                                               points, kFitChoices[index].second, target));
+    refresh_all(app);
+    invalidate_preview(app);
+    mark_dirty(app);
+  });
+  buttons.emplace<Button>("Cancel", [&app] {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+  });
+
+  app.main.host->open_popup(std::move(panel), settings_anchor());
+}
 
 /// A marker's name, note, colour and length. Premiere's marker dialogue.
 ///
@@ -8940,10 +8991,10 @@ void refresh_dock(App& app) {
       {"Overwrite",
        [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Overwrite); }},
       // Greyed unless all four marks are set and disagree, which is the only
-      // time there is anything to fit. No key: Premiere reaches it from a menu
-      // too, and it is not an edit anybody makes in a hurry.
-      {"Fit to Fill",
-       [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::FitToFill); }},
+      // time there is anything to fit. It opens the box rather than acting,
+      // because the answer is a judgement about the cut — Fit to Fill is only
+      // the first of five, and the one it lands on if nothing else is chosen.
+      {"Fit Clip...", [app] { if (app != nullptr) open_fit_dialog(*app); }},
   });
 
   menu("Project", {

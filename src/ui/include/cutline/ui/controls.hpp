@@ -390,6 +390,69 @@ class NumericField : public Widget {
   std::function<void(double)> on_commit_;
 };
 
+/// A column of mutually exclusive choices, exactly one of them taken.
+///
+/// The control every dialogue wants when a question has three or four answers
+/// and the answers should all be visible at once. Without it those questions
+/// were being asked with dropdowns, which hide every choice but the current one
+/// behind a click — fine for a long list of formats, wrong for "which of these
+/// four marks should I give up", where seeing the alternatives *is* the
+/// deciding.
+///
+/// One widget rather than a box of small ones, which is not only cheaper: a
+/// radio group is a single stop for the keyboard, and the arrow keys move the
+/// selection *within* it. Built out of children, each row would take its own
+/// tab stop and the arrows would mean nothing, which is not how any radio group
+/// on this platform behaves.
+///
+/// There is always a selection. A group with nothing taken is a question that
+/// has not been asked properly — the caller decides the default, and every path
+/// through this leaves exactly one row chosen.
+class RadioGroup : public Widget {
+ public:
+  explicit RadioGroup(std::vector<std::string> options = {}, std::size_t selected = 0);
+
+  [[nodiscard]] const std::vector<std::string>& options() const noexcept { return options_; }
+  void set_options(std::vector<std::string> options, std::size_t selected = 0);
+
+  [[nodiscard]] std::size_t selected() const noexcept { return selected_; }
+  /// Ignores an index past the end, so a group is never left with nothing
+  /// taken by a caller counting wrong.
+  void select(std::size_t index);
+
+  void set_on_change(std::function<void(std::size_t)> on_change) {
+    on_change_ = std::move(on_change);
+  }
+
+  /// The row's whole strip, and the circle drawn at the head of it.
+  [[nodiscard]] Rect row_rect(std::size_t index) const;
+  [[nodiscard]] Rect dot(std::size_t index) const;
+  /// Which row a point is in, or `options().size()` for none.
+  [[nodiscard]] std::size_t row_at(double y) const;
+
+  [[nodiscard]] Part part() const noexcept override { return Part::Input; }
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  void layout(const LayoutContext& context) override;
+  void paint_content(Painter& painter, const Theme& theme) const override;
+
+  bool on_mouse_down(const MouseEvent& event) override;
+  bool on_mouse_up(const MouseEvent& event) override;
+  bool on_key_down(const KeyEvent& event) override;
+
+ private:
+  void choose(std::size_t index);
+
+  std::vector<std::string> options_;
+  std::size_t selected_ = 0;
+
+  double row_height_ = 22.0;
+  double dot_size_ = 14.0;
+  double gap_ = 8.0;
+  double font_size_ = 13.0;
+
+  std::function<void(std::size_t)> on_change_;
+};
+
 /// A box that is either ticked or not, with a label beside it.
 class Checkbox : public Widget {
  public:

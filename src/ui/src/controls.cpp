@@ -485,6 +485,149 @@ bool NumericField::on_key_down(const KeyEvent& event) {
 
 // ---------------------------------------------------------------- checkbox --
 
+// ----------------------------------------------------------- radio groups --
+
+RadioGroup::RadioGroup(std::vector<std::string> options, std::size_t selected)
+    : options_(std::move(options)) {
+  set_focusable(true);
+  select(selected);
+}
+
+void RadioGroup::set_options(std::vector<std::string> options, std::size_t selected) {
+  options_ = std::move(options);
+  // Reset rather than kept: the old index named a row in the old list, which is
+  // to say the wrong one.
+  selected_ = 0;
+  select(selected);
+}
+
+void RadioGroup::select(std::size_t index) {
+  if (index >= options_.size()) return;
+  selected_ = index;
+}
+
+void RadioGroup::choose(std::size_t index) {
+  if (index >= options_.size() || index == selected_) return;
+  selected_ = index;
+  if (on_change_) on_change_(selected_);
+}
+
+void RadioGroup::layout(const LayoutContext& context) {
+  const Metrics& metrics = context.metrics();
+  row_height_ = metrics.control_height;
+  dot_size_ = metrics.control_height * 0.6;
+  gap_ = metrics.spacing;
+  font_size_ = metrics.font_size;
+}
+
+LayoutItem RadioGroup::sizing(Axis axis, const LayoutContext& context) const {
+  const Metrics& metrics = context.metrics();
+  if (axis == Axis::Vertical) {
+    return LayoutItem::fixed(metrics.control_height * static_cast<double>(options_.size()));
+  }
+
+  // As wide as the longest row needs. A group narrower than its longest label
+  // would cut the answer somebody is being asked to choose between.
+  const double circle = metrics.control_height * 0.6;
+  double widest = 0.0;
+  for (const std::string& option : options_) {
+    widest = std::max(widest, context.text.measure(option, metrics.font_size, false));
+  }
+  if (options_.empty()) return LayoutItem::fixed(0.0);
+  return LayoutItem::fixed(circle + metrics.spacing + widest);
+}
+
+Rect RadioGroup::row_rect(std::size_t index) const {
+  if (index >= options_.size()) return {};
+  const Rect area = bounds();
+  return Rect{area.x, area.y + static_cast<double>(index) * row_height_, area.width,
+              row_height_};
+}
+
+Rect RadioGroup::dot(std::size_t index) const {
+  const Rect row = row_rect(index);
+  if (row.width <= 0.0 && row.height <= 0.0) return {};
+  const double size = std::min(dot_size_, std::min(row.width, row.height));
+  return Rect{row.x, row.y + (row.height - size) / 2.0, size, size};
+}
+
+std::size_t RadioGroup::row_at(double y) const {
+  const Rect area = bounds();
+  if (row_height_ <= 0.0 || y < area.y) return options_.size();
+  const auto index = static_cast<std::size_t>((y - area.y) / row_height_);
+  return index < options_.size() ? index : options_.size();
+}
+
+void RadioGroup::paint_content(Painter& painter, const Theme& theme) const {
+  const SurfaceStyle& style = theme.style(Part::Input, state());
+  const SurfaceStyle& taken = theme.style(Part::Input, State::Selected);
+
+  for (std::size_t i = 0; i < options_.size(); ++i) {
+    const Rect circle = dot(i);
+    // A circle is a rectangle whose corners are as round as they go. There is
+    // no ellipse primitive and this needs none: half the width is exactly a
+    // circle at every size, and it goes through the same fill and stroke every
+    // other themed surface uses, so a radio looks like it belongs in all four.
+    const double radius = circle.width / 2.0;
+    painter.fill(circle, radius, style.fill);
+    if (style.border_width > 0.0) {
+      painter.stroke(circle, radius, style.border, style.border_width);
+    }
+
+    if (i == selected_) {
+      // The mark is a smaller filled circle inside the first, which is what a
+      // radio button has looked like since before any of this.
+      const double inset_by = circle.width * 0.28;
+      const Rect mark{circle.x + inset_by, circle.y + inset_by, circle.width - inset_by * 2.0,
+                      circle.height - inset_by * 2.0};
+      painter.fill(mark, mark.width / 2.0, Fill::solid(taken.text));
+    }
+
+    const Rect row = row_rect(i);
+    const Rect text{circle.right() + gap_, row.y,
+                    std::max(0.0, row.right() - circle.right() - gap_), row.height};
+    painter.text(text_run(text, options_[i], style, font_size_, TextAlign::Left, false));
+  }
+}
+
+bool RadioGroup::on_mouse_down(const MouseEvent& event) {
+  // Taken so the press captures; the choice lands on release, so sliding off a
+  // row cancels it exactly as it does on a button or a checkbox.
+  return event.button == MouseButton::Left;
+}
+
+bool RadioGroup::on_mouse_up(const MouseEvent& event) {
+  if (event.button != MouseButton::Left) return false;
+  if (hit(event.x, event.y)) choose(row_at(event.y));
+  return true;
+}
+
+bool RadioGroup::on_key_down(const KeyEvent& event) {
+  if (!event.modifiers.none() || options_.empty()) return false;
+
+  // The arrows move the *selection*, not a highlight — which is what a radio
+  // group does everywhere on this platform, and the reason the whole group is
+  // one tab stop rather than a row of them.
+  switch (event.key) {
+    case Key::Up:
+    case Key::Left:
+      if (selected_ > 0) choose(selected_ - 1);
+      return true;
+    case Key::Down:
+    case Key::Right:
+      choose(selected_ + 1);
+      return true;
+    case Key::Home:
+      choose(0);
+      return true;
+    case Key::End:
+      choose(options_.size() - 1);
+      return true;
+    default:
+      return false;
+  }
+}
+
 Checkbox::Checkbox(std::string label, bool checked)
     : label_(std::move(label)), checked_(checked) {
   set_focusable(true);

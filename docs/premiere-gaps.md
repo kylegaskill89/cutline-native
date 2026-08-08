@@ -590,20 +590,38 @@ destination mark). Each is an overwrite with a different pair of "where" and
 subsystem, and why leaving four of them out would have been a choice rather
 than a saving.
 
-**What is not built is the box**, and it is blocked on a widget rather than on
-effort. Premiere's Fit Clip is a column of **radio buttons**, and the widget
-layer has a Checkbox and a Dropdown and nothing that is exclusive and visible
-at once. Building the group out of checkboxes would draw ticked squares where
-Premiere draws filled circles; a dropdown would hide four of the five choices
-behind a click. Either is inventing an arrangement instead of matching one.
+**And the box is built.** It was blocked on a widget rather than on effort:
+Premiere's Fit Clip is a column of **radio buttons**, and the widget layer had a
+Checkbox and a Dropdown and nothing that is exclusive and visible at once.
+Building the group out of checkboxes would have drawn ticked squares where
+Premiere draws filled circles; a dropdown would have hidden four of the five
+choices behind a click. Either is inventing an arrangement instead of matching
+one, so the widget came first.
 
-So **`ui::RadioGroup` is the next piece of work here**, and it is not only for
-this: a radio group is the control Premiere reaches for whenever a question has
-three or four mutually exclusive answers, and this application has been
-answering those with dropdowns because it has nothing else. Until then Fit to
-Fill is on the Timeline menu, greyed unless the marks actually conflict, and it
-is the choice anybody would pick first anyway — it is the only one that keeps
-all four marks.
+**`ui::RadioGroup`** is that widget, and it is not only for this — a radio group
+is what Premiere reaches for whenever a question has three or four exclusive
+answers, and this application had been answering those with dropdowns for want
+of anything else. Two things about it are worth keeping:
+
+- **One widget, not a box of small ones.** A radio group is a single stop for
+  the keyboard and the arrows move the *selection* within it, which is how every
+  radio group on this platform behaves. Built out of children, each row would
+  take its own tab stop and the arrows would mean nothing.
+- **A circle is a rectangle with its corners as round as they go.** There is no
+  ellipse primitive and none is needed: half the width is exactly a circle at
+  every size, and going through the same `fill` and `stroke` every other themed
+  surface uses is what makes a radio look like it belongs in all four themes
+  rather than like a shape somebody drew.
+
+Fit Clip is on the Timeline menu, greyed unless the marks actually conflict,
+and it opens the box rather than acting — the answer is a judgement about the
+cut. Change Speed is the row it lands on, being the only one that keeps all
+four marks.
+
+Still to do here: the dialogue is not in the `--check` scene, so its layout is
+covered by neither the pixel tests nor the four-theme sweep. It needs a project
+with four marks and a source to build against, which is a scene rather than a
+line.
 
 What stands in for the source monitor is the **pool's selection**, which is
 already what a double-click places. That is also why source patching does not

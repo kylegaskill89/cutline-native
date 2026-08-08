@@ -114,21 +114,6 @@ namespace {
   return found;
 }
 
-/// The track a keyboard edit lands on: the one targeted, or nothing.
-///
-/// The first targeted video track, because that is what carries a picture and
-/// what the audio lanes are matched against. A project with only audio tracks
-/// targeted answers with the first of those instead, which is how a source with
-/// no picture is aimed.
-[[nodiscard]] std::string edit_target(const core::Project& project) {
-  for (const core::Track& track : project.tracks) {
-    if (track.targeted && track.kind == core::TrackKind::Video) return track.id;
-  }
-  for (const core::Track& track : project.tracks) {
-    if (track.targeted) return track.id;
-  }
-  return {};
-}
 
 /// Whether there is something to place and somewhere to put it.
 [[nodiscard]] bool can_place(const Session& session) {
@@ -160,6 +145,24 @@ namespace {
 }
 
 }  // namespace
+
+// Reached from the application as well, which is why it is not file-local: the
+// Fit Clip dialogue has to aim at the same track a keyboard edit would.
+/// The track a keyboard edit lands on: the one targeted, or nothing.
+///
+/// The first targeted video track, because that is what carries a picture and
+/// what the audio lanes are matched against. A project with only audio tracks
+/// targeted answers with the first of those instead, which is how a source with
+/// no picture is aimed.
+[[nodiscard]] std::string edit_target(const core::Project& project) {
+  for (const core::Track& track : project.tracks) {
+    if (track.targeted && track.kind == core::TrackKind::Video) return track.id;
+  }
+  for (const core::Track& track : project.tracks) {
+    if (track.targeted) return track.id;
+  }
+  return {};
+}
 
 std::string_view to_string(Command command) noexcept {
   switch (command) {

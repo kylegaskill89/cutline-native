@@ -12,6 +12,7 @@
 
 #include "cutline/editor/session.hpp"
 
+#include <string>
 #include <string_view>
 
 namespace cutline::editor {
@@ -117,6 +118,19 @@ enum class Command {
 };
 
 [[nodiscard]] std::string_view to_string(Command command) noexcept;
+
+/// The track a keyboard edit lands on, or empty when nothing is targeted.
+///
+/// The first targeted *video* track, because that is what carries a picture and
+/// what the audio lanes are matched against; a project with only audio targeted
+/// answers with the first of those, which is how a source with no picture is
+/// aimed.
+///
+/// Public because placing a source is not only reached through a `Command`.
+/// Anything that puts media on the timeline has to aim at the same track a
+/// keystroke would, and two answers to "which track" is how an edit lands
+/// somewhere nobody was looking.
+[[nodiscard]] std::string edit_target(const core::Project& project);
 
 /// Whether the command would do anything right now. What greys a menu item.
 [[nodiscard]] bool can_run(const Session& session, Command command);
