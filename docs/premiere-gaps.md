@@ -1577,22 +1577,34 @@ processing onto a *role*, which is a group. Loudness normalisation across a
 programme is a measurement plus a gain applied somewhere above the clips. None
 of them mean anything while the only place an effect can go is on one clip.
 
-So the order is fixed, and it is not the order the rows are listed in:
+So the order was fixed, and it was not the order the rows are listed in. **The
+first two steps are done:**
 
-1. **An effect stack on a `Track`**, and a chain per track in the mixer. The
-   voice loop already sums each lane separately — that sum is exactly where a
-   track's chain would run, and §6.1's per-track metering put the buffer there.
-   This is the piece everything else waits on.
-2. **An effect stack on the master**, which is the same change one level up and
-   turns the fixed limiter into the last entry of a chain somebody can see.
-3. Then submixes, sends and roles, in whatever order they are wanted.
+1. ~~**An effect stack on a `Track`**~~ — done. The mix loop was restructured
+   rather than extended: voices used to add straight into the mix with a copy
+   kept per lane as a meter tap, which cannot work once a track has a stack,
+   because the stack has to run on what the lane came to *before* it reaches
+   the mix. The lane block is the signal path now, and the meter reads it after
+   the chain — which is what a strip should show.
+2. ~~**An effect stack on the master**~~ — done, after its fader and before the
+   limiter. The limiter stays last: it catches whatever the rest of the chain
+   produced, and a stack after it would process something already squashed.
+3. **What is left**, in the order the remaining rows depend on each other:
+   a reverb and a delay (nothing else needs them, but sends do), channel
+   mapping (independent, and the one a real shoot hits soonest), roles and
+   their presets, loudness measurement and then normalisation, and finally
+   submixes and sends, which want the reverb to be worth routing to.
+
+The shared machinery is now in place for all of them: `run_chain_over` runs a
+chain on the control grid for a clip, a track or the master, and the lane
+blocks are the buses a submix would sum.
 
 #### What Premiere has that we do not
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| Track effects | a stack per track, pre-fader | none — clips only | **machinery**, and see above |
-| Master effects | a stack on the master | a fixed limiter, unreachable | machinery |
+| ~~Track effects~~ | a stack per track, pre-fader | **done** — the lane's own chain, reachable from an fx button on the strip | — |
+| ~~Master effects~~ | a stack on the master | **done** — after the fader, before the limiter | — |
 | Submix tracks | a bus fed by other tracks, with its own stack and fader | none | model + machinery |
 | Sends | per track, pre or post fader, with a level | none | model + machinery |
 | A reverb | Studio Reverb, Convolution Reverb | **none** — there is no time-based effect in the catalogue at all | machinery |

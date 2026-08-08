@@ -1167,16 +1167,21 @@ and there is no work in progress to reconstruct.
   all four themes — run it with something *in* the media cache as well as with
   it empty, since the Delete button only exists when there is something to
   delete.
-- **Where the work is:** sections 1 to 5 of the gaps document are closed.
-  Section 6 (Audio) is open and its mixer subsection is done bar automation,
-  which is written up in §6.1 in the order it has to be built — a track's gain
-  becoming animatable first, because Read has nothing to read until it is.
-  Nothing in it is blocked.
+- **Where the work is:** sections 1 to 5 of the gaps document are closed, and so
+  is §6.1 — the mixer is Premiere's arrangement with Premiere's controls, five
+  automation modes included. §6.2 is audited and its first two steps are built:
+  a track carries an effect stack and so does the master. What is left of it is
+  listed in §6.2 in dependency order, and none of it is blocked.
 - **Not driven yet:** the Fit Clip dialogue (it needs a project carrying four
   marks, so it is absent from the `--check` scene too), and the application on
-  WARP for more than a few minutes. The mixer *has* been driven — meters moving
-  under playback and a fader read at -18.8 dB.
-- 37 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
+  WARP for more than a few minutes. Everything in section 6 *has* been driven:
+  meters moving under playback, a fader read at -18.8 dB, a Write pass that put
+  102 keyframes in the saved file, and a compressor added to a track from the
+  strip's fx button.
+- **Neither effects box is in the `--check` scene.** Fit Clip and the strip's
+  fx popup are both built from a project state the check does not set up, so
+  their layout is covered by driving alone.
+- 42 commits since `v0.3.0`, unreleased. **Do not tag** without being asked —
   the owner's standing instruction is that releases happen after major features,
   not per commit.
 
