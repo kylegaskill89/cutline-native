@@ -8,13 +8,20 @@
 #include "cutline/engine/frame_renderer.hpp"
 
 #include "cutline/core/model.hpp"
+#include "cutline/media/encoder.hpp"
 
 #include <gtest/gtest.h>
 
+#include <process.h>
+
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <set>
 #include <string>
+#include <system_error>
+#include <vector>
 
 namespace cutline::engine {
 namespace {
@@ -657,6 +664,124 @@ TEST_F(FootageTest, AnEffectAppliesToRealFootage) {
   const Rgba b = pixel_at(after, kWidth / 2, kHeight / 2);
   // Inversion is its own opposite, so the two should sit either side of mid.
   EXPECT_NEAR(a.r + b.r, 255, 12);
+}
+
+// -------------------------------------------------- timestamps on a coarse grid --
+//
+// A container's time base decides how finely a frame can be stamped, and
+// Matroska's is a whole millisecond. So a 60 fps capture — which is what comes
+// out of a screen recorder — is stamped 0, 17, 33, 50, 67, 83 ms, while
+// playback asks for 0, 16.667, 33.333, 50, 66.667, 83.333. Nothing here is
+// variable frame rate and nothing has gone wrong with the file; the two grids
+// simply do not line up.
+//
+// This is written with a file of its own rather than against the reference
+// footage, because the property being tested belongs to the *container* and an
+// mp4's finer time base hides it entirely.
+
+/// A flat frame whose brightness is `20 + index * 8`, far enough apart to
+/// survive 4:2:0 and be told apart after compositing.
+[[nodiscard]] std::vector<std::uint8_t> stepped_frame(int index, int width, int height) {
+  std::vector<std::uint8_t> rgba(static_cast<std::size_t>(width) * height * 4);
+  const auto value = static_cast<std::uint8_t>(20 + index * 8);
+  for (std::size_t i = 0; i < rgba.size(); i += 4) {
+    rgba[i] = value;
+    rgba[i + 1] = value;
+    rgba[i + 2] = value;
+    rgba[i + 3] = 255;
+  }
+  return rgba;
+}
+
+class CoarseTimestampTest : public FrameRendererTest {
+ protected:
+  static constexpr int kFrames = 24;
+  static constexpr double kFps = 60.0;
+  static constexpr int kSourceWidth = 160;
+  static constexpr int kSourceHeight = 120;
+
+  void SetUp() override {
+    FrameRendererTest::SetUp();
+    if (IsSkipped()) return;
+
+    // Matroska for its millisecond time base, and the process id because
+    // `ctest -j` runs the suites as separate processes.
+    path_ = std::filesystem::temp_directory_path() /
+            ("cutline_coarse_" + std::to_string(_getpid()) + ".mkv");
+
+    media::VideoEncodeSettings settings;
+    settings.width = kSourceWidth;
+    settings.height = kSourceHeight;
+    settings.fps = kFps;
+    // Software, because the hardware encoders are not on every machine and this
+    // is about timestamps rather than about any one encoder.
+    settings.preference = media::EncoderPreference::Software;
+
+    auto writer = media::MediaWriter::create(path_.string(), settings);
+    if (!writer.has_value()) GTEST_SKIP() << "no encoder available: " << writer.error();
+    for (int i = 0; i < kFrames; ++i) {
+      const auto frame = stepped_frame(i, kSourceWidth, kSourceHeight);
+      ASSERT_TRUE((*writer)->write_frame(frame).has_value());
+    }
+    ASSERT_TRUE((*writer)->finish().has_value());
+  }
+
+  void TearDown() override {
+    renderer_.reset();
+    std::error_code ignored;
+    std::filesystem::remove(path_, ignored);
+  }
+
+  [[nodiscard]] Project with_source() const {
+    Project p = canvas_project();
+
+    Media m;
+    m.id = "v";
+    m.path = path_.generic_string();
+    m.has_video = true;
+    m.duration = kFrames / kFps;
+    m.width = kSourceWidth;
+    m.height = kSourceHeight;
+
+    p.media = {m};
+    p.tracks = {video_track("v1", {clip("c", "v", 0.0, kFrames / kFps)})};
+    return p;
+  }
+
+  std::filesystem::path path_;
+};
+
+TEST_F(CoarseTimestampTest, EveryFrameOfTheGridIsADifferentPicture) {
+  const Project p = with_source();
+
+  // The last two are left off: the final frame of a stream has nothing after it
+  // to be distinguished from, and the clip's own end is a boundary.
+  constexpr int kAsked = kFrames - 2;
+  std::vector<int> shown;
+  shown.reserve(kAsked);
+  for (int i = 0; i < kAsked; ++i) {
+    const gpu::Image image = render(p, i / kFps);
+    ASSERT_FALSE(image.empty());
+    shown.push_back(pixel_at(image, kWidth / 2, kHeight / 2).r);
+  }
+
+  // Asking for each frame in turn must show each frame in turn. Against a
+  // tolerance of a tenth of a millisecond the frame stamped 33 did not answer a
+  // request for 33.333, so the renderer decoded past it to 50 — skipping that
+  // frame and then answering the *next* request with the 50 it had already
+  // shown. One request in three, which on a 4K60 capture measured as playback
+  // at 38 of its 60 frames with the decoder keeping up the whole time.
+  const auto distinct = static_cast<int>(
+      std::set<int>(shown.begin(), shown.end()).size());
+  EXPECT_GE(distinct, kAsked - 1)
+      << "asked for " << kAsked << " consecutive frames and got " << distinct
+      << " different pictures";
+
+  // And in the right order: a picture that goes backwards would keep the count
+  // up while showing the wrong frame.
+  for (std::size_t i = 1; i < shown.size(); ++i) {
+    EXPECT_LE(shown[i - 1], shown[i]) << "the picture went backwards at frame " << i;
+  }
 }
 
 }  // namespace

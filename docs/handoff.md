@@ -706,18 +706,18 @@ things about this codebase.
   from twice a second. What is left is a group of pictures occasionally running
   longer than the run has turns to pay for; the honest next step is measuring GOP
   length rather than guessing at the budget again.
-- **Forward playback shows about 38 of 60 frames on 4K60, and the renderer is
-  not the reason.** `play_project` plays the same file through the same
-  `FrameRenderer` at 57.4 fps and puts 54 distinct pictures a second on the same
-  display; the application renders every frame, paints at 59.7/s, and the
-  *picture* still changes only 37.9 times a second. Decode, compositing, the
-  playback clock, vsync, the display, and the compositor's single display target
-  have each been measured and cleared — the last by building the two-target
-  rotation and finding it changed nothing. What has *not* been instrumented is
-  `TextureCache` and `Monitor`'s own drawing, and that is where to start.
-  Lowering the preview quality does not help and stalls for a second when
-  changed. Full numbers, and four fixes that measured out to nothing, under
-  *Measured: what playback actually costs* in §9.
+- ~~**Forward playback runs at about 40 fps on 4K60**~~ — **fixed.** It was
+  never throughput: Matroska stamps a 60 fps capture on a millisecond grid, and
+  the renderer's frame tolerance was a tenth of a millisecond, so one request in
+  three was answered with the frame it had just shown. 4K60 now plays at 56–57 of
+  60 on screen. Written up under *Measured: what playback actually costs* in §9,
+  along with the four plausible performance fixes that measured out to nothing
+  before the real cause was found.
+- **Changing the preview quality still stalls for over a second.**
+  `ProjectPreview::resize` builds a whole new `FrameRenderer` and throws away
+  every open decoder with it, so the next frame seeks from a keyframe — worst gap
+  1,435 ms at 1/2. Now that playback runs at rate, what the setting is *for* is
+  worth deciding before the stall is worth fixing.
 - **Nothing in the test suite ever resizes a real window.** The pixel tests draw
   on a fixed CPU raster surface and `--check` lays out at one size, so the whole
   `WM_SIZE` → recreate-the-swapchain path had never been exercised until somebody
@@ -1212,11 +1212,11 @@ fixture is one 4K60 clip on V1 with its audio on A1.
 | what | displayed |
 |---|---|
 | Debug build, 4K60 source | **13.5 fps**, 75 ms between pictures |
-| Release build, 4K60 source | **38.3 fps**, 25 ms |
+| Release build, 4K60 source | **38.3 fps**, 25 ms — since fixed, see below |
 | Release, same thing at 1/2 preview quality | 38.7 fps — *no change* |
 | Release, 1080p60 source | **58.2 fps**, 15.6 ms |
 
-Two conclusions, and one dead end that is worth not walking twice.
+Two conclusions, and four dead ends worth not walking twice.
 
 **The Debug build is a third of the speed, and that is what was being looked
 at.** The interface paint alone is 14–54 ms per frame under Debug against
@@ -1249,44 +1249,76 @@ not: a third of the paints carry the frame that was already there. Whatever this
 is, it is downstream of the render and upstream of the glass, and it is worse the
 larger the frame.
 
-The obvious suspect was the **single display target**: the compositor renders
-into one texture and `texture_at` hands it over by pointer, the monitor holds
-that pointer, Skia samples it during a paint that is presented asynchronously,
-and the next frame's `compose` writes over the same texture — nothing sequences
-the compositor's queue against Skia's, since the `wait_for_idle` ending `compose`
-waits on the compositor's queue only. Two presents could therefore carry the same
-picture. **It was built and it is not the answer.** Rotating two display targets
-with their own render target views, handing out the one the previous paint did
-not take, measured **38.4** against 37.9. Reverted.
+**It was the frame the renderer chose, and the cause is a millisecond.** A
+container's time base decides how finely a frame can be stamped, and Matroska's
+is **1/1000** — so a 60 fps screen capture is stamped 0, 17, 33, 50, 67, 83 ms
+while playback asks for 0, 16.667, 33.333, 50, 66.667, 83.333. Nothing is
+variable frame rate and nothing is wrong with the file; the two grids simply do
+not line up, and the mismatch is under a millisecond.
 
-So the cause is still open. What is left to look at, in the order worth trying:
-the `TextureCache` in `src/ui/src/skia_texture.cpp`, which borrows a wrapper per
-resource and keys it on the resource pointer — with the target rotating or not,
-the wrapper is long-lived and Skia may be holding a snapshot of it inside a
-recorded frame; and `Monitor`'s own drawing, which is the one part of the path
-that has never been instrumented.
+`frame_at` decoded forward until `position >= time - kFrameEpsilon`, and
+`kFrameEpsilon` was 1e-4 — a tenth of a millisecond. So the frame stamped 33 did
+not answer a request for 33.333: the renderer decoded *past* it to 50, skipping
+that frame, and then answered the next request (50.0) with the 50 it had already
+shown. One request in three, giving four distinct pictures for every six asked
+for — **exactly the 40 distinct frames a second** that was measured, and exactly
+the 38 that reached the screen.
 
-**Preview quality buys nothing at all, and costs a stall.** Full 37.1 fps, 1/2
-32.5, 1/4 33.1 — the canvas the compositor renders into makes no difference to
-any of this, which is consistent with the loss being in handing the picture over
-rather than in making it. Worse, *changing* the setting stalls for over a second
-(worst gap 1,435 ms at 1/2, 1,140 ms at 1/4), because `ProjectPreview::resize`
-builds a whole new `FrameRenderer` and throws away every open decoder with it, so
-the next frame seeks from a keyframe. Making the setting reduce the decode is
-**not** the fix; the setting is currently not worth having.
+The tolerance is now **half a source frame**, which is what "the nearest frame"
+means and is the largest slack that cannot reach into the neighbouring frame. It
+shows a picture at most half a frame early, a smaller error than the backwards
+tolerance a few lines above it already accepts. On screen:
 
-**Four things measured out to nothing.** Each was built and run, and each is
-here so nobody spends the afternoon on it again. *Two display targets*: above.
-*Pacing the repaint*: the loop
-turns 189 times a second and repainted the whole window on every one of them, so
-two of every three paints could never be shown. Pacing the invalidation to the
-display's refresh cut paints to 58/s and paint work from 435 to 138 ms per
-second — and the picture stayed at 37.9 while the interface's own update rate
-went slightly *down*, 59.7 to 57.2. *Drawing at frame time*: calling
-`UpdateWindow` from `advance_playback` the moment a frame falls due, which is
-what `play_project` does, changed nothing either. *Turning vsync off*:
-`Present(0,0)` instead of `Present(1,0)` gave 37.2 — so it is not the blank
-either. All three were reverted.
+| | before | after |
+|---|---|---|
+| 4K60, 60-second capture | 37.9/s | **56.9/s** |
+| 4K60, the 598-second capture | 37.9/s | **56.0/s** |
+| 1080p60 | 57.4/s | 58.0/s |
+
+`CoarseTimestampTest.EveryFrameOfTheGridIsADifferentPicture` pins it. It writes
+its own Matroska file rather than using the reference footage, because the
+property belongs to the *container* and an mp4's finer time base hides it
+completely — with the tolerance put back to 1e-4 the test reports 15 distinct
+pictures out of 22 asked for.
+
+Two things follow from this that are worth carrying forward. **An mp4 would never
+have shown it**, which is why every earlier measurement pointed at the wrong
+half of the stack — and why the reference clip, `Boiler.mp4`, cannot be the only
+footage anything is tested against. And **it was never a throughput problem**:
+every part of the renderer was keeping up the whole time, which is why four
+plausible performance fixes in a row measured out to nothing.
+
+**Preview quality still buys nothing, and costs a stall.** Full 37.1 fps, 1/2
+32.5, 1/4 33.1 — measured before the fix, and the canvas the compositor renders
+into made no difference to any of it. Worse, *changing* the setting stalls for
+over a second (worst gap 1,435 ms at 1/2, 1,140 ms at 1/4), because
+`ProjectPreview::resize` builds a whole new `FrameRenderer` and throws away every
+open decoder with it, so the next frame seeks from a keyframe. The stall is real
+and unfixed. Whether the setting is worth anything at all now that playback runs
+at rate is a question for whoever next needs it.
+
+**Four things measured out to nothing.** Each was built and run, and each is here
+so nobody spends the afternoon on it again — all four were reverted, and all four
+were looking for a throughput problem that did not exist. *Two display targets*:
+the compositor renders into one texture and hands it over by pointer while Skia
+samples it during a paint presented asynchronously, so the next `compose` can
+write over a picture not yet shown — nothing sequences the two queues. Rotating
+two targets measured 38.4 against 37.9. *Pacing the repaint*: the loop turns 189
+times a second and repainted the whole window every time, so two of every three
+paints could never be shown; pacing the invalidation to the display's refresh cut
+paints to 58/s and paint work from 435 to 138 ms per second, and the picture
+stayed at 37.9 while the interface's own rate went slightly *down*. *Drawing at
+frame time*: calling `UpdateWindow` from `advance_playback` the moment a frame
+falls due, which is what `play_project` does, changed nothing. *Turning vsync
+off*: `Present(0,0)` instead of `Present(1,0)` gave 37.2.
+
+Two measurement traps caught on the way, both of which produced confident wrong
+answers first. Sampling **one** region cannot tell "the window is not reaching
+the screen" from "the picture inside it is stale" — sample the monitor and the
+timecode field together. And a control has to match the thing it controls: the
+first `play_project` control was maximised at 1.0x while the program monitor
+scales 4K to 0.44x, so it did not rule out the downscale erasing the difference.
+Re-running the control at 0.33x, which still read 55.4/s, is what did.
 
 One caveat on all of the above: it was measured on a 3840×2160 *virtual* display
 adapter, not on the machine's real 3440×1440 120 Hz panel. The Debug-versus-
@@ -1298,7 +1330,7 @@ that, but present cost specifically may not be representative.
 Everything is committed and green. Nothing is half-finished, no branch is open,
 and there is no work in progress to reconstruct.
 
-- 3012 tests pass under the `ui` preset, 2589 under `release`. Set
+- 3013 tests pass under the `ui` preset, 2589 under `release`. Set
   `CUTLINE_TEST_MEDIA_DIR` or about fifty decode tests skip while the run still
   says everything passed.
 - **The suite is stable under `-j`, and this has now been fixed twice.** The

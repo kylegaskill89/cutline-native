@@ -1,4 +1,4 @@
-#include "cutline/engine/frame_renderer.hpp"
+﻿#include "cutline/engine/frame_renderer.hpp"
 
 #include "cutline/core/query.hpp"
 #include "cutline/media/av_headers.hpp"
@@ -40,7 +40,7 @@ using media::VideoDecoder;
 ///
 /// A seek costs roughly one GOP of decoding plus the seek itself; decoding
 /// forward costs about 1.6 ms a frame. Two seconds of 60fps footage is ~120
-/// frames, about 190 ms, against ~28 ms for a seek — so the break-even is well
+/// frames, about 190 ms, against ~28 ms for a seek â€” so the break-even is well
 /// under a second. Half a second is chosen to stay clearly on the safe side of
 /// it while still letting ordinary playback gaps (a dropped frame, a paused
 /// scrub) run forwards.
@@ -57,8 +57,8 @@ constexpr double kAssumedFrameGap = 1.0 / 30.0;
 ///
 /// The number that matters is not the frame interval but how much has to be
 /// decoded before the run in hand runs out. Reaching the frames wanted means
-/// decoding from the keyframe before them — about 110 frames on this footage,
-/// some 230 ms — and there are only as many turns to do it in as the run has
+/// decoding from the keyframe before them â€” about 110 frames on this footage,
+/// some 230 ms â€” and there are only as many turns to do it in as the run has
 /// frames left. Twenty-two frames against 230 ms is a shade over ten each.
 ///
 /// Eight was measured and was not enough: the prefetch finished late, the
@@ -70,7 +70,7 @@ constexpr auto kPrefetchBudget = std::chrono::milliseconds(12);
 /// How much memory to spend keeping decoded frames behind the playhead.
 ///
 /// This is the reverse-playback budget. Playing backwards cannot decode
-/// backwards — a compressed stream is only enterable at a keyframe — so every
+/// backwards â€” a compressed stream is only enterable at a keyframe â€” so every
 /// step back costs a seek and a whole group of pictures. Keeping the frames
 /// that decode produced turns one seek per *frame* into one seek per *run*, and
 /// the length of the run is what decides how much of that cost is amortised.
@@ -90,7 +90,7 @@ constexpr auto kPrefetchBudget = std::chrono::milliseconds(12);
 ///
 /// This is the budget for **one** run, and two are held: the one being played
 /// out and the one being decoded ahead of it. So the real ceiling is twice
-/// this — about 768 MB on 4K footage, and proportionally less on anything
+/// this â€” about 768 MB on 4K footage, and proportionally less on anything
 /// smaller, which is a great deal for a cache and is what buys reverse playback
 /// that does not stop twice a second.
 ///
@@ -112,7 +112,7 @@ constexpr int kMaxKeptFrames = 64;
 ///
 /// `extra_hw_frames` is a request, not a guarantee. D3D11 video decoding hands
 /// out slices of one texture array, and the driver stops honouring the number
-/// well before the API's limit — asking for 68 and holding 65 still produced
+/// well before the API's limit â€” asking for 68 and holding 65 still produced
 ///
 ///     [AVHWFramesContext] Static surface pool size exceeded.
 ///
@@ -129,7 +129,7 @@ constexpr int kMaxPooledFrames = 40;
 /// How many frames of this media the budget affords.
 ///
 /// Answered from the media rather than from a decoded frame, because the
-/// decoder has to be told how many surfaces to allocate *before* it opens —
+/// decoder has to be told how many surfaces to allocate *before* it opens â€”
 /// there is no asking for one later. A media that does not know its own size is
 /// assumed to be the common one; getting it wrong costs memory or smoothness,
 /// not correctness.
@@ -143,7 +143,7 @@ constexpr int kMaxPooledFrames = 40;
 
   const auto afford = static_cast<int>(kRememberedBytes / per_frame);
   // One run per decoder, and each decoder gets its own pool, so the whole
-  // ceiling is available to a run — less the few surfaces the decoder itself
+  // ceiling is available to a run â€” less the few surfaces the decoder itself
   // has in flight beside the ones lent out.
   const int by_pool = kMaxPooledFrames - 6;
   return std::clamp(std::min(afford, by_pool), kMinKeptFrames, kMaxKeptFrames);
@@ -206,14 +206,14 @@ constexpr int kMaxPooledFrames = 40;
   if (frame == nullptr) return false;
 
   // A hardware frame carries a handle rather than pixels. Everything the
-  // compositor reads off the frame besides the pixels — its size, its colour
-  // tagging, its range — is the same either way, so only this one branch and
+  // compositor reads off the frame besides the pixels â€” its size, its colour
+  // tagging, its range â€” is the same either way, so only this one branch and
   // the planes at the end differ.
   bool decoded_on_the_card = false;
   switch (frame->format) {
     // Both card formats, because which one a machine offers is the driver's
     // business. The decoder answers `hardware_texture` with a Direct3D 12
-    // resource either way — that is the whole reason the crossing lives down
+    // resource either way â€” that is the whole reason the crossing lives down
     // there rather than up here.
     case AV_PIX_FMT_D3D12:
     case AV_PIX_FMT_D3D11:
@@ -296,12 +296,12 @@ struct Source {
   ///
   /// The prefetch used to seek the *serving* decoder, so the moment a request
   /// missed the run in hand the decoder was somewhere else entirely and the
-  /// ordinary path had to seek all the way back — the abandoned prefetch and
+  /// ordinary path had to seek all the way back â€” the abandoned prefetch and
   /// the recovery both paid for the same group of pictures.
   ///
   /// And the pool ceiling is per decoder, not per source. Holding two runs in
   /// one decoder's pool ran into a limit the driver does not document at around
-  /// sixty-five surfaces, which forced runs down to twenty-two frames — barely
+  /// sixty-five surfaces, which forced runs down to twenty-two frames â€” barely
   /// enough turns to spread a group of pictures across, and the reason a stall
   /// survived. Two pools of thirty-two are nowhere near it.
   std::unique_ptr<VideoDecoder> ahead;
@@ -344,14 +344,14 @@ struct Source {
   ///
   /// The frames were all decoded anyway. Reaching frame N from a keyframe K
   /// means decoding every frame between them, and the next thing reverse asks
-  /// for is N-1 — one this decoder held in its hands a moment ago and threw
+  /// for is N-1 â€” one this decoder held in its hands a moment ago and threw
   /// away. Keeping a run of them turns one seek per frame into one seek per
   /// run.
   ///
   /// References rather than copies, so this costs a refcount and not a picture.
   /// A **contiguous run** and not a set: a hole in it would be indistinguishable
   /// from the end of it, and "the frame covering time t" is the last one at or
-  /// before t — which is the wrong frame entirely if the right one was skipped.
+  /// before t â€” which is the wrong frame entirely if the right one was skipped.
   /// Cleared on a seek for that reason.
   struct Recent {
     double at = 0.0;
@@ -364,14 +364,14 @@ struct Source {
   ///
   /// The cache turned twenty-nine frames of a thirty-frame run into a refcount
   /// bump and left the whole cost of the thirtieth exactly where it was. Driven
-  /// on screen that reads as a stall of 264 ms arriving every 520 — the run
+  /// on screen that reads as a stall of 264 ms arriving every 520 â€” the run
   /// being used up, over and over, half the wall clock spent stopped. The
   /// average frame time said 8 ms and was no help at all: it cannot tell thirty
   /// even frames from twenty-nine and a stop.
   ///
   /// So the work is spread instead of shrunk. Serving a frame from the run
   /// costs about a millisecond of a thirty-millisecond budget, and there are
-  /// thirty of them before the next seek falls due — which is room enough to
+  /// thirty of them before the next seek falls due â€” which is room enough to
   /// decode the next run a few frames at a time and have it in hand before it
   /// is wanted.
   std::deque<Recent> pending;
@@ -396,7 +396,7 @@ struct Source {
   /// Keeps the two runs together inside one run's worth of surfaces.
   ///
   /// They are drawn from the same pool, which was sized once at `keep`, so
-  /// holding a full run *and* a full prefetch would empty it — and an empty
+  /// holding a full run *and* a full prefetch would empty it â€” and an empty
   /// pool is decoding stopping, not slowing. What makes room is that reverse
   /// consumes the run from its newest end: everything above the playhead has
   /// been shown and been left behind, and dropping it hands the surfaces
@@ -444,8 +444,8 @@ struct Source {
   ///
   /// Bounded above by where it *meets* the run in hand, not by its own newest
   /// frame. `covering` refuses anything past the last frame it holds, which is
-  /// right for a run still being decoded — beyond it the answer is a frame
-  /// nobody has produced — and wrong for this one, which was decoded to join a
+  /// right for a run still being decoded â€” beyond it the answer is a frame
+  /// nobody has produced â€” and wrong for this one, which was decoded to join a
   /// run that starts at `pending_until`.
   ///
   /// The difference is a rounding width and it cost the whole feature. A
@@ -471,8 +471,8 @@ struct FrameRenderer::Impl {
   /// so they live as long as the timeline keeps asking for them.
   std::map<std::string, Source> sources;
 
-  /// Whether to read from proxies. Off unless somebody asks, so that export —
-  /// which never asks — cannot write the small copy by forgetting something.
+  /// Whether to read from proxies. Off unless somebody asks, so that export â€”
+  /// which never asks â€” cannot write the small copy by forgetting something.
   bool use_proxies = false;
 
   std::vector<std::string> missing;
@@ -577,7 +577,7 @@ core::Size FrameRenderer::Impl::measure(const core::Media&) { return {}; }
 ///     performed an undefined operation
 ///
 /// The stock `ffmpeg.exe` fails identically on the same file, so it is not
-/// something this is doing wrong — and the removal takes the *compositor's*
+/// something this is doing wrong â€” and the removal takes the *compositor's*
 /// device, since that is the one the decoder was handed. D3D11 decodes the same
 /// file at 558 fps and the frames cross with one copy inside the card.
 ///
@@ -630,7 +630,7 @@ void FrameRenderer::Impl::decode_ahead(Source& source, bool budgeted) {
     auto opened = open_decoder(source.path, static_cast<int>(source.keep));
     if (!opened.has_value()) {
       // Not fatal. Without a second decoder the run in hand still serves every
-      // frame it holds, and the ordinary path still fetches the rest — it is
+      // frame it holds, and the ordinary path still fetches the rest â€” it is
       // the stall coming back, not the picture.
       source.keep_ahead = false;
       return;
@@ -718,7 +718,7 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // by media id, which is right until the file behind that id changes.
   //
   // Dropped rather than reported, because the answer is simply to open the
-  // right one — and left to the caller it would be a rule somebody has to
+  // right one â€” and left to the caller it would be a rule somebody has to
   // remember, which is the same rule that would be forgotten.
   if (found != sources.end() && found->second.path != wanted) {
     sources.erase(found);
@@ -746,7 +746,7 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
     //     performed an undefined operation
     //
     // The stock `ffmpeg.exe` fails identically on the same file, so it is not
-    // something this is doing wrong — and the removal takes the *compositor's*
+    // something this is doing wrong â€” and the removal takes the *compositor's*
     // device, since that is the one the decoder was handed. D3D11 decodes the
     // same file at 558 fps and the frames cross with one copy inside the card.
     //
@@ -766,7 +766,7 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   if (!source.usable || !source.decoder) return nullptr;
 
   // Whichever way this leaves, the answer to "which decoder made that" is the
-  // same one — and it has to be set on *every* path out, not just the last.
+  // same one â€” and it has to be set on *every* path out, not just the last.
   // Missing it on the short-circuit below meant a card frame arrived with no
   // decoder to ask for its texture, so the layer was dropped and the frame came
   // out black: about every other frame during playback, which is exactly what
@@ -789,7 +789,7 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   const bool reversing = previous >= 0.0 && time < previous - kFrameEpsilon;
 
   // The playhead has left the run in hand. If a prefetch was on its way to
-  // exactly this frame, finish it rather than throwing it away — the work is
+  // exactly this frame, finish it rather than throwing it away â€” the work is
   // already part done, and abandoning it means seeking back and decoding the
   // very same group of pictures a second time. That was the whole of why an
   // early version measured *worse* than no prefetch: 556 frames decoded ahead,
@@ -833,7 +833,7 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   source.forget_pending();
 
   // Decoding stops at the first frame whose timestamp reaches the request, so
-  // the decoder usually sits a little *ahead* of where it was asked for — up to
+  // the decoder usually sits a little *ahead* of where it was asked for â€” up to
   // one frame. A later request that is closer than that overshoot then looks
   // like a move backwards, and seeking costs a whole GOP.
   //
@@ -873,8 +873,24 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // Decode forwards until the frame covering `time` is in hand. A frame is
   // shown from its own timestamp until the next one, so the right frame is the
   // last whose timestamp does not exceed the request.
+  //
+  // **Half a frame of slack, not floating-point noise.** A source's timestamps
+  // are only as fine as its container's time base, and Matroska's is a whole
+  // millisecond â€” so a 60 fps capture is stamped 0, 17, 33, 50, 67, 83 ms while
+  // playback asks for 0, 16.667, 33.333, 50, 66.667, 83.333. Against a tolerance
+  // of 0.1 ms the frame stamped 33 does not answer a request for 33.333, so this
+  // decoded past it to 50 â€” skipping that frame, and then answering the *next*
+  // request with the 50 it had already shown. One request in three, which is why
+  // a 4K60 capture played at 38 of its 60 frames with every part of the renderer
+  // keeping up: the frames were being asked for wrongly, not arriving late.
+  //
+  // Half a frame is what "the nearest frame" means, and it is the largest slack
+  // that cannot reach into the neighbouring frame. It shows a picture at most
+  // half a frame early, which is the same trade the backwards tolerance above
+  // already makes and is a good deal smaller.
+  const double slack = std::max(kFrameEpsilon, frame_gap * 0.5);
   while (!source.exhausted) {
-    if (source.position >= time - kFrameEpsilon && source.position >= 0.0) break;
+    if (source.position >= time - slack && source.position >= 0.0) break;
 
     const auto got = source.decoder->next_frame();
     if (!got) {
@@ -1006,7 +1022,7 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
 #if CUTLINE_HAVE_TEXT
         if (source.media == nullptr) continue;
         const text::Raster* raster = d.title_for(*source.media);
-        // Nothing drawable — no text, or no font at all. Skipped rather than
+        // Nothing drawable â€” no text, or no font at all. Skipped rather than
         // drawn as a blank rectangle, so a title that failed is visibly absent
         // instead of quietly wrong.
         if (raster == nullptr || raster->empty()) continue;

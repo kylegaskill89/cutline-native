@@ -4104,7 +4104,7 @@ void refresh_preview(App& app) {
   // in memory the window can draw from, so it is handed over as a texture;
   // without one the two have nothing in common and it has to go down to the
   // CPU and back up again.
-  if (app.shares_device()) {
+  if (app.shares_device() && std::getenv("CUTLINE_CPU_PREVIEW") == nullptr) {
     const auto frame = app.preview->texture_at(project, app.session.playhead());
     if (!frame.has_value()) {
       app.preview_failed = true;
