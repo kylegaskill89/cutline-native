@@ -357,6 +357,12 @@ class WidgetHost {
   [[nodiscard]] Cursor cursor() const;
   [[nodiscard]] Widget* focused() const noexcept { return focused_; }
   [[nodiscard]] Widget* captured() const noexcept { return captured_; }
+  /// The widget the button went down on, if it is still down.
+  ///
+  /// Here beside the other three because it is the same kind of pointer and
+  /// carries the same hazard: the host holds it across frames, so anything
+  /// that takes a widget out of the tree has to say so — see `forget`.
+  [[nodiscard]] Widget* pressed() const noexcept { return pressed_; }
 
   /// Moves the keyboard. Null clears it. A widget that is not focusable, not
   /// visible or not enabled is refused.

@@ -238,6 +238,19 @@ void DockView::reclaim(Widget& widget) {
       // Taken rather than destroyed: a panel keeps its scroll position, its
       // selection and anything else it was holding across a rearrangement.
       if (std::unique_ptr<Widget> content = group->take(group->content_); content != nullptr) {
+        // Told to the host *before* it goes into the spare pile, and this is
+        // the whole reason the line exists.
+        //
+        // `clear_children` below forgets what it destroys, but it can only
+        // recognise what still descends from the tree it is clearing — and
+        // taking the content out has just set its parent to nothing. So a
+        // widget inside a reclaimed panel that the host was pointing at as
+        // hovered, pressed, focused or holding capture stayed pointed at while
+        // sitting out of the tree, and was freed without a word the moment its
+        // panel was replaced or the window closed. The next press then wrote
+        // through it. That is an access violation in `set_pressed`, arriving
+        // long after the rearrangement that caused it.
+        if (WidgetHost* owner = host(); owner != nullptr) owner->forget(content.get());
         spare_[group->content_id_] = std::move(content);
       }
       group->content_ = nullptr;

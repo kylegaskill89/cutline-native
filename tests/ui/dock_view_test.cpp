@@ -47,6 +47,13 @@ class Marker : public Widget {
 
   int state = 0;
 
+  /// Whether a press on this content is handled, which is what makes the host
+  /// hold on to it as pressed and captured. Off by default so the tests about
+  /// dragging tabs are unaffected by content that would swallow a press.
+  bool takes_presses = false;
+
+  bool on_mouse_down(const MouseEvent&) override { return takes_presses; }
+
  private:
   std::string name_;
 };
@@ -680,6 +687,81 @@ TEST(TabStrip, APointFindsTheTabUnderIt) {
   const Rect second = strip->tab_rect(1);
   EXPECT_EQ(strip->tab_at(second.x + 2.0, 15.0), std::optional<std::size_t>{1});
   EXPECT_FALSE(strip->tab_at(390.0, 15.0).has_value()) << "the empty end of the strip";
+}
+
+
+TEST(DockView, ReclaimingAPanelTellsTheHostToLetGoOfWhatIsInIt) {
+  // The fault this was written for, and it arrives long after its cause: an
+  // access violation in `WidgetHost::set_pressed` on the *next* press, because
+  // the host was still pointing at a widget that had been freed with the panel
+  // holding it.
+  //
+  // Rearranging takes a panel's content out of the tree and keeps it aside so
+  // it survives with its scroll position and selection. `clear_children` then
+  // forgets what it destroys — but it can only recognise what still descends
+  // from the tree it is clearing, and the content's parent has just been set to
+  // nothing. So the pointer stayed, out of the tree and unreachable, until the
+  // panel was replaced or the window closed.
+  Fixture fixture;
+
+  Marker* inside = fixture.content_for("project");
+  ASSERT_NE(inside, nullptr);
+  inside->takes_presses = true;
+  inside->set_focusable(true);
+
+  // Pressed the way a hand would press it, so the host holds it as pressed,
+  // captured, focused and hovered all at once.
+  const Rect area = inside->bounds();
+  fixture.host->mouse_move(press(area.x + 5.0, area.y + 5.0));
+  ASSERT_TRUE(fixture.host->mouse_down(press(area.x + 5.0, area.y + 5.0)));
+  ASSERT_EQ(fixture.host->pressed(), inside);
+
+  // A rearrangement that leaves this panel out of the visible tree: its group
+  // shows the other tab, so the content goes into the spare pile.
+  DockNode node = sample_node();
+  DockNode* group = group_of(node, "project");
+  ASSERT_NE(group, nullptr);
+  group->active = 1;  // "effects" is showing; "project" is reclaimed
+  fixture.view->set_node(node);
+  fixture.relayout();
+
+  EXPECT_EQ(fixture.host->pressed(), nullptr) << "the next press would write through this";
+  EXPECT_EQ(fixture.host->captured(), nullptr);
+  EXPECT_EQ(fixture.host->focused(), nullptr);
+  // Hover is the one that may legitimately be something: the pointer has not
+  // moved, and whatever took this panel's place is now under it. What it must
+  // not be is the panel that was put aside.
+  EXPECT_NE(fixture.host->hovered(), inside);
+}
+
+TEST(DockView, APanelPutAsideStillComesBackWithWhatItHeld) {
+  // The other half of the same change: forgetting the host's pointers must not
+  // cost the panel its state, which is the entire reason content is reclaimed
+  // rather than rebuilt.
+  Fixture fixture;
+
+  Marker* inside = fixture.content_for("project");
+  ASSERT_NE(inside, nullptr);
+  inside->state = 42;
+  inside->takes_presses = true;
+  const Rect area = inside->bounds();
+  ASSERT_TRUE(fixture.host->mouse_down(press(area.x + 5.0, area.y + 5.0)));
+
+  DockNode node = sample_node();
+  DockNode* group = group_of(node, "project");
+  ASSERT_NE(group, nullptr);
+  group->active = 1;
+  fixture.view->set_node(node);
+  fixture.relayout();
+
+  // And back again.
+  fixture.view->set_node(sample_node());
+  fixture.relayout();
+
+  Marker* returned = fixture.content_for("project");
+  ASSERT_NE(returned, nullptr);
+  EXPECT_EQ(returned->state, 42) << "it was rebuilt rather than put back";
+  EXPECT_EQ(fixture.made["project"], 1) << "the factory ran a second time";
 }
 
 }  // namespace
