@@ -366,6 +366,30 @@ deciding it is probably fine.
   session of its own before anybody leans on the software renderer. Timing-
   sensitive faults that go away when you look at them are still real.
 
+#### Driven: a lane into a bus, and a mixer that did not notice
+
+Submixes, sends and ducking were driven on a two-track sequence with a real
+capture on it. The routing itself was right first time — Interview set to
+Submix 1 from the strip's output dropdown, and under playback the bus meter
+moved with the lane feeding it, which is the whole feature in one picture.
+
+What driving found was next to it. **The mixer never rebuilt.** A submix added
+from the timeline appeared as a track head and nowhere else, because the strips
+were built once when the dock was and nothing had ever asked them to be built
+again. That was not new and not about submixes: adding an ordinary audio track,
+or putting the first effect on a stack, had always left the panel describing the
+project as it stood when the panel was made. The strips are filled by
+`fill_audio_panel` now and rebuilt on a deferred `mixer_stale` flag — deferred
+for the reason the inspector's is, and not theoretically: the thing that asks is
+usually a control inside a strip, and rebuilding on the spot would free the
+dropdown whose callback was still running.
+
+Two things were also verified by reading the saved file rather than the screen,
+which is worth doing when a feature's whole output is numbers: the send wrote
+`level: 0.25` against the right bus, and the duck wrote three keyframes at the
+clip's own gain of 0.6 falling to 0.076 — which is 0.6 at -18 dB, the amount the
+box was showing.
+
 #### Driven: forty in the pool, and the dialog that made it hard to get there
 
 The icon view had only ever been driven with two sources. Forty is where the
@@ -1053,10 +1077,16 @@ a backwards move smaller than one frame took compositing from 23 ms to 2 ms.
 
 ## 9. Where the work is right now
 
-**`docs/premiere-gaps.md` §5, application settings, is closed.** Every row in it
-is either built or declined with a written reason; that file's §5.6 is the
-reasons and §5.7 is what closing it turned up. **Pick the next section** — see
-*The next thing* below.
+**`docs/premiere-gaps.md` §6, audio, is closed** — and with it sections 1 to 6.
+The mixer is Premiere's arrangement with Premiere's controls, and the routing
+under it is Premiere's too: submixes, sends, roles, presets and ducking.
+**Pick the next section** — see *The next thing* below.
+
+The rest of this section is about **§5, application settings**, which closed
+before it. It is kept because it is the part of the application whose rules are
+easiest to get wrong from the outside: every row in §5 is either built or
+declined with a written reason, that file's §5.6 is the reasons, and §5.7 is
+what closing it turned up.
 
 ### What the section is
 
@@ -1147,43 +1177,54 @@ Twenty minutes, and every step has a reason:
 
 ### The next thing, if you want a recommendation
 
-§5 is closed, so this is a free choice between the sections still to walk.
+Sections 1 to 6 are closed, so this is a free choice between the sections still
+to walk.
 
-Of them, **sequences** is the one that keeps coming up:
-section 4 could not close "new sequence from a clip" without it, and it is the
-largest piece of unbuilt model in the application. **Keyboard customisation** is
-the other substantial one, and it was pulled out of §5 for being larger than the
-rest of that section put together.
+Of them, **sequences** is the one that keeps coming up: section 4 could not
+close "new sequence from a clip" without it, and it is the largest piece of
+unbuilt model in the application. **Keyboard customisation** is the other
+substantial one, and it was pulled out of §5 for being larger than the rest of
+that section put together.
 
 ### State of the tree
 
 Everything is committed and green. Nothing is half-finished, no branch is open,
 and there is no work in progress to reconstruct.
 
-- 2891 tests pass under the `ui` preset, 2496 under `release`. Set
+- 3004 tests pass under the `ui` preset, 2584 under `release`. Set
   `CUTLINE_TEST_MEDIA_DIR` or about fifty decode tests skip while the run still
   says everything passed.
-- `--check` reports 2615 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
+- **The suite is stable under `-j` again.** It was not: the mixer and exporter
+  fixtures each wrote a fixed name in the temp directory, so parallel test
+  *processes* truncated each other's tone file and clobbered each other's
+  output. It showed up as five or six unrelated audio failures that all passed
+  when run one at a time. Both put the process id in the name now. If you add a
+  fixture that writes a file, do the same.
+- `--check` reports 2747 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
   all four themes — run it with something *in* the media cache as well as with
   it empty, since the Delete button only exists when there is something to
   delete.
-- **Where the work is:** sections 1 to 5 of the gaps document are closed, and so
-  is §6.1 — the mixer is Premiere's arrangement with Premiere's controls, five
-  automation modes included. §6.2 is audited and all but two of its rows are
-  built: track and master effect stacks, a delay, a reverb, channel mapping,
-  and loudness measurement and normalisation.
-- **§6.2's last two rows are roles and submix/send routing**, and they are last
-  together on purpose: Premiere's roles largely exist to drive submixes, so
-  roles alone would be a label with nothing behind them. Everything they need
-  is in place — `run_chain_over` works at any level, the lane blocks are the
-  buses and are summed in one place, and `Track` wants only a kind and an
-  output.
+- **Where the work is:** sections 1 to 6 of the gaps document are closed. §6.2
+  finished with submixes, sends, Essential Sound roles, role presets and
+  ducking, which went in as one piece because they are one piece: roles largely
+  exist to drive submixes.
+- **Three things about the audio path are worth knowing before you touch it.**
+  A submix is a flag on an audio track, not a third `TrackKind` — it has a
+  fader, a panner, a stack, a meter and a strip because it *is* an audio track,
+  and the only thing it lacks is clips. The mixer runs its lanes in the order
+  `core::bus_routes` gives rather than in lane order, and running a bus before
+  what feeds it does not fail, it plays a buffer late. And the track fader is
+  applied to the lane now, after the lane's stack, rather than folded into
+  every clip by `plan_audio` — which is where Premiere has it and the only
+  place a pre-fader send can be tapped from.
 - **Not driven yet:** the Fit Clip dialogue (it needs a project carrying four
   marks, so it is absent from the `--check` scene too), and the application on
   WARP for more than a few minutes. Everything in section 6 *has* been driven:
   meters moving under playback, a fader read at -18.8 dB, a Write pass that put
-  102 keyframes in the saved file, and a compressor added to a track from the
-  strip's fx button.
+  102 keyframes in the saved file, a compressor added to a track from the
+  strip's fx button, and — for §6.2's last rows — a lane routed into a submix
+  with the bus meter following it, a send added at -12 dB, and a duck that put
+  three keyframes on the music clip.
 - **Neither effects box is in the `--check` scene.** Fit Clip and the strip's
   fx popup are both built from a project state the check does not set up, so
   their layout is covered by driving alone.

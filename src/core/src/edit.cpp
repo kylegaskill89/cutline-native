@@ -41,10 +41,20 @@ void sort_all_tracks(Project& p) {
 }
 
 /// Indices into `p.tracks` of every track of the given kind, in storage order.
+/// The tracks of a kind that can hold clips, in project order.
+///
+/// A submix is skipped. It is an audio track by every other measure — fader,
+/// panner, stack, meter, strip — and it is fed by other tracks rather than by
+/// anything placed on it. Nothing here should ever choose one: this is the
+/// funnel every placement and every relocation goes through, so refusing a bus
+/// once here is what stops a clip being dropped onto one and then heard from a
+/// lane that is supposed to have no source of its own.
 [[nodiscard]] std::vector<std::size_t> track_indices_of_kind(const Project& p, TrackKind kind) {
   std::vector<std::size_t> out;
   for (std::size_t i = 0; i < p.tracks.size(); ++i) {
-    if (p.tracks[i].kind == kind) out.push_back(i);
+    if (p.tracks[i].kind != kind) continue;
+    if (p.tracks[i].submix) continue;
+    out.push_back(i);
   }
   return out;
 }

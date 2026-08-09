@@ -29,6 +29,11 @@ std::vector<PlannedAudioClip> plan_audio(const core::Project& project) {
   for (const core::Track& track : project.tracks) {
     if (track.kind != core::TrackKind::Audio) continue;
     const int index = track_index++;
+    // The ordinal is taken first, so a bus still owns its lane: the mixer sums
+    // into that lane and the numbering has to agree with `core::bus_routes`.
+    // What it does not have is clips. Nothing in the application can place one
+    // there — see `track_indices_of_kind` — and a file can say anything.
+    if (track.submix) continue;
     if (!core::is_track_audible(project, track)) continue;
 
     for (const core::Clip& clip : track.clips) {

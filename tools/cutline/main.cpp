@@ -723,6 +723,18 @@ struct App {
   };
   std::vector<TrackMeter> track_meters;
 
+  /// The mixer's own panel, so its strips can be rebuilt without rebuilding the
+  /// dock around them.
+  Panel* mixer = nullptr;
+  /// Set when the strips no longer describe the project — a track added or
+  /// removed, a route changed, a stack gained its first effect.
+  ///
+  /// Deferred for the reason the inspector's is, and it is not a theoretical
+  /// reason here: the thing that asks is usually a control *inside* a strip,
+  /// and rebuilding on the spot would free the dropdown whose callback was
+  /// still running.
+  bool mixer_stale = false;
+
   /// A fader laying down automation while the sequence plays.
   ///
   /// The keyframes are held here rather than written to the document as they
@@ -1096,6 +1108,7 @@ void refresh_dock(App& app);
 void reconcile_windows(App& app);
 void refresh_float_titles(App& app);
 void refresh_all(App& app);
+void refresh_audio_panel(App& app);
 void invalidate_preview(App& app);
 void invalidate_scopes(App& app);
 void refresh_scopes(App& app);
@@ -5863,6 +5876,11 @@ void refresh_all(App& app) {
   // ruler and leaves the field alone, which is right while somebody is typing
   // into it and wrong the moment the counting changes underneath.
   show_playhead(app);
+  // The mixer describes the tracks, so anything that changes them changes it:
+  // a track added or removed, a route sent somewhere else, a stack given its
+  // first effect. Deferred, because what asked is often a control inside a
+  // strip about to be rebuilt.
+  app.mixer_stale = true;
   // Project Settings shows the project, so a change to the project is a change
   // to that page — setting the rate to 29.97 is exactly what makes the
   // drop-frame choice appear, and it appeared nowhere until this was written.
@@ -7425,8 +7443,18 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
   // tracks routed into it, which is what the output dropdown on every mixer
   // strip is for.
   rows_out.push_back(Row{.label = "Add Submix Track", .act = [&app] {
-                           app.session.apply(
-                               cutline::core::add_submix_track(app.session.project()));
+                           // Named on arrival, which Premiere does too. A lane
+                           // number says nothing about a bus — "A4" for the
+                           // dialogue bus has to be looked up every time it is
+                           // read — and the name is what both the timeline head
+                           // and the mixer strip show.
+                           std::size_t count = 0;
+                           for (const cutline::core::Track& t : app.session.project().tracks) {
+                             if (t.submix) ++count;
+                           }
+                           app.session.apply(cutline::core::add_submix_track(
+                               app.session.project(),
+                               "Submix " + std::to_string(count + 1)));
                            refresh_all(app);
                            stop_playback(app);
                            mark_dirty(app);
@@ -9126,16 +9154,21 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
       .set_bold(true);
 }
 
-[[nodiscard]] std::unique_ptr<Widget> make_audio_panel(App* app) {
-  auto panel = std::make_unique<Panel>();
-
+/// Fills the mixer with a strip per audio track and the master at the end.
+///
+/// Separate from making the panel so the strips can be rebuilt in place. They
+/// have to be: adding a track, routing one into a submix or putting the first
+/// effect on a stack all change what a strip says, and until this was split the
+/// mixer only ever described the project as it stood when the dock was built —
+/// a submix added from the timeline appeared there and nowhere else.
+void fill_audio_panel(App* app, Panel& panel) {
   // Side by side and scrolling, which is Premiere's arrangement and the answer
   // to the problem that made an earlier version stack them: a docked panel is
   // as likely to be a narrow column as a whole region, and a row of strips
   // needs a width it cannot count on. Premiere has exactly the same problem and
   // lets the strips run off the right-hand edge. Stacking them instead solved
   // the layout and lost the mixer.
-  auto& scroll = panel->emplace<ScrollView>(Axis::Horizontal);
+  auto& scroll = panel.emplace<ScrollView>(Axis::Horizontal);
   auto& strips = static_cast<Box&>(scroll.set_content(std::make_unique<Box>(Axis::Horizontal)));
 
   // The old strips are about to be destroyed, so the pointers to their meters
@@ -9258,8 +9291,30 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
       show_master_gain(*app, app->session.project().master_gain);
     });
   }
+}
 
+[[nodiscard]] std::unique_ptr<Widget> make_audio_panel(App* app) {
+  auto panel = std::make_unique<Panel>();
+  if (app != nullptr) app->mixer = panel.get();
+  fill_audio_panel(app, *panel);
   return panel;
+}
+
+/// Rebuilds the strips against the project as it stands.
+///
+/// `clear_children` first, which tells the host to drop hover, focus and
+/// capture: a dropdown that was open when the route changed must not be freed
+/// underneath its own callback. Same reason the inspector does it.
+void refresh_audio_panel(App& app) {
+  if (app.mixer == nullptr || app.main.host == nullptr) return;
+  app.meter = nullptr;
+  app.master_fader = nullptr;
+  app.master_reading = nullptr;
+  app.track_meters.clear();
+  app.mixer->clear_children();
+  fill_audio_panel(&app, *app.mixer);
+  app.main.host->request_layout();
+  mark_dirty(app);
 }
 
 /// The scopes, with a row of tabs to choose between them.
@@ -9767,6 +9822,12 @@ void refresh_dock(App& app) {
   // Windows first: a rearrangement may have emptied one or made another, and
   // rebuilding a view that is about to be destroyed is wasted work.
   reconcile_windows(app);
+
+  // Forgotten before the panels are rebuilt, and set again by whichever build
+  // makes one. A rearrangement can close the mixer altogether, and a pointer to
+  // a panel that is no longer there is worse than no pointer: the next thing to
+  // change a route would rebuild strips inside freed memory.
+  app.mixer = nullptr;
 
   for (Shell* shell : app.shells()) {
     if (shell->dock == nullptr) continue;
@@ -10706,6 +10767,10 @@ void settle(App& app) {
   if (app.inspector_stale) {
     app.inspector_stale = false;
     refresh_inspector(app);
+  }
+  if (app.mixer_stale) {
+    app.mixer_stale = false;
+    refresh_audio_panel(app);
   }
   if (app.settings_page_stale) {
     app.settings_page_stale = false;

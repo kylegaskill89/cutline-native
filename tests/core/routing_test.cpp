@@ -1,10 +1,12 @@
 #include "cutline/core/routing.hpp"
 
+#include "cutline/core/edit.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/core/serialize.hpp"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -261,6 +263,27 @@ TEST(BusAudibility, AMutedBusIsNotHeardHoweverItIsFed) {
   Project p = add_submix_track(sequence(), "Dialogue");
   p.tracks.back().muted = true;
   EXPECT_FALSE(is_track_audible(p, p.tracks.back()));
+}
+
+// ------------------------------------------------------------- no clips on it --
+
+TEST(Submix, NothingCanBePlacedOnABus) {
+  Project p = sequence();
+  Media m;
+  m.id = "m1";
+  m.path = "D:/footage/take.wav";
+  m.duration = 10.0;
+  m.audio_stream_count = 1;
+  p.media = {m};
+  // The bus first in the track list, so a placement that simply took the first
+  // audio track would take this one.
+  p = add_submix_track(std::move(p), "Dialogue");
+  std::rotate(p.tracks.begin() + 1, p.tracks.end() - 1, p.tracks.end());
+  ASSERT_TRUE(p.tracks[1].submix);
+
+  p = place_media(std::move(p), "m1", 0.0);
+  EXPECT_TRUE(p.tracks[1].clips.empty()) << "a bus is fed by tracks, not by what is dropped on it";
+  EXPECT_FALSE(p.tracks[2].clips.empty()) << "it went to the first lane that can hold clips";
 }
 
 // ------------------------------------------------------------------- file --

@@ -2,6 +2,8 @@
 
 #include "cutline/editor/effects_binding.hpp"
 
+#include "cutline/audio/chain.hpp"
+
 #include "cutline/core/effects.hpp"
 #include "cutline/core/query.hpp"
 
@@ -1238,6 +1240,84 @@ TEST(EffectMask, ThePathSurvivesAnEditToEveryOtherNumber) {
   ASSERT_EQ(after.points.size(), 3u) << "the corners were thrown away";
   EXPECT_DOUBLE_EQ(after.points[1].x, 0.2);
   EXPECT_DOUBLE_EQ(after.feather, 0.1);
+}
+
+
+// ------------------------------------------------------------ role presets --
+
+/// One audio clip on an audio track, which is what a role applies to.
+[[nodiscard]] Project one_audio_clip() {
+  Clip c;
+  c.id = "a";
+  c.media_id = "m1";
+  c.kind = TrackKind::Audio;
+  c.source_out = 5.0;
+
+  Track t;
+  t.id = "a1";
+  t.kind = TrackKind::Audio;
+  t.clips = {std::move(c)};
+
+  Project p;
+  p.tracks = {std::move(t)};
+  return p;
+}
+
+[[nodiscard]] const Clip& audio_clip_of(const Project& p) { return p.tracks.front().clips.front(); }
+
+TEST(RolePreset, TheRoleIsSetAndTheProcessingComesWithIt) {
+  const Project p = apply_role_preset(one_audio_clip(), "a", core::AudioRole::Dialogue);
+  EXPECT_EQ(audio_clip_of(p).role, core::AudioRole::Dialogue);
+  EXPECT_FALSE(audio_clip_of(p).audio_effects.empty())
+      << "saying what a clip is should be followed by giving it what that usually needs";
+}
+
+TEST(RolePreset, EveryParameterIsWrittenOutEvenTheOnesThePresetIgnores) {
+  const Project p = apply_role_preset(one_audio_clip(), "a", core::AudioRole::Dialogue);
+  const auto band = std::ranges::find(audio_clip_of(p).audio_effects, "eqband",
+                                      &core::AudioClipEffect::type);
+  ASSERT_NE(band, audio_clip_of(p).audio_effects.end());
+  // Three in the registry: frequency, gain and Q. The preset names all three
+  // here, so the one that matters is that the count matches the registry rather
+  // than the preset.
+  const audio::AudioEffectDef* def = audio::audio_effect_def("eqband");
+  ASSERT_NE(def, nullptr);
+  EXPECT_EQ(band->params.size(), def->params.size());
+}
+
+TEST(RolePreset, PressingItTwiceDoesNotStackItTwice) {
+  Project p = apply_role_preset(one_audio_clip(), "a", core::AudioRole::Dialogue);
+  const std::size_t once = audio_clip_of(p).audio_effects.size();
+  p = apply_role_preset(std::move(p), "a", core::AudioRole::Dialogue);
+  EXPECT_EQ(audio_clip_of(p).audio_effects.size(), once);
+}
+
+TEST(RolePreset, AnEffectSomebodyTunedIsLeftAlone) {
+  Project p = add_audio_effect(one_audio_clip(), "a", "compressor");
+  p = set_audio_effect_parameter(std::move(p), "a", 0, "ratio", 8.0);
+  p = apply_role_preset(std::move(p), "a", core::AudioRole::Dialogue);
+
+  const auto compressor = std::ranges::find(audio_clip_of(p).audio_effects, "compressor",
+                                            &core::AudioClipEffect::type);
+  ASSERT_NE(compressor, audio_clip_of(p).audio_effects.end());
+  EXPECT_DOUBLE_EQ(compressor->params.at("ratio"), 8.0)
+      << "a preset is a starting point for a clip that has none, not an opinion about work "
+         "already done";
+  EXPECT_EQ(std::ranges::count(audio_clip_of(p).audio_effects, "compressor",
+                               &core::AudioClipEffect::type),
+            1);
+}
+
+TEST(RolePreset, NoRoleMeansNoProcessing) {
+  const Project p = apply_role_preset(one_audio_clip(), "a", core::AudioRole::None);
+  EXPECT_EQ(audio_clip_of(p).role, core::AudioRole::None);
+  EXPECT_TRUE(audio_clip_of(p).audio_effects.empty());
+}
+
+TEST(RolePreset, ThePictureHalfOfAPairTakesNeither) {
+  const Project before = one_clip();
+  EXPECT_EQ(apply_role_preset(before, "c1", core::AudioRole::Dialogue), before)
+      << "a role is about sound";
 }
 
 }  // namespace

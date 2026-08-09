@@ -1597,17 +1597,34 @@ first two steps are done:**
    soonest.
 5. ~~**Loudness**~~ — done, measurement and normalisation both.
 
-**What is left of section 6.2 is two rows: roles and submix/send routing.**
-They are related, which is why they are last: Premiere's roles largely exist to
-drive submixes — Dialogue goes to a dialogue bus, Music to a music bus, and the
-processing is on the bus rather than on each clip. Building roles first would
-give a label with nothing behind it; building sends first would give a route
-with nothing to route to, which is why the reverb came before them.
+6. ~~**Submixes, sends and roles**~~ — done, in one piece, because they are
+   one piece. Premiere's roles largely exist to drive submixes: Dialogue goes
+   to a dialogue bus, Music to a music bus, and the processing is on the bus
+   rather than on each clip. Roles first would have been a label with nothing
+   behind it; sends first would have been a route with nothing to route to,
+   which is why the reverb came before them.
 
-The shared machinery is in place for both. `run_chain_over` runs a chain on the
-control grid for a clip, a track or the master; the lane blocks are already the
-buses a submix would sum, and they are summed in one place; and `Track` has
-everything a submix needs except a kind and an output.
+   A submix is a flag on an audio track rather than a third `TrackKind`. It
+   already has everything a bus needs — a fader, a panner, a stack, a meter,
+   automation and a strip in the mixer — and the one thing it does not have is
+   clips. `track_indices_of_kind` refuses to hand one to a placement, which is
+   the funnel every placement goes through, so a clip cannot be dropped on a
+   bus and then heard from a lane with no source of its own.
+
+   **The mixer runs its lanes in feed order now**, which is what
+   `core::bus_routes` is for. Running a bus before what feeds it does not fail;
+   it plays the previous block through this block's compressor, one buffer
+   late, which sounds like a bad plugin rather than like a bug. Loops cannot be
+   built through the interface — `can_route` asks the question from the far
+   end — and a file that contains one is read as feeding the master.
+
+   **The track fader moved with it.** `plan_audio` folded a track's gain into
+   every clip on it, which put the fader ahead of each clip's own effects and
+   left a pre-fader send with no pre-fader signal to take. It is applied to the
+   lane now, after the lane's stack, where Premiere has it. `clip_gain_at` is
+   the half without it.
+
+**Section 6.2 is closed.**
 
 #### What Premiere has that we do not
 
@@ -1615,13 +1632,13 @@ everything a submix needs except a kind and an output.
 |---|---|---|---|
 | ~~Track effects~~ | a stack per track, pre-fader | **done** — the lane's own chain, reachable from an fx button on the strip | — |
 | ~~Master effects~~ | a stack on the master | **done** — after the fader, before the limiter | — |
-| Submix tracks | a bus fed by other tracks, with its own stack and fader | none | model + machinery |
-| Sends | per track, pre or post fader, with a level | none | model + machinery |
+| ~~Submix tracks~~ | a bus fed by other tracks, with its own stack and fader | **done** — an output dropdown on every strip, and a bus strip of its own | — |
+| ~~Sends~~ | per track, pre or post fader, with a level | **done** — the strip's snd button; post-fader by default, as Premiere is | — |
 | ~~A reverb~~ | Studio Reverb, Convolution Reverb | **done** — Schroeder/Freeverb, size, damping and mix | — |
 | ~~A delay~~ | yes | **done** — time, feedback and mix | — |
-| Essential Sound roles | Dialogue / Music / SFX / Ambience on a clip | none — a clip has no role | model |
-| Role presets | one press applies a set of effects for that role | none | wiring, once roles exist |
-| Ducking | music follows dialogue automatically | none | machinery |
+| ~~Essential Sound roles~~ | Dialogue / Music / SFX / Ambience on a clip | **done** — `Clip::role`, set from the clip menu | — |
+| ~~Role presets~~ | one press applies a set of effects for that role | **done** — this catalogue's nearest equivalents; appends what is missing rather than replacing a stack | — |
+| ~~Ducking~~ | music follows dialogue automatically | **done** — Premiere's amount, fade and position, written as clip keyframes | — |
 | ~~Loudness measurement~~ | LUFS to ITU-R BS.1770 | **done** — `audio::LoudnessMeter`, K-weighted and twice gated | — |
 | ~~Loudness normalisation~~ | measure and match to a target | **done** — Project ▸ Normalise Loudness | — |
 | ~~Channel mapping~~ | which source channel feeds which output | **done** — Premiere's Audio Channels, on the clip menu | — |
@@ -1645,11 +1662,11 @@ channel two is completely ordinary, and today both are heard at once with no way
 to choose. That is arguably worth more than any row above it and is a smaller
 piece of work than most.
 
-#### Nothing here is declined
+#### Nothing here was declined
 
-Every row is buildable. What none of it should be started with is the row it is
-named after: begin at the track effect stack, because it is what four of these
-rows are made of.
+Every row was built, in the order argued for above rather than the order they
+are listed in: the track stack first, because four of these rows were made of
+it, and the routing last, because it needed the rest.
 
 ---
 
@@ -1716,9 +1733,10 @@ The rest of the application, in the order it seems worth walking:
 - ~~**Application settings**~~ — audited, written up as section 5, and **closed**:
   every row is built or declined with a reason, bar keyboard customisation,
   which was pulled out into a section of its own below.
-- ~~**Audio**~~ — audited and written up as section 6 above, both halves. The
-  mixer is built bar its automation modes; §6.2 found that nothing in it can be
-  started before a track carries an effect stack.
+- ~~**Audio**~~ — audited, written up as section 6 above, and **closed**: both
+  halves, every row. §6.2 was right that nothing in it could be started before
+  a track carried an effect stack, and the routing that four of those rows were
+  waiting for came last.
 - **Titles and graphics** — the Essential Graphics panel, layered graphics,
   responsive design, styles.
 - **Colour** — the Lumetri Color panel and its scopes workflow.
