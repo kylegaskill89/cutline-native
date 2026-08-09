@@ -706,14 +706,17 @@ things about this codebase.
   from twice a second. What is left is a group of pictures occasionally running
   longer than the run has turns to pay for; the honest next step is measuring GOP
   length rather than guessing at the budget again.
-- **Forward playback runs at about 40 fps on 4K60** rather than 60. Even, not
-  stuttering, but not the rate either. Now measured: 38.3 fps at 4K60 against
-  58.2 at 1080p60, on a Release build. **Lowering the preview quality does not
-  help at all** — 38.7 fps at 1/2 — because `scaled_canvas` reduces the canvas
-  the compositor renders into and not what the decoder is asked for. Premiere's
-  playback resolution reduces the decode; making ours do the same is the fix.
-  The numbers, and the repaint theory that measured out to nothing, are under
-  *Measured: what playback actually costs* in §9.
+- **Forward playback shows about 38 of 60 frames on 4K60, and the renderer is
+  not the reason.** `play_project` plays the same file through the same
+  `FrameRenderer` at 57.4 fps and puts 54 distinct pictures a second on the same
+  display; the application renders every frame, paints at 59.7/s, and the
+  *picture* still changes only 37.9 times a second. Decode, compositing, the
+  playback clock, vsync and the display have each been measured and cleared. The
+  next thing to rule out is the compositor's **single display target** being
+  overwritten before the paint that borrowed it has been presented. Lowering the
+  preview quality does not help and stalls for a second when changed. Full
+  numbers, and three fixes that measured out to nothing, under *Measured: what
+  playback actually costs* in §9.
 - **Nothing in the test suite ever resizes a real window.** The pixel tests draw
   on a fixed CPU raster surface and `--check` lays out at one size, so the whole
   `WM_SIZE` → recreate-the-swapchain path had never been exercised until somebody
@@ -1220,25 +1223,61 @@ at.** The interface paint alone is 14–54 ms per frame under Debug against
 playback smoothness has to be judged on a Release build or it is measuring MSVC's
 iterator debugging.
 
-**Above 1080p the ceiling is in the source path, and preview quality does not
-lower it.** 1080p60 plays at essentially full rate; 4K60 tops out around 38 fps
-and drops to exactly the same 38 fps at half quality. `scaled_canvas` reduces the
-*canvas* the compositor renders into — it does not reduce what the decoder is
-asked for, so a 4K frame is still decoded and still sampled at 4K whatever the
-quality says. Premiere's playback resolution reduces the decode. Ours does not,
-yet, and that is the fix worth making.
+**Above 1080p only the picture falls behind, and it is not the decoder.** This
+paragraph replaces an earlier one that blamed the decode path and said reducing
+it was the fix. That was wrong, and the measurement that settles it is the one
+worth keeping: `play_project` plays the *same 4K60 file* through the *same*
+`FrameRenderer` at **57.4 fps**, 2.4 ms compositing and 0.4 ms presenting, and
+maximised on the same display it puts **54 distinct pictures a second** on the
+glass. The renderer, the decoder and the compositor are all keeping up. So is
+the clock: logging `Player::position()` on every turn of the loop shows it
+visiting **all 566 frames** of a 9.4-second span, in order, with no skips.
 
-**The dead end:** it is not the interface repainting. Instrumenting the phases of
-a playback frame showed the whole window being redrawn about 114 times a second
-against 38 pictures — two of every three repaints drawing what was already on the
-glass, because `advance_playback` marks every window dirty on every turn of the
-loop to keep the meters moving. That is real waste and it looks exactly like the
-culprit. Pacing the redraw to the display's own refresh rate was written, built
-and measured: **38.3 fps, unchanged.** It was reverted rather than kept, since a
-change that removes waste nobody can see is a change with no evidence behind it.
-The individual phases are all small — preview render 2.2 ms, window paint 2.3 ms,
-present 1.2 ms, decode 2.4 ms by `decode_bench` — which is what points at the
-GPU decode path rather than at anything the loop is doing.
+**The loss is between the rendered picture and the window, and it is only the
+picture.** Sampling two regions of the playing application at once separates it
+cleanly — the program monitor, and the timecode field beside the timeline, which
+counts every frame whether or not a picture arrives:
+
+| | picture | timecode |
+|---|---|---|
+| 4K60 | **37.9/s** | 59.7/s |
+| 1080p60 | 57.4/s | 58.6/s |
+
+The interface is reaching the screen at the full rate. The *picture inside it* is
+not: a third of the paints carry the frame that was already there. Whatever this
+is, it is downstream of the render and upstream of the glass, and it is worse the
+larger the frame.
+
+The strong suspicion, not yet proven, is the **single display target**. The
+compositor renders into one texture and `texture_at` hands it over by pointer;
+the monitor holds that pointer and Skia samples it during the window's paint,
+which is presented asynchronously. The next frame's `compose` then writes over
+that same texture. Nothing sequences the compositor's queue against Skia's — the
+`wait_for_idle` at the end of `compose` waits on the *compositor's* queue only.
+Two presents can therefore end up carrying the same picture. Rotating two or
+three display targets, the way a swapchain does, is the obvious thing to try
+next, and it would be the first thing to rule out.
+
+**Preview quality buys nothing at all, and costs a stall.** Full 37.1 fps, 1/2
+32.5, 1/4 33.1 — the canvas the compositor renders into makes no difference to
+any of this, which is consistent with the loss being in handing the picture over
+rather than in making it. Worse, *changing* the setting stalls for over a second
+(worst gap 1,435 ms at 1/2, 1,140 ms at 1/4), because `ProjectPreview::resize`
+builds a whole new `FrameRenderer` and throws away every open decoder with it, so
+the next frame seeks from a keyframe. Making the setting reduce the decode is
+**not** the fix; the setting is currently not worth having.
+
+**Three things measured out to nothing.** Each was built and run, and each is
+here so nobody spends the afternoon on it again. *Pacing the repaint*: the loop
+turns 189 times a second and repainted the whole window on every one of them, so
+two of every three paints could never be shown. Pacing the invalidation to the
+display's refresh cut paints to 58/s and paint work from 435 to 138 ms per
+second — and the picture stayed at 37.9 while the interface's own update rate
+went slightly *down*, 59.7 to 57.2. *Drawing at frame time*: calling
+`UpdateWindow` from `advance_playback` the moment a frame falls due, which is
+what `play_project` does, changed nothing either. *Turning vsync off*:
+`Present(0,0)` instead of `Present(1,0)` gave 37.2 — so it is not the blank
+either. All three were reverted.
 
 One caveat on all of the above: it was measured on a 3840×2160 *virtual* display
 adapter, not on the machine's real 3440×1440 120 Hz panel. The Debug-versus-
