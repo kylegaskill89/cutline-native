@@ -10,6 +10,7 @@
 
 #include "cutline/core/model.hpp"
 #include "cutline/editor/import.hpp"
+#include "cutline/engine/frame_renderer.hpp"
 #include "cutline/gpu/device.hpp"
 #include "cutline/ui/painter.hpp"
 
@@ -72,6 +73,15 @@ class ProjectPreview {
   /// The device everything here renders on, for handing to whoever draws the
   /// result.
   [[nodiscard]] const std::shared_ptr<gpu::Device>& device() const noexcept;
+
+  /// How much decoding the preview has done, straight from the renderer.
+  ///
+  /// A seek costs roughly seventeen times what decoding the next frame does, so
+  /// this is the difference between a preview that plays and one that crawls —
+  /// and from outside the two look identical. It is exposed here because
+  /// `ProjectPreview` is what the application holds, and because the one thing
+  /// worth asserting about a canvas change is that it did *not* cost a seek.
+  [[nodiscard]] engine::FrameRenderer::DecodeStats decode_stats() const noexcept;
 
   /// Matches the renderer to a sequence of a different size. Cheap and does
   /// nothing when the size already agrees.

@@ -1,4 +1,6 @@
-#include "cutline/render/preview.hpp"
+﻿#include "cutline/render/preview.hpp"
+
+#include "cutline/render/effect_catalog.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +14,30 @@ constexpr int kSmallestCanvas = 16;
 
 [[nodiscard]] int scaled(int value, double factor) noexcept {
   return std::max(1, static_cast<int>(std::lround(value * factor)));
+}
+
+/// Whether an effect's parameter is a distance in pixels, and so has to shrink
+/// with the canvas.
+///
+/// Asked of the catalogue rather than listed here. The catalogue already says
+/// which parameters are in pixels, because that is what puts "px" after the
+/// number on the slider â€” so the one declaration that makes a parameter *read*
+/// as a length is the same one that makes it *scale* as a length, and there is
+/// no second list to keep in step.
+///
+/// It used to be a hard-coded test for `blur`, and the two effects added after
+/// it were both missed: a directional blur's amount and a sharpen's radius are
+/// the same kind of pixel distance, and at half preview quality both were drawn
+/// twice as wide as the export would draw them. The header for this file warned
+/// that this would happen and that no test could catch it. One can now:
+/// `EveryPixelParameterInTheCatalogueIsScaled`.
+[[nodiscard]] bool measured_in_pixels(std::string_view type, std::string_view key) {
+  const EffectSpec* spec = find_effect_spec(type);
+  if (spec == nullptr) return false;
+  for (const EffectParamSpec& param : spec->params) {
+    if (param.key == key) return param.suffix == "px";
+  }
+  return false;
 }
 
 }  // namespace
@@ -41,16 +67,15 @@ core::Project scaled_canvas(core::Project project, double factor) {
   for (core::Track& track : project.tracks) {
     for (core::Clip& clip : track.clips) {
       for (core::ClipEffect& effect : clip.effects) {
-        if (effect.type != "blur") continue;
-
         // The stored value and the keyframes both: an animated blur reads its
         // keyframes and ignores the stored one, so scaling only one of them
         // leaves whichever is in use unscaled half the time.
-        if (const auto found = effect.params.find("amount"); found != effect.params.end()) {
-          found->second *= actual;
+        for (auto& [key, value] : effect.params) {
+          if (measured_in_pixels(effect.type, key)) value *= actual;
         }
-        if (const auto keyed = effect.keyframes.find("amount"); keyed != effect.keyframes.end()) {
-          for (core::Keyframe& frame : keyed->second) frame.v *= actual;
+        for (auto& [key, frames] : effect.keyframes) {
+          if (!measured_in_pixels(effect.type, key)) continue;
+          for (core::Keyframe& frame : frames) frame.v *= actual;
         }
       }
     }

@@ -9,8 +9,11 @@
 #include "cutline/render/preview.hpp"
 
 #include "cutline/core/layout.hpp"
+#include "cutline/render/effect_catalog.hpp"
 
 #include <gtest/gtest.h>
+
+#include <string>
 
 namespace cutline::render {
 namespace {
@@ -166,6 +169,56 @@ TEST(ScaledCanvas, NothingIsLostFromTheProjectOnTheWayThrough) {
   EXPECT_EQ(half.tracks.size(), p.tracks.size());
   EXPECT_EQ(half.tracks[0].clips.size(), p.tracks[0].clips.size());
   EXPECT_EQ(clip_of(half).id, clip_of(p).id);
+}
+
+// The header for `preview.hpp` says a new parameter measured in pixels belongs
+// in `scaled_canvas` too, and that there is no way for a test to find one that
+// is missing — a fraction and a pixel count are both just doubles. There is
+// now, because the catalogue says which parameters are lengths: that is what
+// puts "px" after the number on the slider.
+//
+// Two had already been missed when this was written. A directional blur's
+// amount and a sharpen's radius are both pixel distances handed to the shader
+// exactly as a Gaussian blur's sigma is, and neither was scaled — so at half
+// preview quality both were drawn twice as wide as the export would draw them.
+TEST(ScaledCanvas, EveryPixelParameterInTheCatalogueIsScaled) {
+  for (const EffectSpec& spec : effect_catalog()) {
+    for (const EffectParamSpec& param : spec.params) {
+      if (param.suffix != "px") continue;
+
+      core::Project p = sequence();
+      core::ClipEffect effect{.type = std::string(spec.type)};
+      effect.params[std::string(param.key)] = 20.0;
+      effect.keyframes[std::string(param.key)] = {core::Keyframe{.t = 0.0, .v = 40.0}};
+      p.tracks[0].clips[0].effects.push_back(std::move(effect));
+
+      const core::Project half = scaled_canvas(p, 0.5);
+      const core::ClipEffect& scaled = clip_of(half).effects[0];
+      EXPECT_DOUBLE_EQ(scaled.params.at(std::string(param.key)), 10.0)
+          << spec.type << "." << param.key << " is in pixels and was not scaled";
+      EXPECT_DOUBLE_EQ(scaled.keyframes.at(std::string(param.key))[0].v, 20.0)
+          << spec.type << "." << param.key << " keyframes were not scaled";
+    }
+  }
+}
+
+// And the other half of the rule: anything *not* declared in pixels must be
+// left exactly as it was, or a percentage would shrink along with the canvas.
+TEST(ScaledCanvas, NothingElseInTheCatalogueIsTouched) {
+  for (const EffectSpec& spec : effect_catalog()) {
+    for (const EffectParamSpec& param : spec.params) {
+      if (param.suffix == "px") continue;
+
+      core::Project p = sequence();
+      core::ClipEffect effect{.type = std::string(spec.type)};
+      effect.params[std::string(param.key)] = 20.0;
+      p.tracks[0].clips[0].effects.push_back(std::move(effect));
+
+      const core::Project half = scaled_canvas(p, 0.5);
+      EXPECT_DOUBLE_EQ(clip_of(half).effects[0].params.at(std::string(param.key)), 20.0)
+          << spec.type << "." << param.key << " is not a length and should not have moved";
+    }
+  }
 }
 
 }  // namespace

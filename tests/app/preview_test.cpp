@@ -319,5 +319,69 @@ TEST(Preview, ResizingToTheSameShapeKeepsEverything) {
   EXPECT_EQ(again->generation, first->generation);
 }
 
+// Changing the preview quality changes the canvas, and that is all it should
+// change. This used to build a whole new `FrameRenderer`, which took every open
+// decoder down with it — so the next frame seeked from the nearest keyframe and
+// playback froze for over a second on 4K footage.
+//
+// The reasoning behind it was that a renderer "owns its compositor and every
+// decoder it has open, and those are all sized to the old canvas". Only the
+// first half is true: a decoder's surface pool is sized from the *media's* own
+// width and height and knows nothing about the canvas.
+//
+// This is the control somebody reaches for when a stack of effects has playback
+// struggling, so a freeze is the worst answer it could give.
+TEST_F(WithFootage, ChangingTheCanvasKeepsTheDecodersOpen) {
+  auto preview = ProjectPreview::create(320, 180);
+  if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
+
+  core::Project project;
+  project.canvas_w = 320;
+  project.canvas_h = 180;
+
+  core::Media media;
+  media.id = "m";
+  media.path = path_;
+  media.has_video = true;
+  media.duration = 8.0;
+  project.media = {media};
+
+  core::Track track{.id = "v1", .kind = core::TrackKind::Video};
+  track.clips.push_back(core::Clip{.id = "c",
+                                   .media_id = "m",
+                                   .kind = core::TrackKind::Video,
+                                   .source_in = 0.0,
+                                   .source_out = 4.0});
+  project.tracks = {std::move(track)};
+
+  // Scrub about first, deliberately, to build up a *history* of seeks. That
+  // history is the thing being tested: it is carried by the renderer, and a
+  // renderer built fresh starts every counter at zero.
+  //
+  // Comparing frame or seek counts across the resize does not work on its own.
+  // A new renderer re-reaches the same moment by seeking to the nearest keyframe
+  // and decoding forward, which lands on numbers close enough to the originals
+  // to slip past any single comparison — both versions of this test passed
+  // against the bug before it was written this way.
+  constexpr double kFps = 60.0;
+  ASSERT_TRUE((*preview)->texture_at(project, 3.0).has_value());
+  ASSERT_TRUE((*preview)->texture_at(project, 1.0).has_value());  // backwards
+  ASSERT_TRUE((*preview)->texture_at(project, 3.5).has_value());  // and forward again
+  const auto settled = (*preview)->decode_stats();
+  ASSERT_GE(settled.seeks, 3) << "the scrubbing never seeked, so this proves nothing";
+
+  // Half resolution, which is what the quality control does, then carry on to
+  // the very next frame — which from here needs no seek at all.
+  project.canvas_w = 160;
+  project.canvas_h = 90;
+  ASSERT_TRUE((*preview)->texture_at(project, 3.5 + 1.0 / kFps).has_value());
+
+  const auto after = (*preview)->decode_stats();
+  EXPECT_EQ(after.seeks, settled.seeks)
+      << "the seek history was lost, so the renderer was rebuilt and the decoders with it";
+  EXPECT_GT(after.frames_decoded, settled.frames_decoded)
+      << "the next frame should have been decoded, not found";
+}
+
 }  // namespace
 }  // namespace cutline::app
