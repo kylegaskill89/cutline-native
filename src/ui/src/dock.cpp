@@ -1,6 +1,7 @@
 #include "cutline/ui/dock.hpp"
 
 #include <algorithm>
+#include <string>
 #include <utility>
 
 namespace cutline::ui {
@@ -264,16 +265,49 @@ void normalise(DockLayout& layout) {
 
 bool dock_panel(DockLayout& layout, std::string_view panel, std::string_view target,
                 DockSide side) {
-  if (panel.empty() || target.empty() || panel == target) return false;
+  if (panel.empty() || target.empty()) return false;
   if (!anywhere(layout, panel) || !anywhere(layout, target)) return false;
+
+  // Splitting off the group you are already in is a real request, and it used
+  // to be refused.
+  //
+  // A drop names the panel it landed on, and what a group offers is its
+  // *active* tab — which, while one of its own tabs is being dragged, is
+  // usually the panel being dragged. So "put this down the bottom of the group
+  // it is in" arrives here as "dock A beside A" and was turned away by a guard
+  // meant for something else. It was reachable, which is how it was found: two
+  // panels tabbed together, and no way to split one off below the other
+  // without docking it somewhere else first and dragging it back.
+  //
+  // Answered against one of its neighbours instead. That names the same group,
+  // and everything below then works unchanged — which matters, because by the
+  // time the target is looked up the panel has been detached and would not be
+  // found under its own name.
+  std::string beside(target);
+  if (panel == target) {
+    // In the middle, onto itself, there is nothing to do: it is already there
+    // and already showing.
+    if (side == DockSide::Centre) return false;
+    const DockNode* tree = tree_holding(layout, panel);
+    const DockNode* group = tree == nullptr ? nullptr : group_of(*tree, panel);
+    // Alone in its group, an edge drop would split a pane off itself and leave
+    // the same single pane. Nothing to do there either.
+    if (group == nullptr || group->panels.size() < 2) return false;
+    for (const PanelId& other : group->panels) {
+      if (other != panel) {
+        beside = other;
+        break;
+      }
+    }
+  }
 
   // Dropping a panel in the middle of the group it is already in means "show
   // this one", not "take it out and put it back at the end" — which would
   // reorder the tabs behind the user's back.
   if (side == DockSide::Centre) {
-    const DockNode* tree = tree_holding(layout, target);
+    const DockNode* tree = tree_holding(layout, beside);
     if (tree != nullptr) {
-      const DockNode* group = group_of(*tree, target);
+      const DockNode* group = group_of(*tree, beside);
       if (group != nullptr && std::ranges::find(group->panels, panel) != group->panels.end()) {
         return activate_panel(layout, panel);
       }
@@ -287,12 +321,12 @@ bool dock_panel(DockLayout& layout, std::string_view panel, std::string_view tar
   // group and collapsed a split, which moves every node around it.
   normalise(layout);
 
-  DockNode* tree = tree_holding(layout, target);
+  DockNode* tree = tree_holding(layout, beside);
   if (tree == nullptr) {
     layout = before;
     return false;
   }
-  DockNode* group = group_of(*tree, target);
+  DockNode* group = group_of(*tree, beside);
   if (group == nullptr) {
     layout = before;
     return false;

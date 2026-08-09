@@ -103,6 +103,14 @@ struct Compositor::Impl {
   int height = 0;
   /// Incremented by `create_targets`, so a cache downstream can tell a rebuilt
   /// target from the one it saw last even at the same address and size.
+  ///
+  /// Drawn from a counter shared by every compositor rather than starting at
+  /// zero in each. A per-compositor count is only unique while there is one
+  /// compositor: the preview builds a *new* one whenever the canvas changes
+  /// size, and a fresh one starting at zero hands out generations that a
+  /// caller has already seen from the old one — at which point the guard says
+  /// "same texture" about memory that has been freed and reallocated, which is
+  /// exactly the case it exists to catch.
   unsigned generation = 0;
 
   [[nodiscard]] Device::Impl& gpu() noexcept { return owner->internals(); }

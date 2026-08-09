@@ -4027,6 +4027,32 @@ void toggle_use_proxies([[maybe_unused]] App& app) {
 #endif
 }
 
+/// Lets the monitor go of anything it is holding when the next render is about
+/// to change the canvas size under it.
+///
+/// A texture handed over by `texture_at` belongs to the preview's compositor,
+/// and a canvas of a different size means a whole new compositor: the old one
+/// is destroyed and the texture with it. Whatever the monitor kept is then a
+/// pointer into freed memory, and the next paint reads it.
+///
+/// Called at every point that renders, because there is more than one and they
+/// do not agree about size — the picture is rendered at the preview scale and a
+/// snapshot at the sequence's own. The one that resizes is not always the one
+/// that will hand the monitor a replacement.
+void release_stale_picture(App& app, const cutline::core::Project& about_to_render) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.preview == nullptr || app.monitor == nullptr) return;
+  if (app.preview->width() == about_to_render.canvas_w &&
+      app.preview->height() == about_to_render.canvas_h) {
+    return;
+  }
+  app.monitor->clear_frame();
+#else
+  (void)app;
+  (void)about_to_render;
+#endif
+}
+
 /// Renders the frame under the playhead into the monitor.
 ///
 /// Deferred and coalesced like everything else: scrubbing produces a mouse
@@ -4069,6 +4095,10 @@ void refresh_preview(App& app) {
     }
     app.preview = std::move(*made);
   }
+
+  // Changing the preview quality changes the canvas, which throws the
+  // compositor away — including the texture the monitor is still showing.
+  release_stale_picture(app, project);
 
   // Two ways to the same picture. Sharing a device means the frame is already
   // in memory the window can draw from, so it is handed over as a texture;
@@ -4388,8 +4418,18 @@ void refresh_source([[maybe_unused]] App& app) {
       complain(app.main.window, "The source monitor is unavailable.\n\n" + made.error());
       return;
     }
+    // Before the old preview is dropped. What this monitor is showing is that
+    // preview's texture, and replacing the preview frees it — see
+    // `release_stale_picture`, which is the same hazard reached the other way.
+    app.source_monitor->clear_frame();
     app.source_preview = std::move(*made);
     app.source_built_for = media->id;
+  }
+  // And when the same preview is asked for a differently shaped sequence, which
+  // rebuilds its compositor in place.
+  if (app.source_preview->width() != project.canvas_w ||
+      app.source_preview->height() != project.canvas_h) {
+    app.source_monitor->clear_frame();
   }
 
   const double at = std::clamp(app.source_playhead, 0.0, std::max(0.0, media->duration));
@@ -4430,7 +4470,13 @@ void take_snapshot([[maybe_unused]] App& app) {
     return;
   }
 
+  // The sequence's own size, whatever the preview is set to — a snapshot is a
+  // frame of the cut, not of the proxy of it that is being scrubbed. That
+  // means resizing the preview away from what the monitor is showing, so the
+  // monitor lets go first and the picture is rebuilt afterwards.
+  release_stale_picture(app, app.session.project());
   const auto frame = app.preview->frame_at(app.session.project(), app.session.playhead());
+  invalidate_preview(app);
   if (!frame.has_value()) {
     complain(app.main.window, "Could not render the frame.\n\n" + frame.error());
     return;
@@ -5427,7 +5473,24 @@ void refresh_scopes([[maybe_unused]] App& app) {
   app.scopes_stale = false;
 
   if (app.preview == nullptr) return;
-  const auto frame = app.preview->frame_at(app.session.project(), app.session.playhead());
+
+  // At the preview's scale, which is the picture actually on screen — and the
+  // size the preview is already built for.
+  //
+  // It used to ask for the sequence's own size. That was wrong twice over: a
+  // scope is a measurement of what is being looked at, and asking for a
+  // different size than the monitor just asked for made every frame rebuild
+  // the compositor, then rebuild it again for the next picture. The rebuild
+  // freed the texture the monitor was showing, which is a crash rather than a
+  // slow scope.
+  const cutline::core::Project& document = app.showing();
+  const cutline::core::Project reduced =
+      app.preview_scale == 1.0 ? cutline::core::Project{}
+                               : cutline::render::scaled_canvas(document, app.preview_scale);
+  const cutline::core::Project& project = app.preview_scale == 1.0 ? document : reduced;
+
+  release_stale_picture(app, project);
+  const auto frame = app.preview->frame_at(project, app.session.playhead());
   if (!frame.has_value() || frame->empty()) return;
 
   const int step = std::max(1, frame->width / kScopeWidth);

@@ -10,6 +10,7 @@
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/editor/import.hpp"
+#include "cutline/gpu/device.hpp"
 
 #include <gtest/gtest.h>
 
@@ -248,6 +249,74 @@ TEST(Preview, WithoutADeviceItMakesItsOwn) {
   auto preview = ProjectPreview::create(160, 90);
   if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
   EXPECT_NE((*preview)->device(), nullptr);
+}
+
+
+// ------------------------------------------------------------- resizing --
+
+TEST(Preview, ResizingHandsBackADifferentGeneration) {
+  // The guard that stops a caller drawing a texture that has been freed. A
+  // resize throws the compositor away and Direct3D reuses addresses freely, so
+  // the handle alone says nothing — the generation is what says "this is not
+  // the texture you were given".
+  auto preview = ProjectPreview::create(160, 90);
+  if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
+
+  core::Project project = core::empty_project(1, 1);
+  project.canvas_w = 160;
+  project.canvas_h = 90;
+  const auto first = (*preview)->texture_at(project, 0.0);
+  ASSERT_TRUE(first.has_value()) << first.error();
+  const unsigned was = first->generation;
+
+  project.canvas_w = 320;
+  project.canvas_h = 180;
+  const auto second = (*preview)->texture_at(project, 0.0);
+  ASSERT_TRUE(second.has_value()) << second.error();
+
+  EXPECT_NE(second->generation, was);
+  EXPECT_EQ(second->width, 320);
+}
+
+TEST(Preview, TwoPreviewsNeverShareAGeneration) {
+  // The fault this was written for: the count used to start at zero in every
+  // compositor, and a resize builds a *new* one. Two previews, or one preview
+  // resized twice, would hand out the same generation for different memory —
+  // at which point the guard says "unchanged" about a freed texture and the
+  // caller draws it.
+  auto one = ProjectPreview::create(160, 90);
+  if (!one.has_value()) GTEST_SKIP() << "no usable device: " << one.error();
+  auto two = ProjectPreview::create(160, 90, (*one)->device());
+  ASSERT_TRUE(two.has_value()) << two.error();
+
+  core::Project project = core::empty_project(1, 1);
+  project.canvas_w = 160;
+  project.canvas_h = 90;
+
+  const auto from_one = (*one)->texture_at(project, 0.0);
+  const auto from_two = (*two)->texture_at(project, 0.0);
+  ASSERT_TRUE(from_one.has_value()) << from_one.error();
+  ASSERT_TRUE(from_two.has_value()) << from_two.error();
+
+  EXPECT_NE(from_one->generation, from_two->generation);
+}
+
+TEST(Preview, ResizingToTheSameShapeKeepsEverything) {
+  // The early return matters: a rebuild costs every open decoder, and the
+  // preview is asked to match the project on every single frame.
+  auto preview = ProjectPreview::create(160, 90);
+  if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
+
+  core::Project project = core::empty_project(1, 1);
+  project.canvas_w = 160;
+  project.canvas_h = 90;
+
+  const auto first = (*preview)->texture_at(project, 0.0);
+  ASSERT_TRUE(first.has_value()) << first.error();
+  const auto again = (*preview)->texture_at(project, 0.0);
+  ASSERT_TRUE(again.has_value()) << again.error();
+
+  EXPECT_EQ(again->generation, first->generation);
 }
 
 }  // namespace

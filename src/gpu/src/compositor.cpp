@@ -183,11 +183,32 @@ std::expected<void, std::string> Compositor::Impl::ensure_capacity(UINT layers) 
   return {};
 }
 
+namespace {
+
+/// Handed out to every compositor in the process, never restarted.
+///
+/// A count kept per compositor is unique only while there is one of them, and
+/// there is not: the preview throws its renderer away and builds another
+/// whenever the canvas changes size — which is what changing the preview
+/// quality does. A fresh compositor counting from zero hands back generations
+/// its predecessor already used, so a stale handle compares equal to a live one
+/// and the guard reports "unchanged" about memory that has been freed since.
+///
+/// Not atomic. A compositor is built and rebuilt from the thread that owns the
+/// device, and making this thread-safe would suggest it is safe to do
+/// otherwise.
+unsigned next_generation() {
+  static unsigned counter = 0;
+  return ++counter;
+}
+
+}  // namespace
+
 std::expected<void, std::string> Compositor::Impl::create_targets() {
   gpu().wait_for_idle();
   // Before anything is freed, so a caller that kept the old handle sees a
   // different generation even if the replacement lands at the same address.
-  ++generation;
+  generation = next_generation();
   scene.Reset();
   backdrop.Reset();
   display.Reset();

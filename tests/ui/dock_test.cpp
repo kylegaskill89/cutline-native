@@ -358,12 +358,62 @@ TEST(Dock, MovingTheLastPanelOutOfAGroupCollapsesIt) {
   expect_canonical(layout);
 }
 
-TEST(Dock, APanelCannotBeDockedOntoItself) {
+TEST(Dock, APanelDroppedOnItselfInTheMiddleStaysWhereItIs) {
   DockLayout layout = sample_layout();
   const DockLayout before = layout;
 
-  EXPECT_FALSE(dock_panel(layout, "project", "project", DockSide::Left));
+  EXPECT_FALSE(dock_panel(layout, "project", "project", DockSide::Centre));
+  EXPECT_EQ(layout, before) << "it is already there and already showing";
+}
+
+TEST(Dock, APanelAloneInItsGroupCannotSplitOffItself) {
+  // There is nothing to split from: the pane holds this panel and nothing
+  // else, so the result would be the same single pane.
+  DockLayout layout = sample_layout();
+  const DockLayout before = layout;
+
+  EXPECT_FALSE(dock_panel(layout, "monitor", "monitor", DockSide::Left));
   EXPECT_EQ(layout, before);
+}
+
+TEST(Dock, APanelDroppedOnItsOwnTabAtAnEdgeSplitsOffTheGroup) {
+  // The bug this was written for, reported as: two panels docked together, and
+  // no way to drag one to the bottom of that same region without docking it
+  // somewhere else first and dragging it back.
+  //
+  // A drop names the panel it landed on, and a group offers its *active* tab —
+  // which, while one of its own tabs is being dragged, is the panel being
+  // dragged. So the request arrives as "dock project beside project" and used
+  // to be refused by a guard meant for something else.
+  DockLayout layout = sample_layout();
+  ASSERT_TRUE(dock_panel(layout, "project", "project", DockSide::Bottom));
+
+  const DockNode* group = group_of(layout.root, "project");
+  ASSERT_NE(group, nullptr);
+  EXPECT_EQ(group->panels, (std::vector<PanelId>{"project"})) << "it left the tabs";
+
+  const DockNode* neighbour = group_of(layout.root, "effects");
+  ASSERT_NE(neighbour, nullptr);
+  EXPECT_EQ(neighbour->panels, (std::vector<PanelId>{"effects"}));
+  EXPECT_NE(group, neighbour) << "they are two panes now, not one group";
+
+  // And nothing was lost on the way.
+  std::vector<PanelId> panels = panels_in(layout);
+  std::ranges::sort(panels);
+  EXPECT_EQ(panels, (std::vector<PanelId>{"effects", "monitor", "project", "timeline"}));
+  expect_canonical(layout);
+}
+
+TEST(Dock, SplittingOffItsOwnGroupPutsItOnTheSideAsked) {
+  DockLayout layout;
+  layout.root = DockNode::tabs({"a", "b"});
+  ASSERT_TRUE(dock_panel(layout, "b", "b", DockSide::Top));
+
+  ASSERT_TRUE(layout.root.is_split());
+  EXPECT_EQ(layout.root.axis, Axis::Vertical);
+  EXPECT_EQ(layout.root.children.front().panels, (std::vector<PanelId>{"b"}));
+  EXPECT_EQ(layout.root.children.back().panels, (std::vector<PanelId>{"a"}));
+  expect_canonical(layout);
 }
 
 TEST(Dock, DockingOntoATargetThatIsNotThereDoesNothing) {

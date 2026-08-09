@@ -92,6 +92,21 @@ std::expected<void, std::string> ProjectPreview::resize(int width, int height) {
   auto renderer = engine::FrameRenderer::create(impl_->device, width, height);
   if (!renderer.has_value()) return std::unexpected(renderer.error());
 
+  // Before the old one is dropped, and this is not a tidiness measure.
+  //
+  // `texture_at` hands the caller the compositor's display target and the
+  // caller draws it — so at the moment a resize arrives, that texture may be
+  // referenced by command lists the GPU has not finished with. Destroying the
+  // renderer here frees it underneath them, which removes the device and takes
+  // the window with it. It is a crash you only get while something is
+  // continuously drawing, which is to say: while the sequence is playing and
+  // somebody changes the preview quality.
+  //
+  // The compositor waits for idle before rebuilding its own targets, for the
+  // same reason. What it cannot do is wait on behalf of a renderer being thrown
+  // away whole.
+  if (impl_->device != nullptr) impl_->device->wait_for_idle();
+
   impl_->renderer = std::move(*renderer);
   impl_->width = width;
   impl_->height = height;
