@@ -535,5 +535,71 @@ TEST(History, ClearDropsBothStacks) {
   EXPECT_FALSE(history.can_redo());
 }
 
+// ------------------------------------------------------- a drawn mask path --
+
+TEST(Serialize, APathKeepsItsHandles) {
+  Project p;
+  p.canvas_w = 1920;
+  p.canvas_h = 1080;
+
+  ClipEffect blur;
+  blur.type = "blur";
+  blur.mask = Mask{.shape = MaskShape::Path,
+                   .points = {MaskPoint{.x = -0.2, .y = -0.2, .out_x = 0.1, .out_y = -0.05},
+                              MaskPoint{.x = 0.2, .y = -0.2, .in_x = -0.1, .in_y = -0.05},
+                              MaskPoint{.x = 0.0, .y = 0.2}}};
+
+  Clip c{.id = "c1", .media_id = "m1", .kind = TrackKind::Video, .source_out = 1.0};
+  c.effects = {blur};
+  p.tracks = {Track{.id = "v1", .kind = TrackKind::Video, .clips = {c}}};
+
+  const auto loaded = from_json(to_json(p));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_EQ(loaded->project, p);
+}
+
+// Every path written before the pen existed has no handles at all. Reading one
+// back as a polygon of sharp corners is what keeps those projects looking the
+// way they were left.
+TEST(Serialize, APathWrittenBeforeHandlesExistedReadsAsCorners) {
+  const std::string older = R"({
+    "version": 1,
+    "project": {
+      "canvas_w": 1920, "canvas_h": 1080,
+      "tracks": [{"id": "v1", "kind": "video", "clips": [{
+        "id": "c1", "media_id": "m1", "kind": "video", "source_out": 1.0,
+        "effects": [{"type": "blur", "mask": {
+          "shape": "path",
+          "points": [{"x": -0.2, "y": -0.2}, {"x": 0.2, "y": -0.2}, {"x": 0.0, "y": 0.2}]
+        }}]
+      }]}]
+    }
+  })";
+
+  const auto loaded = from_json(older);
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  const Mask& mask = loaded->project.tracks[0].clips[0].effects[0].mask;
+  ASSERT_EQ(mask.points.size(), 3u);
+  for (const MaskPoint& point : mask.points) EXPECT_TRUE(point.sharp());
+}
+
+// And a mask that never had a curve on it does not start writing four zeroes
+// per point to say so.
+TEST(Serialize, SharpCornersCostNothingToWriteDown) {
+  Project p;
+  ClipEffect blur;
+  blur.type = "blur";
+  blur.mask = Mask{.shape = MaskShape::Path,
+                   .points = {MaskPoint{.x = -0.2, .y = -0.2}, MaskPoint{.x = 0.2, .y = -0.2},
+                              MaskPoint{.x = 0.0, .y = 0.2}}};
+  Clip c{.id = "c1", .media_id = "m1", .kind = TrackKind::Video, .source_out = 1.0};
+  c.effects = {blur};
+  p.tracks = {Track{.id = "v1", .kind = TrackKind::Video, .clips = {c}}};
+
+  const std::string written = to_json(p);
+  EXPECT_EQ(written.find("out_x"), std::string::npos)
+      << "a sharp corner wrote handles it does not have";
+}
+
 }  // namespace
 }  // namespace cutline::core

@@ -41,6 +41,23 @@ struct MonitorBox {
   friend bool operator==(const MonitorBox&, const MonitorBox&) = default;
 };
 
+/// One point of a free-drawn mask, with the handle either side of it.
+///
+/// The same shape as `core::MaskPoint` and deliberately not that type: this
+/// header describes what a widget draws, in canvas fractions, and knows nothing
+/// about a project. The conversion is one line in the editor either way.
+struct MaskVertex {
+  double x = 0.0;
+  double y = 0.0;
+  /// Towards the previous point, and towards the next. Both zero is a corner.
+  double in_x = 0.0;
+  double in_y = 0.0;
+  double out_x = 0.0;
+  double out_y = 0.0;
+
+  friend bool operator==(const MaskVertex&, const MaskVertex&) = default;
+};
+
 /// One effect's mask, drawn over the picture.
 ///
 /// In canvas fractions like everything else here, because a shape on the frame
@@ -59,10 +76,14 @@ struct MaskOverlay {
   double height = 0.25;
   double rotation = 0.0;  ///< degrees, clockwise
 
-  /// A path's corners, each an offset from the centre above in fractions of the
+  /// A path's points, each an offset from the centre above in fractions of the
   /// canvas — the same units everything else here is in. Empty for the other
   /// two shapes.
-  std::vector<std::pair<double, double>> points;
+  ///
+  /// These are the points somebody placed, handles and all, rather than the
+  /// outline they describe. The view flattens them to draw, through the same
+  /// `core::flatten_mask_path` the renderer fills with.
+  std::vector<MaskVertex> points;
 
   friend bool operator==(const MaskOverlay&, const MaskOverlay&) = default;
 };
@@ -237,6 +258,33 @@ class MonitorView : public Widget {
   /// one, or the corner is not there.
   [[nodiscard]] Rect mask_corner_grip(std::size_t index, std::size_t corner) const;
 
+  /// Which side of a point a bezier handle belongs to.
+  enum class MaskHandle { In, Out };
+
+  /// The grab square for one of a point's two bezier handles. Empty unless that
+  /// point is the selected one — handles are shown for the point being worked
+  /// on and nowhere else, or a path of any size becomes a thicket of squares.
+  [[nodiscard]] Rect mask_handle_grip(std::size_t index, std::size_t corner,
+                                      MaskHandle side) const;
+
+  /// The point whose handles are showing, if any.
+  [[nodiscard]] std::optional<std::size_t> selected_mask_point() const noexcept {
+    return mask_selected_;
+  }
+
+  /// Gives a sharp point handles that follow the run of the path through it, so
+  /// double-clicking a corner rounds it off rather than doing nothing visible.
+  ///
+  /// Along the line between its neighbours, a third of the way to each, which
+  /// is the arrangement that leaves no crease and is what every drawing program
+  /// hands you when it smooths a point.
+  void curve_mask_point(std::size_t index, std::size_t corner);
+
+  /// Puts a point on the outline nearest a place on the widget, splitting the
+  /// curve there so the shape is unchanged. Nothing when the place is not near
+  /// enough to the path to have meant it.
+  std::optional<std::size_t> add_mask_point(std::size_t index, double x, double y);
+
   /// What a press at this point would take hold of.
   [[nodiscard]] TransformHandle handle_at(double x, double y) const;
 
@@ -320,6 +368,15 @@ class MonitorView : public Widget {
   /// has no size handle: every corner is a handle, and moving one is the only
   /// way its shape ever changes.
   std::optional<std::size_t> mask_corner_;
+  /// The bezier handle being pulled, when it is one of those rather than the
+  /// point it belongs to.
+  std::optional<MaskHandle> mask_handle_;
+  /// Whether the pair is being broken as it is pulled — the modifier held at
+  /// the press, so letting go of it halfway does not change what the drag is.
+  bool mask_handle_broken_ = false;
+  /// The point whose handles are on show. Set by pressing one, cleared by
+  /// pressing anywhere that is not part of this path.
+  std::optional<std::size_t> mask_selected_;
   MaskOverlay mask_origin_;
 
   bool snapping_ = true;

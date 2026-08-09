@@ -1,11 +1,13 @@
 #include "cutline/render/effect_passes.hpp"
 
 #include "cutline/core/effects.hpp"
+#include "cutline/core/mask_path.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <numbers>
 #include <string>
+#include <vector>
 
 namespace cutline::render {
 namespace {
@@ -189,13 +191,19 @@ EffectPass threshold_pass(float level) noexcept {
 namespace {
 
 /// A path's corners as the shader wants them, and nothing for the other shapes.
+///
+/// Flattened on the way, because the shader fills a polygon by the even-odd
+/// rule and knows nothing about a cubic. The same call the monitor makes to draw
+/// the outline, so the shape being filled is the shape being shown.
 [[nodiscard]] std::vector<std::array<float, 2>> path_points(const core::Mask& mask) {
   if (mask.shape != core::MaskShape::Path) return {};
 
+  const std::vector<core::MaskPoint> flat =
+      core::flatten_mask_path(mask.points, core::kMaxMaskPoints);
+
   std::vector<std::array<float, 2>> out;
-  out.reserve(std::min(mask.points.size(), core::kMaxMaskPoints));
-  for (const core::MaskPoint& point : mask.points) {
-    if (out.size() >= core::kMaxMaskPoints) break;
+  out.reserve(flat.size());
+  for (const core::MaskPoint& point : flat) {
     out.push_back({static_cast<float>(point.x), static_cast<float>(point.y)});
   }
   return out;

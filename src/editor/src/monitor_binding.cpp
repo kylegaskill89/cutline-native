@@ -3,6 +3,7 @@
 #include "cutline/editor/effects_binding.hpp"
 
 #include "cutline/core/layout.hpp"
+#include "cutline/core/mask_path.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/core/effects.hpp"
 #include "cutline/editor/inspector.hpp"
@@ -160,10 +161,20 @@ std::vector<MaskOverlayRef> mask_overlays(const core::Project& project,
     // the overlay wants them in canvas fractions. Scaled rather than turned:
     // the overlay carries the rotation and applies it itself, exactly as it
     // does for the half-extents of the other two shapes.
-    std::vector<std::pair<double, double>> points;
+    std::vector<ui::MaskVertex> points;
     points.reserve(mask.points.size());
     for (const core::MaskPoint& point : mask.points) {
-      points.emplace_back(point.x * frame->width, point.y * frame->height);
+      // The handles are offsets in the same space as the points, so they scale
+      // the same way. Left unturned for the same reason: the overlay carries
+      // the rotation and applies it to everything it draws.
+      points.push_back(ui::MaskVertex{
+          .x = point.x * frame->width,
+          .y = point.y * frame->height,
+          .in_x = point.in_x * frame->width,
+          .in_y = point.in_y * frame->height,
+          .out_x = point.out_x * frame->width,
+          .out_y = point.out_y * frame->height,
+      });
     }
 
     out.push_back(MaskOverlayRef{
@@ -220,9 +231,15 @@ core::Project apply_mask_overlay(core::Project project, std::string_view clip_id
     core::Mask mask = moved->effects[effect].mask;
     mask.points.clear();
     mask.points.reserve(overlay.points.size());
-    for (const auto& [px, py] : overlay.points) {
-      mask.points.push_back(
-          core::MaskPoint{.x = px / frame->width, .y = py / frame->height});
+    for (const ui::MaskVertex& point : overlay.points) {
+      mask.points.push_back(core::MaskPoint{
+          .x = point.x / frame->width,
+          .y = point.y / frame->height,
+          .in_x = point.in_x / frame->width,
+          .in_y = point.in_y / frame->height,
+          .out_x = point.out_x / frame->width,
+          .out_y = point.out_y / frame->height,
+      });
     }
 
     // And the half-extents are made to describe the corners, because on a path
@@ -240,9 +257,13 @@ core::Project apply_mask_overlay(core::Project project, std::string_view clip_id
     // and switching back restores corners that still match the box. The centre
     // is left alone — the corners are offsets from it, and the drag already
     // moved it if it was the whole mask being moved rather than one corner.
+    //
+    // Measured on the flattened outline rather than on the placed points,
+    // because a curve leaves its ends: a cubic stays inside the hull of its
+    // control points, and the hull reaches wherever the handles do.
     double half_w = 0.0;
     double half_h = 0.0;
-    for (const core::MaskPoint& point : mask.points) {
+    for (const core::MaskPoint& point : core::flatten_mask_path(mask.points)) {
       half_w = std::max(half_w, std::abs(point.x));
       half_h = std::max(half_h, std::abs(point.y));
     }

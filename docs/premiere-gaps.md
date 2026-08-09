@@ -342,39 +342,46 @@ masking for nothing.
 | Feather, opacity, inversion | yes | **done** — opacity is the *effect's* strength, not the layer's transparency | — |
 | Rotation | yes | **done** | — |
 | A mask per effect | yes | **done** | — |
-| Pen / free-draw path | pen tool, bezier handles | **half** — a four-corner polygon with a handle on each; see below | medium |
+| Pen / free-draw path | pen tool, bezier handles | **done**, except placing a fresh path click by click; see below | — |
 | Dragging the shape on the monitor | yes | **done**, and it writes a keyframe when the number is animated | — |
 | Animating a mask | keyframed path, and tracking | **done** for every number it has; a path is the part that is missing | — |
 | Tracking | per-frame analysis | none, and belongs with neither of the above | machinery |
 
-**"Free Draw" does not draw yet, and this row used to claim it was done.** The
-owner found it: what the button gives you is a rectangle of four corners, each
-draggable. There is no way to add a corner, take one away, or bend an edge, and
-nothing in it is a bezier. Calling that a pen tool was wrong.
+**"Free Draw" is a pen now.** It was a rectangle of four draggable corners, and
+this row claimed it was finished. What it has:
 
-The half that exists is the half that is hard to see. `Mask::points` already
-carries up to sixty-four corners, the shader already fills any polygon by
-even-odd, the corners already scale and rotate with the layer, and the monitor
-already hit-tests and drags them. What is missing is the pen itself:
+- **A handle either side of every point.** `MaskPoint` carries `in` and `out`
+  offsets, and both zero is a sharp corner — so every path written before the
+  pen existed reads back as exactly the polygon it was, and a mask with no
+  curve on it still writes no handles down.
+- **One outline.** `core::flatten_mask_path` turns the path into the straight
+  segments that get filled, and the monitor draws *that*, so the shape on the
+  picture is the region being masked rather than an approximation beside it.
+  The sixty-four-point cap is spent where the curvature is: a nearly straight
+  edge gets one segment, a tight bend gets many, and the points somebody placed
+  are never dropped in favour of samples.
+- **The gestures.** Drag a point and its handles travel with it. Drag a handle
+  and the pair mirrors, so the curve stays smooth through the point; hold Alt
+  and it breaks, for a corner. Double-click a point to round it off or square it
+  up. Ctrl-click the outline to add a point — the curve is *split* by de
+  Casteljau, so the shape does not move at all — and Alt-click one to remove it,
+  down to the three that are the fewest that enclose anything.
 
-- **The model** needs a control point either side of each corner — Premiere's
-  free-draw points are bezier, and a corner is the case where both handles sit
-  on it. That is `MaskPoint` gaining two offsets, and the serialiser following.
-- **The shader keeps filling straight edges.** A curve is flattened into corners
-  before it is handed down, which is why the sixty-four-point cap is the thing to
-  watch: a few curved segments spend it quickly, and the flattening step should
-  spend points where the curvature is rather than evenly.
-- **The monitor** needs a placing mode — click to drop a corner, drag as you
-  drop to pull its handles out, click the first corner to close — and then to
-  draw and hit-test two handles per corner alongside the corner itself. It has
-  the last part already.
-- **Alt-click to break a handle pair**, and double-click a corner to switch it
-  between smooth and sharp, are what make the tool usable rather than merely
-  present.
+**What is left is placing a path from nothing.** Premiere lets you click out a
+fresh shape point by point on an empty frame; here you always start from the
+rectangle Free Draw seeds and edit it into what you want, which reaches every
+shape but is not the same gesture. That wants a mode on the monitor — clicks
+append rather than select, a rubber band to the pointer, and closing on the
+first point — plus somewhere to turn it on.
 
-Until then the polygon is honest and useful, and the one thing that *was* broken
-about it — the half-extents not following the corners, so switching the shape
-afterwards jumped somewhere else — is fixed.
+**And the whole feature had never masked anything.** `to_gpu_pass` builds the
+mask from a brace list of its ten numbers, and the corners are a vector that a
+brace list cannot carry, so a path reached the card empty and the shader applied
+the effect to the entire layer. Nothing in the editor showed it: the outline
+drew, the handles dragged, every number round-tripped. Only the picture was
+wrong, and only for the one shape whose definition is not a number. There are
+two tests on it now, one of which measures the area a bowed path covers against
+the diamond it started as and expects π/2.
 
 Tracking is beyond all of it: it is per-frame analysis, a different kind of work
 from anything here now.

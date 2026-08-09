@@ -1920,6 +1920,20 @@ void build_effect_mask(App& app, const std::string& clip_id,
 
   if (mask.shape == cutline::core::MaskShape::None) return;
 
+  // What the pen can do, written down where the shape was chosen. None of it is
+  // guessable — a modifier held over a picture leaves no trace until it is
+  // tried — and a tool nobody can find is a tool that is not there.
+  if (mask.shape == cutline::core::MaskShape::Path) {
+    auto& pen = app.inspector->emplace<Box>(Axis::Vertical);
+    pen.emplace<Label>("Drag a point to move it. Double-click one to round it off")
+        .set_small(true);
+    pen.emplace<Label>("or square it up. Ctrl-click the outline to add a point,")
+        .set_small(true);
+    pen.emplace<Label>("Alt-click one to remove it. Alt while pulling a handle")
+        .set_small(true);
+    pen.emplace<Label>("breaks the pair, for a corner instead of a curve.").set_small(true);
+  }
+
   // Every number on the mask is an ordinary animatable parameter row, under the
   // reserved keys `core::mask_param_keys` names. That is the whole of mask
   // animation: the stopwatch, the keyframe navigator, the curve picker and the

@@ -6,6 +6,7 @@
   src/id.cpp
   src/keyframe.cpp
   src/layout.cpp
+  src/mask_path.cpp
   src/pool.cpp
   src/properties.cpp
   src/query.cpp

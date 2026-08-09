@@ -162,7 +162,20 @@ json write(const Mask& m) {
   // Only for a path. Every mask carries the field and almost none has corners.
   if (!m.points.empty()) {
     json points = json::array();
-    for (const MaskPoint& point : m.points) points.push_back({{"x", point.x}, {"y", point.y}});
+    for (const MaskPoint& point : m.points) {
+      json entry{{"x", point.x}, {"y", point.y}};
+      // The handles only when there are any. A sharp corner is the common case
+      // and every path written before the pen existed is entirely sharp, so
+      // writing four zeroes per point would quadruple the size of the commonest
+      // shape to say nothing.
+      if (!point.sharp()) {
+        entry["in_x"] = point.in_x;
+        entry["in_y"] = point.in_y;
+        entry["out_x"] = point.out_x;
+        entry["out_y"] = point.out_y;
+      }
+      points.push_back(std::move(entry));
+    }
     j["points"] = std::move(points);
   }
   return j;
@@ -469,8 +482,15 @@ ClipEffect read_clip_effect(const json& j) {
         points != mask->end() && points->is_array()) {
       for (const auto& point : *points) {
         if (!point.is_object() || e.mask.points.size() >= kMaxMaskPoints) continue;
-        e.mask.points.push_back(
-            MaskPoint{.x = read_or(point, "x", 0.0), .y = read_or(point, "y", 0.0)});
+        // Absent handles read as zero, which is a sharp corner — so a path
+        // written before the pen existed comes back as exactly the polygon it
+        // was.
+        e.mask.points.push_back(MaskPoint{.x = read_or(point, "x", 0.0),
+                                          .y = read_or(point, "y", 0.0),
+                                          .in_x = read_or(point, "in_x", 0.0),
+                                          .in_y = read_or(point, "in_y", 0.0),
+                                          .out_x = read_or(point, "out_x", 0.0),
+                                          .out_y = read_or(point, "out_y", 0.0)});
       }
     }
   }

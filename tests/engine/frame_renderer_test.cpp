@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <numbers>
 #include <set>
 #include <string>
 #include <system_error>
@@ -401,6 +402,82 @@ TEST_F(FrameRendererTest, AClipsEffectStackReachesTheShader) {
 
   const Rgba centre = pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2);
   EXPECT_LT(centre.r, 5) << "an inverted white matte should be black";
+}
+
+// A free-drawn mask reached the card with an empty path for as long as the
+// feature existed. `to_gpu_pass` builds the mask from a brace list of its ten
+// numbers, and the corners are a vector that the list cannot carry — so the
+// shader had nothing to test a pixel against and applied the effect everywhere.
+//
+// It was invisible from the editor: the outline drew, the handles dragged, the
+// numbers all round-tripped. Only the picture was wrong, and only for the one
+// shape whose definition is not a number.
+TEST_F(FrameRendererTest, AFreeDrawnMaskKeepsTheEffectInsideIt) {
+  Project p = canvas_project();
+  p.media = {matte("m", "#ffffff")};
+
+  // A diamond about the centre, well clear of the corners of the frame.
+  core::ClipEffect invert{.type = "invert", .enabled = true, .params = {{"on", 1.0}}};
+  invert.mask = core::Mask{.shape = core::MaskShape::Path,
+                           .points = {core::MaskPoint{.x = 0.0, .y = -0.3},
+                                      core::MaskPoint{.x = 0.3, .y = 0.0},
+                                      core::MaskPoint{.x = 0.0, .y = 0.3},
+                                      core::MaskPoint{.x = -0.3, .y = 0.0}}};
+
+  Clip c = clip("c", "m", 0.0, 5.0);
+  c.effects = {invert};
+  p.tracks = {video_track("v1", {c})};
+
+  const gpu::Image image = render(p, 1.0);
+  ASSERT_FALSE(image.empty());
+
+  EXPECT_LT(pixel_at(image, kWidth / 2, kHeight / 2).r, 5)
+      << "inside the path the white matte should have been inverted to black";
+  EXPECT_GT(pixel_at(image, 2, 2).r, 250)
+      << "outside the path the matte should have been left alone";
+}
+
+// And the handles are what make it a pen rather than a polygon: the same four
+// points, bowed outwards, have to cover more of the frame than the diamond they
+// started as.
+TEST_F(FrameRendererTest, BendingAPathsEdgesChangesWhatItCovers) {
+  const auto coverage = [this](bool curved) {
+    Project p = canvas_project();
+    p.media = {matte("m", "#ffffff")};
+
+    // The circle constant: handles of this length turn four cubics into a
+    // circle, so the curved run should cover about pi/2 of the diamond.
+    const double r = 0.3;
+    const double k = curved ? 0.5523 * r : 0.0;
+    core::ClipEffect invert{.type = "invert", .enabled = true, .params = {{"on", 1.0}}};
+    invert.mask = core::Mask{
+        .shape = core::MaskShape::Path,
+        .points = {core::MaskPoint{.x = 0.0, .y = -r, .in_x = -k, .out_x = k},
+                   core::MaskPoint{.x = r, .y = 0.0, .in_y = -k, .out_y = k},
+                   core::MaskPoint{.x = 0.0, .y = r, .in_x = k, .out_x = -k},
+                   core::MaskPoint{.x = -r, .y = 0.0, .in_y = k, .out_y = -k}}};
+
+    Clip c = clip("c", "m", 0.0, 5.0);
+    c.effects = {invert};
+    p.tracks = {video_track("v1", {c})};
+
+    const gpu::Image image = render(p, 1.0);
+    int inside = 0;
+    for (int y = 0; y < kHeight; ++y) {
+      for (int x = 0; x < kWidth; ++x) {
+        if (pixel_at(image, x, y).r < 128) ++inside;
+      }
+    }
+    return inside;
+  };
+
+  const int diamond = coverage(false);
+  const int disc = coverage(true);
+  ASSERT_GT(diamond, 0) << "the straight-edged path masked nothing at all";
+  EXPECT_GT(disc, diamond) << "bowing the edges out should enclose more, not less";
+  // A circle against its inscribed diamond is pi/2. Loose, because sixty-four
+  // pixels across is a coarse place to measure an area.
+  EXPECT_NEAR(static_cast<double>(disc) / diamond, std::numbers::pi / 2.0, 0.15);
 }
 
 TEST_F(FrameRendererTest, EffectKeyframesResolveAtTheRenderedTime) {

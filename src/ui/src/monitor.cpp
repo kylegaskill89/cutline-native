@@ -1,5 +1,7 @@
 #include "cutline/ui/monitor.hpp"
 
+#include "cutline/core/mask_path.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <numbers>
@@ -14,6 +16,33 @@ namespace {
 /// same size: a handle that is easier to hit than it looks is a handle you
 /// grab by accident when you meant to move the layer.
 constexpr double kHandleReach = 5.0;
+
+/// The most points this widget will let a path grow to.
+///
+/// The same cap the model carries, repeated rather than included: this header
+/// describes what a widget draws and does not otherwise know a project exists.
+/// A static assertion where the two meet would be better than a comment, and
+/// there is nowhere in the widget layer that sees both.
+constexpr std::size_t kMaxOverlayPoints = 64;
+
+/// The path as the corners that get filled, which is what it is drawn as too.
+///
+/// Straight through `core::flatten_mask_path`, the same call the renderer makes
+/// — so the outline on the picture is the region being masked rather than an
+/// approximation of it that can drift.
+[[nodiscard]] std::vector<core::MaskPoint> outline_of(const MaskOverlay& mask) {
+  std::vector<core::MaskPoint> control;
+  control.reserve(mask.points.size());
+  for (const MaskVertex& point : mask.points) {
+    control.push_back(core::MaskPoint{.x = point.x,
+                                      .y = point.y,
+                                      .in_x = point.in_x,
+                                      .in_y = point.in_y,
+                                      .out_x = point.out_x,
+                                      .out_y = point.out_y});
+  }
+  return core::flatten_mask_path(control);
+}
 
 /// How far above the top edge the rotation handle floats. Clear of the corner
 /// handles either side of it, which is the whole reason it is not simply on
@@ -207,7 +236,11 @@ void MonitorView::paint_masks(Painter& painter, const Theme& theme) const {
     // is not a rectangle the painter can stroke and a rotated rectangle is not
     // one either. Thirty-two steps is smooth at any size this panel reaches.
     constexpr int kSteps = 32;
-    const int steps = mask.shape == 3 ? static_cast<int>(mask.points.size())
+    // A path is drawn as the corners it fills as, curves already flattened, so
+    // the outline and the mask are the same shape however it is bent.
+    const std::vector<core::MaskPoint> outline =
+        mask.shape == 3 ? outline_of(mask) : std::vector<core::MaskPoint>{};
+    const int steps = mask.shape == 3 ? static_cast<int>(outline.size())
                       : mask.shape == 2 ? 4
                                         : kSteps;
     if (steps <= 0) continue;
@@ -220,10 +253,9 @@ void MonitorView::paint_masks(Painter& painter, const Theme& theme) const {
       double ly = 0.0;
       if (mask.shape == 3) {
         // Its own corners, in the order they were drawn, closing on the first.
-        const std::pair<double, double>& corner =
-            mask.points[static_cast<std::size_t>(step) % mask.points.size()];
-        lx = corner.first * area.width;
-        ly = corner.second * area.height;
+        const core::MaskPoint& corner = outline[static_cast<std::size_t>(step) % outline.size()];
+        lx = corner.x * area.width;
+        ly = corner.y * area.height;
       } else if (mask.shape == 2) {
         // The four corners, in order, closing back on the first.
         const double corner_x[4] = {-1.0, 1.0, 1.0, -1.0};
@@ -251,6 +283,24 @@ void MonitorView::paint_masks(Painter& painter, const Theme& theme) const {
     for (std::size_t corner = 0; corner < mask.points.size(); ++corner) {
       const Rect handle = mask_corner_grip(i, corner);
       if (!handle.empty()) painter.fill(handle.inset(2.0), 0.0, Fill::solid(grip_ink));
+    }
+
+    // And the two bezier handles of the point being worked on, each on the end
+    // of a leg from the point it bends. Only that one point's: a path of any
+    // size shows a thicket of squares otherwise, and Premiere shows them for
+    // the selected point for the same reason.
+    if (mask.shape == 3 && mask_selected_.has_value() && *mask_selected_ < mask.points.size() &&
+        mask_dragging_.value_or(i) == i) {
+      const MaskVertex& point = mask.points[*mask_selected_];
+      const auto [px, py] = rotate(point.x * area.width, point.y * area.height, radians);
+      for (const MaskHandle side : {MaskHandle::In, MaskHandle::Out}) {
+        const Rect grip_rect = mask_handle_grip(i, *mask_selected_, side);
+        if (grip_rect.empty()) continue;
+        // The leg first, so the square sits on top of its own line.
+        painter.line(cx + px, cy + py, grip_rect.x + grip_rect.width * 0.5,
+                     grip_rect.y + grip_rect.height * 0.5, ink, 1.0);
+        painter.fill(grip_rect.inset(2.0), 0.0, Fill::solid(ink));
+      }
     }
   }
   painter.pop_clip();
@@ -358,7 +408,8 @@ struct MaskBox {
 /// Whether a point is inside a free-drawn path, by the same even-odd rule the
 /// shader fills it with — so what you can grab and what you can see agree.
 [[nodiscard]] bool inside_path(const MaskOverlay& mask, const Rect& area, double x, double y) {
-  if (mask.points.size() < 3 || area.width <= 0.0 || area.height <= 0.0) return false;
+  const std::vector<core::MaskPoint> outline = outline_of(mask);
+  if (outline.size() < 3 || area.width <= 0.0 || area.height <= 0.0) return false;
 
   const auto [lx, ly] = rotate(x - (area.x + mask.x * area.width),
                                y - (area.y + mask.y * area.height), -to_radians(mask.rotation));
@@ -366,10 +417,11 @@ struct MaskBox {
   const double py = ly / area.height;
 
   bool inside = false;
-  for (std::size_t i = 0, previous = mask.points.size() - 1; i < mask.points.size();
-       previous = i++) {
-    const auto& [cx, cy] = mask.points[i];
-    const auto& [ox, oy] = mask.points[previous];
+  for (std::size_t i = 0, previous = outline.size() - 1; i < outline.size(); previous = i++) {
+    const double cx = outline[i].x;
+    const double cy = outline[i].y;
+    const double ox = outline[previous].x;
+    const double oy = outline[previous].y;
     if ((cy > py) != (oy > py)) {
       const double t = (py - cy) / (oy - cy);
       if (px < cx + t * (ox - cx)) inside = !inside;
@@ -387,8 +439,108 @@ Rect MonitorView::mask_corner_grip(std::size_t index, std::size_t corner) const 
   const MaskOverlay& mask = masks_[index];
   if (mask.shape != 3 || corner >= mask.points.size()) return Rect{};
 
-  const auto [ox, oy] = rotate(mask.points[corner].first * area.width,
-                               mask.points[corner].second * area.height,
+  const auto [ox, oy] = rotate(mask.points[corner].x * area.width,
+                               mask.points[corner].y * area.height,
+                               to_radians(mask.rotation));
+  const double cx = area.x + mask.x * area.width + ox;
+  const double cy = area.y + mask.y * area.height + oy;
+  return Rect{cx - kHandleReach, cy - kHandleReach, kHandleReach * 2.0, kHandleReach * 2.0};
+}
+
+std::optional<std::size_t> MonitorView::add_mask_point(std::size_t index, double x, double y) {
+  const Rect area = picture();
+  if (area.empty() || index >= masks_.size()) return std::nullopt;
+  if (area.width <= 0.0 || area.height <= 0.0) return std::nullopt;
+
+  MaskOverlay& mask = masks_[index];
+  if (mask.shape != 3 || mask.points.size() < 2) return std::nullopt;
+
+  // Into the path's own frame, the same way the hit test goes.
+  const auto [lx, ly] = rotate(x - (area.x + mask.x * area.width),
+                               y - (area.y + mask.y * area.height), -to_radians(mask.rotation));
+  const double px = lx / area.width;
+  const double py = ly / area.height;
+
+  std::vector<core::MaskPoint> control;
+  control.reserve(mask.points.size());
+  for (const MaskVertex& point : mask.points) {
+    control.push_back(core::MaskPoint{.x = point.x,
+                                      .y = point.y,
+                                      .in_x = point.in_x,
+                                      .in_y = point.in_y,
+                                      .out_x = point.out_x,
+                                      .out_y = point.out_y});
+  }
+
+  const std::optional<core::MaskPathHit> hit = core::nearest_on_mask_path(control, px, py);
+  if (!hit.has_value()) return std::nullopt;
+
+  // Near enough to have been aimed at the outline. Measured against the widget
+  // rather than the frame, because what a hand can aim is a number of pixels.
+  const double away = std::hypot(hit->distance * area.width, hit->distance * area.height);
+  if (away > kHandleReach * 3.0) return std::nullopt;
+
+  const std::vector<core::MaskPoint> split = core::split_mask_path(control, hit->segment, hit->t);
+  mask.points.clear();
+  mask.points.reserve(split.size());
+  for (const core::MaskPoint& point : split) {
+    mask.points.push_back(MaskVertex{.x = point.x,
+                                     .y = point.y,
+                                     .in_x = point.in_x,
+                                     .in_y = point.in_y,
+                                     .out_x = point.out_x,
+                                     .out_y = point.out_y});
+  }
+  return hit->segment + 1;
+}
+
+void MonitorView::curve_mask_point(std::size_t index, std::size_t corner) {
+  if (index >= masks_.size()) return;
+  MaskOverlay& mask = masks_[index];
+  const std::size_t count = mask.points.size();
+  if (count < 3 || corner >= count) return;
+
+  const MaskVertex& previous = mask.points[(corner + count - 1) % count];
+  const MaskVertex& next = mask.points[(corner + 1) % count];
+  MaskVertex& point = mask.points[corner];
+
+  // The direction the path is running as it passes through, taken from the
+  // neighbours rather than from the point itself — the point is on the line, so
+  // it says nothing about which way the line goes.
+  const double dx = next.x - previous.x;
+  const double dy = next.y - previous.y;
+  const double length = std::hypot(dx, dy);
+  if (length <= 0.0) return;
+
+  const double ux = dx / length;
+  const double uy = dy / length;
+  // A third of the way to each neighbour: far enough to round the corner
+  // visibly, near enough that it does not overshoot into the next one.
+  const double to_next = std::hypot(next.x - point.x, next.y - point.y) / 3.0;
+  const double to_previous = std::hypot(point.x - previous.x, point.y - previous.y) / 3.0;
+  point.out_x = ux * to_next;
+  point.out_y = uy * to_next;
+  point.in_x = -ux * to_previous;
+  point.in_y = -uy * to_previous;
+}
+
+Rect MonitorView::mask_handle_grip(std::size_t index, std::size_t corner,
+                                   MaskHandle side) const {
+  const Rect area = picture();
+  if (area.empty() || index >= masks_.size()) return Rect{};
+  // Only the selected point's, which is what makes the picture readable — and
+  // what makes the hit test below unambiguous, since a handle sitting on its
+  // own point would otherwise be indistinguishable from it.
+  if (!mask_selected_.has_value() || *mask_selected_ != corner) return Rect{};
+
+  const MaskOverlay& mask = masks_[index];
+  if (mask.shape != 3 || corner >= mask.points.size()) return Rect{};
+
+  const MaskVertex& point = mask.points[corner];
+  const double hx = side == MaskHandle::In ? point.in_x : point.out_x;
+  const double hy = side == MaskHandle::In ? point.in_y : point.out_y;
+
+  const auto [ox, oy] = rotate((point.x + hx) * area.width, (point.y + hy) * area.height,
                                to_radians(mask.rotation));
   const double cx = area.x + mask.x * area.width + ox;
   const double cy = area.y + mask.y * area.height + oy;
@@ -568,20 +720,91 @@ bool MonitorView::on_mouse_down(const MouseEvent& event) {
     mask_dragging_ = mask;
     mask_resizing_ = mask_grip(*mask).contains(event.x, event.y);
     mask_corner_.reset();
-    // A corner before the shape, so grabbing one of a path's handles reshapes
-    // it rather than moving the whole thing — the same order the layer's own
-    // handles are tested in, and for the same reason.
-    for (std::size_t corner = 0; corner < masks_[*mask].points.size(); ++corner) {
-      if (mask_corner_grip(*mask, corner).contains(event.x, event.y)) {
-        mask_corner_ = corner;
-        break;
+    mask_handle_.reset();
+    mask_handle_broken_ = event.modifiers.alt;
+
+    // A bezier handle first of all. It sits further out than the point it
+    // belongs to and only exists for the selected one, so testing it first
+    // costs the other points nothing and makes the near ones reachable.
+    if (mask_selected_.has_value()) {
+      for (const MaskHandle side : {MaskHandle::In, MaskHandle::Out}) {
+        if (mask_handle_grip(*mask, *mask_selected_, side).contains(event.x, event.y)) {
+          mask_handle_ = side;
+          mask_corner_ = mask_selected_;
+          break;
+        }
       }
     }
+
+    // Then a corner, before the shape, so grabbing one of a path's handles
+    // reshapes it rather than moving the whole thing — the same order the
+    // layer's own handles are tested in, and for the same reason.
+    if (!mask_handle_.has_value()) {
+      for (std::size_t corner = 0; corner < masks_[*mask].points.size(); ++corner) {
+        if (mask_corner_grip(*mask, corner).contains(event.x, event.y)) {
+          // Alt on a point takes it out. A path needs three to enclose
+          // anything, so the third is where removing stops — below that there
+          // is no shape left to edit back up from.
+          if (event.modifiers.alt && masks_[*mask].points.size() > 3) {
+            masks_[*mask].points.erase(masks_[*mask].points.begin() +
+                                       static_cast<std::ptrdiff_t>(corner));
+            mask_selected_.reset();
+            mask_dragging_.reset();
+            mask_handle_broken_ = false;
+            if (on_mask_commit_) on_mask_commit_(*mask, masks_[*mask]);
+            return true;
+          }
+
+          mask_corner_ = corner;
+          mask_selected_ = corner;
+
+          // Double-clicking a point turns it between a corner and a curve.
+          // That is the one gesture that changes a point's *kind* rather than
+          // its position, and Premiere spells it the same way.
+          if (event.click_count >= 2) {
+            MaskVertex& point = masks_[*mask].points[corner];
+            if (point.in_x == 0.0 && point.in_y == 0.0 && point.out_x == 0.0 &&
+                point.out_y == 0.0) {
+              curve_mask_point(*mask, corner);
+            } else {
+              point.in_x = point.in_y = point.out_x = point.out_y = 0.0;
+            }
+            mask_dragging_.reset();
+            mask_corner_.reset();
+            if (on_mask_commit_) on_mask_commit_(*mask, masks_[*mask]);
+            return true;
+          }
+          break;
+        }
+      }
+    }
+
+    // Control and a click on the outline puts a point there. The curve is split
+    // rather than re-cut, so the shape does not so much as twitch — adding
+    // detail has to be something you can do without losing what you drew.
+    if (!mask_corner_.has_value() && !mask_handle_.has_value() &&
+        event.modifiers.control && masks_[*mask].shape == 3 &&
+        masks_[*mask].points.size() < kMaxOverlayPoints) {
+      if (const std::optional<std::size_t> added = add_mask_point(*mask, event.x, event.y);
+          added.has_value()) {
+        mask_selected_ = added;
+        mask_dragging_.reset();
+        mask_handle_broken_ = false;
+        if (on_mask_commit_) on_mask_commit_(*mask, masks_[*mask]);
+        return true;
+      }
+    }
+
+    // A press on the body of the path, away from any point, puts the handles
+    // away — the same as clicking off a selection anywhere else.
+    if (!mask_corner_.has_value() && !mask_handle_.has_value()) mask_selected_.reset();
+
     mask_origin_ = masks_[*mask];
     press_x_ = event.x;
     press_y_ = event.y;
     return true;
   }
+  mask_selected_.reset();
 
   if (handle == TransformHandle::Move) return take_layer();
 
@@ -633,12 +856,47 @@ void MonitorView::drag_mask(double x, double y) {
   const double dy = (y - press_y_) / area.height;
 
   MaskOverlay next = mask_origin_;
-  if (mask_corner_.has_value() && *mask_corner_ < next.points.size()) {
-    // In the path's own frame, so dragging a corner of a turned shape moves it
-    // where the pointer went rather than where the rotation sends it.
+  if (mask_handle_.has_value() && mask_corner_.has_value() &&
+      *mask_corner_ < next.points.size()) {
+    // A bezier handle. In the path's own frame like everything else here.
     const auto [lx, ly] = rotate(dx, dy, -to_radians(next.rotation));
-    next.points[*mask_corner_].first = mask_origin_.points[*mask_corner_].first + lx;
-    next.points[*mask_corner_].second = mask_origin_.points[*mask_corner_].second + ly;
+    const MaskVertex& was = mask_origin_.points[*mask_corner_];
+    MaskVertex& point = next.points[*mask_corner_];
+
+    const bool out = *mask_handle_ == MaskHandle::Out;
+    if (out) {
+      point.out_x = was.out_x + lx;
+      point.out_y = was.out_y + ly;
+    } else {
+      point.in_x = was.in_x + lx;
+      point.in_y = was.in_y + ly;
+    }
+
+    // The pair moves together unless it is being broken. That is what keeps a
+    // curve smooth through the point while it is being shaped, and holding Alt
+    // is how you get a crease — the same modifier, and the same meaning, as
+    // every other program with a pen in it.
+    if (!mask_handle_broken_) {
+      core::MaskPoint mirrored{.x = point.x,
+                               .y = point.y,
+                               .in_x = point.in_x,
+                               .in_y = point.in_y,
+                               .out_x = point.out_x,
+                               .out_y = point.out_y};
+      core::smooth_mask_point(mirrored, out);
+      point.in_x = mirrored.in_x;
+      point.in_y = mirrored.in_y;
+      point.out_x = mirrored.out_x;
+      point.out_y = mirrored.out_y;
+    }
+  } else if (mask_corner_.has_value() && *mask_corner_ < next.points.size()) {
+    // In the path's own frame, so dragging a corner of a turned shape moves it
+    // where the pointer went rather than where the rotation sends it. The
+    // handles travel with the point: they are offsets from it, so moving it
+    // moves the curve either side without reshaping it.
+    const auto [lx, ly] = rotate(dx, dy, -to_radians(next.rotation));
+    next.points[*mask_corner_].x = mask_origin_.points[*mask_corner_].x + lx;
+    next.points[*mask_corner_].y = mask_origin_.points[*mask_corner_].y + ly;
   } else if (mask_resizing_) {
     // In the mask's own frame, so dragging a corner of a turned shape grows it
     // along its own axes rather than the screen's.
@@ -658,6 +916,8 @@ bool MonitorView::on_mouse_up(const MouseEvent& event) {
     mask_dragging_.reset();
     mask_resizing_ = false;
     mask_corner_.reset();
+    mask_handle_.reset();
+    mask_handle_broken_ = false;
     if (index < masks_.size() && masks_[index] != mask_origin_ && on_mask_commit_) {
       on_mask_commit_(index, masks_[index]);
     }

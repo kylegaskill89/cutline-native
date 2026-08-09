@@ -188,6 +188,14 @@ constexpr int kMaxPooledFrames = 40;
               pass.mask.width,        pass.mask.height,       pass.mask.cos_rotation,
               pass.mask.sin_rotation, pass.mask.feather,      pass.mask.opacity,
               pass.mask.inverted};
+  // The corners, which the brace list above cannot carry and used not to.
+  //
+  // Without this a free-drawn mask reached the card with an empty path, the
+  // shader found no corners to test a pixel against, and the effect applied to
+  // the whole layer — so the outline could be drawn and dragged on the monitor
+  // and masked nothing whatever. The two shapes made of numbers were fine,
+  // because all ten of their numbers are in that list.
+  out.mask.points = pass.mask.points;
   return out;
 }
 

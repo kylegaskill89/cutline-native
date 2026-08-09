@@ -272,15 +272,35 @@ struct Transition {
 /// what every effect did before there were masks.
 enum class MaskShape { None, Ellipse, Rectangle, Path };
 
-/// One corner of a free-drawn mask, in fractions of the layer and measured from
+/// One point of a free-drawn mask, in fractions of the layer and measured from
 /// the mask's own centre — so the position and rotation above move and turn the
 /// whole path, through exactly the transform the other two shapes go through.
 ///
-/// Straight lines between them: a curve is a different feature, and one that
-/// would want a handle either side of every point.
+/// **The two handles are what make it a pen rather than a polygon.** Each is an
+/// offset from the point itself, in the same units: `out` reaches towards the
+/// next point and `in` back towards the previous one, and the segment between
+/// any two points is the cubic they describe. Both handles zero is a sharp
+/// corner and a straight edge, which is what every path written before they
+/// existed has — so an old project reads back as exactly the shape it was.
+///
+/// Nothing downstream sees a curve. `flatten_mask_path` turns the path into the
+/// straight segments the shader fills and the monitor draws, so there is one
+/// outline rather than a drawn one and a filled one that can disagree.
 struct MaskPoint {
   double x = 0.0;
   double y = 0.0;
+
+  /// Towards the previous point.
+  double in_x = 0.0;
+  double in_y = 0.0;
+  /// Towards the next point.
+  double out_x = 0.0;
+  double out_y = 0.0;
+
+  /// Whether this point has any curve to it at all.
+  [[nodiscard]] bool sharp() const noexcept {
+    return in_x == 0.0 && in_y == 0.0 && out_x == 0.0 && out_y == 0.0;
+  }
 
   friend bool operator==(const MaskPoint&, const MaskPoint&) = default;
 };
