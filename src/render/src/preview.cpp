@@ -1,4 +1,4 @@
-﻿#include "cutline/render/preview.hpp"
+#include "cutline/render/preview.hpp"
 
 #include "cutline/render/effect_catalog.hpp"
 
@@ -21,7 +21,7 @@ constexpr int kSmallestCanvas = 16;
 ///
 /// Asked of the catalogue rather than listed here. The catalogue already says
 /// which parameters are in pixels, because that is what puts "px" after the
-/// number on the slider â€” so the one declaration that makes a parameter *read*
+/// number on the slider — so the one declaration that makes a parameter *read*
 /// as a length is the same one that makes it *scale* as a length, and there is
 /// no second list to keep in step.
 ///

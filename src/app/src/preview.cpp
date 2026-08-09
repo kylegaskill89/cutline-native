@@ -1,4 +1,4 @@
-﻿#include "cutline/app/preview.hpp"
+#include "cutline/app/preview.hpp"
 
 #include "cutline/engine/frame_renderer.hpp"
 #include "cutline/gpu/compositor.hpp"
@@ -15,7 +15,7 @@ std::expected<editor::MediaSource, std::string> probe_source(std::string_view pa
   if (!info.has_value()) return std::unexpected(info.error());
 
   // libavformat is permissive enough to open things that are not media at all
-  // â€” it will happily identify a text file as some raw format â€” and without
+  // — it will happily identify a text file as some raw format — and without
   // this a mistyped name imports as a clip with no streams and no duration,
   // which then sits in the browser doing nothing and explaining nothing.
   if (!info->has_video() && info->audio.empty()) {
@@ -88,19 +88,19 @@ std::expected<void, std::string> ProjectPreview::resize(int width, int height) {
 
   // The renderer keeps its decoders. This used to build a whole new one, on the
   // grounds that it owns its compositor "and every decoder it has open, and
-  // those are all sized to the old canvas" â€” which is true of the compositor and
+  // those are all sized to the old canvas" — which is true of the compositor and
   // false of the decoders. A decoder is sized to its *source*: its surface pool
   // comes from the media's own width and height, and nothing in it knows what
   // canvas the result will be drawn into.
   //
   // So throwing them away bought nothing and cost a seek from the nearest
   // keyframe on every open source. Changing the preview quality mid-playback
-  // stalled for over a second â€” 1,435 ms at 1/2 on a 4K60 capture â€” and that is
+  // stalled for over a second — 1,435 ms at 1/2 on a 4K60 capture — and that is
   // the one control somebody reaches for *because* playback is already
   // struggling under a stack of effects. The worst possible moment to freeze.
   //
   // `Compositor::resize` rebuilds only the canvas-sized targets, and it waits
-  // for the GPU to go idle before freeing them â€” which is the wait the old code
+  // for the GPU to go idle before freeing them — which is the wait the old code
   // had to do by hand, because what it could not do was wait on behalf of a
   // renderer being destroyed whole. That crash is still guarded; it is guarded
   // in the one place that owns the textures.
@@ -116,14 +116,14 @@ std::expected<void, std::string> ProjectPreview::resize(int width, int height) {
 
 std::expected<ui::ImageView, std::string> ProjectPreview::frame_at(const core::Project& project,
                                                                    double t) {
-  // The sequence may have been resized under us â€” opening a different project,
-  // most obviously â€” and rendering at the old size would letterbox wrongly.
+  // The sequence may have been resized under us — opening a different project,
+  // most obviously — and rendering at the old size would letterbox wrongly.
   if (const auto matched = resize(project.canvas_w, project.canvas_h); !matched.has_value()) {
     return std::unexpected(matched.error());
   }
 
   // The preview is the one thing that asks for proxies, and it asks every
-  // frame from the project's own setting â€” so turning them on or off takes
+  // frame from the project's own setting — so turning them on or off takes
   // effect at once rather than at whatever moment something remembers to push
   // it. Export never asks, which is what keeps the small copy out of the file
   // it writes.
@@ -151,7 +151,7 @@ std::expected<ui::TextureView, std::string> ProjectPreview::texture_at(
   }
 
   // The preview is the one thing that asks for proxies, and it asks every
-  // frame from the project's own setting â€” so turning them on or off takes
+  // frame from the project's own setting — so turning them on or off takes
   // effect at once rather than at whatever moment something remembers to push
   // it. Export never asks, which is what keeps the small copy out of the file
   // it writes.
