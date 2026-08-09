@@ -680,19 +680,32 @@ things about this codebase.
 
 ### B. Worth doing, and nobody will notice until it is done
 
-- **Every preview frame drains the GPU twice.** `Compositor::compose` ends with
-  `submit()` then `wait_for_idle()`, and `display_texture` — which runs
-  immediately after it on every preview frame — does the same again. Each of
-  those is a full CPU-to-GPU round trip, so the CPU sits idle while the card
-  finishes and the card sits idle while the next batch is recorded. Nothing
-  overlaps. On bare footage it is affordable (2.4 ms compositing measured), and
-  it is precisely the wrong shape for the case the preview quality control
-  exists to rescue: a stack of per-pixel effects at 4K, where GPU time is the
-  whole cost. The two passes want to be one command list and one submit.
-  **The wait cannot simply be deleted** — `upload_planes` maps and rewrites one
-  upload buffer per frame, and the descriptor heap is rewritten per layer, so
-  without the drain the next frame scribbles over what the card is still
-  reading. Multi-buffering those is the actual work; the wait is the symptom.
+- **Every preview frame drains the GPU twice, and the fix needs per-frame
+  command allocators first.** `Compositor::compose` ends with `submit()` then
+  `wait_for_idle()`, and `display_texture` — which runs immediately after it on
+  every preview frame — does the same again. Two full CPU-to-GPU round trips,
+  with the card idle across each.
+
+  Moving the wait from the *end* of compose to the *start* of the next one was
+  tried: it keeps the same promise about not overwriting per-frame resources
+  while the card reads them, and it lets the display pass queue straight behind
+  the composite. **It hangs.** `Device::begin` resets a single command allocator
+  and its one command list, so `display_texture` calling `begin` while compose's
+  list is still executing resets an allocator with commands in flight. It shows
+  as `play_project` never producing a summary on a heavy fixture; the light one
+  survives it, which is the sort of thing that gets committed if the only
+  fixture is a light one.
+
+  So the prerequisite is a *ring of allocators and command lists*, one per frame
+  in flight, in `gpu::Device` — not anything in the compositor. Only after that
+  can the drains go, and only then is it worth multi-buffering the upload buffer,
+  the mask-point buffer and the descriptor heap, which are the other things the
+  drain currently protects.
+
+  Worth knowing before spending time on it: on a 5070 Ti the app is about **4 ms
+  a frame behind the bare renderer** under a heavy stack (25.3 ms against 21.5),
+  and most of that is the interface's own 4K repaint rather than the round
+  trips. The round trips are the tidy fix; they are not obviously the big one.
 - **Forward and reverse can disagree about which frame a moment is.** The
   forward decode loop now takes the nearest frame within half a source frame
   (see §9), while `Source::covering` — the run of remembered frames, which is
@@ -1338,11 +1351,20 @@ unmistakably blurred, so the effects really are running):
 | four per-pixel effects, 4K60 | 57.9 fps | 57.9 | 57.6 |
 | no effects, 4K60 | 57.1 fps | 57.2 | 57.1 |
 
-So on a 5070 Ti the shading is nowhere near the limit and the control buys
-nothing at any quality. That is a statement about this machine rather than about
-the control: on a weaker card, or under a heavier stack than four passes, it is
-exactly the right lever. It should stay, and it should stay *correct* — which is
-what the scaling bug below was about.
+So four passes are nowhere near a 5070 Ti's limit. **Sixteen are, and there the
+control does exactly what it is for.** Eight Gaussian blurs at sigma 40 and eight
+sharpens on the same 4K60 clip (`heavy.cutline`) costs 21.1 ms a frame to
+composite, which is 46.5 fps in the bare renderer:
+
+| | Full | 1/2 | 1/4 |
+|---|---|---|---|
+| sixteen per-pixel passes, 4K60 | 37.9 fps | **60.0** | 59.8 |
+
+That is the first demonstration that the setting earns its place. It also says
+where the ceiling really is: at Full the application manages 37.9 where the bare
+renderer manages 46.5, so **about 4 ms a frame goes on the application rather
+than the picture** — the interface's own 4K repaint, the display pass, and the
+round trips in §7B. Halving the canvas removes far more than any of that.
 
 Two things follow. **Disregard the earlier numbers in this section that showed
 quality apparently making things worse** (37.1 / 32.5 / 33.1). They were taken by

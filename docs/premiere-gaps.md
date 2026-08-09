@@ -342,10 +342,39 @@ masking for nothing.
 | Feather, opacity, inversion | yes | **done** — opacity is the *effect's* strength, not the layer's transparency | — |
 | Rotation | yes | **done** | — |
 | A mask per effect | yes | **done** | — |
-| Pen / free-draw path | yes | **done** — corners in a buffer, even-odd fill, a handle on each | — |
+| Pen / free-draw path | pen tool, bezier handles | **half** — a four-corner polygon with a handle on each; see below | medium |
 | Dragging the shape on the monitor | yes | **done**, and it writes a keyframe when the number is animated | — |
 | Animating a mask | keyframed path, and tracking | **done** for every number it has; a path is the part that is missing | — |
 | Tracking | per-frame analysis | none, and belongs with neither of the above | machinery |
+
+**"Free Draw" does not draw yet, and this row used to claim it was done.** The
+owner found it: what the button gives you is a rectangle of four corners, each
+draggable. There is no way to add a corner, take one away, or bend an edge, and
+nothing in it is a bezier. Calling that a pen tool was wrong.
+
+The half that exists is the half that is hard to see. `Mask::points` already
+carries up to sixty-four corners, the shader already fills any polygon by
+even-odd, the corners already scale and rotate with the layer, and the monitor
+already hit-tests and drags them. What is missing is the pen itself:
+
+- **The model** needs a control point either side of each corner — Premiere's
+  free-draw points are bezier, and a corner is the case where both handles sit
+  on it. That is `MaskPoint` gaining two offsets, and the serialiser following.
+- **The shader keeps filling straight edges.** A curve is flattened into corners
+  before it is handed down, which is why the sixty-four-point cap is the thing to
+  watch: a few curved segments spend it quickly, and the flattening step should
+  spend points where the curvature is rather than evenly.
+- **The monitor** needs a placing mode — click to drop a corner, drag as you
+  drop to pull its handles out, click the first corner to close — and then to
+  draw and hit-test two handles per corner alongside the corner itself. It has
+  the last part already.
+- **Alt-click to break a handle pair**, and double-click a corner to switch it
+  between smooth and sharp, are what make the tool usable rather than merely
+  present.
+
+Until then the polygon is honest and useful, and the one thing that *was* broken
+about it — the half-extents not following the corners, so switching the shape
+afterwards jumped somewhere else — is fixed.
 
 Tracking is beyond all of it: it is per-frame analysis, a different kind of work
 from anything here now.

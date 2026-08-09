@@ -346,6 +346,61 @@ TEST(MaskOverlays, AnEffectThatIsNotThereChangesNothing) {
   EXPECT_EQ(apply_mask_overlay(p, "nope", 0, ui::MaskOverlay{}, 2.0), p);
 }
 
+// A path lives in its corners and ignores the half-extents. But the half-extents
+// are what an ellipse and a rectangle are made of, so if pulling a corner leaves
+// them behind, switching the shape afterwards produces something with no
+// relation to the outline that was on the picture a moment earlier.
+TEST(MaskOverlays, DraggingAPathCornerKeepsTheHalfExtentsDescribingIt) {
+  core::Project p = with_mask(1920, 1080,
+                              core::Mask{.shape = core::MaskShape::Path,
+                                         .width = 0.25,
+                                         .height = 0.25,
+                                         .points = {{-0.25, -0.25},
+                                                    {0.25, -0.25},
+                                                    {0.25, 0.25},
+                                                    {-0.25, 0.25}}});
+
+  // Pull one corner well out. The layer fills the 1920x1080 frame, so a canvas
+  // fraction and a layer fraction are the same thing here.
+  const std::vector<MaskOverlayRef> before = mask_overlays(p, "c1", 2.0);
+  ASSERT_EQ(before.size(), 1u);
+  ui::MaskOverlay dragged = before[0].overlay;
+  ASSERT_EQ(dragged.points.size(), 4u);
+  dragged.points[2] = {0.4, 0.4};
+
+  p = apply_mask_overlay(p, "c1", 0, dragged, 2.0);
+  const core::Mask& mask = p.tracks.front().clips.front().effects.front().mask;
+
+  EXPECT_NEAR(mask.points[2].x, 0.4, 1e-9);
+  EXPECT_NEAR(mask.width, 0.4, 1e-9) << "the box no longer contains the corners";
+  EXPECT_NEAR(mask.height, 0.4, 1e-9) << "the box no longer contains the corners";
+}
+
+TEST(MaskOverlays, TheBoxAPathLeavesBehindIsTheOneAnEllipseWouldUse) {
+  // The round trip the owner hit: draw a path, switch the shape, and find a
+  // shape somewhere else entirely. With the extents kept in step the ellipse
+  // lands inside the outline that was there.
+  core::Project p = with_mask(1920, 1080,
+                              core::Mask{.shape = core::MaskShape::Path,
+                                         .width = 0.25,
+                                         .height = 0.25,
+                                         .points = {{-0.1, -0.2}, {0.3, -0.2}, {0.3, 0.2}}});
+
+  std::vector<MaskOverlayRef> shown = mask_overlays(p, "c1", 2.0);
+  ASSERT_EQ(shown.size(), 1u);
+  p = apply_mask_overlay(p, "c1", 0, shown[0].overlay, 2.0);
+
+  core::Mask mask = p.tracks.front().clips.front().effects.front().mask;
+  EXPECT_NEAR(mask.width, 0.3, 1e-9);
+  EXPECT_NEAR(mask.height, 0.2, 1e-9);
+
+  // Now switch it to an ellipse, the way the panel does, and the ellipse is the
+  // one that fits the path rather than a leftover quarter of the layer.
+  mask.shape = core::MaskShape::Ellipse;
+  EXPECT_NEAR(mask.width, 0.3, 1e-9);
+  EXPECT_NEAR(mask.height, 0.2, 1e-9);
+}
+
 // ------------------------------------------------------ an animated mask --
 
 TEST(MaskOverlays, AnAnimatedMaskIsDrawnWhereItIsRatherThanWhereItWasStored) {

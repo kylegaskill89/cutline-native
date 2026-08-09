@@ -224,6 +224,31 @@ core::Project apply_mask_overlay(core::Project project, std::string_view clip_id
       mask.points.push_back(
           core::MaskPoint{.x = px / frame->width, .y = py / frame->height});
     }
+
+    // And the half-extents are made to describe the corners, because on a path
+    // they are the only thing that still describes it to anybody else.
+    //
+    // `width` and `height` are the ellipse's radii and half the rectangle's
+    // sides. A path ignores them and lives entirely in its corners — so pulling
+    // a corner about used to leave them at whatever the shape happened to be
+    // before anyone drew anything. Switch that mask to Ellipse or Rectangle and
+    // it jumped to a size and place with no relation to the outline that had
+    // just been on the picture, because the two were never the same shape.
+    //
+    // Kept in step, the three shapes describe the same region: an ellipse or a
+    // rectangle switched to from a path lands inside the outline that was there,
+    // and switching back restores corners that still match the box. The centre
+    // is left alone — the corners are offsets from it, and the drag already
+    // moved it if it was the whole mask being moved rather than one corner.
+    double half_w = 0.0;
+    double half_h = 0.0;
+    for (const core::MaskPoint& point : mask.points) {
+      half_w = std::max(half_w, std::abs(point.x));
+      half_h = std::max(half_h, std::abs(point.y));
+    }
+    if (half_w > 0.0) mask.width = half_w;
+    if (half_h > 0.0) mask.height = half_h;
+
     project = core::set_effect_mask(std::move(project), clip_id, effect, std::move(mask));
   }
   return project;
