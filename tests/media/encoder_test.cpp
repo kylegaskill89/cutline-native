@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <process.h>
+
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -44,9 +46,15 @@ constexpr int kHeight = 120;
 /// A scratch path that cleans itself up.
 class TempFile {
  public:
+  /// The process id is in the name, and it is not decoration. `ctest -j` runs
+  /// these as separate *processes*, each with its own counter starting at one —
+  /// so two of them write `cutline_test_1.mp4` at the same time and truncate
+  /// each other's file. It fails as an unrelated-looking encoder assertion that
+  /// passes the moment the test is run on its own.
   explicit TempFile(std::string suffix)
       : path_(std::filesystem::temp_directory_path() /
-              ("cutline_test_" + std::to_string(++counter_) + suffix)) {}
+              ("cutline_test_" + std::to_string(_getpid()) + "_" +
+               std::to_string(++counter_) + suffix)) {}
 
   ~TempFile() {
     std::error_code ignored;

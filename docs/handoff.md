@@ -711,12 +711,13 @@ things about this codebase.
   `FrameRenderer` at 57.4 fps and puts 54 distinct pictures a second on the same
   display; the application renders every frame, paints at 59.7/s, and the
   *picture* still changes only 37.9 times a second. Decode, compositing, the
-  playback clock, vsync and the display have each been measured and cleared. The
-  next thing to rule out is the compositor's **single display target** being
-  overwritten before the paint that borrowed it has been presented. Lowering the
-  preview quality does not help and stalls for a second when changed. Full
-  numbers, and three fixes that measured out to nothing, under *Measured: what
-  playback actually costs* in §9.
+  playback clock, vsync, the display, and the compositor's single display target
+  have each been measured and cleared — the last by building the two-target
+  rotation and finding it changed nothing. What has *not* been instrumented is
+  `TextureCache` and `Monitor`'s own drawing, and that is where to start.
+  Lowering the preview quality does not help and stalls for a second when
+  changed. Full numbers, and four fixes that measured out to nothing, under
+  *Measured: what playback actually costs* in §9.
 - **Nothing in the test suite ever resizes a real window.** The pixel tests draw
   on a fixed CPU raster surface and `--check` lays out at one size, so the whole
   `WM_SIZE` → recreate-the-swapchain path had never been exercised until somebody
@@ -1248,15 +1249,22 @@ not: a third of the paints carry the frame that was already there. Whatever this
 is, it is downstream of the render and upstream of the glass, and it is worse the
 larger the frame.
 
-The strong suspicion, not yet proven, is the **single display target**. The
-compositor renders into one texture and `texture_at` hands it over by pointer;
-the monitor holds that pointer and Skia samples it during the window's paint,
-which is presented asynchronously. The next frame's `compose` then writes over
-that same texture. Nothing sequences the compositor's queue against Skia's — the
-`wait_for_idle` at the end of `compose` waits on the *compositor's* queue only.
-Two presents can therefore end up carrying the same picture. Rotating two or
-three display targets, the way a swapchain does, is the obvious thing to try
-next, and it would be the first thing to rule out.
+The obvious suspect was the **single display target**: the compositor renders
+into one texture and `texture_at` hands it over by pointer, the monitor holds
+that pointer, Skia samples it during a paint that is presented asynchronously,
+and the next frame's `compose` writes over the same texture — nothing sequences
+the compositor's queue against Skia's, since the `wait_for_idle` ending `compose`
+waits on the compositor's queue only. Two presents could therefore carry the same
+picture. **It was built and it is not the answer.** Rotating two display targets
+with their own render target views, handing out the one the previous paint did
+not take, measured **38.4** against 37.9. Reverted.
+
+So the cause is still open. What is left to look at, in the order worth trying:
+the `TextureCache` in `src/ui/src/skia_texture.cpp`, which borrows a wrapper per
+resource and keys it on the resource pointer — with the target rotating or not,
+the wrapper is long-lived and Skia may be holding a snapshot of it inside a
+recorded frame; and `Monitor`'s own drawing, which is the one part of the path
+that has never been instrumented.
 
 **Preview quality buys nothing at all, and costs a stall.** Full 37.1 fps, 1/2
 32.5, 1/4 33.1 — the canvas the compositor renders into makes no difference to
@@ -1267,8 +1275,9 @@ builds a whole new `FrameRenderer` and throws away every open decoder with it, s
 the next frame seeks from a keyframe. Making the setting reduce the decode is
 **not** the fix; the setting is currently not worth having.
 
-**Three things measured out to nothing.** Each was built and run, and each is
-here so nobody spends the afternoon on it again. *Pacing the repaint*: the loop
+**Four things measured out to nothing.** Each was built and run, and each is
+here so nobody spends the afternoon on it again. *Two display targets*: above.
+*Pacing the repaint*: the loop
 turns 189 times a second and repainted the whole window on every one of them, so
 two of every three paints could never be shown. Pacing the invalidation to the
 display's refresh cut paints to 58/s and paint work from 435 to 138 ms per
@@ -1292,12 +1301,17 @@ and there is no work in progress to reconstruct.
 - 3012 tests pass under the `ui` preset, 2589 under `release`. Set
   `CUTLINE_TEST_MEDIA_DIR` or about fifty decode tests skip while the run still
   says everything passed.
-- **The suite is stable under `-j` again.** It was not: the mixer and exporter
-  fixtures each wrote a fixed name in the temp directory, so parallel test
-  *processes* truncated each other's tone file and clobbered each other's
-  output. It showed up as five or six unrelated audio failures that all passed
-  when run one at a time. Both put the process id in the name now. If you add a
-  fixture that writes a file, do the same.
+- **The suite is stable under `-j`, and this has now been fixed twice.** The
+  mixer and exporter fixtures each wrote a fixed name in the temp directory, so
+  parallel test *processes* truncated each other's tone file. The same fault was
+  still in six more fixtures — `encoder_test`, `transcode_test` and
+  `proxies_test` named their scratch files from a counter that starts at one in
+  every process, `probe_test` used a constant, and the three cache fixtures keyed
+  on `this`, which is not unique across processes either. It showed as one
+  failure per run in a *different* test each time, always passing when run alone.
+  **Every fixture that writes to the temp directory now has `_getpid()` in the
+  name.** If you add one, do the same — and note that a counter, an address and a
+  test name all look unique and are not.
 - `--check` reports 2747 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
   all four themes — run it with something *in* the media cache as well as with
   it empty, since the Delete button only exists when there is something to

@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <process.h>
+
 #include <string>
 #include <thread>
 #include <vector>
@@ -22,8 +24,12 @@ namespace {
 class Scratch {
  public:
   Scratch() {
+    // The address distinguishes fixtures within a process; the process id
+    // distinguishes the processes `ctest -j` runs them in, which the address
+    // alone does not — two of them can sit at the same heap address.
     root_ = std::filesystem::temp_directory_path() /
-            ("cutline-cache-" + std::to_string(reinterpret_cast<std::uintptr_t>(this)));
+            ("cutline-cache-" + std::to_string(_getpid()) + "-" +
+             std::to_string(reinterpret_cast<std::uintptr_t>(this)));
     std::filesystem::create_directories(dir());
     write_source("some footage");
   }

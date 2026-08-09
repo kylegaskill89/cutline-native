@@ -12,6 +12,8 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <process.h>
+
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -200,7 +202,11 @@ TEST(Probe, ReportsAnErrorForAMissingFile) {
 }
 
 TEST(Probe, ReportsAnErrorForANonMediaFile) {
-  const fs::path temp = fs::temp_directory_path() / "cutline_not_media.txt";
+  // Named for this process: `ctest -j` runs the suites as separate processes,
+  // and a fixed name is one file two of them write and delete underneath each
+  // other.
+  const fs::path temp =
+      fs::temp_directory_path() / ("cutline_not_media_" + std::to_string(_getpid()) + ".txt");
   {
     std::ofstream out(temp);
     out << "this is not a video";

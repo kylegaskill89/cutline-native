@@ -11,6 +11,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <process.h>
+
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -421,8 +423,11 @@ TEST_F(WithVideoFootage, ACoarsePassDoesNotStopAFinerOne) {
 class Scratch {
  public:
   Scratch() {
+    // With the process id as well as the address: `ctest -j` runs these in
+    // separate processes, where the same heap address can come up twice.
     dir_ = std::filesystem::temp_directory_path() /
-           ("cutline-strip-cache-" + std::to_string(reinterpret_cast<std::uintptr_t>(this)));
+           ("cutline-strip-cache-" + std::to_string(_getpid()) + "-" +
+            std::to_string(reinterpret_cast<std::uintptr_t>(this)));
   }
   ~Scratch() {
     std::error_code ignored;

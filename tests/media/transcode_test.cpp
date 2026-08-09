@@ -16,6 +16,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <process.h>
+
 #include <optional>
 #include <string>
 #include <vector>
@@ -26,9 +28,12 @@ namespace {
 /// A scratch path that cleans itself up.
 class TempFile {
  public:
+  /// With the process id, because `ctest -j` runs these as separate processes
+  /// and a counter starting at one in each of them names the same file twice.
   explicit TempFile(std::string suffix)
       : path_(std::filesystem::temp_directory_path() /
-              ("cutline_proxy_test_" + std::to_string(++counter_) + suffix)) {}
+              ("cutline_proxy_test_" + std::to_string(_getpid()) + "_" +
+               std::to_string(++counter_) + suffix)) {}
 
   ~TempFile() {
     std::error_code ignored;

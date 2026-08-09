@@ -13,6 +13,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <process.h>
+
 #include <memory>
 #include <string>
 #include <thread>
@@ -32,9 +34,12 @@ using namespace std::chrono_literals;
 /// A scratch path that cleans itself up, along with the folder it sits in.
 class TempProxy {
  public:
+  /// With the process id, because `ctest -j` runs these as separate processes
+  /// and a counter starting at one in each of them names the same folder twice.
   TempProxy()
       : folder_(std::filesystem::temp_directory_path() /
-                ("cutline_proxies_" + std::to_string(++counter_))) {}
+                ("cutline_proxies_" + std::to_string(_getpid()) + "_" +
+                 std::to_string(++counter_))) {}
 
   ~TempProxy() {
     std::error_code ignored;
