@@ -707,7 +707,13 @@ things about this codebase.
   longer than the run has turns to pay for; the honest next step is measuring GOP
   length rather than guessing at the budget again.
 - **Forward playback runs at about 40 fps on 4K60** rather than 60. Even, not
-  stuttering, but not the rate either.
+  stuttering, but not the rate either. Now measured: 38.3 fps at 4K60 against
+  58.2 at 1080p60, on a Release build. **Lowering the preview quality does not
+  help at all** — 38.7 fps at 1/2 — because `scaled_canvas` reduces the canvas
+  the compositor renders into and not what the decoder is asked for. Premiere's
+  playback resolution reduces the decode; making ours do the same is the fix.
+  The numbers, and the repaint theory that measured out to nothing, are under
+  *Measured: what playback actually costs* in §9.
 - **Nothing in the test suite ever resizes a real window.** The pixel tests draw
   on a fixed CPU raster surface and `--check` lays out at one size, so the whole
   `WM_SIZE` → recreate-the-swapchain path had never been exercised until somebody
@@ -1186,12 +1192,65 @@ unbuilt model in the application. **Keyboard customisation** is the other
 substantial one, and it was pulled out of §5 for being larger than the rest of
 that section put together.
 
+### Measured: what playback actually costs
+
+The owner said playback ran at "a very low framerate". It does, and the numbers
+are worth having written down, because three separate things were suspected and
+only one of them turned out to be true.
+
+Measured by grabbing a patch of the program monitor off the screen at ~220 Hz
+and counting how many grabs differ — playback is clocked by the sound card, so
+it never drifts, it drops pictures, and counting distinct pictures from outside
+the process is the only honest way to see that. The script is
+`fps.ps1`, in the session scratchpad alongside the driver described in §5; the
+fixture is one 4K60 clip on V1 with its audio on A1.
+
+| what | displayed |
+|---|---|
+| Debug build, 4K60 source | **13.5 fps**, 75 ms between pictures |
+| Release build, 4K60 source | **38.3 fps**, 25 ms |
+| Release, same thing at 1/2 preview quality | 38.7 fps — *no change* |
+| Release, 1080p60 source | **58.2 fps**, 15.6 ms |
+
+Two conclusions, and one dead end that is worth not walking twice.
+
+**The Debug build is a third of the speed, and that is what was being looked
+at.** The interface paint alone is 14–54 ms per frame under Debug against
+0.8–3.1 ms under Release — `cutline --benchmark` prints both. Anything about
+playback smoothness has to be judged on a Release build or it is measuring MSVC's
+iterator debugging.
+
+**Above 1080p the ceiling is in the source path, and preview quality does not
+lower it.** 1080p60 plays at essentially full rate; 4K60 tops out around 38 fps
+and drops to exactly the same 38 fps at half quality. `scaled_canvas` reduces the
+*canvas* the compositor renders into — it does not reduce what the decoder is
+asked for, so a 4K frame is still decoded and still sampled at 4K whatever the
+quality says. Premiere's playback resolution reduces the decode. Ours does not,
+yet, and that is the fix worth making.
+
+**The dead end:** it is not the interface repainting. Instrumenting the phases of
+a playback frame showed the whole window being redrawn about 114 times a second
+against 38 pictures — two of every three repaints drawing what was already on the
+glass, because `advance_playback` marks every window dirty on every turn of the
+loop to keep the meters moving. That is real waste and it looks exactly like the
+culprit. Pacing the redraw to the display's own refresh rate was written, built
+and measured: **38.3 fps, unchanged.** It was reverted rather than kept, since a
+change that removes waste nobody can see is a change with no evidence behind it.
+The individual phases are all small — preview render 2.2 ms, window paint 2.3 ms,
+present 1.2 ms, decode 2.4 ms by `decode_bench` — which is what points at the
+GPU decode path rather than at anything the loop is doing.
+
+One caveat on all of the above: it was measured on a 3840×2160 *virtual* display
+adapter, not on the machine's real 3440×1440 120 Hz panel. The Debug-versus-
+Release gap and the 1080p-versus-4K gap are far too large to be an artefact of
+that, but present cost specifically may not be representative.
+
 ### State of the tree
 
 Everything is committed and green. Nothing is half-finished, no branch is open,
 and there is no work in progress to reconstruct.
 
-- 3004 tests pass under the `ui` preset, 2584 under `release`. Set
+- 3012 tests pass under the `ui` preset, 2589 under `release`. Set
   `CUTLINE_TEST_MEDIA_DIR` or about fifty decode tests skip while the run still
   says everything passed.
 - **The suite is stable under `-j` again.** It was not: the mixer and exporter
