@@ -35,6 +35,9 @@ SHA-256 before running it.
 - [`docs/spec.md`](docs/spec.md) — the product specification: data model,
   algorithms, effect semantics, and UI. Carried over from the TypeScript
   version, which remains the reference for exact numeric behaviour.
+- [`docs/running-locally.md`](docs/running-locally.md) — running the editor you
+  just built, the two headless checks, and how to tell three different playback
+  stutters apart.
 - [`docs/releasing.md`](docs/releasing.md) — how a tag becomes an installer,
   and what the update check refuses.
 - [`docs/premiere-gaps.md`](docs/premiere-gaps.md) — where this still falls
@@ -577,7 +580,13 @@ everything.
 
 Media tests need real footage, which is not in the repository. Point
 `CUTLINE_TEST_MEDIA_DIR` at a directory containing `Boiler.mp4` to run them;
-without it they skip rather than silently pass.
+without it they skip rather than silently pass — and the run still reports that
+everything passed, which is why it is worth setting even when the decoder is
+not what you are thinking about.
+
+The editor itself is built by the `ui` preset and by nothing else. See
+[`docs/running-locally.md`](docs/running-locally.md) for running it, the two
+headless checks, and which build a measurement can be trusted from.
 
 ## Licence
 
