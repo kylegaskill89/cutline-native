@@ -37,8 +37,10 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/AppData/Local/vcpkg/archives
-          key: vcpkg-full-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-          restore-keys: vcpkg-full-${{ runner.os }}-
+          key: vcpkg-full-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-full-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}-
+            vcpkg-full-${{ runner.os }}-
 
       - name: Point CMake at the preinstalled vcpkg
         run: echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
@@ -51,12 +53,16 @@ jobs:
       - name: Configure
         run: cmake --preset ui -DCUTLINE_WARNINGS_AS_ERRORS=ON
 
+      # Always, not only on a miss. A fixed key saved only when the restore
+      # missed can never grow past whatever the first saving run happened to
+      # hold — see the note in `release.yml`, where that cost eighty minutes a
+      # run for weeks while reporting a cache hit.
       - name: Save vcpkg binaries
-        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        if: always()
         uses: actions/cache/save@v4
         with:
           path: ~/AppData/Local/vcpkg/archives
-          key: vcpkg-full-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-full-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}
 
       - name: Build
         run: cmake --build --preset ui

@@ -66,8 +66,10 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/AppData/Local/vcpkg/archives
-          key: vcpkg-media-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-          restore-keys: vcpkg-media-${{ runner.os }}-
+          key: vcpkg-media-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-media-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}-
+            vcpkg-media-${{ runner.os }}-
 
       - name: Point CMake at the preinstalled vcpkg
         run: echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
@@ -77,12 +79,15 @@ jobs:
       - name: Configure
         run: cmake --preset media -DCUTLINE_WARNINGS_AS_ERRORS=ON
 
+      # Always, not only on a miss — see the note in `release.yml`. Saving only
+      # when the restore missed freezes the archive at whatever the first run to
+      # save it happened to hold, for ever, while still reporting a hit.
       - name: Save vcpkg binaries
-        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        if: always()
         uses: actions/cache/save@v4
         with:
           path: ~/AppData/Local/vcpkg/archives
-          key: vcpkg-media-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-media-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}
 
       - name: Build
         run: cmake --build --preset media
