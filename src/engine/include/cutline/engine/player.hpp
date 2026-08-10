@@ -49,6 +49,18 @@ struct PlayerSettings {
   int sample_rate = 48000;
   int channels = 2;
 
+  /// Where playback is about to begin, in timeline seconds.
+  ///
+  /// Only the audio about to be heard is decoded before `create` returns; the
+  /// rest is fetched while the first seconds play. Without it a press of Play
+  /// paid one decode per cut in the whole sequence — see
+  /// `AudioMixSettings::start_at`, which this is passed straight to.
+  ///
+  /// Seeking afterwards is still free: what has not been read yet mixes as
+  /// silence for a moment rather than stalling, and the reader goes where the
+  /// playhead went.
+  double start_at = 0.0;
+
   /// Which output to play through, or empty for whichever the system prefers.
   ///
   /// A device that is not there falls back to the default rather than failing.

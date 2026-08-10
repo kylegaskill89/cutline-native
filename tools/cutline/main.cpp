@@ -5891,8 +5891,13 @@ void toggle_playback(App& app) {
   }
 
   if (app.player == nullptr) {
-    auto made = cutline::engine::Player::create(app.session.project(),
-                                               {.device_id = app.settings.audio_device});
+    // Told where it is about to start, so only the audio that is about to be
+    // heard is decoded before this returns. Without it, building a player read
+    // every clip in the sequence — which is what made a press of Play cost
+    // longer the further into the cut somebody got.
+    auto made = cutline::engine::Player::create(
+        app.session.project(),
+        {.start_at = app.session.playhead(), .device_id = app.settings.audio_device});
     if (!made.has_value()) {
       // Once and no more: a machine with no output device will not acquire one,
       // and a dialog on every press of Play would be worse than the silence.

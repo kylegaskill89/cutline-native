@@ -102,6 +102,12 @@ struct StreamedSource {
   /// Set once when the file will not decode, so a broken source is not tried
   /// again on every block for the life of the mix.
   std::atomic<bool> failed{false};
+
+  /// When the earliest clip using this source is first heard, in timeline
+  /// seconds. What the reader fills in order of, so the audio arrives in the
+  /// order it is going to be wanted rather than in whatever order a map
+  /// happened to hold it.
+  double needed_at = 0.0;
 };
 
 /// Decodes the part of `source` that should be resident when the mix is at
@@ -219,6 +225,24 @@ struct Voice {
 
 /// Whether a clip needs its audio rendered ahead of time rather than read
 /// straight from the source.
+/// How far past the start position audio is read before playback begins.
+///
+/// Two seconds, which is what the reader needs to get ahead of the playhead:
+/// it wakes ten times a second and a decode is tens of milliseconds, so it is
+/// hundreds of times faster than the sound is consumed. What this buys is the
+/// gap between `create` returning and the reader's first pass — everything
+/// after that it stays comfortably in front of.
+constexpr double kEagerAhead = 2.0;
+
+/// Whether this clip is heard at or shortly after where playback is starting.
+///
+/// Both ends matter: a clip already running at the start position has to be
+/// resident, and so does the one after it, because the reader has not woken up
+/// yet when the first block is mixed.
+[[nodiscard]] bool heard_within(const render::PlannedAudioClip& planned, double start_at) noexcept {
+  return planned.end > start_at - 1e-6 && planned.start < start_at + kEagerAhead;
+}
+
 [[nodiscard]] bool needs_retiming(const render::PlannedAudioClip& planned) noexcept {
   return planned.reverse || std::abs(planned.speed - 1.0) > 1e-6 ||
          std::abs(planned.conform - 1.0) > 1e-6;
@@ -338,6 +362,9 @@ struct AudioMixer::Impl {
   /// Unique pointers so a source's address, and the atomics in it, survive the
   /// map growing.
   std::map<SourceKey, std::unique_ptr<StreamedSource>> sources;
+  /// The same sources, in the order their audio is going to be wanted. What the
+  /// reader walks, so a backlog is cleared in play order.
+  std::vector<StreamedSource*> pending;
   std::vector<Voice> voices;
   std::vector<std::string> missing;
 
@@ -526,21 +553,45 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
         source->whole = (to - from) <= kWholeSourceSeconds || needs_retiming(entry);
         source->wanted.store(from, std::memory_order_relaxed);
 
-        // The first window is read here, so a mixer that has been created is
-        // one that can be mixed from — an export never waits on a thread and
-        // the player has sound the instant it starts.
-        auto window = read_window(*source, from);
-        if (window == nullptr) {
-          // Recorded and mixed as silence: an export should complete with a
-          // hole rather than fail at the last step.
-          missing.insert(entry.media->id);
-          source->failed.store(true, std::memory_order_relaxed);
-        }
-        source->resident.store(std::move(window));
+        source->needed_at = entry.start;
         found = impl->sources.emplace(key, std::move(source)).first;
       }
 
       StreamedSource& source = *found->second;
+      source.needed_at = std::min(source.needed_at, entry.start);
+
+      // Read here only when it is about to be heard. A mixer has to come back
+      // able to play, and the audio that has to be resident for that is the
+      // audio at the playhead — the rest arrives while the first seconds run,
+      // because decoding is hundreds of times faster than playing.
+      //
+      // Everything used to be read here, and a cut sequence is made of clips
+      // short enough to be held whole, so a press of Play paid one decode per
+      // cut and got slower every time somebody cut again.
+      //
+      // Offline is unconditional: an export must not depend on a thread having
+      // got somewhere. So is a retimed clip, whose stretched buffer is built
+      // once, below, out of the whole window and never again.
+      //
+      // Asked **per voice** rather than when the source is made, because two
+      // clips can share one: the same trim used twice is one decode, and
+      // deciding at creation let the first of them answer for both. A clip
+      // under the playhead then went silent because another clip elsewhere in
+      // the sequence happened to name the same range first.
+      const bool now = !settings.realtime || needs_retiming(entry) ||
+                       heard_within(entry, settings.start_at);
+      if (now && source.resident.load() == nullptr &&
+          !source.failed.load(std::memory_order_relaxed)) {
+        auto window = read_window(source, source.key.source_in);
+        if (window == nullptr) {
+          // Recorded and mixed as silence: an export should complete with a
+          // hole rather than fail at the last step.
+          missing.insert(entry.media->id);
+          source.failed.store(true, std::memory_order_relaxed);
+        }
+        source.resident.store(std::move(window));
+      }
+
       if (!source.failed.load(std::memory_order_relaxed)) {
         if (needs_retiming(entry)) {
           // Whole by construction, so this is the entire clip's audio.
@@ -661,11 +712,19 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
     impl->live_track_gain[lane].store(impl->built_track_gain[lane], std::memory_order_relaxed);
   }
 
-  // Only when something can actually run out. Every source held whole means
-  // there is nothing for a reader to do, which is the ordinary project.
-  const bool anything_windowed =
-      std::ranges::any_of(impl->sources, [](const auto& entry) { return !entry.second->whole; });
-  if (settings.realtime && anything_windowed) {
+  // In the order the audio is going to be wanted, so what is coming next is
+  // read before what is five cuts away.
+  impl->pending.reserve(impl->sources.size());
+  for (auto& [key, source] : impl->sources) impl->pending.push_back(source.get());
+  std::ranges::sort(impl->pending, {}, &StreamedSource::needed_at);
+
+  // Something to run out of, or something not read yet. The second is the
+  // ordinary case now: a cut sequence is all short sources, every one of which
+  // is held whole and only the first few are read before playback starts.
+  const bool anything_to_do = std::ranges::any_of(impl->sources, [](const auto& entry) {
+    return !entry.second->whole || entry.second->resident.load() == nullptr;
+  });
+  if (settings.realtime && anything_to_do) {
     Impl* raw = impl.get();
     raw->reader = std::thread([raw] {
       for (;;) {
@@ -680,8 +739,11 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
           if (raw->reader_stopping) return;
         }
 
-        for (auto& [key, source] : raw->sources) {
-          if (source->whole || source->failed.load(std::memory_order_relaxed)) continue;
+        for (StreamedSource* source : raw->pending) {
+          // `covers` answers false for a source with nothing resident, whole or
+          // not, which is what makes one that has never been read the reader's
+          // job rather than something it walks past.
+          if (source->failed.load(std::memory_order_relaxed)) continue;
           const double at = source->wanted.load(std::memory_order_relaxed);
           const std::shared_ptr<const Window> have = source->resident.load();
           if (covers(have.get(), *source, at)) continue;

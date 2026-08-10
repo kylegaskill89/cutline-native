@@ -56,6 +56,24 @@ struct AudioMixSettings {
   /// Off by default, so anything that is not real time gets the deterministic
   /// behaviour without having to know this exists.
   bool realtime = false;
+
+  /// Where playback is about to begin, in timeline seconds.
+  ///
+  /// This decides how much is decoded **before** `create` returns. A mixer has
+  /// to come back able to play immediately, and the only audio that has to be
+  /// resident for that is the audio about to be heard; everything else can be
+  /// fetched by the reader while the first seconds play, since decoding runs
+  /// hundreds of times faster than playing.
+  ///
+  /// Reading it all up front is what this replaced, and the cost was not
+  /// abstract: a clip short enough to hold is read whole, a cut sequence is
+  /// made of nothing but short clips, and so a press of Play paid one decode
+  /// per cut. Measured on a 4K capture at about 20 ms a cut — a third of a
+  /// second at sixteen cuts, and worse every time somebody cut again.
+  ///
+  /// Ignored when `realtime` is off: an export decodes what it needs where it
+  /// needs it and must not depend on a thread having got there.
+  double start_at = 0.0;
 };
 
 class AudioMixer {

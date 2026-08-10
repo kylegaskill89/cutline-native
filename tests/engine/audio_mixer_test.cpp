@@ -15,6 +15,9 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <thread>
+
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -1243,6 +1246,86 @@ class WithLongTone : public ::testing::Test {
 
   Media media_;
 };
+
+// ------------------------------------------------- what is read, and when --
+//
+// A mixer for the sound card reads only the audio about to be heard before it
+// comes back, and fetches the rest while the first seconds play. Everything
+// below is about that bargain holding: the audio at the playhead has to be
+// there *now*, and the audio further along has to arrive without anybody
+// asking for it on the mixing thread.
+
+TEST_F(WithLongTone, TheAudioAtTheStartIsThereBeforePlaybackBegins) {
+  // The guarantee `start_at` exists to make. Deferring is only sound if the
+  // clip under the playhead is never one of the deferred ones.
+  Project p;
+  p.media = {media_};
+  p.sequence().tracks = {audio_track("a1", {audio_clip("near", "long", 0.0, 4.0),
+                                            audio_clip("far", "long", 40.0, 4.0, 40.0)})};
+
+  auto mixer = AudioMixer::create(
+      p, {.sample_rate = kRate, .channels = kChannels, .realtime = true, .start_at = 0.0});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+
+  EXPECT_GT(rms_of(mix_span(**mixer, 0.5, 0.2)), 0.01) << "the clip at the playhead was silent";
+}
+
+TEST_F(WithLongTone, StartingLaterMakesThatClipTheOneReadFirst) {
+  // Proves the position is actually consulted rather than the first clip
+  // always being the eager one: pressing play halfway down a cut has to give
+  // sound at once there too.
+  Project p;
+  p.media = {media_};
+  p.sequence().tracks = {audio_track("a1", {audio_clip("near", "long", 0.0, 4.0),
+                                            audio_clip("far", "long", 40.0, 4.0, 40.0)})};
+
+  auto mixer = AudioMixer::create(
+      p, {.sample_rate = kRate, .channels = kChannels, .realtime = true, .start_at = 40.0});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+
+  EXPECT_GT(rms_of(mix_span(**mixer, 40.5, 0.2)), 0.01)
+      << "starting there gave silence, so the wrong clip was made resident";
+}
+
+TEST_F(WithLongTone, WhatWasDeferredArrivesWithoutBeingAskedFor) {
+  // The other half. Nothing on the mixing thread may touch a file, so a clip
+  // that was not read up front can only become audible if the reader went and
+  // got it — and it has to, or a sequence would fall silent after its first
+  // couple of seconds.
+  Project p;
+  p.media = {media_};
+  p.sequence().tracks = {audio_track("a1", {audio_clip("near", "long", 0.0, 4.0),
+                                            audio_clip("far", "long", 40.0, 4.0, 40.0)})};
+
+  auto mixer = AudioMixer::create(
+      p, {.sample_rate = kRate, .channels = kChannels, .realtime = true, .start_at = 0.0});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+
+  // Polled rather than slept through: the reader wakes ten times a second, and
+  // waiting a fixed period would be either flaky or slow.
+  double level = 0.0;
+  for (int attempt = 0; attempt < 100 && level <= 0.01; ++attempt) {
+    level = rms_of(mix_span(**mixer, 40.5, 0.05));
+    if (level <= 0.01) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  EXPECT_GT(level, 0.01) << "the reader never fetched a clip it had left behind";
+}
+
+TEST_F(WithLongTone, AnExportStillReadsEverythingItself) {
+  // Offline must not depend on a thread having got somewhere: an export has to
+  // produce the same file every time it is run. So the deferral is real-time
+  // only, and this is what says so.
+  Project p;
+  p.media = {media_};
+  p.sequence().tracks = {audio_track("a1", {audio_clip("near", "long", 0.0, 4.0),
+                                            audio_clip("far", "long", 40.0, 4.0, 40.0)})};
+
+  auto mixer = AudioMixer::create(p, {.sample_rate = kRate, .channels = kChannels});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+
+  // The far clip, on the very first block asked for. No waiting, no polling.
+  EXPECT_GT(rms_of(mix_span(**mixer, 40.5, 0.2)), 0.01);
+}
 
 // The claim the whole thing rests on: a source too long to hold is still read
 // from the right place. Three positions, three amplitudes, and the last is far
