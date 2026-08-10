@@ -163,7 +163,32 @@ struct Media {
 
   std::optional<int> width;
   std::optional<int> height;
+  /// The rate the *file* claims, as probed. See `assumed_fps` for the rate the
+  /// project plays it at, which is this one unless somebody said otherwise.
   std::optional<double> fps;
+
+  /// Premiere's Interpret Footage: the rate this source is played at, when
+  /// that is not the rate the file claims.
+  ///
+  /// The daily use is footage shot fast to be shown slow. Conforming 60 to 24
+  /// makes the source two and a half times longer and every frame of it a real
+  /// one, which is not the same picture a 40% retime gives — that has to invent
+  /// the frames in between or show each one two and a half times.
+  ///
+  /// Unlike a clip's `speed` this belongs to the *source*, so every clip cut
+  /// from it is conformed, including the ones placed tomorrow. That is the
+  /// whole difference between the two features and the reason both exist.
+  std::optional<double> assumed_fps;
+
+  /// What `duration` was before the conform, kept only while one is in force.
+  ///
+  /// `duration` itself stays the **conformed** length, because that is what
+  /// every reader of it already means: how much source there is to cut from,
+  /// in the units a clip's `source_in` and `source_out` are measured in.
+  /// Keeping the original here is what lets a conform be cleared back to
+  /// exactly the length it started at rather than to whatever a second
+  /// division arrives at.
+  std::optional<double> file_duration;
 
   /// A small copy of the same footage, to edit against.
   ///

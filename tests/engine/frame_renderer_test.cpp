@@ -7,6 +7,7 @@
 
 #include "cutline/engine/frame_renderer.hpp"
 
+#include "cutline/core/interpret.hpp"
 #include "cutline/core/model.hpp"
 #include "cutline/media/encoder.hpp"
 
@@ -635,6 +636,49 @@ TEST_F(FootageTest, RendersActualPictureContent) {
   const Rgba b = pixel_at(image, kWidth * 3 / 4, kHeight * 3 / 4);
   EXPECT_NE(a, b);
   EXPECT_EQ(a.a, 255);
+}
+
+TEST_F(FootageTest, ConformingTheFootageChangesWhichFrameIsOnScreen) {
+  // The evidence that Interpret Footage reaches the picture at all, and there
+  // is no way to get it except by rendering: every layer below this one can be
+  // right about the arithmetic while the renderer still asks the decoder for a
+  // time in the wrong units.
+  //
+  // Four seconds in, unconformed, is four seconds of file. Conformed from 60 to
+  // 24 the same moment is 1.6 seconds of file, which on real footage is a
+  // different picture — and it is *the picture 1.6 seconds in*, which the
+  // second half checks by rendering that moment plainly and comparing.
+  Project plain = with_video();
+  plain.media[0].fps = 60.0;
+
+  const gpu::Image at_four = render(plain, 4.0);
+  ASSERT_FALSE(at_four.empty());
+
+  Project conformed = core::interpret_media(plain, "v", 24.0);
+  ASSERT_TRUE(core::is_conformed(conformed.media[0]));
+  const gpu::Image conformed_at_four = render(conformed, 4.0);
+  ASSERT_FALSE(conformed_at_four.empty());
+
+  EXPECT_NE(conformed_at_four.pixels, at_four.pixels)
+      << "the conform never reached the decoder";
+
+  // And it is showing the right one: 4 x 0.4 is 1.6 seconds into the file.
+  const gpu::Image at_one_six = render(plain, 1.6);
+  ASSERT_FALSE(at_one_six.empty());
+  EXPECT_EQ(conformed_at_four.pixels, at_one_six.pixels)
+      << "it moved, but not to the frame the conform names";
+}
+
+TEST_F(FootageTest, AnUnconformedSourceIsUntouched) {
+  // The guard on the multiply: a factor of one has to be exactly one, or every
+  // source in every project moves by a rounding error.
+  Project plain = with_video();
+  plain.media[0].fps = 60.0;
+
+  Project cleared = core::interpret_media(plain, "v", 24.0);
+  cleared = core::interpret_media(std::move(cleared), "v", std::nullopt);
+
+  EXPECT_EQ(render(cleared, 4.0).pixels, render(plain, 4.0).pixels);
 }
 
 // --------------------------------------------------------- decode economy --

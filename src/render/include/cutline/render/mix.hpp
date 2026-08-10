@@ -36,7 +36,13 @@ struct PlannedAudioClip {
   double start = 0.0;
   double end = 0.0;
 
-  /// The source range consumed, in source seconds, before retiming.
+  /// The source range consumed, in **file** seconds, before retiming.
+  ///
+  /// File rather than source seconds, which are the same thing until the media
+  /// is conformed to another frame rate: the mixer hands these straight to a
+  /// decoder, and a decoder only knows the file. `conform` below is what the
+  /// two differ by, and the planner is where the conversion happens so that
+  /// nothing downstream has to remember to do it.
   double source_in = 0.0;
   double source_out = 0.0;
 
@@ -44,6 +50,16 @@ struct PlannedAudioClip {
   /// source per timeline second.
   double speed = 1.0;
   bool reverse = false;
+
+  /// How many seconds of file a second of source is, from Interpret Footage.
+  ///
+  /// One unless the media is conformed. It multiplies `speed` in deciding how
+  /// fast the file is read, and it is kept apart from it because the two are
+  /// heard differently: a speed change is stretched with the pitch held, and a
+  /// conform is a change of timebase, so it drops the pitch the way running
+  /// tape slow does. Folding them into one number would make that impossible
+  /// to tell apart.
+  double conform = 1.0;
 
   /// Which audio track it came from, counting from the top of the stored
   /// order. Mixing is a sum, so unlike video this does not imply an order —

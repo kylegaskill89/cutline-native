@@ -189,5 +189,60 @@ TEST(TimeStretch, TheOutputStaysFinite) {
   }
 }
 
+// ------------------------------------------------ replaying at another rate --
+
+TEST(ResampleBy, TheLengthChangesAndSoDoesThePitch) {
+  // The thing `time_stretch` exists not to do, and the one caller who wants it.
+  // A conform is a change of timebase: the file is replayed on a different
+  // clock, so 60 fps shown at 24 sounds like tape run slow because that is
+  // exactly what it is.
+  const std::vector<float> input = stereo_sine(1000.0, 24000);
+  const std::vector<float> out = resample_by(input, kChannels, 2.5);
+
+  EXPECT_NEAR(static_cast<double>(frames_of(out)), 60000.0, 2.0);
+  // A kilohertz replayed two and a half times slower is 400 Hz, and there
+  // should be next to nothing left where it started.
+  EXPECT_GT(energy_at(out, 400.0), 0.1);
+  EXPECT_LT(energy_at(out, 1000.0), energy_at(out, 400.0) * 0.2)
+      << "the pitch was held, which is what a stretch does and not what this is";
+}
+
+TEST(ResampleBy, GoingFasterRaisesIt) {
+  const std::vector<float> input = stereo_sine(400.0, 48000);
+  const std::vector<float> out = resample_by(input, kChannels, 0.5);
+
+  EXPECT_NEAR(static_cast<double>(frames_of(out)), 24000.0, 2.0);
+  EXPECT_GT(energy_at(out, 800.0), 0.1);
+}
+
+TEST(ResampleBy, AFactorOfOneIsLeftAlone) {
+  const std::vector<float> input = stereo_sine(1000.0, 4800);
+  EXPECT_EQ(resample_by(input, kChannels, 1.0), input);
+}
+
+TEST(ResampleBy, NonsenseIsRefusedRatherThanCrashed) {
+  const std::vector<float> input = stereo_sine(1000.0, 4800);
+  EXPECT_EQ(resample_by(input, kChannels, 0.0), input);
+  EXPECT_EQ(resample_by(input, kChannels, -2.0), input);
+  EXPECT_TRUE(resample_by({}, kChannels, 2.0).empty());
+}
+
+TEST(ResampleBy, TheChannelsStayWhereTheyWere) {
+  // Interpolating across the interleaving rather than within each lane would
+  // slur the two channels into each other, which is a stereo image collapsing.
+  std::vector<float> input(8 * kChannels);
+  for (std::size_t i = 0; i < 8; ++i) {
+    input[i * kChannels] = 1.0f;
+    input[i * kChannels + 1] = -1.0f;
+  }
+
+  const std::vector<float> out = resample_by(input, kChannels, 2.0);
+  ASSERT_GE(frames_of(out), 8u);
+  for (std::size_t i = 0; i + 1 < frames_of(out); ++i) {
+    EXPECT_NEAR(out[i * kChannels], 1.0f, 1e-5) << "at " << i;
+    EXPECT_NEAR(out[i * kChannels + 1], -1.0f, 1e-5) << "at " << i;
+  }
+}
+
 }  // namespace
 }  // namespace cutline::audio

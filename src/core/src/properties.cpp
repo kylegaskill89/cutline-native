@@ -1,5 +1,9 @@
 #include "cutline/core/properties.hpp"
 
+#include "cutline/core/interpret.hpp"
+
+#include "ripple.hpp"
+
 #include "cutline/core/id.hpp"
 #include "cutline/core/query.hpp"
 
@@ -158,8 +162,14 @@ Project match_sequence_to(Project p, std::string_view media_id) {
       *media->height > 0) {
     p = set_canvas(std::move(p), *media->width, *media->height);
   }
-  if (media->fps.has_value() && *media->fps > 0.0) {
-    p = set_fps(std::move(p), *media->fps);
+  // The rate it is *played* at, not the rate the file claims. Footage conformed
+  // to 24 and then used to shape a sequence should give that sequence 24 —
+  // matching it to the file's 60 would put every frame of the source between
+  // two of the sequence's, which is the one arrangement matching exists to
+  // avoid.
+  if (const std::optional<double> rate = playback_fps(*media);
+      rate.has_value() && *rate > 0.0) {
+    p = set_fps(std::move(p), *rate);
   }
   return p;
 }
@@ -256,37 +266,7 @@ Project set_clips_speed(Project p, std::span<const std::string> clip_ids, double
     }
   }
 
-  if (ripple && !shifts.empty()) {
-    // Sorted by time and then by delta, so collapsing to the last entry at each
-    // instant keeps the largest — which for a slow-down is the one that makes
-    // enough room, and for a speed-up is the least of the closings and so the
-    // one that cannot pull a neighbour over the clip in front of it.
-    std::ranges::sort(shifts);
-    std::vector<std::pair<double, double>> distinct;
-    for (const auto& shift : shifts) {
-      if (!distinct.empty() && std::abs(distinct.back().first - shift.first) < kTouchEps) {
-        distinct.back().second = shift.second;
-      } else {
-        distinct.push_back(shift);
-      }
-    }
-    shifts = std::move(distinct);
-    for (Track& t : p.sequence().tracks) {
-      const bool holds_target =
-          std::ranges::any_of(t.clips, [&](const Clip& c) { return members.contains(c.id); });
-      // A pinned track still carries its own retimed clips — sync lock decides
-      // whether an edit *elsewhere* moves a track, not whether its own clip may
-      // change length and leave the one after it overlapping.
-      if (!t.sync_locked && !holds_target) continue;
-      for (Clip& c : t.clips) {
-        double moved = 0.0;
-        for (const auto& [at, delta] : shifts) {
-          if (c.start >= at - kTouchEps) moved += delta;
-        }
-        c.start += moved;
-      }
-    }
-  }
+  if (ripple) p = ripple_after(std::move(p), std::move(shifts), members);
 
   for (Track& t : p.sequence().tracks) std::ranges::stable_sort(t.clips, {}, &Clip::start);
   return p;

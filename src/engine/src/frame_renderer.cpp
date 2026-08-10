@@ -1,5 +1,6 @@
 #include "cutline/engine/frame_renderer.hpp"
 
+#include "cutline/core/interpret.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/media/av_headers.hpp"
 #include "cutline/media/decoder.hpp"
@@ -719,6 +720,16 @@ void FrameRenderer::Impl::decode_ahead(Source& source, bool budgeted) {
 const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double time,
                                             const media::VideoDecoder** from) {
   const std::string& wanted = core::source_path(media, use_proxies);
+
+  // Into the file's own time. Everything above this line — the plan, the
+  // segments, a clip's source range — is in *source* seconds, which are the
+  // file's own unless somebody has conformed the footage to another rate. This
+  // is one of the two places in the application that knows the difference, and
+  // the other is where the mixer asks for sound.
+  //
+  // Below one for the usual case, 60 shown at 24: ten seconds of source is
+  // four seconds of file, which is what makes every frame a real one.
+  time *= core::conform_speed(media);
 
   auto found = sources.find(media.id);
   // Open on a different file from the one this source now means. Proxies being

@@ -5,6 +5,7 @@
   src/effects.cpp
   src/history.cpp
   src/id.cpp
+  src/interpret.cpp
   src/keyframe.cpp
   src/layout.cpp
   src/mask_path.cpp
@@ -12,6 +13,7 @@
   src/pool.cpp
   src/properties.cpp
   src/query.cpp
+  src/ripple.cpp
   src/roles.cpp
   src/routing.cpp
   src/segments.cpp

@@ -1758,7 +1758,7 @@ had been written down anywhere:
 | ~~Separate audio on export~~ | one stream per track, or a mix | **done** — a third choice beside Stereo and Mono | — |
 | ~~Scale to frame size~~ | right-click a clip, and an import default | **the row was wrong** — see below. Fit and Fill are both on the clip menu now | — |
 | Frame hold / freeze frame | a still from one frame, in place | **done** — held at the playhead, picture only | — |
-| Interpret footage | override a source's frame rate, alpha, channels | none — a source is what it says it is | model |
+| ~~Interpret footage~~ | override a source's frame rate, alpha, channels | **done** for the rate; alpha does not exist in this pipeline and channels already had a home — see below | — |
 | ~~Paste attributes~~ | pick which properties travel | **done** — nine groups, Ctrl+Alt+V, and Premiere's keyframe stretch | — |
 | Preview render bar | red/yellow over the ruler, Enter renders it | none, and nothing caches a rendered span | machinery |
 | Safe margins | title-safe and action-safe overlays | none | control |
@@ -1827,6 +1827,59 @@ and both are on the clip menu now, because neither is much use without the other
 to get back to. Filling scales both axes by the same factor, so it crops rather
 than stretches, and it goes through the same setter the inspector's rows use, so
 an animated scale takes a keyframe instead of quietly losing its animation.
+
+**Interpret Footage is one number, and the row asked for three things of which
+only one exists here.** Decoded video in this application is NV12 or YUV 4:2:0
+and carries no alpha whatsoever — the only thing in the pipeline with an alpha
+channel is a rasterised title — so "ignore alpha" and "invert alpha" would be
+switches on something that is not there. Channel layout is `Clip::channel_map`,
+built some time ago and per *clip*, which is where a camera with a lapel on one
+input and a shotgun on the other actually needs deciding. What was genuinely
+missing is the frame rate, and it is the third anybody reaches for.
+
+**It is not the same thing as a retime, and that is why both exist.** Conforming
+60 to 24 makes the source two and a half times longer and every frame of it a
+real one. A 40% retime of the same clip has to invent the frames in between or
+show each one two and a half times. They look alike in the timeline and do not
+look alike on screen. The other difference is where each lives: a retime is a
+property of one clip, a conform is a property of the *source*, so every clip cut
+from it is conformed including the ones placed tomorrow.
+
+**The whole feature is one factor applied at two boundaries.** `conform_speed`
+is `assumed ÷ file` — 0.4 for 60 shown at 24 — and it is multiplied in at
+exactly two places: where the renderer asks the decoder for a frame, and where
+the mixer plans a range to read. Everything above those two lines stays in
+source seconds and does not know the feature exists. `Media::duration` stays the
+*conformed* length, which is what all two dozen of its readers already mean by
+it, and the file's own length is kept beside it only while a conform is in force
+— so clearing one gives back the length the file has rather than a value two
+roundings away from it.
+
+**Clips already cut keep their frames, and the sequence ripples to fit.** A clip
+on the first two seconds of 60 fps footage is on frames 0 to 120; at 24 those
+frames end at five seconds, so that is where its range has to end. Leaving the
+range alone would have every existing clip jump to different footage, which is
+not what changing a playback rate means. Every clip that changed length then
+moves what follows it, on every track a sync lock holds together — the same rule
+the retime ripple uses, and now literally the same code: `ripple_after` was
+lifted out of `set_clips_speed`, because two operations that change how long
+clips are without moving them have the same problem afterwards and one of them
+would eventually get the edge cases wrong.
+
+**A conform drops the pitch, and a retime does not.** This is the one place the
+sound had to gain a new path rather than reuse one. A speed change is stretched
+with the pitch held, which is what `atempo` does and what anybody retiming a
+shot expects. A conform is a change of *timebase* — the file is being replayed
+on a different clock — so 60 shown at 24 sounds like tape run slow, because that
+is what it is. Correcting it there would hide the one cue that says the conform
+took effect. `audio::resample_by` is the tape half, and the two are kept as
+separate numbers on the plan precisely so they can be heard differently.
+
+**The evidence is a rendered frame, not the arithmetic.** Every layer under the
+renderer can be right about the ratio while the renderer still asks the decoder
+for a time in the wrong units, and nothing but pixels can tell. The test renders
+real footage at four seconds conformed, renders it plainly at 1.6 seconds, and
+requires the two to be the same image — it fails if the multiply is removed.
 
 **Paste Attributes is a question, and that is the whole of its design.** Which
 properties travel has no default worth guessing: "all of them" is the plain

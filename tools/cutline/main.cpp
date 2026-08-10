@@ -25,6 +25,7 @@
 #include "cutline/audio/chain.hpp"
 #include "cutline/audio/loudness.hpp"
 #include "cutline/core/animate.hpp"
+#include "cutline/core/interpret.hpp"
 #include "cutline/core/attributes.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
@@ -162,6 +163,7 @@ using cutline::ui::Panel;
 using cutline::ui::parse_color;
 using cutline::ui::ProgressBar;
 using cutline::ui::PanelId;
+using cutline::ui::RadioGroup;
 using cutline::ui::Rect;
 using cutline::ui::ScrollView;
 using cutline::ui::ScrubBar;
@@ -213,7 +215,11 @@ using cutline::ui::built_in_themes;
   // only shown where it means something, and at 30 it means nothing.
   project.sequence().fps = 30000.0 / 1001.0;
   project.media = {
-      Media{.id = "wide", .name = "wide.mp4", .duration = 120.0, .has_video = true},
+      // With a rate on it, because real footage has one and because Interpret
+      // Footage is only offered where there is a rate to conform *from* — so
+      // without this the check cannot reach that box at all.
+      Media{.id = "wide", .name = "wide.mp4", .duration = 120.0, .has_video = true,
+            .fps = 60.0},
       Media{.id = "close", .name = "close.mp4", .duration = 120.0, .has_video = true},
       Media{.id = "title", .name = "title.png", .duration = 10.0, .has_video = true,
             .is_image = true},
@@ -1103,6 +1109,7 @@ void mark_dirty(App& app) {
 
 void set_theme(App& app, std::size_t index);
 void open_paste_attributes_dialog(App& app);
+void open_interpret_dialog(App& app, const std::string& media_id);
 void show_playhead(App& app);
 void save_settings(App& app);
 void refresh_timeline(App& app);
@@ -3895,6 +3902,16 @@ void open_pool_menu(App& app, double x, double y) {
     if (!is_bin) {
       items.push_back(Item{"Label", [&app, x, y] { open_media_label_menu(app, x, y); }});
       items.push_back(Item{"Relink Media...", [&app] { relink_pool_entry(app); }});
+      // Only for footage with a rate to conform *from*. A still has no frames
+      // to re-time and a file whose rate never probed has no ratio to form —
+      // offering it there would be offering a box that can only be cancelled.
+      const auto asset = std::ranges::find(app.session.project().media, chosen->id,
+                                           &cutline::core::Media::id);
+      if (asset != app.session.project().media.end() &&
+          cutline::core::can_interpret(*asset)) {
+        items.push_back(Item{"Interpret Footage...",
+                             [&app, id = chosen->id] { open_interpret_dialog(app, id); }});
+      }
       // Only where a row is already inside one. "Move to Top Level" on
       // something already there is an entry that cannot do anything.
       const auto media = std::ranges::find(app.session.project().media, chosen->id,
@@ -4224,7 +4241,10 @@ void refresh_preview(App& app) {
   cutline::core::Project project;
   project.sequence().canvas_w = std::max(1, media.width.value_or(1280));
   project.sequence().canvas_h = std::max(1, media.height.value_or(720));
-  project.sequence().fps = media.fps.value_or(30.0) > 0.0 ? *media.fps : 30.0;
+  // The rate it is *played* at, so a conformed source steps and scrubs on the
+  // grid it will actually be cut on rather than on the file's.
+  const std::optional<double> rate = cutline::core::playback_fps(media);
+  project.sequence().fps = rate.value_or(0.0) > 0.0 ? *rate : 30.0;
   project.media = {media};
 
   cutline::core::Track track;
@@ -4275,7 +4295,8 @@ void step_source(App& app, double frames) {
   const cutline::core::Media* media = source_media_of(app);
   if (media == nullptr) return;
 
-  const double fps = media->fps.value_or(0.0) > 0.0 ? *media->fps : 30.0;
+  const std::optional<double> rate = cutline::core::playback_fps(*media);
+  const double fps = rate.value_or(0.0) > 0.0 ? *rate : 30.0;
   const double at = app.source_playhead + frames / fps;
   app.source_playhead =
       std::clamp(cutline::core::snap_to_frame(at, fps), 0.0, std::max(0.0, media->duration));
@@ -4289,7 +4310,8 @@ void mark_source(App& app, bool out_point) {
   if (media == nullptr) return;
 
   const std::optional<double>& already = out_point ? media->out_point : media->in_point;
-  const double fps = media->fps.value_or(0.0) > 0.0 ? *media->fps : 30.0;
+  const std::optional<double> rate = cutline::core::playback_fps(*media);
+  const double fps = rate.value_or(0.0) > 0.0 ? *rate : 30.0;
   const bool here =
       already.has_value() && std::abs(*already - app.source_playhead) < 0.5 / fps;
 
@@ -7351,6 +7373,109 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
   app.main.host->open_popup(std::move(panel), settings_anchor());
 }
 
+/// Premiere's Interpret Footage, which here is one question: what rate is this?
+///
+/// Footage shot fast to be shown slow is the whole of the daily use. Conforming
+/// 60 to 24 makes the source two and a half times longer and every frame of it
+/// a real one, which is a different picture from a 40% retime — that has to
+/// invent the frames between or show each one two and a half times. The two
+/// look alike in the timeline and do not look alike on screen.
+///
+/// The resulting length is shown and kept up to date as the number is typed,
+/// because it is the thing anybody is actually checking: "does this give me the
+/// ten seconds I need" is the question, and working out that it means 23.976 is
+/// not.
+///
+/// Premiere's box also offers alpha and channel layout. Decoded video here is
+/// NV12 or YUV 4:2:0 and carries no alpha at all, so those switches would be
+/// switches on nothing; channel layout is `Clip::channel_map`, which is built
+/// and lives per clip, where a camera's two microphones need deciding.
+void open_interpret_dialog(App& app, const std::string& media_id) {
+  if (app.main.host == nullptr) return;
+  const auto found = std::ranges::find(app.session.project().media, media_id,
+                                       &cutline::core::Media::id);
+  if (found == app.session.project().media.end() || !cutline::core::can_interpret(*found)) {
+    return;
+  }
+
+  const cutline::core::Media media = *found;
+  const double file_rate = *media.fps;
+  // The length with no conform on it, which is what every "how long would it
+  // be" below is worked out from.
+  const double file_length = media.file_duration.value_or(media.duration);
+  const bool conformed = cutline::core::is_conformed(media);
+
+  auto panel = std::make_unique<Panel>();
+  panel->emplace<Label>("Interpret Footage").set_bold(true);
+  panel->emplace<Label>(media.name).set_small(true);
+
+  auto& choice = panel->emplace<RadioGroup>(
+      std::vector<std::string>{std::format("Use the rate in the file: {:.3f} fps", file_rate),
+                               "Assume this rate:"},
+      conformed ? 1u : 0u);
+
+  auto& rate_row = panel->emplace<Box>(Axis::Horizontal);
+  auto& rate = rate_row.emplace<TextField>(
+      std::format("{:.3f}", media.assumed_fps.value_or(file_rate)));
+  rate.set_columns(8);
+  rate_row.emplace<Label>("fps").set_small(true);
+
+  const bool drop_frame = app.session.project().sequence().drop_frame;
+  auto& length = panel->emplace<Label>("");
+  length.set_small(true);
+
+  // Kept in step from one place, so the radio and the field cannot disagree
+  // about which length is on show.
+  const auto show_length = [&length, &choice, &rate, file_rate, file_length, drop_frame] {
+    double at = file_rate;
+    if (choice.selected() == 1) {
+      double typed = 0.0;
+      if (std::from_chars(rate.text().data(), rate.text().data() + rate.text().size(), typed)
+                  .ec == std::errc{} &&
+          typed > 0.0) {
+        at = typed;
+      }
+    }
+    length.set_text("It would run " + cutline::core::seconds_to_timecode(
+                                          file_length * file_rate / at, at, drop_frame));
+  };
+  show_length();
+  choice.set_on_change([show_length](std::size_t) { show_length(); });
+  rate.set_on_finish([show_length] { show_length(); });
+
+  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
+  buttons.emplace<Button>("OK", [&app, media_id, choice = &choice, rate = &rate] {
+    std::optional<double> assumed;
+    if (choice->selected() == 1) {
+      double typed = 0.0;
+      if (std::from_chars(rate->text().data(), rate->text().data() + rate->text().size(), typed)
+                  .ec == std::errc{} &&
+          typed > 0.0) {
+        assumed = typed;
+      } else {
+        // A typing mistake leaves the source as it is rather than conforming it
+        // to nothing, which is a source of no length at all.
+        if (app.main.host != nullptr) app.main.host->close_popup();
+        return;
+      }
+    }
+
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    app.session.apply(
+        cutline::core::interpret_media(app.session.project(), media_id, assumed));
+    // Everything: the pool's duration column, the clips that changed length,
+    // the picture, and the sound, which is now being read at another rate.
+    refresh_all(app);
+    stop_playback(app);
+    invalidate_preview(app);
+  });
+  buttons.emplace<Button>("Cancel", [&app] {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+  });
+
+  app.main.host->open_popup(std::move(panel), settings_anchor());
+}
+
 /// Premiere's Paste Attributes: some of what was copied, not all of it.
 ///
 /// A plain paste puts a whole clip down. This puts a *part* of one onto clips
@@ -9746,7 +9871,8 @@ void refresh_audio_panel(App& app) {
     // the picture and the mark that follows it agree on which frame is meant.
     bar.on_scrub = [app](double time) {
       const cutline::core::Media* media = source_media_of(*app);
-      const double fps = media != nullptr ? media->fps.value_or(0.0) : 0.0;
+      const double fps =
+          media != nullptr ? cutline::core::playback_fps(*media).value_or(0.0) : 0.0;
       app->source_playhead = fps > 0.0 ? cutline::core::snap_to_frame(time, fps) : time;
       refresh_source(*app);
     };
@@ -12460,6 +12586,23 @@ template <typename T>
 
         open_loudness_dialog(app);
         measure_dialog("loudness");
+
+        // A source with a rate to conform from, which is the only kind the
+        // entry is offered on. Reported when there is none rather than quietly
+        // skipped: a dialogue nothing lays out is the exact fault this whole
+        // pass was added for, and a loop that finds nothing looks identical to
+        // a loop that found everything.
+        const auto interpretable =
+            std::ranges::find_if(app.session.project().media, [](const cutline::core::Media& m) {
+              return cutline::core::can_interpret(m);
+            });
+        if (interpretable != app.session.project().media.end()) {
+          open_interpret_dialog(app, interpretable->id);
+          measure_dialog("interpret footage");
+        } else {
+          std::println("{}: no source the interpret box could be opened on", theme.id);
+          ++failures;
+        }
 
         // Four marks that disagree, which is the only state Fit Clip exists in
         // — with three the fourth is derived and there is nothing to ask about.

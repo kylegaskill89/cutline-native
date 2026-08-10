@@ -11,6 +11,7 @@ add_executable(cutline_core_tests
   core/arrange_test.cpp
   core/attributes_test.cpp
   core/edit_test.cpp
+  core/interpret_test.cpp
   core/keyframe_test.cpp
   core/layout_test.cpp
   core/mask_path_test.cpp

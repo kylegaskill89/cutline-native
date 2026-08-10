@@ -1,5 +1,6 @@
 #include "cutline/render/mix.hpp"
 
+#include "cutline/core/interpret.hpp"
 #include "cutline/core/query.hpp"
 
 #include <algorithm>
@@ -60,8 +61,12 @@ std::vector<PlannedAudioClip> plan_audio(const core::Project& project) {
       entry.audio_stream = clip.audio_stream;
       entry.start = clip.start;
       entry.end = clip.start + duration;
-      entry.source_in = clip.source_in;
-      entry.source_out = clip.source_out;
+      // Into the file's own time here, once, so that everything downstream —
+      // the decode window, the read position, the retime — is talking about
+      // the thing a decoder can actually be asked for.
+      entry.conform = media != nullptr ? core::conform_speed(*media) : 1.0;
+      entry.source_in = clip.source_in * entry.conform;
+      entry.source_out = clip.source_out * entry.conform;
       entry.speed = core::clip_speed(clip);
       entry.reverse = clip.reverse;
       entry.track_index = index;
@@ -164,9 +169,14 @@ double audio_source_time_at(const PlannedAudioClip& planned, double t) noexcept 
   // continuously — which is a different piece of DSP from the fixed stretch a
   // constant speed needs. Ramping a clip and hearing it slide is worse than
   // ramping it and having to handle the sound yourself.
-  const core::Clip& clip = *planned.clip;
-  const double local = (t - clip.start) * planned.speed;
-  const double wanted = clip.reverse ? clip.source_out - local : clip.source_in + local;
+  //
+  // Off the plan throughout rather than reaching back into the clip for half of
+  // it: the plan's range is in file seconds and the clip's is in source
+  // seconds, and mixing the two was how a conformed clip read from the wrong
+  // part of its file.
+  const double local = (t - planned.start) * planned.speed * planned.conform;
+  const double wanted =
+      planned.reverse ? planned.source_out - local : planned.source_in + local;
   return std::min(std::max(planned.source_in, wanted), planned.source_out);
 }
 

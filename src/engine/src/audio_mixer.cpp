@@ -220,7 +220,8 @@ struct Voice {
 /// Whether a clip needs its audio rendered ahead of time rather than read
 /// straight from the source.
 [[nodiscard]] bool needs_retiming(const render::PlannedAudioClip& planned) noexcept {
-  return planned.reverse || std::abs(planned.speed - 1.0) > 1e-6;
+  return planned.reverse || std::abs(planned.speed - 1.0) > 1e-6 ||
+         std::abs(planned.conform - 1.0) > 1e-6;
 }
 
 /// Renders a retimed clip's audio into timeline time.
@@ -263,7 +264,22 @@ struct Voice {
     }
   }
 
-  // A clip at speed 2 lasts half as long, so the stretch factor is its inverse.
+  // A conform first, and it is a *resample* rather than a stretch. The file is
+  // being replayed on a different clock — 60 fps shown at 24 is tape run slow
+  // — so the pitch goes down with the speed. Correcting it here would hide the
+  // one cue that says the conform took effect, and would be a treatment nobody
+  // asked for on top of it.
+  //
+  // The trimmed span is in file seconds, and dividing by the conform brings it
+  // back to source seconds, which is the length the clip occupies before its
+  // own speed is applied.
+  if (std::abs(planned.conform - 1.0) > 1e-6) {
+    trimmed = audio::resample_by(trimmed, channels, 1.0 / planned.conform);
+  }
+
+  // And then the clip's own speed, which is the opposite bargain: a clip at
+  // speed 2 lasts half as long and sounds the same, so the factor is its
+  // inverse and the pitch is held.
   out.samples = audio::time_stretch(trimmed, channels, 1.0 / planned.speed);
   return out;
 }

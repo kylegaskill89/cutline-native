@@ -144,4 +144,40 @@ std::vector<float> time_stretch(std::span<const float> interleaved, int channels
   return out;
 }
 
+std::vector<float> resample_by(std::span<const float> interleaved, int channels, double factor) {
+  const auto lanes = static_cast<std::size_t>(std::max(1, channels));
+  if (interleaved.empty() || factor <= 0.0 || factor == 1.0) {
+    return {interleaved.begin(), interleaved.end()};
+  }
+
+  const std::size_t frames = interleaved.size() / lanes;
+  if (frames == 0) return {};
+
+  const auto output_frames = static_cast<std::size_t>(
+      std::llround(static_cast<double>(frames) * factor));
+  if (output_frames == 0) return {};
+
+  std::vector<float> out(output_frames * lanes, 0.0f);
+  // The read position advances by 1/factor per output frame: slower than one
+  // for a stretch, which is a conform to a lower rate and the drop in pitch
+  // that goes with it.
+  const double step = 1.0 / factor;
+
+  for (std::size_t i = 0; i < output_frames; ++i) {
+    const double at = static_cast<double>(i) * step;
+    const auto whole = static_cast<std::size_t>(at);
+    if (whole >= frames) break;
+
+    const auto next = std::min(whole + 1, frames - 1);
+    const auto fraction = static_cast<float>(at - static_cast<double>(whole));
+    for (std::size_t c = 0; c < lanes; ++c) {
+      const float a = interleaved[whole * lanes + c];
+      const float b = interleaved[next * lanes + c];
+      out[i * lanes + c] = a + (b - a) * fraction;
+    }
+  }
+
+  return out;
+}
+
 }  // namespace cutline::audio

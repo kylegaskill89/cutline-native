@@ -226,6 +226,11 @@ json write(const Media& m) {
   put_if_set(j, "width", m.width);
   put_if_set(j, "height", m.height);
   put_if_set(j, "fps", m.fps);
+  // Both absent unless the source has been conformed, so nothing written
+  // before Interpret Footage existed gains a field and nothing written now
+  // troubles a build that predates it.
+  put_if_set(j, "assumed_fps", m.assumed_fps);
+  put_if_set(j, "file_duration", m.file_duration);
   put_if_set(j, "in_point", m.in_point);
   put_if_set(j, "out_point", m.out_point);
   if (!m.proxy_path.empty()) j["proxy_path"] = m.proxy_path;
@@ -567,6 +572,8 @@ Media read_media(const json& j) {
   m.width = read_optional<int>(j, "width");
   m.height = read_optional<int>(j, "height");
   m.fps = read_optional<double>(j, "fps");
+  m.assumed_fps = read_optional<double>(j, "assumed_fps");
+  m.file_duration = read_optional<double>(j, "file_duration");
   m.in_point = read_optional<double>(j, "in_point");
   m.out_point = read_optional<double>(j, "out_point");
   m.proxy_path = read_or(j, "proxy_path", std::string{});

@@ -37,4 +37,24 @@ inline constexpr std::size_t kStretchWindow = 1024;
 [[nodiscard]] std::vector<float> time_stretch(std::span<const float> interleaved, int channels,
                                               double factor);
 
+/// Replays interleaved audio at a different rate, pitch and all: the result is
+/// `factor` times as long and `1 / factor` times the pitch.
+///
+/// The thing `time_stretch` exists *not* to do, and there is one caller who
+/// wants exactly it. Conforming footage to another frame rate is a change of
+/// timebase rather than a change of speed — the file is being replayed on a
+/// different clock, so 60 fps shown at 24 sounds like tape run slow, because
+/// that is what it is. Correcting the pitch there would be inventing a
+/// treatment nobody asked for and hiding the very thing that says the conform
+/// took effect.
+///
+/// Linearly interpolated, which is what the mixer already does when it reads a
+/// retimed clip at a fractional position: point sampling quantises the read
+/// position to whole samples and adds a rasp of noise on top.
+///
+/// A factor of 1, a non-positive factor, or an empty input is returned
+/// unchanged.
+[[nodiscard]] std::vector<float> resample_by(std::span<const float> interleaved, int channels,
+                                             double factor);
+
 }  // namespace cutline::audio
