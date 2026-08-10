@@ -984,22 +984,22 @@ way to *set* them by eye, which is the panel.
 | ~~Drag from the picture to the timeline~~ | yes | **done** — with the same ghost the pool's drag shows | — |
 | ~~A list of recently opened sources~~ | a dropdown of them | **done** — the name of what is showing *is* the chooser | — |
 | ~~Audio-only sources shown as a waveform~~ | yes | **done** — `ui::WaveformView` | — |
-| Display mode, safe margins, zoom | yes | none — and not this section's, since it is both monitors' | audit |
+| Display mode, safe margins, zoom | yes | **zoom is done**, on both monitors; the other two are not — and not this section's, since they are both monitors' | audit |
 
-**Section 3 is closed but for the last row, which is deferred rather than
-done.** Display mode, safe margins and monitor zoom belong to the program
+**Section 3 is closed but for the last row, and the useful third of that row is
+now done.** Display mode, safe margins and monitor zoom belong to the program
 monitor as much as to this one, so building them into the source monitor alone
 would be building them twice; they are carried in *Found by audit* below, as
-**Safe margins**, **Monitor zoom level** and **Display mode**, and that list is
-where they will be picked up.
+**Safe margins**, **Monitor zoom level** and **Display mode**. Zoom was built
+there, once, and both monitors have it.
 
 Worth saying plainly what was weighed, so the deferral is a decision rather than
 a thing that quietly did not happen. Safe margins are title-safe and action-safe
 overlays for broadcast delivery, which is not what this application is being
 used for. Display mode — composite, alpha, and the scopes — largely repeats what
 the Scopes panel already offers, and offers it as a dockable panel that can sit
-beside the picture rather than over it. Monitor zoom is the one of the three
-with daily use, and it is the one to do first when they are picked up.
+beside the picture rather than over it. Monitor zoom was the one of the three
+with daily use, it was done first, and it is done.
 
 **The picture costs nothing to render.** A source monitor is a sequence of one
 clip, so it can be shown by handing `ProjectPreview` a project built on the spot
@@ -1762,17 +1762,52 @@ had been written down anywhere:
 | Paste attributes | pick which properties travel | the effect stack only, whole | control |
 | Preview render bar | red/yellow over the ruler, Enter renders it | none, and nothing caches a rendered span | machinery |
 | Safe margins | title-safe and action-safe overlays | none | control |
-| Monitor zoom level | Fit, 10%…400%, and scroll | letterboxed fit only | control |
+| ~~Monitor zoom level~~ | Fit, 10%…400%, and scroll | **done** — on both monitors, with the wheel and the middle button to pan | — |
 | Display mode | composite, alpha, and the scopes, over the picture | the Scopes panel instead, docked | control |
 | ~~Maximise a panel~~ | `~` over any panel | **done** — the panel under the pointer, and again to put it back | — |
 
 **The three monitor rows are §3's last row**, moved here rather than left there:
 they belong to the program monitor as much as to the source one, and doing them
 in one place is doing them once. Of the three, monitor zoom is the one with
-daily use — checking focus, or the edge of a mask — and is the one to start
-with. Safe margins are for broadcast delivery, which is not what this is being
-used for; display mode largely repeats the Scopes panel, which is already
-dockable and can therefore sit *beside* the picture rather than over it.
+daily use — checking focus, or the edge of a mask — and it is **done**, on both
+monitors, from one widget. Safe margins are for broadcast delivery, which is not
+what this is being used for; display mode largely repeats the Scopes panel,
+which is already dockable and can therefore sit *beside* the picture rather than
+over it.
+
+**Zoom turned out to be four lines of geometry and one decision.** Everything
+drawn over the picture — the transform box, its handles, every mask outline, the
+hit test that finds them — is already placed against `MonitorView::picture()`,
+so putting the zoom *inside* that one function carried the whole overlay with it
+and nothing else had to learn that zoom exists. That is the shape the widget
+already had, not a lucky accident: the reason the overlay was written against
+the picture rectangle is that it is the only thing that knows where the picture
+is.
+
+**The percentages are measured against the canvas, not against the frame that
+turned up.** This is the trap, and it is invisible until somebody changes the
+preview quality: the picture arriving at the monitor is a half- or quarter-scale
+render at anything below Full, so measuring 100% against *its* pixels would make
+the number mean one thing on Full and another on Half. The monitor is told the
+sequence size now — `set_canvas_size` rather than only `set_canvas_aspect` — and
+one told only the shape steps its levels around Fit rather than lying about
+pixels.
+
+**Panning is the middle button and the wheel, and not a left drag.** Premiere
+puts scroll bars down two edges of a zoomed monitor. The reason it needs them is
+the reason a left drag cannot pan here either: on the program monitor the body
+of a selected layer *is* its move handle, so a picture that panned on a left
+drag would swallow both gestures, and on the source monitor it would swallow the
+drag onto the timeline. The middle button collides with nothing, the wheel is
+the gesture the row above asked for, and neither costs two edges of the picture.
+
+**The source monitor's zoom sits on its header row**, beside the name of what is
+showing, rather than down with the transport where the program monitor keeps
+its own. That row is a third the width of the program monitor's and has already
+been cut down twice to fit; `--check` returned 5 clipped and 5 squeezed in every
+theme the moment a seventh control went on it. The header holds one control and
+the full width of the panel, and "what is showing" and "how closely you are
+looking at it" are the same kind of statement about it.
 
 The first is the only one the *spec* asks for: §18's export dialog says
 "Audio (mix/separate)", and §11 defines separate as one stream per track. The

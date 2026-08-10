@@ -1115,5 +1115,285 @@ TEST(MonitorDragOut, ALayersHandlesComeFirst) {
   EXPECT_GT(moves, 0);
 }
 
+// ----------------------------------------------------------------- zoom --
+
+namespace {
+
+struct ZoomFixture {
+  /// A half-scale render of a 1920x1080 canvas, which is what the preview
+  /// sends at anything below full quality.
+  Pixels frame{960, 540};
+  MonitorView monitor;
+
+  ZoomFixture() {
+    monitor.set_canvas_size(1920, 1080);
+    monitor.set_frame(frame.view());
+    // 440 square, less the 20-pixel border either side: a 400 square viewport
+    // at (20, 20), which every expectation below is worked out against.
+    monitor.arrange(Rect{0.0, 0.0, 440.0, 440.0}, flat_context());
+  }
+
+  [[nodiscard]] static MouseEvent middle(double x, double y) {
+    return MouseEvent{.x = x, .y = y, .button = MouseButton::Middle};
+  }
+  [[nodiscard]] static MouseEvent left(double x, double y) {
+    return MouseEvent{.x = x, .y = y, .button = MouseButton::Left};
+  }
+};
+
+/// Whether anything was ever clipped to exactly this rectangle.
+[[nodiscard]] bool clipped_to(const RecordingPainter& painter, const Rect& area) {
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::PushClip && call.bounds == area) return true;
+  }
+  return false;
+}
+
+/// The innermost clip in force when the first call of this kind was recorded,
+/// or nothing when there was none or the call never happened.
+[[nodiscard]] std::optional<Rect> clip_over(const RecordingPainter& painter,
+                                            DrawCall::Kind kind) {
+  std::vector<Rect> stack;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::PushClip) {
+      stack.push_back(call.bounds);
+    } else if (call.kind == DrawCall::Kind::PopClip) {
+      if (!stack.empty()) stack.pop_back();
+    } else if (call.kind == kind) {
+      if (stack.empty()) return std::nullopt;
+      return stack.back();
+    }
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+TEST(MonitorZoom, AMonitorStartsFitted) {
+  ZoomFixture test;
+  EXPECT_DOUBLE_EQ(test.monitor.zoom(), kMonitorFit);
+  EXPECT_DOUBLE_EQ(test.monitor.picture().width, 400.0);
+  EXPECT_FALSE(test.monitor.can_pan());
+}
+
+TEST(MonitorZoom, AHundredPerCentIsOneCanvasPixelPerScreenPixel) {
+  ZoomFixture test;
+  test.monitor.set_zoom(1.0);
+  EXPECT_DOUBLE_EQ(test.monitor.picture().width, 1920.0);
+  EXPECT_DOUBLE_EQ(test.monitor.picture().height, 1080.0);
+  EXPECT_TRUE(test.monitor.can_pan());
+}
+
+TEST(MonitorZoom, TheLevelIsMeasuredAgainstTheCanvasAndNotTheFrameThatTurnedUp) {
+  // The whole reason the monitor is told the canvas size rather than only its
+  // shape. The frame here is a half-scale render, so measuring 100% against its
+  // 960 pixels would fold the preview-quality setting into a number that is
+  // supposed to be about the footage — and "100%" would mean one thing on Full
+  // and another on Half.
+  ZoomFixture test;
+  test.monitor.set_zoom(1.0);
+  EXPECT_DOUBLE_EQ(test.monitor.picture().width, 1920.0)
+      << "it zoomed to the render rather than to the canvas";
+}
+
+TEST(MonitorZoom, AMonitorNeverToldTheCanvasSizeZoomsAgainstTheFit) {
+  // There is no honest absolute answer without the canvas size, so the levels
+  // step around Fit instead of lying about pixels.
+  MonitorView monitor;
+  const Pixels frame(320, 180);
+  monitor.set_frame(frame.view());
+  monitor.arrange(Rect{0.0, 0.0, 440.0, 440.0}, flat_context());
+  const double fitted = monitor.picture().width;
+
+  monitor.set_zoom(1.0);
+  EXPECT_DOUBLE_EQ(monitor.picture().width, fitted);
+  monitor.set_zoom(2.0);
+  EXPECT_DOUBLE_EQ(monitor.picture().width, fitted * 2.0);
+}
+
+TEST(MonitorZoom, TheCanvasSizeSetsTheShapeWithIt) {
+  MonitorView monitor;
+  monitor.set_canvas_size(1920, 1080);
+  EXPECT_DOUBLE_EQ(monitor.canvas_aspect(), 1920.0 / 1080.0);
+
+  monitor.set_canvas_size(0, -4);
+  EXPECT_EQ(monitor.canvas_width(), 1920) << "nonsense was taken";
+}
+
+TEST(MonitorZoom, ZoomingOutLeavesThePictureCentred) {
+  ZoomFixture test;
+  test.monitor.set_zoom(0.10);
+
+  const Rect picture = test.monitor.picture();
+  EXPECT_DOUBLE_EQ(picture.width, 192.0);
+  EXPECT_DOUBLE_EQ(picture.x, 20.0 + (400.0 - 192.0) / 2.0);
+  EXPECT_FALSE(test.monitor.can_pan());
+}
+
+TEST(MonitorZoom, PanningStopsWhenAnEdgeReachesTheViewport) {
+  // Otherwise the picture can be pushed out of the window, and getting it back
+  // is guesswork against a blank panel.
+  ZoomFixture test;
+  test.monitor.set_zoom(1.0);
+  test.monitor.set_pan(100000.0, 100000.0);
+
+  const Rect view = test.monitor.viewport();
+  const Rect picture = test.monitor.picture();
+  EXPECT_DOUBLE_EQ(picture.x, view.x);
+  EXPECT_DOUBLE_EQ(picture.y, view.y);
+
+  test.monitor.set_pan(-100000.0, -100000.0);
+  const Rect other = test.monitor.picture();
+  EXPECT_DOUBLE_EQ(other.right(), view.right());
+  EXPECT_DOUBLE_EQ(other.bottom(), view.bottom());
+}
+
+TEST(MonitorZoom, APictureThatFitsCannotBePanned) {
+  ZoomFixture test;
+  test.monitor.set_pan(50.0, 50.0);
+  EXPECT_DOUBLE_EQ(test.monitor.pan_x(), 0.0);
+  EXPECT_DOUBLE_EQ(test.monitor.pan_y(), 0.0);
+}
+
+TEST(MonitorZoom, WhatIsInTheMiddleStaysThereWhenTheZoomChanges) {
+  // Going in on a corner and being returned to the middle of the frame loses
+  // the thing that was being looked at, which is the whole reason for going in.
+  ZoomFixture test;
+  test.monitor.set_zoom(1.0);
+  test.monitor.set_pan(-400.0, -200.0);
+
+  const std::optional<std::pair<double, double>> before =
+      test.monitor.to_picture(220.0, 220.0);  // the middle of the viewport
+  ASSERT_TRUE(before.has_value());
+
+  test.monitor.set_zoom(2.0);
+  const std::optional<std::pair<double, double>> after = test.monitor.to_picture(220.0, 220.0);
+  ASSERT_TRUE(after.has_value());
+  EXPECT_NEAR(after->first, before->first, 1e-9);
+  EXPECT_NEAR(after->second, before->second, 1e-9);
+}
+
+TEST(MonitorZoom, GoingBackToFitPutsThePictureBackInTheMiddle) {
+  ZoomFixture test;
+  test.monitor.set_zoom(4.0);
+  test.monitor.set_pan(-1000.0, -1000.0);
+
+  test.monitor.set_zoom(kMonitorFit);
+  EXPECT_DOUBLE_EQ(test.monitor.pan_x(), 0.0);
+  EXPECT_DOUBLE_EQ(test.monitor.pan_y(), 0.0);
+  EXPECT_DOUBLE_EQ(test.monitor.picture().width, 400.0);
+}
+
+TEST(MonitorZoom, TheWheelPansAndShiftTurnsIt) {
+  ZoomFixture test;
+  test.monitor.set_zoom(1.0);
+
+  ASSERT_TRUE(test.monitor.on_wheel(WheelEvent{.x = 220.0, .y = 220.0, .delta_y = 1.0}));
+  EXPECT_LT(test.monitor.pan_y(), 0.0) << "scrolling down should look further down the picture";
+  EXPECT_DOUBLE_EQ(test.monitor.pan_x(), 0.0);
+
+  const double down = test.monitor.pan_y();
+  ASSERT_TRUE(test.monitor.on_wheel(WheelEvent{
+      .x = 220.0, .y = 220.0, .delta_y = 1.0, .modifiers = Modifiers{.shift = true}}));
+  EXPECT_LT(test.monitor.pan_x(), 0.0);
+  EXPECT_DOUBLE_EQ(test.monitor.pan_y(), down) << "shift moved both axes at once";
+}
+
+TEST(MonitorZoom, TheWheelIsRefusedWhenThereIsNothingToPan) {
+  // Refused rather than swallowed, so a wheel over a fitted monitor still
+  // reaches whatever else wanted it.
+  ZoomFixture test;
+  EXPECT_FALSE(test.monitor.on_wheel(WheelEvent{.x = 220.0, .y = 220.0, .delta_y = 1.0}));
+}
+
+TEST(MonitorZoom, TheMiddleButtonPushesThePictureAbout) {
+  ZoomFixture test;
+  test.monitor.set_zoom(1.0);
+
+  ASSERT_TRUE(test.monitor.on_mouse_down(ZoomFixture::middle(220.0, 220.0)));
+  test.monitor.on_mouse_move(ZoomFixture::middle(180.0, 200.0));
+  EXPECT_DOUBLE_EQ(test.monitor.pan_x(), -40.0);
+  EXPECT_DOUBLE_EQ(test.monitor.pan_y(), -20.0);
+
+  test.monitor.on_mouse_up(ZoomFixture::middle(180.0, 200.0));
+  test.monitor.on_mouse_move(ZoomFixture::middle(300.0, 300.0));
+  EXPECT_DOUBLE_EQ(test.monitor.pan_x(), -40.0) << "it never let go of the picture";
+}
+
+TEST(MonitorZoom, TheMiddleButtonIsLeftAloneWhenThereIsNothingToPan) {
+  ZoomFixture test;
+  EXPECT_FALSE(test.monitor.on_mouse_down(ZoomFixture::middle(220.0, 220.0)));
+}
+
+TEST(MonitorZoom, ALeftDragOnAZoomedPictureIsStillADragOut) {
+  // The middle button pans precisely so the left one does not have to: on the
+  // program monitor the body of a selected layer *is* its move handle, so a
+  // picture that panned on a left drag would have swallowed both gestures.
+  ZoomFixture test;
+  int drops = 0;
+  test.monitor.set_on_drag_out([&](double, double) { ++drops; });
+  test.monitor.set_zoom(1.0);
+
+  test.monitor.on_mouse_down(ZoomFixture::left(220.0, 220.0));
+  test.monitor.on_mouse_move(ZoomFixture::left(280.0, 240.0));
+  test.monitor.on_mouse_up(ZoomFixture::left(280.0, 240.0));
+
+  EXPECT_EQ(drops, 1);
+  EXPECT_DOUBLE_EQ(test.monitor.pan_x(), 0.0) << "the left button panned as well";
+}
+
+TEST(MonitorZoom, TheHandlesFollowThePictureIn) {
+  // Everything drawn over the picture is placed against `picture()`, so the
+  // zoom reaches the transform box and the masks without either of them knowing
+  // it exists. Worth pinning down: the alternative is a mask outline left where
+  // the fitted picture used to be.
+  ZoomFixture test;
+  test.monitor.set_transform(MonitorBox{.x = 0.5, .y = 0.5, .width = 0.5, .height = 0.5});
+  const Rect fitted = test.monitor.handle_rect(TransformHandle::TopLeft);
+  ASSERT_FALSE(fitted.empty());
+
+  test.monitor.set_zoom(1.0);
+  const Rect zoomed = test.monitor.handle_rect(TransformHandle::TopLeft);
+  EXPECT_LT(zoomed.x, fitted.x) << "the corner stayed where the fitted picture had it";
+}
+
+TEST(MonitorZoom, AZoomedPictureIsCutToTheViewport) {
+  ZoomFixture test;
+  test.monitor.set_zoom(4.0);
+
+  RecordingPainter painter;
+  test.monitor.paint(painter, default_theme());
+
+  const DrawCall* drawn = painter.first(DrawCall::Kind::Image);
+  ASSERT_NE(drawn, nullptr);
+  ASSERT_GT(drawn->bounds.width, test.monitor.viewport().width) << "nothing was zoomed";
+
+  const std::optional<Rect> clip = clip_over(painter, DrawCall::Kind::Image);
+  ASSERT_TRUE(clip.has_value()) << "a picture wider than the panel was drawn unclipped";
+  EXPECT_EQ(*clip, test.monitor.viewport());
+}
+
+TEST(MonitorZoom, TheOverlayIsNotCutWhereThePictureIs) {
+  // A layer filling the frame has its handles *on* the frame's edge, which at
+  // Fit is the viewport's edge too. Clipping the overlay where the picture is
+  // clipped would take half of every corner handle away — which is the fault
+  // `kMonitorInset` was added for, reached from the other side.
+  MonitorView monitor;
+  const Pixels frame(400, 400);
+  monitor.set_frame(frame.view());
+  monitor.arrange(Rect{0.0, 0.0, 440.0, 440.0}, flat_context());
+  monitor.set_transform(MonitorBox{.x = 0.5, .y = 0.5, .width = 1.0, .height = 1.0});
+
+  const Rect grip = monitor.handle_rect(TransformHandle::TopLeft);
+  ASSERT_FALSE(grip.empty());
+  ASSERT_LT(grip.x, monitor.viewport().x) << "the premise is wrong: the handle is well inside";
+  EXPECT_GE(grip.x, monitor.bounds().x);
+
+  RecordingPainter painter;
+  monitor.paint(painter, default_theme());
+  EXPECT_TRUE(clipped_to(painter, monitor.bounds()))
+      << "the overlay was cut to something smaller than the widget";
+}
+
 }  // namespace
 }  // namespace cutline::ui

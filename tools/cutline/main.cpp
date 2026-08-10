@@ -814,6 +814,19 @@ struct App {
   double preview_scale = 1.0;
   Dropdown* preview_scale_choice = nullptr;
 
+  /// How far each monitor is zoomed in, and the control that says so.
+  ///
+  /// One per monitor, because they are answering different questions: the
+  /// program monitor is zoomed to check a mask edge on the cut, and the source
+  /// monitor to check whether a take was in focus. Tying them together would
+  /// mean one of the two is never at the level it was put at.
+  ///
+  /// Held here rather than only on the widget for the reason `aspect_locked`
+  /// is: a rearrangement builds the panel again from nothing, and a setting
+  /// that lives only in the widget goes with it.
+  double monitor_zoom = cutline::ui::kMonitorFit;
+  double source_zoom = cutline::ui::kMonitorFit;
+
   /// The update check. Shows the running version and asks about newer ones.
   cutline::app::Updater updater;
   Button* version_button = nullptr;
@@ -4182,7 +4195,7 @@ void refresh_preview(App& app) {
     app.monitor->set_frame(*frame);
   }
 
-  app.monitor->set_canvas_aspect(static_cast<double>(project.sequence().canvas_w) / project.sequence().canvas_h);
+  app.monitor->set_canvas_size(project.sequence().canvas_w, project.sequence().canvas_h);
   mark_dirty(app);
 #else
   (void)app;
@@ -4511,8 +4524,7 @@ void refresh_source([[maybe_unused]] App& app) {
     app.source_monitor->set_frame(*frame);
   }
 
-  app.source_monitor->set_canvas_aspect(static_cast<double>(project.sequence().canvas_w) /
-                                        project.sequence().canvas_h);
+  app.source_monitor->set_canvas_size(project.sequence().canvas_w, project.sequence().canvas_h);
   mark_dirty(app);
 #endif
 }
@@ -4629,6 +4641,37 @@ constexpr std::array<std::pair<double, std::string_view>, 3> kPreviewScales{{
     {0.25, "1/4"},
 }};
 
+/// What a monitor zoom level is called. Fit is a word rather than a percentage
+/// because it is not one: it is whatever percentage the panel happens to be.
+[[nodiscard]] std::string zoom_label(double zoom) {
+  if (zoom <= cutline::ui::kMonitorFit) return "Fit";
+  return std::to_string(std::lround(zoom * 100.0)) + "%";
+}
+
+/// The zoom dropdown that goes under a monitor's picture.
+///
+/// Both monitors get one and they are independent, so this takes the level and
+/// what to do with a new one rather than reaching for either monitor by name.
+void add_zoom_control(Box& transport, MonitorView& picture, double chosen,
+                      std::function<void(double)> on_choose) {
+  std::vector<std::string> names;
+  std::size_t at = 0;
+  for (std::size_t i = 0; i < cutline::ui::kMonitorZooms.size(); ++i) {
+    if (cutline::ui::kMonitorZooms[i] == chosen) at = i;
+    names.push_back(zoom_label(cutline::ui::kMonitorZooms[i]));
+  }
+
+  auto& zoom = transport.emplace<Dropdown>(std::move(names), at);
+  zoom.set_tooltip("How far into the picture to look. Drag with the middle button, or scroll, to pan");
+  zoom.set_on_change([on_choose = std::move(on_choose)](std::size_t index) {
+    if (index < cutline::ui::kMonitorZooms.size()) on_choose(cutline::ui::kMonitorZooms[index]);
+  });
+
+  // Pushed rather than left to the widget's default, because the panel is
+  // rebuilt by a rearrangement and the level is remembered by the application.
+  picture.set_zoom(chosen);
+}
+
 /// Resizes the sequence and brings everything that depends on its size along.
 ///
 /// The preview's renderer is sized from the project on every frame, so it
@@ -4641,7 +4684,7 @@ void apply_canvas(App& app, int width, int height) {
   }
   if (app.monitor != nullptr) {
     const cutline::core::Project& project = app.session.project();
-    app.monitor->set_canvas_aspect(static_cast<double>(project.sequence().canvas_w) / project.sequence().canvas_h);
+    app.monitor->set_canvas_size(project.sequence().canvas_w, project.sequence().canvas_h);
   }
   refresh_title(app);
   invalidate_preview(app);
@@ -6020,7 +6063,7 @@ void refresh_all(App& app) {
   }
   if (app.monitor != nullptr) {
     const cutline::core::Project& project = app.session.project();
-    app.monitor->set_canvas_aspect(static_cast<double>(project.sequence().canvas_w) / project.sequence().canvas_h);
+    app.monitor->set_canvas_size(project.sequence().canvas_w, project.sequence().canvas_h);
   }
   // After the browser, which is what may have changed which source is chosen.
   refresh_source(app);
@@ -7108,6 +7151,14 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
       choose_preview_scale(*app, kPreviewScales[index].first);
     });
     if (app != nullptr) app->preview_scale_choice = &quality;
+  }
+
+  if (app != nullptr) {
+    add_zoom_control(transport, picture, app->monitor_zoom, [app](double zoom) {
+      app->monitor_zoom = zoom;
+      if (app->monitor != nullptr) app->monitor->set_zoom(zoom);
+      mark_dirty(*app);
+    });
   }
 
   transport.emplace<Spacer>();
@@ -9517,7 +9568,16 @@ void refresh_audio_panel(App& app) {
   // The name of what is showing, and the way to the others. One control rather
   // than a label and a list, which is what Premiere does and for the reason
   // that the name *is* the thing you press to change it.
-  auto& choice = panel->emplace<Dropdown>(std::vector<std::string>{"No source"});
+  //
+  // The zoom sits at the other end of the same row rather than down beside the
+  // transport, where the program monitor keeps its own and where Premiere keeps
+  // both. That row is a third the width of the program monitor's and has twice
+  // been cut down to fit — `--check` said 5 clipped and 5 squeezed in every
+  // theme the moment a seventh control went on it. This row holds one control
+  // and the whole width of the panel, and "what is showing" and "how closely
+  // you are looking at it" are the same kind of statement about it.
+  auto& header = panel->emplace<Box>(Axis::Horizontal);
+  auto& choice = header.emplace<Dropdown>(std::vector<std::string>{"No source"});
   if (app != nullptr) {
     app->source_choice = &choice;
     choice.set_on_change([app](std::size_t index) {
@@ -9525,6 +9585,7 @@ void refresh_audio_panel(App& app) {
       show_source(*app, app->source_recent[index]);
     });
   }
+  header.emplace<Spacer>();
 
   auto& picture = panel->emplace<MonitorView>();
   picture.set_placeholder("Select something in the project panel.");
@@ -9539,6 +9600,11 @@ void refresh_audio_panel(App& app) {
       const auto where = app->timeline->drop_at(x, y);
       if (!where.has_value()) return;  // released somewhere that means nothing
       place_media_from(*app, app->session.source_media(), where);
+    });
+    add_zoom_control(header, picture, app->source_zoom, [app](double zoom) {
+      app->source_zoom = zoom;
+      if (app->source_monitor != nullptr) app->source_monitor->set_zoom(zoom);
+      mark_dirty(*app);
     });
   }
 

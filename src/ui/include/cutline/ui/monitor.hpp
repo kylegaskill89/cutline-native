@@ -133,6 +133,20 @@ inline constexpr double kMonitorInset = 20.0;
 /// minimum extent exists for.
 inline constexpr double kMinMaskExtent = 0.01;
 
+/// The zoom that letterboxes the picture into the panel, which is what a
+/// monitor shows until it is asked for something else. Spelled rather than
+/// written as a bare zero, because "fit" is a choice and not an absence of one.
+inline constexpr double kMonitorFit = 0.0;
+
+/// The levels the monitor offers, which are Premiere's.
+///
+/// A hundred per cent is one canvas pixel per screen pixel — the level the
+/// whole control exists for, since checking focus means looking at the pixels
+/// that were shot rather than at a resampling of them.
+inline constexpr std::array<double, 9> kMonitorZooms{kMonitorFit, 0.10, 0.25, 0.50,
+                                                     0.75,        1.00, 1.50, 2.00,
+                                                     4.00};
+
 class MonitorView : public Widget {
  public:
   MonitorView();
@@ -166,6 +180,45 @@ class MonitorView : public Widget {
   /// picture would jump into a different rectangle the moment one arrived.
   void set_canvas_aspect(double aspect) noexcept;
   [[nodiscard]] double canvas_aspect() const noexcept { return canvas_aspect_; }
+
+  /// How big the sequence is, in pixels, which also sets the aspect.
+  ///
+  /// The shape alone is enough to letterbox with and not enough to zoom with:
+  /// "100%" means one canvas pixel per screen pixel, and the picture arriving
+  /// here is often a half- or quarter-scale render of the canvas. Measuring the
+  /// percentages against *that* would make them mean whatever the preview
+  /// quality happened to be set to, which is the one thing a percentage must
+  /// not do. A monitor never told the size falls back to the fitted width, so
+  /// 100% is fit and the levels still step around it.
+  void set_canvas_size(int width, int height) noexcept;
+  [[nodiscard]] int canvas_width() const noexcept { return canvas_w_; }
+  [[nodiscard]] int canvas_height() const noexcept { return canvas_h_; }
+
+  // ----------------------------------------------------------------- zoom --
+
+  /// The zoom, from `kMonitorZooms`. Anything at or below zero is Fit.
+  ///
+  /// Zooming keeps whatever is in the middle of the viewport in the middle of
+  /// it. Going in on a corner and being returned to the centre of the frame
+  /// would lose the thing being looked at, which is the entire reason for
+  /// going in.
+  void set_zoom(double zoom);
+  [[nodiscard]] double zoom() const noexcept { return zoom_; }
+
+  /// Where the picture has been pushed, in screen pixels away from centred.
+  /// Clamped so an edge of the picture can never come inside the viewport,
+  /// which is what stops it being scrolled off into nothing.
+  void set_pan(double x, double y);
+  [[nodiscard]] double pan_x() const noexcept { return pan_x_; }
+  [[nodiscard]] double pan_y() const noexcept { return pan_y_; }
+
+  /// The rectangle the picture is kept inside: the panel, less the border that
+  /// keeps a full-frame layer's handles reachable.
+  [[nodiscard]] Rect viewport() const;
+
+  /// Whether the picture is larger than the viewport, which is the only time
+  /// panning means anything.
+  [[nodiscard]] bool can_pan() const;
 
   /// What is shown under the picture when there is none.
   void set_placeholder(std::string text) { placeholder_ = std::move(text); }
@@ -344,8 +397,16 @@ class MonitorView : public Widget {
   bool on_mouse_down(const MouseEvent& event) override;
   bool on_mouse_move(const MouseEvent& event) override;
   bool on_mouse_up(const MouseEvent& event) override;
+  bool on_wheel(const WheelEvent& event) override;
 
  private:
+  /// The shape of what is being shown: the frame's own when there is one, the
+  /// sequence's when there is not.
+  [[nodiscard]] double picture_aspect() const noexcept;
+  /// How big the picture is before it is placed, which does not depend on the
+  /// pan — so the pan can be clamped against it without asking circularly
+  /// where the picture is.
+  [[nodiscard]] std::pair<double, double> picture_size() const;
   /// The box's four corners in widget pixels, clockwise from the top left,
   /// with the rotation applied. Everything about the overlay — drawing, hit
   /// testing, dragging — is expressed against these, because rotation is only
@@ -367,7 +428,21 @@ class MonitorView : public Widget {
   ImageView frame_;
   TextureView texture_;
   double canvas_aspect_ = 16.0 / 9.0;
+  /// Zero until something says otherwise; see `set_canvas_size`.
+  int canvas_w_ = 0;
+  int canvas_h_ = 0;
   std::string placeholder_ = "No preview";
+
+  double zoom_ = kMonitorFit;
+  double pan_x_ = 0.0;
+  double pan_y_ = 0.0;
+  /// A middle-button drag, and where it began. The pan is recomputed from the
+  /// press every frame rather than accumulated, like every other drag here.
+  bool panning_ = false;
+  double pan_press_x_ = 0.0;
+  double pan_press_y_ = 0.0;
+  double pan_origin_x_ = 0.0;
+  double pan_origin_y_ = 0.0;
 
   std::optional<MonitorBox> box_;
   std::function<void(const MonitorBox&)> on_change_;

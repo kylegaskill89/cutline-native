@@ -140,6 +140,13 @@ void MonitorView::set_canvas_aspect(double aspect) noexcept {
   if (aspect > 0.0) canvas_aspect_ = aspect;
 }
 
+void MonitorView::set_canvas_size(int width, int height) noexcept {
+  if (width <= 0 || height <= 0) return;
+  canvas_w_ = width;
+  canvas_h_ = height;
+  set_canvas_aspect(static_cast<double>(width) / height);
+}
+
 void MonitorView::set_drop_lit(bool lit) noexcept {
   if (drop_lit_ == lit) return;
   drop_lit_ = lit;
@@ -147,14 +154,89 @@ void MonitorView::set_drop_lit(bool lit) noexcept {
   if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
 }
 
-Rect MonitorView::picture() const {
+double MonitorView::picture_aspect() const noexcept {
   // The frame's own shape when there is one, the sequence's when there is not.
   // Using the panel's shape while empty would make the picture jump into a
   // different rectangle the moment the first frame arrived.
-  double aspect = canvas_aspect_;
-  if (!frame_.empty()) aspect = frame_.aspect();
-  else if (!texture_.empty()) aspect = texture_.aspect();
-  return fit_aspect(bounds().inset(kMonitorInset), aspect);
+  if (!frame_.empty()) return frame_.aspect();
+  if (!texture_.empty()) return texture_.aspect();
+  return canvas_aspect_;
+}
+
+Rect MonitorView::viewport() const { return bounds().inset(kMonitorInset); }
+
+std::pair<double, double> MonitorView::picture_size() const {
+  const Rect fitted = fit_aspect(viewport(), picture_aspect());
+  if (zoom_ <= kMonitorFit || fitted.empty()) return {fitted.width, fitted.height};
+
+  // Against the canvas rather than against the frame that turned up: a
+  // half-scale render of a 4K sequence is still 4K of picture, and measuring
+  // 100% against its 1920 pixels would put the preview quality into a number
+  // that is supposed to be about the footage.
+  const double across = canvas_w_ > 0 ? static_cast<double>(canvas_w_) : fitted.width;
+  const double width = across * zoom_;
+  return {width, width / picture_aspect()};
+}
+
+bool MonitorView::can_pan() const {
+  const Rect area = viewport();
+  if (area.empty()) return false;
+  const auto [width, height] = picture_size();
+  return width > area.width + 0.5 || height > area.height + 0.5;
+}
+
+void MonitorView::set_pan(double x, double y) {
+  const Rect area = viewport();
+  const auto [width, height] = picture_size();
+  // Half the overhang each way, so an edge of the picture can be brought to
+  // the edge of the viewport and no further. Panning a picture out of the
+  // window and having to guess your way back is not a gesture worth offering.
+  const double slack_x = std::max(0.0, (width - area.width) / 2.0);
+  const double slack_y = std::max(0.0, (height - area.height) / 2.0);
+
+  const double next_x = std::clamp(x, -slack_x, slack_x);
+  const double next_y = std::clamp(y, -slack_y, slack_y);
+  if (next_x == pan_x_ && next_y == pan_y_) return;
+
+  pan_x_ = next_x;
+  pan_y_ = next_y;
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
+void MonitorView::set_zoom(double zoom) {
+  const double next = zoom > kMonitorFit ? zoom : kMonitorFit;
+  if (next == zoom_) return;
+
+  const auto [was_wide, was_high] = picture_size();
+  zoom_ = next;
+  const auto [width, height] = picture_size();
+
+  // The pan is measured from centred, so scaling it by how much the picture
+  // grew is the whole of keeping the middle of the viewport where it is. It
+  // also re-clamps, which is what brings the picture back to centred on the
+  // way down to Fit.
+  const double scale_x = was_wide > 0.0 ? width / was_wide : 0.0;
+  const double scale_y = was_high > 0.0 ? height / was_high : 0.0;
+  pan_x_ *= scale_x;
+  pan_y_ *= scale_y;
+  set_pan(pan_x_, pan_y_);
+
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
+Rect MonitorView::picture() const {
+  const Rect area = viewport();
+  const auto [width, height] = picture_size();
+  if (width <= 0.0 || height <= 0.0) return {};
+
+  // Clamped again on the way out, because the panel can be resized under a pan
+  // that was legal when it was made — a stored value cannot stay correct
+  // through something it was never told about.
+  const double slack_x = std::max(0.0, (width - area.width) / 2.0);
+  const double slack_y = std::max(0.0, (height - area.height) / 2.0);
+  return Rect{area.x + (area.width - width) / 2.0 + std::clamp(pan_x_, -slack_x, slack_x),
+              area.y + (area.height - height) / 2.0 + std::clamp(pan_y_, -slack_y, slack_y),
+              width, height};
 }
 
 std::optional<std::pair<double, double>> MonitorView::to_picture(double x, double y) const {
@@ -182,7 +264,23 @@ void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
     painter.stroke(area.inset(-2.0), 0.0, ink, 2.0);
   };
 
-  if (!has_picture()) {
+  // Zoomed in, the picture is larger than the panel holding it, so it is cut
+  // to the viewport. Only the picture: the *overlay* is clipped to the widget
+  // instead, because a layer filling the frame has its handles on the frame's
+  // edge — which is the viewport's edge too — and cutting them there would
+  // leave half of each one missing at Fit. That border is what `kMonitorInset`
+  // is for, and clipping the two to the same rectangle would undo it.
+  painter.push_clip(viewport(), 0.0);
+  if (has_picture()) {
+    if (!texture_.empty()) {
+      painter.texture(area, texture_);
+    } else {
+      painter.image(area, frame_);
+    }
+    // A hairline around it, so a frame that is mostly black still reads as a
+    // picture with edges rather than as a hole in the panel.
+    if (style.border.a > 0.0) painter.stroke(area, 0.0, style.border, 1.0);
+  } else {
     // The shape of the sequence, drawn as a well, so it is obvious that this
     // is where the picture goes rather than looking like a broken panel.
     const SurfaceStyle& empty = theme.style(Part::Input, State::Disabled);
@@ -191,23 +289,14 @@ void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
       painter.text(text_run(area, placeholder_, empty, theme.metrics.small_font_size,
                             TextAlign::Center, false));
     }
-    outline_if_dropping();
-    paint_masks(painter, theme);
-    return;
   }
-
-  if (!texture_.empty()) {
-    painter.texture(area, texture_);
-  } else {
-    painter.image(area, frame_);
-  }
-  // A hairline around it, so a frame that is mostly black still reads as a
-  // picture with edges rather than as a hole in the panel.
-  if (style.border.a > 0.0) painter.stroke(area, 0.0, style.border, 1.0);
-
   outline_if_dropping();
+  painter.pop_clip();
+
+  painter.push_clip(bounds(), 0.0);
   paint_masks(painter, theme);
-  paint_overlay(painter, theme);
+  if (has_picture()) paint_overlay(painter, theme);
+  painter.pop_clip();
 }
 
 void MonitorView::paint_masks(Painter& painter, const Theme& theme) const {
@@ -819,6 +908,21 @@ TransformHandle MonitorView::handle_at(double x, double y) const {
 }
 
 bool MonitorView::on_mouse_down(const MouseEvent& event) {
+  // The middle button pans, and it is the middle button because the left one
+  // is already spoken for: the body of a selected layer *is* its move handle,
+  // so on the program monitor there would be nowhere left to push the picture
+  // from. Premiere solves the same collision with scroll bars down two edges;
+  // this is the same answer without spending two edges of the picture on it.
+  if (event.button == MouseButton::Middle) {
+    if (!can_pan()) return false;
+    panning_ = true;
+    pan_press_x_ = event.x;
+    pan_press_y_ = event.y;
+    pan_origin_x_ = pan_x_;
+    pan_origin_y_ = pan_y_;
+    return true;
+  }
+
   if (event.button != MouseButton::Left) return false;
 
   // Placing a path takes every press before anything else looks at it. That is
@@ -954,6 +1058,14 @@ bool MonitorView::on_mouse_down(const MouseEvent& event) {
 }
 
 bool MonitorView::on_mouse_move(const MouseEvent& event) {
+  if (panning_) {
+    // From the press rather than accumulated, like every other drag here, so
+    // a pan that runs into the clamp and comes back lands where it started
+    // instead of having lost the travel it spent against the edge.
+    set_pan(pan_origin_x_ + (event.x - pan_press_x_), pan_origin_y_ + (event.y - pan_press_y_));
+    return true;
+  }
+
   if (mask_dragging_.has_value()) {
     drag_mask(event.x, event.y);
     if (on_mask_change_) on_mask_change_(*mask_dragging_, masks_[*mask_dragging_]);
@@ -1055,6 +1167,11 @@ void MonitorView::drag_mask(double x, double y) {
 }
 
 bool MonitorView::on_mouse_up(const MouseEvent& event) {
+  if (panning_) {
+    panning_ = false;
+    return true;
+  }
+
   if (mask_dragging_.has_value()) {
     const std::size_t index = *mask_dragging_;
     const bool placed = mask_placed_;
@@ -1086,6 +1203,29 @@ bool MonitorView::on_mouse_up(const MouseEvent& event) {
   dragging_ = TransformHandle::None;
   guides_.clear();
   if (box_.has_value() && *box_ != origin_ && on_commit_) on_commit_(*box_);
+  return true;
+}
+
+bool MonitorView::on_wheel(const WheelEvent& event) {
+  // Refused rather than swallowed when there is nothing to pan, so a wheel over
+  // a fitted monitor still reaches whatever else wanted it.
+  if (!can_pan()) return false;
+
+  const Rect area = viewport();
+  // A notch moves a tenth of what is on show, which is the step every scrolling
+  // list here uses and is small enough to keep the eye on the thing being
+  // inspected.
+  const double step_x = area.width * 0.1;
+  const double step_y = area.height * 0.1;
+
+  // Shift means "the other axis", which is what it means in every scrolling
+  // view; a trackpad's sideways scroll arrives on `delta_x` and needs no
+  // modifier at all.
+  const double across = event.delta_x + (event.modifiers.shift ? event.delta_y : 0.0);
+  const double down = event.modifiers.shift ? 0.0 : event.delta_y;
+
+  // Scrolling down looks further down the picture, which moves the picture up.
+  set_pan(pan_x_ - across * step_x, pan_y_ - down * step_y);
   return true;
 }
 
