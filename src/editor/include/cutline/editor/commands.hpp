@@ -56,6 +56,17 @@ enum class Command {
   Paste,
   /// Opens a gap the length of the clipboard and puts it in there instead.
   PasteInsert,
+  /// Puts *some* of what was copied onto the selection — the framing, the
+  /// grade, the level — leaving everything else as it is. Premiere's Paste
+  /// Attributes.
+  ///
+  /// The one command here that is a question rather than an edit: which
+  /// attributes travel has no sensible default, since "all of them" is the
+  /// plain Paste this is an alternative to. `run` therefore refuses it and the
+  /// layer that can put a dialogue up catches it first; everything else about
+  /// it is an ordinary command, with a name, a key and a `can_run` that greys
+  /// the menu entry.
+  PasteAttributes,
 
   // -- three-point editing
   /// Puts the source at the playhead, rippling everything after it along to

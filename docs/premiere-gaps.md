@@ -1759,7 +1759,7 @@ had been written down anywhere:
 | ~~Scale to frame size~~ | right-click a clip, and an import default | **the row was wrong** — see below. Fit and Fill are both on the clip menu now | — |
 | Frame hold / freeze frame | a still from one frame, in place | **done** — held at the playhead, picture only | — |
 | Interpret footage | override a source's frame rate, alpha, channels | none — a source is what it says it is | model |
-| Paste attributes | pick which properties travel | the effect stack only, whole | control |
+| ~~Paste attributes~~ | pick which properties travel | **done** — nine groups, Ctrl+Alt+V, and Premiere's keyframe stretch | — |
 | Preview render bar | red/yellow over the ruler, Enter renders it | none, and nothing caches a rendered span | machinery |
 | Safe margins | title-safe and action-safe overlays | none | control |
 | ~~Monitor zoom level~~ | Fit, 10%…400%, and scroll | **done** — on both monitors, with the wheel and the middle button to pan | — |
@@ -1827,6 +1827,48 @@ and both are on the clip menu now, because neither is much use without the other
 to get back to. Filling scales both axes by the same factor, so it crops rather
 than stretches, and it goes through the same setter the inspector's rows use, so
 an animated scale takes a keyframe instead of quietly losing its animation.
+
+**Paste Attributes is a question, and that is the whole of its design.** Which
+properties travel has no default worth guessing: "all of them" is the plain
+paste it exists to be narrower than, and anything else would be the command
+deciding for somebody what they meant. So `Command::PasteAttributes` is the one
+command whose `run` *refuses* — it has a name, a key, a menu entry and a
+`can_run` that greys all three, and the layer that can put a dialogue up catches
+it before dispatch. The alternative was a second route in through the menu,
+which is how a key and a menu entry come to do slightly different things.
+
+**The groups are groups because a person thinks in them.** Motion is seven
+numbers and the keyframes on all of them, and it is one tick: moving a shot and
+leaving its animation behind gives you a clip that jumps back where it started
+the instant it plays. Opacity carries the fades, because Premiere writes a video
+fade *as* opacity keyframes and splitting them here would make the same-named
+box mean something different.
+
+**Each half takes from its own kind.** A shot on this timeline is two linked
+clips, so copying one copies both and selecting three more selects six. The
+picture groups reach the video halves and the sound groups reach the audio ones,
+which is what makes "make these three shots like that one" a single gesture. A
+group whose kind is not on the clipboard changes nothing rather than clearing
+anything — copying a video-only clip and asking for Volume must not silence
+what it lands on — and the box shows those groups greyed rather than hiding
+them, because a missing half reads as a bug where a greyed one says why.
+
+**Scale Attributes Time is Premiere's, and it is one multiplication** — keyframe
+times are clip-relative, so zero is the head of the clip whatever the clip is.
+The easing handles are offsets in the same units and are stretched with them; a
+scaled animation that kept the handles of the length it was drawn at reads as a
+different move rather than as the same one made slower. Off by default, as it is
+there.
+
+**Building this found that no dialogue had ever been laid out.** `--check` walks
+the widget tree from the host's root, and a popup is not in it — so six boxes of
+controls, several of them holding the widest rows in the application, were being
+measured in no theme at all. The colour picker and the Window menu were each
+added to the check by hand after something went wrong inside one of them. The
+rest are in now: speed and duration, paste attributes, the marker box, audio
+channels, loudness and Fit Clip, the last of which had to have four disagreeing
+marks and a targeted track set up before it would open at all. 2811 widgets
+became 2888.
 
 **The render bar** is the opposite —
 nothing in the application caches a rendered span, so it is a subsystem rather

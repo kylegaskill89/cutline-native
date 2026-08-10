@@ -25,6 +25,7 @@
 #include "cutline/audio/chain.hpp"
 #include "cutline/audio/loudness.hpp"
 #include "cutline/core/animate.hpp"
+#include "cutline/core/attributes.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/core/roles.hpp"
@@ -707,6 +708,14 @@ struct App {
   /// ever had Copy pressed in it.
   cutline::editor::EffectClipboard effect_clipboard;
 
+  /// What was last ticked in the Paste Attributes box.
+  ///
+  /// Remembered so the second clip is one keystroke and a button rather than
+  /// the same six ticks again — putting one look onto six shots is the case
+  /// the command exists for. Not saved with the project, and not part of it:
+  /// it is a question about a gesture, not a property of the cut.
+  cutline::core::ClipAttributes paste_attributes;
+
   /// What has been written to the recovery copy so far.
   cutline::editor::AutosaveState autosave;
 
@@ -1093,6 +1102,7 @@ void mark_dirty(App& app) {
 }
 
 void set_theme(App& app, std::size_t index);
+void open_paste_attributes_dialog(App& app);
 void show_playhead(App& app);
 void save_settings(App& app);
 void refresh_timeline(App& app);
@@ -6707,6 +6717,8 @@ constexpr std::array kTransportKeys{
     Binding{Key::X, true, false, cutline::editor::Command::Cut},
     Binding{Key::V, true, false, cutline::editor::Command::Paste},
     Binding{Key::V, true, true, cutline::editor::Command::PasteInsert},
+    // Premiere's Paste Attributes, on Premiere's chord.
+    Binding{Key::V, true, false, cutline::editor::Command::PasteAttributes, true},
 };
 
 /// The tool palette, in the order it is drawn and offered.
@@ -6777,6 +6789,16 @@ void choose_tool(App& app, cutline::ui::Tool tool) {
 /// refreshing different things. The command decides whether it applies —
 /// nothing here needs to know when a razor has anything to cut.
 void run_command(App& app, cutline::editor::Command command) {
+  // The one command that is a question rather than an edit. `run` refuses it
+  // because the editor layer has no way to ask, and this is the layer that
+  // does — so it is caught here rather than being given a second route in
+  // through the menu, which is how a key and a menu entry come to do slightly
+  // different things.
+  if (command == cutline::editor::Command::PasteAttributes) {
+    open_paste_attributes_dialog(app);
+    return;
+  }
+
   if (cutline::editor::run(app.session, command)) {
     refresh_timeline(app);
     refresh_browser(app);
@@ -7322,6 +7344,105 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
         app.inspector_stale = true;
         mark_dirty(app);
       });
+  buttons.emplace<Button>("Cancel", [&app] {
+    if (app.main.host != nullptr) app.main.host->close_popup();
+  });
+
+  app.main.host->open_popup(std::move(panel), settings_anchor());
+}
+
+/// Premiere's Paste Attributes: some of what was copied, not all of it.
+///
+/// A plain paste puts a whole clip down. This puts a *part* of one onto clips
+/// that are already there — the framing off that shot, the grade, the level —
+/// and the whole of the design is the question, because there is no default
+/// worth guessing. "Everything" is Ctrl+V and already exists.
+///
+/// The groups are Premiere's, and each one is several fields: Motion is seven
+/// numbers and the keyframes on all of them, because moving a shot and leaving
+/// its animation behind gives you a clip that jumps back where it started the
+/// moment it plays.
+///
+/// A group whose kind is not on the clipboard is shown greyed rather than
+/// hidden. Copying a video-only clip and finding the sound half of the box
+/// missing reads as a bug; finding it greyed says why.
+void open_paste_attributes_dialog(App& app) {
+  using cutline::editor::Command;
+  if (app.main.host == nullptr) return;
+  if (!cutline::editor::can_run(app.session, Command::PasteAttributes)) return;
+
+  bool has_picture = false;
+  bool has_sound = false;
+  for (const cutline::core::ClipCopy& copy : app.session.clipboard()) {
+    if (copy.clip.kind == cutline::core::TrackKind::Video) has_picture = true;
+    else has_sound = true;
+  }
+
+  const cutline::core::ClipAttributes& was = app.paste_attributes;
+
+  auto panel = std::make_unique<Panel>();
+  panel->emplace<Label>("Paste Attributes").set_bold(true);
+
+  // Ticked from what was chosen last time, which is what Premiere does and
+  // what makes this usable on the second clip: pasting one look onto six
+  // shots one at a time should not be six trips through the same six ticks.
+  auto& picture = panel->emplace<Label>("Video");
+  picture.set_small(true);
+  auto& motion = panel->emplace<Checkbox>("Motion, and its keyframes", was.motion);
+  auto& opacity = panel->emplace<Checkbox>("Opacity and fades", was.opacity);
+  auto& blend = panel->emplace<Checkbox>("Blend mode", was.blend);
+  auto& effects = panel->emplace<Checkbox>("Effects", was.effects);
+
+  auto& sound = panel->emplace<Label>("Audio");
+  sound.set_small(true);
+  auto& volume = panel->emplace<Checkbox>("Volume and fades", was.volume);
+  auto& pan = panel->emplace<Checkbox>("Pan", was.pan);
+  auto& channels = panel->emplace<Checkbox>("Channel mapping", was.channels);
+  auto& role = panel->emplace<Checkbox>("Role", was.role);
+  auto& audio_effects = panel->emplace<Checkbox>("Audio effects", was.audio_effects);
+
+  for (Checkbox* box : {&motion, &opacity, &blend, &effects}) box->set_enabled(has_picture);
+  for (Checkbox* box : {&volume, &pan, &channels, &role, &audio_effects}) {
+    box->set_enabled(has_sound);
+  }
+
+  auto& scale = panel->emplace<Checkbox>("Stretch keyframes to the clip they land on",
+                                         was.scale_to_length);
+  scale.set_tooltip(
+      "A two-second push-in becomes a ten-second one on a ten-second shot, rather than "
+      "staying two seconds long");
+
+  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
+  buttons.emplace<Button>("Paste", [&app, has_picture, has_sound, motion = &motion,
+                                    opacity = &opacity, blend = &blend, effects = &effects,
+                                    volume = &volume, pan = &pan, channels = &channels,
+                                    role = &role, audio_effects = &audio_effects,
+                                    scale = &scale] {
+    // Read through what the clipboard actually holds, so a tick left over from
+    // last time on a group that is greyed now cannot travel.
+    const cutline::core::ClipAttributes which{
+        .motion = has_picture && motion->checked(),
+        .opacity = has_picture && opacity->checked(),
+        .blend = has_picture && blend->checked(),
+        .effects = has_picture && effects->checked(),
+        .volume = has_sound && volume->checked(),
+        .pan = has_sound && pan->checked(),
+        .channels = has_sound && channels->checked(),
+        .role = has_sound && role->checked(),
+        .audio_effects = has_sound && audio_effects->checked(),
+        .scale_to_length = scale->checked()};
+
+    if (app.main.host != nullptr) app.main.host->close_popup();
+    app.paste_attributes = which;
+
+    app.session.apply(cutline::core::paste_attributes(app.session.project(),
+                                                      app.session.clipboard(),
+                                                      app.session.selected_group(), which));
+    refresh_timeline(app);
+    invalidate_preview(app);
+    app.inspector_stale = true;
+    mark_dirty(app);
+  });
   buttons.emplace<Button>("Cancel", [&app] {
     if (app.main.host != nullptr) app.main.host->close_popup();
   });
@@ -7923,6 +8044,7 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
         Entry{"Copy", Command::Copy},
         Entry{"Paste", Command::Paste},
         Entry{"Paste Insert", Command::PasteInsert},
+        Entry{"Paste Attributes...", Command::PasteAttributes},
         Entry{"Clear", Command::Delete},
         Entry{"Ripple Delete", Command::RippleDelete},
         Entry{"Split at Playhead", Command::Split},
@@ -10176,6 +10298,9 @@ void refresh_dock(App& app) {
       {"Paste", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Paste); }},
       {"Paste Insert",
        [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::PasteInsert); }},
+      {"Paste Attributes...", [app] {
+         if (app != nullptr) run_command(*app, cutline::editor::Command::PasteAttributes);
+       }},
       // Premiere keeps these on the Clip menu, which this has no equivalent of;
       // the timeline's right-click is where a clip's own commands live, and
       // these act on the *source* rather than on a clip.
@@ -12288,6 +12413,78 @@ template <typename T>
         ++failures;
       }
       app.main.host->close_popup();
+
+      // The dialogues — and none of them had ever been laid out in any theme.
+      //
+      // A popup is not in the tree this walk starts from, so six boxes of
+      // controls were being measured nowhere at all, several of them holding
+      // the widest rows in the application. The colour picker and the window
+      // menu above are popups too, and each was added here one at a time after
+      // something went wrong in one of them; this is the rest of the layer,
+      // added before rather than after.
+      {
+        const auto measure_dialog = [&](std::string_view what) {
+          app.main.host->update_layout(context);
+          app.main.host->paint(*painter, theme);
+          if (Widget* dialog = app.main.host->popup(); dialog != nullptr) {
+            walk(*dialog);
+          } else {
+            std::println("{}: the {} dialogue did not open", theme.id, what);
+            ++failures;
+          }
+          app.main.host->close_popup();
+          app.main.host->update_layout(context);
+        };
+
+        // On a video clip, which is what the first two are reached from.
+        if (!clip_id.empty()) app.session.select_one(clip_id);
+        open_speed_dialog(app, app.session.selected_group());
+        measure_dialog("speed and duration");
+
+        // Something copied and something selected, which is the state Paste
+        // Attributes greys itself out of existence without.
+        run_command(app, cutline::editor::Command::Copy);
+        open_paste_attributes_dialog(app);
+        measure_dialog("paste attributes");
+
+        if (!app.session.project().sequence().markers.empty()) {
+          open_marker_dialog(app, 0);
+          measure_dialog("marker");
+        }
+
+        if (!audio_clip.empty()) {
+          app.session.select_one(audio_clip);
+          open_channel_dialog(app, app.session.selected_group());
+          measure_dialog("audio channels");
+        }
+
+        open_loudness_dialog(app);
+        measure_dialog("loudness");
+
+        // Four marks that disagree, which is the only state Fit Clip exists in
+        // — with three the fourth is derived and there is nothing to ask about.
+        // The sequence is already marked from 1 to 6 above, so a three-second
+        // source span is a conflict.
+        if (!app.session.project().media.empty()) {
+          const std::string source = app.session.project().media.front().id;
+          app.session.set_source_media(source);
+          app.session.apply(
+              cutline::core::set_source_in_point(app.session.project(), source, 0.0));
+          app.session.apply(
+              cutline::core::set_source_out_point(app.session.project(), source, 3.0));
+          // And somewhere for it to land: nothing is targeted in a fresh
+          // project, and an edit with no target has no answer to *where*.
+          for (const cutline::core::Track& track : app.session.project().sequence().tracks) {
+            if (track.kind != cutline::core::TrackKind::Video) continue;
+            app.session.apply(cutline::core::update_track(
+                app.session.project(), track.id,
+                cutline::core::TrackPropsPatch{.targeted = true}));
+            break;
+          }
+          open_fit_dialog(app);
+          measure_dialog("fit clip");
+        }
+      }
 
       // The settings windows, every page of both. They are real windows now and
       // nothing else here would ever lay one out — and they are rows of numbers

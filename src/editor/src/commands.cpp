@@ -181,6 +181,7 @@ std::string_view to_string(Command command) noexcept {
     case Command::Cut: return "cut";
     case Command::Paste: return "paste";
     case Command::PasteInsert: return "paste_insert";
+    case Command::PasteAttributes: return "paste_attributes";
     case Command::MarkIn: return "mark_in";
     case Command::MarkOut: return "mark_out";
     case Command::ClearMarks: return "clear_marks";
@@ -229,6 +230,11 @@ bool can_run(const Session& session, Command command) {
     case Command::Paste:
     case Command::PasteInsert:
       return !session.clipboard().empty();
+
+    // Both ends have to exist: something copied to take attributes from, and
+    // something selected to put them on.
+    case Command::PasteAttributes:
+      return !session.clipboard().empty() && !session.selection().empty();
 
     case Command::MarkIn:
       return can_mark(session.project(), session.project().sequence().in_point);
@@ -376,6 +382,14 @@ bool run(Session& session, Command command) {
       if (changed) session.select(std::move(pasted));
       return changed;
     }
+
+    // Refused on purpose. Which attributes travel is a question, and there is
+    // no default worth guessing: "all of them" is the plain Paste above, and
+    // anything narrower would be this command deciding for somebody what they
+    // meant. `core::paste_attributes` is the edit, and whoever asked the
+    // question calls it.
+    case Command::PasteAttributes:
+      return false;
 
     case Command::MarkIn: {
       if (!can_mark(project, project.sequence().in_point)) return false;
