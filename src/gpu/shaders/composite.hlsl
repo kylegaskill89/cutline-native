@@ -700,7 +700,16 @@ float maskCoverage(float2 uv) {
         // two produce and so feathers and inverts identically.
         const uint count = (uint)max(params.pathCount, 0.0);
         const uint first = (uint)max(params.pathFirst, 0.0);
-        if (count < 3u) return 1.0;
+        // Fewer than three corners encloses nothing, so nothing is covered.
+        //
+        // This used to answer 1.0 — everything — on the grounds that a broken
+        // mask should not hide the effect. There is now a way to be *drawing*
+        // one, and during those first two clicks "everything" means the whole
+        // frame flashing the effect until the third point lands. Nothing is the
+        // better reading of a shape that encloses nothing, and no saved path
+        // can reach here: one is seeded with four corners and removing them
+        // stops at three.
+        if (count < 3u) return 0.0;
 
         bool inside = false;
         float nearest = 1e9;

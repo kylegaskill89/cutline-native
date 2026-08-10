@@ -232,6 +232,47 @@ void MonitorView::paint_masks(Painter& painter, const Theme& theme) const {
     const double half_h = std::abs(mask.height) * area.height;
     const double radians = to_radians(mask.rotation);
 
+    // A path being placed is drawn open, because it is: the run from the last
+    // point back to the first is not part of it until the pen says so. And a
+    // line trails to the pointer, so the edge about to be committed to can be
+    // seen before the click that commits it.
+    if (mask_drawing_.has_value() && *mask_drawing_ == i) {
+      const auto on_screen = [&](double lx, double ly) {
+        const auto [rx, ry] = rotate(lx * area.width, ly * area.height, radians);
+        return std::pair{cx + rx, cy + ry};
+      };
+
+      constexpr int kCurveSteps = 12;
+      for (std::size_t at = 0; at + 1 < mask.points.size(); ++at) {
+        const MaskVertex& from = mask.points[at];
+        const MaskVertex& to = mask.points[at + 1];
+        const core::MaskPoint a{.x = from.x, .y = from.y, .out_x = from.out_x,
+                                .out_y = from.out_y};
+        const core::MaskPoint b{.x = to.x, .y = to.y, .in_x = to.in_x, .in_y = to.in_y};
+        auto [previous_x, previous_y] = on_screen(a.x, a.y);
+        for (int step = 1; step <= kCurveSteps; ++step) {
+          const core::MaskPoint sample = core::mask_path_point_at(
+              a, b, static_cast<double>(step) / static_cast<double>(kCurveSteps));
+          const auto [sx, sy] = on_screen(sample.x, sample.y);
+          painter.line(previous_x, previous_y, sx, sy, ink, 1.0);
+          previous_x = sx;
+          previous_y = sy;
+        }
+      }
+
+      if (!mask.points.empty() && draw_pointer_known_ && !mask_dragging_.has_value()) {
+        const MaskVertex& last = mask.points.back();
+        const auto [lx, ly] = on_screen(last.x, last.y);
+        painter.line(lx, ly, draw_x_, draw_y_, ink, 1.0);
+      }
+
+      for (std::size_t corner = 0; corner < mask.points.size(); ++corner) {
+        const Rect handle = mask_corner_grip(i, corner);
+        if (!handle.empty()) painter.fill(handle.inset(2.0), 0.0, Fill::solid(grip_ink));
+      }
+      continue;
+    }
+
     // Drawn as a closed run of segments either way, because a rotated ellipse
     // is not a rectangle the painter can stroke and a rotated rectangle is not
     // one either. Thirty-two steps is smooth at any size this panel reaches.
@@ -373,8 +414,95 @@ void MonitorView::set_transform(std::optional<MonitorBox> box) {
 // ------------------------------------------------------------------- masks --
 
 void MonitorView::set_masks(std::vector<MaskOverlay> masks) {
+  // Placing survives the shapes being handed over again, which happens after
+  // every point that lands: the model is what the points were written to, and
+  // this is where they come back from. What cannot survive is the mask being
+  // drawn going away entirely.
+  if (mask_drawing_.has_value() && *mask_drawing_ >= masks.size()) mask_drawing_.reset();
   if (masks == masks_) return;
   masks_ = std::move(masks);
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
+std::pair<double, double> MonitorView::mask_local(std::size_t index, double x, double y) const {
+  const Rect area = picture();
+  if (area.empty() || index >= masks_.size()) return {0.0, 0.0};
+  if (area.width <= 0.0 || area.height <= 0.0) return {0.0, 0.0};
+
+  const MaskOverlay& mask = masks_[index];
+  const auto [lx, ly] = rotate(x - (area.x + mask.x * area.width),
+                               y - (area.y + mask.y * area.height), -to_radians(mask.rotation));
+  return {lx / area.width, ly / area.height};
+}
+
+bool MonitorView::place_mask_point(const MouseEvent& event) {
+  const std::size_t index = *mask_drawing_;
+  if (index >= masks_.size()) {
+    finish_mask_drawing();
+    return false;
+  }
+  MaskOverlay& mask = masks_[index];
+
+  // Back on the first point closes the shape. Three is the fewest that encloses
+  // anything, so below that the press is another point rather than a close —
+  // otherwise a slightly wobbly second click would end the path at two.
+  if (mask.points.size() >= 3 && mask_corner_grip(index, 0).contains(event.x, event.y)) {
+    finish_mask_drawing();
+    if (on_mask_commit_) on_mask_commit_(index, mask);
+    return true;
+  }
+
+  if (mask.points.size() >= kMaxOverlayPoints) {
+    finish_mask_drawing();
+    return true;
+  }
+
+  const auto [px, py] = mask_local(index, event.x, event.y);
+  mask.points.push_back(MaskVertex{.x = px, .y = py});
+
+  // Held and dragged, the press pulls the handles out of the point it just
+  // put down — which is how a curve is drawn in one gesture instead of being
+  // placed and then bent afterwards. The drag machinery already does exactly
+  // this for a handle, so the press hands over to it.
+  mask_dragging_ = index;
+  mask_resizing_ = false;
+  mask_corner_ = mask.points.size() - 1;
+  mask_handle_ = MaskHandle::Out;
+  mask_handle_broken_ = event.modifiers.alt;
+  mask_selected_ = mask_corner_;
+  mask_placed_ = true;
+  mask_origin_ = mask;
+  press_x_ = event.x;
+  press_y_ = event.y;
+
+  if (on_mask_change_) on_mask_change_(index, mask);
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+  return true;
+}
+
+void MonitorView::begin_mask_drawing(std::size_t index) {
+  if (index >= masks_.size()) return;
+  mask_drawing_ = index;
+  mask_selected_.reset();
+  mask_dragging_.reset();
+  mask_corner_.reset();
+  mask_handle_.reset();
+  draw_pointer_known_ = false;
+
+  // From nothing. Premiere's pen starts on an empty frame, and a path that
+  // began as somebody else's rectangle is not one you drew.
+  masks_[index].points.clear();
+  if (on_mask_commit_) on_mask_commit_(index, masks_[index]);
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
+void MonitorView::finish_mask_drawing() {
+  if (!mask_drawing_.has_value()) return;
+  mask_drawing_.reset();
+  draw_pointer_known_ = false;
+  mask_dragging_.reset();
+  mask_corner_.reset();
+  mask_handle_.reset();
   if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
 }
 
@@ -693,6 +821,11 @@ TransformHandle MonitorView::handle_at(double x, double y) const {
 bool MonitorView::on_mouse_down(const MouseEvent& event) {
   if (event.button != MouseButton::Left) return false;
 
+  // Placing a path takes every press before anything else looks at it. That is
+  // what a mode is for: while the pen is out, the picture is somewhere to put
+  // points and not a layer to drag or a mask to pick up.
+  if (mask_drawing_.has_value()) return place_mask_point(event);
+
   // Three things want this press, and the order between them is the whole of
   // what makes both gestures reachable.
   //
@@ -827,6 +960,17 @@ bool MonitorView::on_mouse_move(const MouseEvent& event) {
     return true;
   }
 
+  // With the pen out and nothing held, the pointer is where the next point
+  // would go — so the path trails a line to it and the shape can be seen
+  // before it is committed to.
+  if (mask_drawing_.has_value()) {
+    draw_x_ = event.x;
+    draw_y_ = event.y;
+    draw_pointer_known_ = true;
+    if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+    return true;
+  }
+
   if (pressed_out_) {
     drag_x_ = event.x;
     drag_y_ = event.y;
@@ -913,12 +1057,14 @@ void MonitorView::drag_mask(double x, double y) {
 bool MonitorView::on_mouse_up(const MouseEvent& event) {
   if (mask_dragging_.has_value()) {
     const std::size_t index = *mask_dragging_;
+    const bool placed = mask_placed_;
     mask_dragging_.reset();
     mask_resizing_ = false;
     mask_corner_.reset();
     mask_handle_.reset();
     mask_handle_broken_ = false;
-    if (index < masks_.size() && masks_[index] != mask_origin_ && on_mask_commit_) {
+    mask_placed_ = false;
+    if (index < masks_.size() && (placed || masks_[index] != mask_origin_) && on_mask_commit_) {
       on_mask_commit_(index, masks_[index]);
     }
     return true;

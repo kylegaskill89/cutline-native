@@ -342,7 +342,7 @@ masking for nothing.
 | Feather, opacity, inversion | yes | **done** — opacity is the *effect's* strength, not the layer's transparency | — |
 | Rotation | yes | **done** | — |
 | A mask per effect | yes | **done** | — |
-| Pen / free-draw path | pen tool, bezier handles | **done**, except placing a fresh path click by click; see below | — |
+| Pen / free-draw path | pen tool, bezier handles | **done** — placing, curving, adding and removing | — |
 | Dragging the shape on the monitor | yes | **done**, and it writes a keyframe when the number is animated | — |
 | Animating a mask | keyframed path, and tracking | **done** for every number it has; a path is the part that is missing | — |
 | Tracking | per-frame analysis | none, and belongs with neither of the above | machinery |
@@ -367,12 +367,29 @@ this row claimed it was finished. What it has:
   Casteljau, so the shape does not move at all — and Alt-click one to remove it,
   down to the three that are the fewest that enclose anything.
 
-**What is left is placing a path from nothing.** Premiere lets you click out a
-fresh shape point by point on an empty frame; here you always start from the
-rectangle Free Draw seeds and edit it into what you want, which reaches every
-shape but is not the same gesture. That wants a mode on the monitor — clicks
-append rather than select, a rubber band to the pointer, and closing on the
-first point — plus somewhere to turn it on.
+- **Placing one from nothing.** *Draw Path*, under the shape, empties the mask
+  and puts the pen out: a click on the picture puts a point down, holding and
+  dragging as you click pulls the handles out of it, a line trails from the last
+  point to the pointer so the edge can be seen before it is committed to, and
+  clicking the first point again closes the shape. While the pen is out a press
+  places rather than picks up, which is what a mode is for.
+
+**Two things it taught, both found by drawing with it rather than by testing
+it.** Emptying a path could not be written down: `apply_mask_overlay` only wrote
+the corners when there were some, so the pen's opening act was refused and the
+next refresh handed the old shape straight back — the first three points of a
+new triangle landed on top of the circle they were replacing. And a placed point
+was never committed, because the release compares the shape against what it was
+at the press and the press is what had added it; the gesture then read as
+abandoned and the point was discarded. Both have tests now.
+
+**An unfinished path covers nothing rather than everything.** The compositor
+used to treat fewer than three corners as "no mask", on the stated grounds that
+an effect should not vanish while a path was being drawn. Watching it settles
+the argument the other way: on an invert, covering everything means the whole
+frame strobes until the third point lands, where covering nothing leaves the
+picture you are tracing visible. No saved path can reach that state — one is
+seeded with four corners and removing them stops at three.
 
 **And the whole feature had never masked anything.** `to_gpu_pass` builds the
 mask from a brace list of its ten numbers, and the corners are a vector that a

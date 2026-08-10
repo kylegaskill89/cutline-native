@@ -212,9 +212,15 @@ namespace {
 }  // namespace
 
 PassMask pass_mask(const core::Mask& mask) {
-  // A path with fewer than three corners encloses nothing, which on screen is a
-  // mask that has stopped working rather than one being drawn — so it masks
-  // nothing at all until the third point lands.
+  // A path with fewer than three corners encloses nothing — and now that there
+  // is a pen, that is what a path *being drawn* looks like for its first two
+  // clicks. It is still handed down as a path, with no corners in it, so the
+  // shader takes the path branch and covers nothing. Reporting "no mask" here
+  // instead would let the effect through over the whole layer, which is the
+  // frame flashing at you while you place the first two points.
+  if (mask.shape == core::MaskShape::Path && !mask.usable()) {
+    return PassMask{.shape = static_cast<float>(static_cast<int>(core::MaskShape::Path))};
+  }
   if (!mask.usable()) return PassMask{};
 
   const double radians = mask.rotation * std::numbers::pi / 180.0;

@@ -1526,10 +1526,19 @@ TEST_F(CompositorTest, AFreeDrawnPathMasksTheShapeItEncloses) {
   EXPECT_EQ(pixel_at(masked, kWidth * 3 / 8, kHeight * 3 / 8).a, 255) << "past the diagonal";
 }
 
-TEST_F(CompositorTest, APathWithTooFewCornersMasksNothing) {
-  // Two points enclose nothing. Treating that as an empty mask would make an
-  // effect vanish while a path was being drawn; treating it as no mask at all
-  // is what the other shapes do when they have no size.
+TEST_F(CompositorTest, APathWithTooFewCornersCoversNothing) {
+  // Two points enclose nothing, and nothing is what they cover.
+  //
+  // This used to expect the opposite, on the grounds that "treating that as an
+  // empty mask would make an effect vanish while a path was being drawn".
+  // There is a pen now, so that case is no longer hypothetical — and watching
+  // it settles the argument the other way. Covering everything means the whole
+  // frame wears the effect until the third point lands, which on an invert is a
+  // strobe; covering nothing means the effect stays off and you place points
+  // over the picture you are tracing.
+  //
+  // No saved path can reach here either way: one is seeded with four corners,
+  // and removing them stops at three.
   Layer layer;
   layer.color = {1.0f, 1.0f, 1.0f, 1.0f};
   layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
@@ -1542,8 +1551,8 @@ TEST_F(CompositorTest, APathWithTooFewCornersMasksNothing) {
   layer.passes = effects;
   const Image masked = render({&layer, 1});
 
-  EXPECT_EQ(pixel_at(masked, kWidth / 2, kHeight / 8).a, 0)
-      << "the crop should have applied everywhere";
+  EXPECT_EQ(pixel_at(masked, kWidth / 2, kHeight / 8).a, 255)
+      << "the crop should have applied nowhere";
 }
 
 TEST_F(CompositorTest, TwoPathsInOneFrameEachGetTheirOwnCorners) {

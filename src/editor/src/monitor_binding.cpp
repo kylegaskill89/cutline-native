@@ -224,7 +224,16 @@ core::Project apply_mask_overlay(core::Project project, std::string_view clip_id
   // The corners go straight back on the mask rather than through a parameter:
   // a path is a shape rather than a number, and there is no keyframe for it to
   // land on.
-  if (!overlay.points.empty()) {
+  //
+  // Gated on the *shape* rather than on there being points, because for a path
+  // the overlay is the whole truth — including when it is empty. Gating on
+  // "there are some" meant a path that had just been cleared could not be
+  // written down: the pen starts by emptying it, that emptying was refused, and
+  // the next refresh handed the old corners straight back. The first three
+  // points of a freshly drawn shape landed on top of the shape it was meant to
+  // replace. The other two shapes still keep their corners untouched, which is
+  // what lets you switch away from a path and back without losing it.
+  if (static_cast<int>(core::MaskShape::Path) == overlay.shape) {
     const core::Clip* moved = core::find_clip(project, clip_id);
     if (moved == nullptr || effect >= moved->effects.size()) return project;
 

@@ -793,6 +793,152 @@ TEST(MonitorMasks, DraggingOneMovesItAndCommitsOnce) {
   EXPECT_NEAR(landed.y, 0.5, 1e-6);
 }
 
+// ------------------------------------------------------------------- pen --
+//
+// Placing a path point by point. The gestures are the ones every drawing
+// program shares, and the reason they are tested here rather than driven is
+// that each is a press at a place with a modifier — cheap to state, and
+// tedious and unreliable to aim by hand.
+
+struct WithPen {
+  WithPen() {
+    monitor.arrange(Rect{0.0, 0.0, 400.0, 400.0}, flat_context());
+    monitor.set_masks({MaskOverlay{.shape = 3}});
+    monitor.set_on_mask_commit([this](std::size_t, const MaskOverlay& shape) {
+      ++commits;
+      landed = shape;
+    });
+    monitor.begin_mask_drawing(0);
+    area = monitor.picture();
+  }
+
+  /// A place in the picture, as a fraction of it from the middle.
+  [[nodiscard]] std::pair<double, double> at(double fx, double fy) const {
+    return {area.x + area.width * (0.5 + fx), area.y + area.height * (0.5 + fy)};
+  }
+  void click(double fx, double fy, Modifiers modifiers = {}) {
+    const auto [x, y] = at(fx, fy);
+    monitor.on_mouse_down(MouseEvent{.x = x, .y = y, .modifiers = modifiers});
+    monitor.on_mouse_up(MouseEvent{.x = x, .y = y, .modifiers = modifiers});
+  }
+
+  MonitorView monitor;
+  Rect area;
+  int commits = 0;
+  MaskOverlay landed;
+};
+
+TEST(MonitorPen, StartingToDrawThrowsAwayWhateverWasThere) {
+  MonitorView monitor;
+  monitor.arrange(Rect{0.0, 0.0, 400.0, 400.0}, flat_context());
+  monitor.set_masks({MaskOverlay{.shape = 3,
+                                 .points = {MaskVertex{.x = -0.2, .y = -0.2},
+                                            MaskVertex{.x = 0.2, .y = -0.2},
+                                            MaskVertex{.x = 0.0, .y = 0.2}}}});
+  monitor.begin_mask_drawing(0);
+
+  ASSERT_TRUE(monitor.drawing_mask().has_value());
+  EXPECT_TRUE(monitor.masks()[0].points.empty())
+      << "a path that began as somebody else's shape is not one you drew";
+}
+
+// Every point has to reach whoever is listening, or the model never learns
+// about it and the next refresh wipes it. The release used to compare the shape
+// against what it was at the press — and the press is what added the point, so
+// the two agreed and nothing was ever written.
+TEST(MonitorPen, EachPointIsCommitted) {
+  WithPen pen;
+  const int before = pen.commits;
+  pen.click(-0.2, -0.2);
+  pen.click(0.2, -0.2);
+  EXPECT_EQ(pen.commits, before + 2);
+  EXPECT_EQ(pen.landed.points.size(), 2u) << "the last commit should carry both points";
+}
+
+TEST(MonitorPen, EachClickPutsAPointDown) {
+  WithPen pen;
+  pen.click(-0.2, -0.2);
+  pen.click(0.2, -0.2);
+  pen.click(0.0, 0.2);
+
+  const std::vector<MaskVertex>& points = pen.monitor.masks()[0].points;
+  ASSERT_EQ(points.size(), 3u);
+  EXPECT_NEAR(points[0].x, -0.2, 1e-9);
+  EXPECT_NEAR(points[1].x, 0.2, 1e-9);
+  EXPECT_NEAR(points[2].y, 0.2, 1e-9);
+  EXPECT_EQ(points[0].out_x, 0.0) << "a click without a drag is a corner";
+  EXPECT_EQ(points[0].out_y, 0.0);
+}
+
+TEST(MonitorPen, HoldingAndDraggingAsYouClickCurvesThePoint) {
+  WithPen pen;
+  const auto [x, y] = pen.at(0.1, 0.0);
+  pen.monitor.on_mouse_down(MouseEvent{.x = x, .y = y});
+  pen.monitor.on_mouse_move(MouseEvent{.x = x + pen.area.width * 0.15, .y = y});
+  pen.monitor.on_mouse_up(MouseEvent{.x = x + pen.area.width * 0.15, .y = y});
+
+  const std::vector<MaskVertex>& points = pen.monitor.masks()[0].points;
+  ASSERT_EQ(points.size(), 1u);
+  EXPECT_NEAR(points[0].out_x, 0.15, 1e-6) << "the drag should have pulled a handle out";
+  // And the pair mirrors, so the curve runs smoothly through the point.
+  EXPECT_NEAR(points[0].in_x, -0.15, 1e-6);
+}
+
+TEST(MonitorPen, ClickingTheFirstPointAgainClosesThePath) {
+  WithPen pen;
+  pen.click(-0.2, -0.2);
+  pen.click(0.2, -0.2);
+  pen.click(0.0, 0.2);
+  ASSERT_TRUE(pen.monitor.drawing_mask().has_value());
+
+  pen.click(-0.2, -0.2);  // back on the first
+  EXPECT_FALSE(pen.monitor.drawing_mask().has_value());
+  EXPECT_EQ(pen.monitor.masks()[0].points.size(), 3u) << "closing should not add a fourth";
+}
+
+TEST(MonitorPen, TheFirstPointIsNotACloseWhileTheShapeIsStillTwoPoints) {
+  // Otherwise a second click that landed near the first would end the path at
+  // two points, which encloses nothing and reads as the pen not working.
+  WithPen pen;
+  pen.click(-0.2, -0.2);
+  pen.click(-0.2, -0.2);
+  EXPECT_TRUE(pen.monitor.drawing_mask().has_value());
+  EXPECT_EQ(pen.monitor.masks()[0].points.size(), 2u);
+}
+
+TEST(MonitorPen, WhileThePenIsOutAPressPlacesRatherThanPicksUp) {
+  // The mode has to come before every other thing that wants a press, or the
+  // layer's own handles and the mask body swallow the clicks.
+  WithPen pen;
+  pen.monitor.set_transform(MonitorBox{.x = 0.5, .y = 0.5, .width = 1.0, .height = 1.0});
+  pen.click(0.0, 0.0);
+  EXPECT_EQ(pen.monitor.masks()[0].points.size(), 1u);
+}
+
+TEST(MonitorPen, FinishingLeavesTheModeAndKeepsThePoints) {
+  WithPen pen;
+  pen.click(-0.2, -0.2);
+  pen.click(0.2, -0.2);
+  pen.monitor.finish_mask_drawing();
+
+  EXPECT_FALSE(pen.monitor.drawing_mask().has_value());
+  EXPECT_EQ(pen.monitor.masks()[0].points.size(), 2u);
+}
+
+TEST(MonitorPen, AnInProgressPathIsDrawnOpen) {
+  WithPen pen;
+  RecordingPainter empty;
+  pen.monitor.paint(empty, default_theme());
+
+  pen.click(-0.2, -0.2);
+  pen.click(0.2, -0.2);
+  RecordingPainter drawn;
+  pen.monitor.paint(drawn, default_theme());
+
+  EXPECT_GT(drawn.count(DrawCall::Kind::Line), empty.count(DrawCall::Kind::Line));
+  EXPECT_TRUE(drawn.clips_balanced());
+}
+
 TEST(MonitorMasks, DraggingTheGripResizesRatherThanMoves) {
   MonitorView monitor;
   monitor.arrange(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());

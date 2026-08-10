@@ -225,6 +225,24 @@ class MonitorView : public Widget {
     on_mask_commit_ = std::move(on_commit);
   }
 
+  /// Starts placing a fresh path on the mask at `index`, discarding whatever
+  /// shape it had.
+  ///
+  /// While this is on, a press on the picture puts a point down rather than
+  /// picking anything up, and holding and dragging as you place pulls the
+  /// handles out of it — which is how a curve gets drawn in one gesture rather
+  /// than placed and then bent. Pressing the first point again closes the path
+  /// and ends the mode, as does `finish_mask_drawing`.
+  void begin_mask_drawing(std::size_t index);
+
+  /// Leaves placing mode, keeping whatever was placed.
+  void finish_mask_drawing();
+
+  /// Which mask is being drawn, if any.
+  [[nodiscard]] std::optional<std::size_t> drawing_mask() const noexcept {
+    return mask_drawing_;
+  }
+
   // ---------------------------------------------------------- dragging out --
 
   /// A drag that began on the picture and was released, at a point in the same
@@ -284,6 +302,15 @@ class MonitorView : public Widget {
   /// curve there so the shape is unchanged. Nothing when the place is not near
   /// enough to the path to have meant it.
   std::optional<std::size_t> add_mask_point(std::size_t index, double x, double y);
+
+  /// One press while the pen is out: another point, or the close that ends it.
+  bool place_mask_point(const MouseEvent& event);
+
+  /// A place on the widget as an offset from a mask's centre, in the fractions
+  /// its points are kept in — the mask's own frame, so a turned mask takes
+  /// points where the pointer is rather than where the rotation sends them.
+  [[nodiscard]] std::pair<double, double> mask_local(std::size_t index, double x,
+                                                     double y) const;
 
   /// What a press at this point would take hold of.
   [[nodiscard]] TransformHandle handle_at(double x, double y) const;
@@ -374,9 +401,23 @@ class MonitorView : public Widget {
   /// Whether the pair is being broken as it is pulled — the modifier held at
   /// the press, so letting go of it halfway does not change what the drag is.
   bool mask_handle_broken_ = false;
+  /// Whether this gesture began by putting a point down.
+  ///
+  /// The release commits when the shape differs from what it was at the press,
+  /// and `mask_origin_` has to carry the new point for the handle drag to have
+  /// a base to measure from — so the two agree and nothing would be written.
+  /// Placing says so directly instead.
+  bool mask_placed_ = false;
   /// The point whose handles are on show. Set by pressing one, cleared by
   /// pressing anywhere that is not part of this path.
   std::optional<std::size_t> mask_selected_;
+  /// The mask being placed point by point, when one is.
+  std::optional<std::size_t> mask_drawing_;
+  /// Where the pointer was last seen while placing, for the line that trails
+  /// from the last point to it.
+  double draw_x_ = 0.0;
+  double draw_y_ = 0.0;
+  bool draw_pointer_known_ = false;
   MaskOverlay mask_origin_;
 
   bool snapping_ = true;

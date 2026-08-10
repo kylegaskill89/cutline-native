@@ -1924,14 +1924,35 @@ void build_effect_mask(App& app, const std::string& clip_id,
   // guessable — a modifier held over a picture leaves no trace until it is
   // tried — and a tool nobody can find is a tool that is not there.
   if (mask.shape == cutline::core::MaskShape::Path) {
+    auto& pen_line = app.inspector->emplace<Box>(Axis::Horizontal);
+    auto& draw = pen_line.emplace<Button>("Draw Path");
+    draw.set_on_click([&app, index = row.index] {
+      if (app.monitor == nullptr) return;
+      // Which shape on the monitor belongs to this effect. The widget is handed
+      // shapes and told nothing about what they are for, so the mapping lives
+      // here — the same one every other mask callback uses.
+      for (std::size_t at = 0; at < app.mask_effects.size(); ++at) {
+        if (app.mask_effects[at] != index) continue;
+        app.monitor->begin_mask_drawing(at);
+        break;
+      }
+    });
+    pen_line.emplace<Spacer>();
+
     auto& pen = app.inspector->emplace<Box>(Axis::Vertical);
-    pen.emplace<Label>("Drag a point to move it. Double-click one to round it off")
+    pen.emplace<Label>("Draw Path clears the shape: click the picture to place")
         .set_small(true);
-    pen.emplace<Label>("or square it up. Ctrl-click the outline to add a point,")
+    pen.emplace<Label>("points, hold and drag as you click to curve one, and")
         .set_small(true);
-    pen.emplace<Label>("Alt-click one to remove it. Alt while pulling a handle")
+    pen.emplace<Label>("click the first point again to close.").set_small(true);
+    pen.emplace<Label>("Then: drag a point to move it, double-click to round it")
         .set_small(true);
-    pen.emplace<Label>("breaks the pair, for a corner instead of a curve.").set_small(true);
+    pen.emplace<Label>("off or square it up, Ctrl-click the outline to add a")
+        .set_small(true);
+    pen.emplace<Label>("point, Alt-click one to remove it. Alt while pulling a")
+        .set_small(true);
+    pen.emplace<Label>("handle breaks the pair, for a corner instead of a curve.")
+        .set_small(true);
   }
 
   // Every number on the mask is an ordinary animatable parameter row, under the

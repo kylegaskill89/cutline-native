@@ -346,6 +346,36 @@ TEST(MaskOverlays, AnEffectThatIsNotThereChangesNothing) {
   EXPECT_EQ(apply_mask_overlay(p, "nope", 0, ui::MaskOverlay{}, 2.0), p);
 }
 
+// Clearing a path has to be something the model can be told. The pen begins by
+// emptying the shape, and if that cannot be written down the next refresh hands
+// the old corners back and the new points land on top of the old ones.
+TEST(MaskOverlays, APathCanBeEmptied) {
+  core::Project p = with_mask(1920, 1080,
+                              core::Mask{.shape = core::MaskShape::Path,
+                                         .points = {{-0.2, -0.2}, {0.2, -0.2}, {0.0, 0.2}}});
+
+  const std::vector<MaskOverlayRef> shown = mask_overlays(p, "c1", 2.0);
+  ASSERT_EQ(shown.size(), 1u);
+  ui::MaskOverlay cleared = shown[0].overlay;
+  cleared.points.clear();
+
+  p = apply_mask_overlay(p, "c1", 0, cleared, 2.0);
+  EXPECT_TRUE(p.tracks.front().clips.front().effects.front().mask.points.empty());
+}
+
+// And the other two shapes must not lose theirs, which is what makes switching
+// away from a path and back keep the shape you drew.
+TEST(MaskOverlays, AnEllipseLeavesAPathsCornersAlone) {
+  core::Project p = with_mask(1920, 1080,
+                              core::Mask{.shape = core::MaskShape::Ellipse,
+                                         .points = {{-0.2, -0.2}, {0.2, -0.2}, {0.0, 0.2}}});
+
+  const std::vector<MaskOverlayRef> shown = mask_overlays(p, "c1", 2.0);
+  ASSERT_EQ(shown.size(), 1u);
+  p = apply_mask_overlay(p, "c1", 0, shown[0].overlay, 2.0);
+  EXPECT_EQ(p.tracks.front().clips.front().effects.front().mask.points.size(), 3u);
+}
+
 // A path lives in its corners and ignores the half-extents. But the half-extents
 // are what an ellipse and a rectangle are made of, so if pulling a corner leaves
 // them behind, switching the shape afterwards produces something with no
