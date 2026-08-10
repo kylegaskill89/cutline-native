@@ -681,6 +681,84 @@ TEST_F(FootageTest, AnUnconformedSourceIsUntouched) {
   EXPECT_EQ(render(cleared, 4.0).pixels, render(plain, 4.0).pixels);
 }
 
+// A rough cut: pieces kept from scattered parts of the source, which is what is
+// left after somebody throws the rest away. Every boundary is a jump to a
+// different part of the file, and so a seek and a group of pictures.
+//
+// The spans are sized against the reference clip, which is a few seconds long:
+// a stride wide enough that crossing a boundary is further than decoding
+// forwards would have covered, and clips long enough for the lookahead to have
+// somewhere to run.
+[[nodiscard]] Project rough_cut(const std::string& path) {
+  Project p = canvas_project();
+
+  Media m;
+  m.id = "v";
+  m.path = path;
+  m.has_video = true;
+  m.duration = 60.0;
+  m.width = 3840;
+  m.height = 2160;
+  p.media = {m};
+
+  constexpr double kEach = 1.0;
+  constexpr double kStride = 2.4;  // so each cut travels 1.4 s of source
+
+  Track track;
+  track.id = "v1";
+  track.kind = TrackKind::Video;
+  for (int i = 0; i < 3; ++i) {
+    Clip c;
+    c.id = "c" + std::to_string(i);
+    c.media_id = "v";
+    c.source_in = 0.2 + static_cast<double>(i) * kStride;
+    c.source_out = c.source_in + kEach;
+    c.start = static_cast<double>(i) * kEach;
+    track.clips.push_back(c);
+  }
+  p.sequence().tracks = {std::move(track)};
+  return p;
+}
+
+TEST_F(FootageTest, CrossingACutTakesARunDecodedBeforeItGotThere) {
+  // The stall this exists to remove. A cut to another part of the source is a
+  // seek plus a whole group of pictures — measured at 96 to 287 ms on a 4K
+  // capture, on the render thread, at every boundary. Prepared half a second
+  // ahead instead, out of turns that have room to spare.
+  //
+  // Counted rather than timed. What has to be true is that the run was *ready*;
+  // a stopwatch would make this a test about whichever machine ran it.
+  const Project p = rough_cut(path_);
+  constexpr double kFps = 60.0;
+
+  for (int i = 0; i < 3 * 60; ++i) {
+    ASSERT_TRUE(renderer_->render(p, i / kFps).has_value());
+  }
+
+  const auto stats = renderer_->decode_stats();
+  ASSERT_GT(stats.frames_decoded_ahead, 0)
+      << "nothing was decoded ahead at all, so the premise is wrong";
+  // Both cuts after the first clip, each crossed on a run already in hand.
+  EXPECT_GE(stats.runs_taken_ahead, 2) << "the cuts were seeked through as they arrived";
+}
+
+TEST_F(FootageTest, PlayingStraightThroughStillDecodesNothingAhead) {
+  // The other side of it: a sequence with no jump in it must not pay for a
+  // prefetch nothing is going to want. Looking half a second ahead of the
+  // playhead and finding the same clip is the ordinary case, and it has to cost
+  // nothing at all.
+  const Project p = with_video();
+  constexpr double kFps = 60.0;
+
+  for (int i = 0; i < 3 * 60; ++i) {
+    ASSERT_TRUE(renderer_->render(p, i / kFps).has_value());
+  }
+
+  const auto stats = renderer_->decode_stats();
+  EXPECT_EQ(stats.frames_decoded_ahead, 0) << "it prepared for a cut that is not there";
+  EXPECT_LE(stats.seeks, 1);
+}
+
 // --------------------------------------------------------- decode economy --
 //
 // A preview that seeks per frame and one that decodes through look identical

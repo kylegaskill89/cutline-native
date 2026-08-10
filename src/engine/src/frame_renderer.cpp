@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <deque>
 #include <map>
+#include <span>
 #include <vector>
 
 namespace cutline::engine {
@@ -67,6 +68,34 @@ constexpr double kAssumedFrameGap = 1.0 / 30.0;
 /// survived. Twelve leaves the run comfortably ahead and still fits inside a
 /// 60 fps frame beside the composite and the paint.
 constexpr auto kPrefetchBudget = std::chrono::milliseconds(12);
+
+/// How far down the sequence to look for the next cut.
+///
+/// Long enough to absorb the worst seek measured — 287 ms on a 4K capture —
+/// across turns that have room to spare, and short enough that a scrub does
+/// not spend the whole time preparing for cuts it never reaches. Half a second
+/// is thirty turns at 60 Hz, which at twelve milliseconds apiece is far more
+/// than a group of pictures needs.
+constexpr double kCutLookahead = 0.5;
+
+/// How many frames to have waiting on the far side of a cut.
+///
+/// Only the join has to be covered: once the playhead is across, the serving
+/// decoder is seeked by the ordinary path and carries on as normal. A quarter
+/// of a second at 60 fps, which is long enough for that to happen unnoticed
+/// and short enough that the surfaces it borrows are not missed.
+constexpr std::size_t kJumpRunFrames = 16;
+
+/// How far a cut's target may drift and still be the same cut.
+///
+/// The target is read off the plan at `t + kCutLookahead`, so as the playhead
+/// approaches a cut it names a moment slightly further into the clip after it
+/// on every turn. Treating each of those as a new run re-seeked the second
+/// decoder every frame and finished nothing — the prefetch ran the whole way to
+/// the cut and arrived with one frame decoded. What is wanted is the run that
+/// *starts* at the cut, so anything within the lookahead of the run in flight
+/// is that run.
+constexpr double kSameCut = kCutLookahead + kFrameEpsilon;
 
 /// How much memory to spend keeping decoded frames behind the playhead.
 ///
@@ -315,6 +344,22 @@ struct Source {
   /// survived. Two pools of thirty-two are nowhere near it.
   std::unique_ptr<VideoDecoder> ahead;
   double ahead_position = -1.0;
+
+  /// What the second decoder is building, which decides how the run it is
+  /// filling is bounded and when it is taken.
+  enum class Ahead {
+    None,
+    /// The run *before* the one in hand, for playing backwards. Bounded above
+    /// by where it meets that run.
+    Previous,
+    /// A run somewhere else in the source entirely, because the sequence cuts
+    /// to it shortly. Forward playback's equivalent, and the reason crossing a
+    /// cut no longer costs a seek in the middle of a frame.
+    Jump,
+  };
+  Ahead ahead_for = Ahead::None;
+  /// Where a `Jump` run begins, in source seconds. Below zero for the others.
+  double jump_from = -1.0;
   /// Turned off when the second decoder cannot be opened or stops working.
   /// Losing it is the stall coming back, not the picture: the run in hand still
   /// serves every frame it holds and the ordinary path still fetches the rest.
@@ -424,6 +469,8 @@ struct Source {
   void forget_pending() {
     pending.clear();
     pending_until = -1.0;
+    jump_from = -1.0;
+    ahead_for = Ahead::None;
     extending = false;
   }
 
@@ -464,8 +511,15 @@ struct Source {
   /// ordinary path. Prefetch ran, delivered nothing, and measured three times
   /// slower than having none.
   [[nodiscard]] bool pending_covers(double time) const {
-    if (pending.empty() || pending_until < 0.0) return false;
+    if (pending.empty()) return false;
     if (time < pending.front().at - kFrameEpsilon) return false;
+    // A jump run has no run in hand to meet — it is the far side of a cut, and
+    // what bounds it is simply how much of it has been decoded. `covering`
+    // answers that, and refusing anything past its newest frame is right here
+    // for the same reason it is wrong above: beyond it, nobody has decoded the
+    // frame yet.
+    if (ahead_for == Ahead::Jump) return covering(pending, time) != nullptr;
+    if (pending_until < 0.0) return false;
     return time < pending_until - kFrameEpsilon;
   }
 };
@@ -524,6 +578,25 @@ struct FrameRenderer::Impl {
   /// `budgeted` false runs it to completion, for the case where the playhead
   /// has already arrived and waiting for the rest is cheaper than starting over.
   void decode_ahead(Source& source, bool budgeted = true);
+
+  /// Decodes a run at `target`, somewhere else in the source, because the
+  /// sequence cuts to it shortly.
+  ///
+  /// The forward twin of `decode_ahead`. A rough cut is made of pieces taken
+  /// from scattered parts of a capture, so crossing a cut means seeking and
+  /// decoding from the keyframe before the new position — measured on a 4K
+  /// capture at 96 to 287 ms, on the render thread, at *every* boundary. The
+  /// frames either side of a cut were fine; the frame on it stopped.
+  ///
+  /// Spread rather than shrunk, exactly as the reverse prefetch is: there is no
+  /// making a group of pictures cheaper, only somewhere else to put the cost,
+  /// and the seconds before a cut are full of turns with room to spare.
+  void prefetch_jump(Source& source, double target, bool budgeted = true);
+
+  /// Looks a little way down the sequence and starts whatever the cut after
+  /// this one is going to need.
+  void prefetch_cuts(const core::Project& project, double t,
+                     std::span<const render::PlannedLayer> now);
 
   /// Opens one decoder for a file, sized to lend `keeping` frames.
   [[nodiscard]] std::expected<std::unique_ptr<media::VideoDecoder>, std::string> open_decoder(
@@ -620,6 +693,10 @@ void FrameRenderer::Impl::decode_ahead(Source& source, bool budgeted) {
   if (!source.usable || !source.keep_ahead || source.keep == 0 || source.recent.empty()) {
     return;
   }
+  // One second decoder, so one run at a time. A reverse prefetch and a cut
+  // prefetch cannot both be in flight, and they never want to be: they are
+  // the two directions of travel.
+  if (source.ahead_for == Source::Ahead::Jump) return;
 
   // The prefetch has to meet the run in hand exactly: a gap between them reads
   // as the end of a run, and "the last frame at or before t" would then answer
@@ -659,6 +736,7 @@ void FrameRenderer::Impl::decode_ahead(Source& source, bool budgeted) {
     }
     source.ahead_position = -1.0;
     source.pending_until = meet;
+    source.ahead_for = Source::Ahead::Previous;
     source.extending = true;
   }
 
@@ -714,6 +792,149 @@ void FrameRenderer::Impl::decode_ahead(Source& source, bool budgeted) {
 
     // Met the run in hand. Done, and the join is exact.
     source.extending = false;
+  }
+}
+
+void FrameRenderer::Impl::prefetch_jump(Source& source, double target, bool budgeted) {
+  if (!source.usable || !source.keep_ahead || source.keep == 0) return;
+  // Busy with the run before this one, which means playback is going backwards
+  // and there is no cut ahead to prepare for.
+  if (source.extending && source.ahead_for != Source::Ahead::Jump) return;
+  // Already built for this cut, and the run begins at it. Nothing to add.
+  const bool same_cut = source.ahead_for == Source::Ahead::Jump &&
+                        target >= source.jump_from - kFrameEpsilon &&
+                        target - source.jump_from < kSameCut;
+  if (same_cut && !source.extending) return;
+
+  if (source.ahead == nullptr) {
+    auto opened = open_decoder(source.path, static_cast<int>(source.keep));
+    if (!opened.has_value()) {
+      source.keep_ahead = false;
+      return;
+    }
+    source.ahead = std::move(*opened);
+  }
+
+  const bool restart = !same_cut;
+  if (restart) {
+    // The playhead moved somewhere else while this was being built, so what is
+    // half decoded is for a cut that is no longer next.
+    source.pending.clear();
+    if (!source.ahead->seek(target)) {
+      source.keep_ahead = false;
+      source.forget_pending();
+      return;
+    }
+    source.ahead_position = -1.0;
+    source.jump_from = target;
+    source.pending_until = -1.0;
+    source.ahead_for = Source::Ahead::Jump;
+    source.extending = true;
+  }
+
+  // Enough to carry the first moment of the new clip while the serving decoder
+  // is seeked behind it by the ordinary path. Not a whole run: the point is to
+  // cover the join, and every frame held here is a surface the pool has lent.
+  const std::size_t wanted = std::min<std::size_t>(source.keep, kJumpRunFrames);
+
+  const auto started = std::chrono::steady_clock::now();
+  while (source.extending) {
+    if (budgeted && std::chrono::steady_clock::now() - started >= kPrefetchBudget) return;
+
+    const auto got = source.ahead->next_frame();
+    if (!got) {
+      source.keep_ahead = false;
+      source.forget_pending();
+      return;
+    }
+    if (!*got) {
+      // The source ended before the cut did. Whatever was gathered still
+      // serves; there is simply no more of it.
+      source.extending = false;
+      return;
+    }
+    source.ahead_position = source.ahead->timestamp();
+
+    // Everything between the keyframe and the cut is what the seek cost, and
+    // most of it belongs to a part of the source this clip does not show. All
+    // but *one*: a frame is shown from its own timestamp until the next one, so
+    // what covers the cut is the last frame at or before it, and that one is
+    // usually a shade earlier than the cut itself. Dropping it left the run
+    // starting after the moment it was built to answer, and the swap never
+    // happened — the prefetch ran every time and was thrown away every time.
+    if (source.ahead_position < source.jump_from - kFrameEpsilon) {
+      std::unique_ptr<AVFrame, FrameDeleter> covering(av_frame_alloc());
+      if (covering && av_frame_ref(covering.get(), source.ahead->frame()) >= 0) {
+        // Only ever one, and always the newest of them.
+        source.pending.clear();
+        source.pending.push_back(
+            Source::Recent{.at = source.ahead_position, .frame = std::move(covering)});
+      }
+      continue;
+    }
+
+    std::unique_ptr<AVFrame, FrameDeleter> copy(av_frame_alloc());
+    if (copy && av_frame_ref(copy.get(), source.ahead->frame()) >= 0) {
+      source.pending.push_back(
+          Source::Recent{.at = source.ahead_position, .frame = std::move(copy)});
+      ++stats.frames_decoded_ahead;
+    }
+    if (source.pending.size() >= wanted) source.extending = false;
+  }
+}
+
+void FrameRenderer::Impl::prefetch_cuts(const core::Project& project, double t,
+                                        std::span<const render::PlannedLayer> now) {
+  // What the sequence will be showing shortly. Planned rather than guessed: the
+  // plan already knows which source time every layer wants, and asking it about
+  // a moment in the future is the same pure function.
+  const std::vector<render::PlannedLayer> soon = render::plan_frame(
+      project, t + kCutLookahead, [this](const core::Media& media) { return measure(media); });
+
+  for (const render::PlannedLayer& layer : soon) {
+    if (layer.content != render::LayerContent::Video) continue;
+    if (layer.media == nullptr || layer.media->path.empty()) continue;
+
+    const auto found = sources.find(layer.media->id);
+    // Not open yet. Opening one costs a quarter of a second and this runs on
+    // the thread that has sixteen milliseconds, so a source nobody has needed
+    // is left to the ordinary path — that cost belongs somewhere else.
+    if (found == sources.end()) continue;
+
+    Source& source = found->second;
+    if (!source.usable) continue;
+
+    const double wanted = layer.source_time * core::conform_speed(*layer.media);
+
+    // Where this source is being read *now*, if it is on screen. Compared
+    // against that rather than against the decoder's position, because the
+    // decoder will have moved on by the time the cut arrives — measuring from
+    // where it happens to sit made every ordinary frame of forward playback
+    // look like a jump, and the prefetch re-seeked every turn and finished
+    // nothing.
+    const auto showing = std::ranges::find_if(now, [&](const render::PlannedLayer& live) {
+      return live.media == layer.media && live.content == render::LayerContent::Video;
+    });
+
+    if (showing != now.end()) {
+      // Ordinary progress carries the source forward by about the time that
+      // passed. Anything much further is the sequence cutting to somewhere
+      // else — and it is a *seek* only when it is further than decoding
+      // forwards would have covered anyway.
+      const double travelled = wanted - showing->source_time * core::conform_speed(*layer.media);
+      if (travelled <= kCutLookahead + kDecodeForwardWindow) continue;
+    } else if (source.position >= 0.0) {
+      // Not on screen, so its decoder is parked wherever it was left.
+      if (wanted > source.position - kFrameEpsilon &&
+          wanted <= source.position + kDecodeForwardWindow) {
+        continue;
+      }
+    }
+
+    // Backwards is the reverse prefetch's business, and it has its own run.
+    if (source.position >= 0.0 && wanted < source.position) continue;
+
+    prefetch_jump(source, wanted);
   }
 }
 
@@ -813,9 +1034,16 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // very same group of pictures a second time. That was the whole of why an
   // early version measured *worse* than no prefetch: 556 frames decoded ahead,
   // two runs of it ever used, and every abandoned one paid for twice.
-  if (source.remembered(time) == nullptr && source.extending &&
-      time < source.pending_until + kFrameEpsilon) {
-    decode_ahead(source, false);
+  if (source.remembered(time) == nullptr && source.extending) {
+    if (source.ahead_for == Source::Ahead::Jump) {
+      // The cut arrived before the run behind it was ready. Finishing it
+      // unbudgeted still beats abandoning it: the seek is already paid for and
+      // the group of pictures is already part decoded, where starting over
+      // means doing both again.
+      if (time >= source.jump_from - kFrameEpsilon) prefetch_jump(source, source.jump_from, false);
+    } else if (time < source.pending_until + kFrameEpsilon) {
+      decode_ahead(source, false);
+    }
   }
 
   // The run decoded ahead of need has caught up with the playhead. Taking it
@@ -849,7 +1077,13 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // Out of cache, so whatever was being decoded ahead is about to be overtaken
   // by an ordinary seek. Dropping it first returns its surfaces to the pool,
   // which the decode below is about to want.
-  source.forget_pending();
+  //
+  // A run gathered for a *cut* is the exception, and the whole point of it: it
+  // is built while the clip before the cut is still playing, and every frame of
+  // that clip comes through here. Dropping it on each one would mean it never
+  // survived to be used — which is what the reverse prefetch's own history says
+  // happens when a part-built run is abandoned and paid for twice.
+  if (source.ahead_for != Source::Ahead::Jump) source.forget_pending();
 
   // Decoding stops at the first frame whose timestamp reaches the request, so
   // the decoder usually sits a little *ahead* of where it was asked for — up to
@@ -1089,7 +1323,18 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
     layers.push_back(layer);
   }
 
-  return d.compositor->compose(layers);
+  auto composed = d.compositor->compose(layers);
+
+  // With the frame drawn, and before the turn is given back. A rough cut is
+  // made of pieces from scattered parts of a capture, so the next cut is a seek
+  // and a group of pictures — and the turns between here and there have room
+  // for it, where the turn *on* the cut does not.
+  //
+  // After compositing rather than before, so a frame that is due is never
+  // waiting behind work for a frame that is not.
+  d.prefetch_cuts(project, t, planned);
+
+  return composed;
 }
 
 }  // namespace cutline::engine
