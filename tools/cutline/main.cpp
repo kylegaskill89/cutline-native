@@ -81,6 +81,7 @@
 #include "cutline/engine/exporter.hpp"
 #include "cutline/engine/audio_mixer.hpp"
 #include "cutline/engine/player.hpp"
+#include "cutline/media/decoder.hpp"
 #endif
 
 #include <windows.h>
@@ -12747,6 +12748,18 @@ int main(int argc, char** argv) {
   if (argc > 1 && std::string_view(argv[1]) == "--check") {
     return self_check(argc > 2 ? argv[2] : "");
   }
+#if CUTLINE_HAVE_PREVIEW
+  // The Direct3D 11 video device, built on a thread of its own while the window
+  // is still being put together. Every hardware decoder borrows the one device,
+  // so this is paid once — and left alone it is paid on the render thread at
+  // the first frame of the first clip, which is exactly where somebody notices
+  // a sixth of a second going missing.
+  //
+  // Detached because there is nothing to wait for: a decoder that gets there
+  // first simply builds it itself, and the two are serialised inside.
+  std::thread(cutline::media::warm_hardware_decoding).detach();
+#endif
+
   // Both of these make windows now -- the benchmark a hidden one for its
   // swapchain -- so the class has to exist first.
   WNDCLASSEXW window_class{};

@@ -24,6 +24,7 @@ extern "C" {
 #endif
 
 #include <format>
+#include <mutex>
 #include <utility>
 
 namespace cutline::media {
@@ -90,7 +91,50 @@ AVPixelFormat pick_hardware_format(AVCodecContext* ctx, const AVPixelFormat* for
   return ref;
 }
 
+/// The Direct3D 11 video device, made once and lent to every decoder.
+///
+/// `av_hwdevice_ctx_create` builds a whole Direct3D 11 device, and it was being
+/// asked to do that per *decoder*. Measured at 146 to 180 ms against 2 to 4 ms
+/// for demuxing the same file, so the first frame of every source in a
+/// sequence stopped the render thread for about a sixth of a second — visible
+/// as a hitch the first time playback reached each new clip.
+///
+/// A device context is an `AVBufferRef` precisely so that it can be shared, and
+/// what has to stay per decoder is the *frames* pool, which is built from the
+/// device rather than being part of it. So every decoder keeps its own
+/// surfaces and its own ceiling — the thing the pool-size scar was about — and
+/// only the device underneath them is common.
+///
+/// Never released. It outlives every decoder by construction, the process ends
+/// with it, and a static holding a reference that FFmpeg may still be using
+/// during static destruction is a worse bargain than a device that is still
+/// there when the process exits.
+///
+/// A failure is not cached. It is rare, it is not much cheaper than a success,
+/// and remembering it would make one bad moment permanent for the run.
+[[nodiscard]] AVBufferRef* shared_d3d11_device() {
+  static std::mutex lock;
+  static AVBufferRef* shared = nullptr;
+
+  const std::lock_guard<std::mutex> held(lock);
+  if (shared == nullptr) {
+    if (av_hwdevice_ctx_create(&shared, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) < 0) {
+      shared = nullptr;
+      return nullptr;
+    }
+  }
+  // A reference of the caller's own, so its codec context can own one end of
+  // the lifetime the way it does with a context it made itself.
+  return av_buffer_ref(shared);
+}
+
 }  // namespace
+
+void warm_hardware_decoding() noexcept {
+  // The reference handed back is the caller's; the static keeps its own, which
+  // is the one that makes the next call cheap.
+  if (AVBufferRef* ref = shared_d3d11_device(); ref != nullptr) av_buffer_unref(&ref);
+}
 
 std::string_view to_string(Acceleration acceleration) noexcept {
   switch (acceleration) {
@@ -240,6 +284,8 @@ std::expected<std::unique_ptr<VideoDecoder>, std::string> VideoDecoder::open_wit
 
     if (device != nullptr) {
       impl->hw_device = d3d12_context_for(device);
+    } else if (type == AV_HWDEVICE_TYPE_D3D11VA) {
+      impl->hw_device = shared_d3d11_device();
     } else if (av_hwdevice_ctx_create(&impl->hw_device, type, nullptr, nullptr, 0) < 0) {
       impl->hw_device = nullptr;
     }

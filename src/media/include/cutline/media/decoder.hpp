@@ -38,6 +38,20 @@ enum class Acceleration {
 
 [[nodiscard]] std::string_view to_string(Acceleration acceleration) noexcept;
 
+/// Builds the shared hardware video device now, so the first source to want one
+/// does not wait for it.
+///
+/// Every hardware decoder borrows one Direct3D 11 device rather than making its
+/// own — see the note beside `shared_d3d11_device` — which took opening a
+/// second source from about 150 ms to under 20. Building it still costs that
+/// once, and left alone it is paid on the render thread at the first frame of
+/// the first clip, which is precisely where it is felt.
+///
+/// Safe to call from any thread and safe to call more than once: the first call
+/// builds it and the rest find it already there. Nothing here touches the
+/// compositor's device.
+void warm_hardware_decoding() noexcept;
+
 /// A decoded frame that never left the GPU.
 ///
 /// The texture is NV12: an 8-bit luma plane and a half-resolution interleaved
