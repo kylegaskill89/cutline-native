@@ -19,6 +19,7 @@ add_executable(cutline_core_tests
   core/roles_test.cpp
   core/routing_test.cpp
   core/segments_test.cpp
+  core/sequences_test.cpp
   core/serialize_test.cpp
   core/time_test.cpp
   editor/autosave_test.cpp

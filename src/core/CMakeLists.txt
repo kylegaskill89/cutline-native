@@ -7,6 +7,7 @@
   src/keyframe.cpp
   src/layout.cpp
   src/mask_path.cpp
+  src/sequences.cpp
   src/pool.cpp
   src/properties.cpp
   src/query.cpp
