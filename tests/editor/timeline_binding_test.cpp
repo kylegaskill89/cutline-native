@@ -485,6 +485,46 @@ TEST(Binding, ARazorCutsTheClipItWasUsedOn) {
   EXPECT_DOUBLE_EQ(core::clip_end(*core::find_clip(after, "c1")), 2.0);
 }
 
+// A razor took the one clip it was pointed at, which on a linked pair cut the
+// picture and left the sound whole. It then made that worse: the right half of
+// a cut is put in a *new* group so the two halves are not linked to each other,
+// so cutting one of a pair left the new group holding a single clip — the
+// picture after the cut linked to nothing, and the sound still linked to the
+// picture before it. One stroke both failed to cut the sound and unlinked it.
+TEST(Binding, ARazorCutsEverythingLinkedToWhatItWasUsedOn) {
+  Project before = sample_project();
+  // Link the picture on v1 to the sound on a1, the way a placement does.
+  for (core::Track& track : before.sequence().tracks) {
+    for (core::Clip& clip : track.clips) {
+      if (clip.id == "c1" || clip.id == "a") clip.group_id = "g1";
+    }
+  }
+
+  const Project after = apply_timeline_edit(
+      before, "c1", ui::TimelineEdit{.mode = ui::DragMode::Razor, .at = 2.0});
+
+  EXPECT_EQ(core::track_of_clip(after, "c1")->clips.size(), 3u) << "the picture was cut";
+  EXPECT_EQ(core::track_of_clip(after, "a")->clips.size(), 2u) << "and so was the sound";
+
+  // And the halves either side of the cut are still pairs: the two left halves
+  // share a group, the two right halves share a different one.
+  const core::Clip* left_picture = core::find_clip(after, "c1");
+  const core::Clip* left_sound = core::find_clip(after, "a");
+  ASSERT_NE(left_picture, nullptr);
+  ASSERT_NE(left_sound, nullptr);
+  EXPECT_EQ(left_picture->group_id, left_sound->group_id) << "the halves before the cut";
+
+  const std::vector<std::string> right = core::group_members(after, "c1");
+  EXPECT_EQ(right.size(), 2u) << "the group either side of the cut holds a pair";
+}
+
+TEST(Binding, ARazorOnAnUnlinkedClipStillCutsOnlyThatOne) {
+  const Project before = sample_project();
+  const Project after = apply_timeline_edit(
+      before, "c1", ui::TimelineEdit{.mode = ui::DragMode::Razor, .at = 2.0});
+  EXPECT_EQ(core::track_of_clip(after, "a")->clips.size(), 1u);
+}
+
 TEST(Binding, ARazorLeavesEveryOtherClipAlone) {
   const Project before = sample_project();
   const Project after = apply_timeline_edit(

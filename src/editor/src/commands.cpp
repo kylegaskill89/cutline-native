@@ -167,6 +167,7 @@ namespace {
 std::string_view to_string(Command command) noexcept {
   switch (command) {
     case Command::Split: return "split";
+    case Command::SplitAllTracks: return "split_all_tracks";
     case Command::Delete: return "delete";
     case Command::RippleDelete: return "ripple_delete";
     case Command::NudgeLeft: return "nudge_left";
@@ -208,6 +209,9 @@ bool can_run(const Session& session, Command command) {
   switch (command) {
     case Command::Split:
       return !razor_targets(session).empty();
+
+    case Command::SplitAllTracks:
+      return !clips_under(session.project(), session.playhead()).empty();
 
     case Command::Delete:
     case Command::RippleDelete:
@@ -299,6 +303,15 @@ bool run(Session& session, Command command) {
   switch (command) {
     case Command::Split: {
       const std::vector<std::string> targets = razor_targets(session);
+      if (targets.empty()) return false;
+      return session.apply(core::split_at(project, session.playhead(), targets));
+    }
+
+    case Command::SplitAllTracks: {
+      // Everything the playhead crosses, whatever is selected. `split_at`
+      // passes over the clips the cut does not fall inside, so handing it every
+      // clip under the playhead is the whole of "cut through everything".
+      const std::vector<std::string> targets = clips_under(project, session.playhead());
       if (targets.empty()) return false;
       return session.apply(core::split_at(project, session.playhead(), targets));
     }

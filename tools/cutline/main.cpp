@@ -6585,6 +6585,8 @@ constexpr std::array kApplicationKeys{
     Binding{Key::Y, true, false, cutline::editor::Command::Redo},
     Binding{Key::A, true, false, cutline::editor::Command::SelectAll},
     Binding{Key::K, true, false, cutline::editor::Command::Split},
+    // Premiere's Add Edit to All Tracks.
+    Binding{Key::K, true, true, cutline::editor::Command::SplitAllTracks},
 };
 
 /// Offered only after the widget tree has declined them.
@@ -7822,6 +7824,7 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
         Entry{"Clear", Command::Delete},
         Entry{"Ripple Delete", Command::RippleDelete},
         Entry{"Split at Playhead", Command::Split},
+        Entry{"Split All Tracks", Command::SplitAllTracks},
         Entry{"Link", Command::LinkClips},
         Entry{"Unlink", Command::UnlinkClips},
         Entry{"Add Video Track", Command::AddVideoTrack},

@@ -305,7 +305,26 @@ core::Project apply_timeline_edit(core::Project project, std::string_view clip_i
       return core::slide_clip(std::move(project), clip_id, edit.result.start - clip->start);
 
     case ui::DragMode::Razor: {
-      if (!edit.all_tracks) return core::split_at(std::move(project), edit.at, ids);
+      if (!edit.all_tracks) {
+        // Whatever is linked to it, not only the clip under the blade.
+        //
+        // A razor took the one clip it was pointed at, which cut the picture
+        // and left the sound whole — and then made it worse, because the right
+        // half of a cut clip is put in a *new* group so that the two halves are
+        // not linked to each other. Cutting one of a linked pair therefore left
+        // that new group holding a single clip, so the picture after the cut
+        // was linked to nothing and the sound was still linked to the picture
+        // before it. One blade stroke both failed to cut the sound and unlinked
+        // the picture from it.
+        //
+        // Handing `split_at` the whole group fixes both at once: it cuts every
+        // member, and the right halves all take the same new group id, so the
+        // pair either side of the cut stay pairs.
+        // `group_members` answers with the clip itself when it is in no group,
+        // so this is one call rather than a special case for each.
+        const std::vector<std::string> linked = core::group_members(project, clip_id);
+        return core::split_at(std::move(project), edit.at, linked);
+      }
       // Every clip in the project. `split_at` ignores the ones the cut does not
       // fall inside, so this is "cut through everything" without the caller
       // having to work out what that means.

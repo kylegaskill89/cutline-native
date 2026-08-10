@@ -22,6 +22,13 @@ enum class Command {
   /// Razor: splits the selection at the playhead, or everything under it when
   /// nothing is selected.
   Split,
+  /// Premiere's Add Edit to All Tracks: cuts every track the playhead crosses,
+  /// whatever is selected and whatever is targeted.
+  ///
+  /// Its own command rather than a flag on `Split`, because the two answer
+  /// different questions — one is "cut what I mean", the other is "cut
+  /// everything" — and Premiere gives them their own keys for that reason.
+  SplitAllTracks,
   /// Lift: removes the selection and leaves the gap.
   Delete,
   /// Extract: removes the selection and closes the gap.
