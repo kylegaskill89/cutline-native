@@ -150,6 +150,19 @@ enum class Command {
 /// somewhere nobody was looking.
 [[nodiscard]] std::string edit_target(const core::Project& project);
 
+/// The lane a keyboard edit's *sound* lands on, or empty for the one paired
+/// with the picture's track.
+///
+/// Premiere's source patch, reached through the target toggle rather than
+/// through a second control per header — see `core::PlacementTargets`. This is
+/// what lets the picture go to V2 while the sound goes to A3: both were always
+/// expressible, since targeting is a per-track flag and any number of tracks
+/// can carry it, and placement simply read the first one and derived the rest.
+///
+/// Empty when no audio track is targeted, which keeps the pairing rule for
+/// everybody who has not asked for anything else: V1's sound on A1.
+[[nodiscard]] std::string edit_audio_target(const core::Project& project);
+
 /// Whether the command would do anything right now. What greys a menu item.
 [[nodiscard]] bool can_run(const Session& session, Command command);
 

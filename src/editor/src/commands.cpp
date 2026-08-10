@@ -164,6 +164,13 @@ namespace {
   return {};
 }
 
+std::string edit_audio_target(const core::Project& project) {
+  for (const core::Track& track : project.sequence().tracks) {
+    if (track.targeted && track.kind == core::TrackKind::Audio) return track.id;
+  }
+  return {};
+}
+
 std::string_view to_string(Command command) noexcept {
   switch (command) {
     case Command::Split: return "split";
@@ -417,18 +424,24 @@ bool run(Session& session, Command command) {
       if (!can_place(session)) return false;
       core::Project ready = core::match_sequence_to(project, session.source_media());
       const std::string target = edit_target(ready);
+      const std::string sound = edit_audio_target(ready);
       const auto points = core::edit_points(ready, session.source_media(), session.playhead());
       return session.apply(core::insert_media_at(std::move(ready), session.source_media(),
-                                                 points.at, target, points.source));
+                                                 points.at,
+                                                 core::PlacementTargets{target, sound},
+                                                 points.source));
     }
 
     case Command::Overwrite: {
       if (!can_place(session)) return false;
       core::Project ready = core::match_sequence_to(project, session.source_media());
       const std::string target = edit_target(ready);
+      const std::string sound = edit_audio_target(ready);
       const auto points = core::edit_points(ready, session.source_media(), session.playhead());
       return session.apply(core::overwrite_media_at(std::move(ready), session.source_media(),
-                                                    points.at, target, points.source));
+                                                    points.at,
+                                                    core::PlacementTargets{target, sound},
+                                                    points.source));
     }
 
     case Command::FitToFill: {

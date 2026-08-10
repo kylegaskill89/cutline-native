@@ -223,34 +223,35 @@ struct PlacementLanes {
 };
 
 [[nodiscard]] PlacementLanes reserve_lanes(Project& p, const Media& media,
-                                           std::string_view track_id) {
+                                           PlacementTargets targets) {
   PlacementLanes lanes;
 
-  // A named track that turns out to be an audio one is a target for the sound
-  // rather than for the picture — that is what targeting an audio lane means,
-  // and the only way an audio-only source can be aimed anywhere but A1.
-  std::optional<std::size_t> audio_target;
-  if (!track_id.empty()) {
+  /// Where a named track sits, when it is of this kind.
+  const auto index_of = [&p](std::string_view id, TrackKind kind) -> std::optional<std::size_t> {
+    if (id.empty()) return std::nullopt;
     for (std::size_t i = 0; i < p.sequence().tracks.size(); ++i) {
-      if (p.sequence().tracks[i].id == track_id && p.sequence().tracks[i].kind == TrackKind::Audio) {
-        audio_target = i;
-        break;
-      }
+      if (p.sequence().tracks[i].id == id && p.sequence().tracks[i].kind == kind) return i;
+    }
+    return std::nullopt;
+  };
+
+  std::optional<std::size_t> audio_target = index_of(targets.audio, TrackKind::Audio);
+
+  // One track named, and it is an audio lane: that is a target for the *sound*
+  // rather than for the picture, which is what targeting an audio track has
+  // always meant here and the only way an audio-only source can be aimed
+  // anywhere but A1. Kept because every caller with a single id in hand is
+  // still saying exactly that.
+  if (!audio_target.has_value()) {
+    if (const auto sound = index_of(targets.video, TrackKind::Audio); sound.has_value()) {
+      audio_target = sound;
+      targets.video = {};
     }
   }
 
   const std::vector<std::size_t> video_tracks = track_indices_of_kind(p, TrackKind::Video);
   if (media.has_video && !video_tracks.empty()) {
-    std::size_t target = video_tracks.front();
-    if (!track_id.empty()) {
-      for (const std::size_t i : video_tracks) {
-        if (p.sequence().tracks[i].id == track_id) {
-          target = i;
-          break;
-        }
-      }
-    }
-    lanes.video = target;
+    lanes.video = index_of(targets.video, TrackKind::Video).value_or(video_tracks.front());
   }
 
   std::vector<std::size_t> audio_tracks = track_indices_of_kind(p, TrackKind::Audio);
@@ -289,7 +290,7 @@ struct PlacementLanes {
 }  // namespace
 
 Project place_media(Project p, std::string_view media_id, double start,
-                    std::string_view track_id, std::optional<PlacementRange> range) {
+                    PlacementTargets targets, std::optional<PlacementRange> range) {
   const auto media_it = std::ranges::find(p.media, media_id, &Media::id);
   if (media_it == p.media.end()) return p;
   const Media media = *media_it;  // copied: p.media may not reallocate, but tracks change
@@ -301,7 +302,7 @@ Project place_media(Project p, std::string_view media_id, double start,
   const double source_in = honour_range ? std::max(0.0, range->in) : 0.0;
   const double source_out = honour_range ? std::min(media.duration, range->out) : media.duration;
 
-  const PlacementLanes lanes = reserve_lanes(p, media, track_id);
+  const PlacementLanes lanes = reserve_lanes(p, media, targets);
 
   if (lanes.video.has_value()) {
     Clip clip;
@@ -862,16 +863,16 @@ void clear_range(Track& track, double start, double end) {
 }  // namespace
 
 Project insert_media_at(Project p, std::string_view media_id, double at_time,
-                        std::string_view track_id, std::optional<PlacementRange> range) {
+                        PlacementTargets targets, std::optional<PlacementRange> range) {
   const auto media = std::ranges::find(p.media, media_id, &Media::id);
   if (media == p.media.end()) return p;
 
   p = ripple_insert(std::move(p), at_time, placed_length(*media, range));
-  return place_media(std::move(p), media_id, at_time, track_id, range);
+  return place_media(std::move(p), media_id, at_time, targets, range);
 }
 
 Project overwrite_media_at(Project p, std::string_view media_id, double at_time,
-                           std::string_view track_id, std::optional<PlacementRange> range) {
+                           PlacementTargets targets, std::optional<PlacementRange> range) {
   const auto media_it = std::ranges::find(p.media, media_id, &Media::id);
   if (media_it == p.media.end()) return p;
   const Media media = *media_it;
@@ -882,15 +883,24 @@ Project overwrite_media_at(Project p, std::string_view media_id, double at_time,
   // function it uses. This used to clear lanes zero upwards and let the
   // placement choose its own, which carved holes in one place and put the sound
   // in another the moment the two disagreed.
-  const PlacementLanes lanes = reserve_lanes(p, media, track_id);
+  const PlacementLanes lanes = reserve_lanes(p, media, targets);
   if (lanes.video.has_value()) clear_range(p.sequence().tracks[*lanes.video], at_time, end);
   for (const std::size_t lane : lanes.audio) clear_range(p.sequence().tracks[lane], at_time, end);
 
   // By id rather than index: `clear_range` sorts, and nothing here adds tracks
   // after the reservation, but naming the track is what makes that irrelevant.
-  const std::string resolved =
-      lanes.video.has_value() ? p.sequence().tracks[*lanes.video].id : std::string(track_id);
-  return place_media(std::move(p), media_id, at_time, resolved, range);
+  //
+  // Both of them, so a sound aimed at A3 is not quietly re-derived from the
+  // picture's lane on the way through — which would carve the hole in one place
+  // and put the clip in another, the exact fault this reservation exists for.
+  const std::string video_lane = lanes.video.has_value()
+                                     ? p.sequence().tracks[*lanes.video].id
+                                     : std::string(targets.video);
+  const std::string audio_lane = lanes.audio.empty()
+                                     ? std::string(targets.audio)
+                                     : p.sequence().tracks[lanes.audio.front()].id;
+  return place_media(std::move(p), media_id, at_time,
+                     PlacementTargets{video_lane, audio_lane}, range);
 }
 
 Project fit_media(Project p, std::string_view media_id, const EditPoints& points,

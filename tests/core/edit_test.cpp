@@ -555,6 +555,86 @@ TEST(PlaceMedia, TheSecondVideoLanesSoundLandsOnTheSecondAudioLane) {
   EXPECT_EQ(track_by_id(p, "a2").clips.size(), 1u);
 }
 
+TEST(PlaceMedia, ThePictureAndTheSoundCanBeAimedAtDifferentLanes) {
+  // Premiere's source patch. Both were always expressible — targeting is a
+  // per-track flag and any number of tracks can carry it — and placement read
+  // the first one and derived the rest, so aiming the sound anywhere but the
+  // lane paired with the picture was impossible.
+  Project p = empty_project();
+  p.sequence().tracks.insert(p.sequence().tracks.begin(),
+                             Track{.id = "v2", .kind = TrackKind::Video});
+  p.sequence().tracks.push_back(Track{.id = "a3", .kind = TrackKind::Audio});
+
+  Media mono = footage();
+  mono.audio_stream_count = 1;
+  p = add_media(std::move(p), mono);
+
+  p = place_media(std::move(p), "m1", 0.0, PlacementTargets{"v2", "a3"});
+  EXPECT_EQ(track_by_id(p, "v2").clips.size(), 1u);
+  EXPECT_EQ(track_by_id(p, "a3").clips.size(), 1u);
+  EXPECT_TRUE(track_by_id(p, "a1").clips.empty());
+  EXPECT_TRUE(track_by_id(p, "a2").clips.empty()) << "the sound went to the paired lane anyway";
+}
+
+TEST(PlaceMedia, StreamsAfterTheFirstFollowTheLaneItWasAimedAt) {
+  Project p = empty_project();
+  p.sequence().tracks.push_back(Track{.id = "a3", .kind = TrackKind::Audio});
+  p.sequence().tracks.push_back(Track{.id = "a4", .kind = TrackKind::Audio});
+  p = add_media(std::move(p), footage());  // two streams
+
+  p = place_media(std::move(p), "m1", 0.0, PlacementTargets{"v1", "a3"});
+  EXPECT_EQ(track_by_id(p, "a3").clips.size(), 1u);
+  EXPECT_EQ(track_by_id(p, "a4").clips.size(), 1u);
+  EXPECT_TRUE(track_by_id(p, "a1").clips.empty());
+}
+
+TEST(PlaceMedia, NamingOnlyTheSoundLeavesThePictureWhereItWouldHaveGone) {
+  Project p = empty_project();
+  p.sequence().tracks.push_back(Track{.id = "a3", .kind = TrackKind::Audio});
+  Media mono = footage();
+  mono.audio_stream_count = 1;
+  p = add_media(std::move(p), mono);
+
+  p = place_media(std::move(p), "m1", 0.0, PlacementTargets{{}, "a3"});
+  EXPECT_EQ(track_by_id(p, "v1").clips.size(), 1u);
+  EXPECT_EQ(track_by_id(p, "a3").clips.size(), 1u);
+}
+
+TEST(PlaceMedia, OneTrackNamedStillMeansWhatItAlwaysMeant) {
+  // The converting constructor has to preserve both old readings exactly: a
+  // video track takes the picture, and an audio track takes the sound — which
+  // is the only way a source with no picture is aimed anywhere but A1.
+  Project p = empty_project();
+  p.sequence().tracks.push_back(Track{.id = "a3", .kind = TrackKind::Audio});
+  Media sound_only = footage();
+  sound_only.has_video = false;
+  sound_only.audio_stream_count = 1;
+  p = add_media(std::move(p), sound_only);
+
+  p = place_media(std::move(p), "m1", 0.0, "a3");
+  EXPECT_EQ(track_by_id(p, "a3").clips.size(), 1u);
+  EXPECT_TRUE(track_by_id(p, "a1").clips.empty());
+  EXPECT_TRUE(track_by_id(p, "v1").clips.empty());
+}
+
+TEST(OverwriteMedia, ItCarvesTheLaneTheSoundIsActuallyAimedAt) {
+  // The reservation exists so the hole and the clip land in the same place. A
+  // patched sound re-derived on the way through would carve A1 and fill A3.
+  Project p = empty_project();
+  p.sequence().tracks.push_back(Track{.id = "a3", .kind = TrackKind::Audio});
+  Media mono = footage();
+  mono.audio_stream_count = 1;
+  p = add_media(std::move(p), mono);
+
+  p = place_media(std::move(p), "m1", 0.0, PlacementTargets{"v1", "a3"});
+  p = overwrite_media_at(std::move(p), "m1", 2.0, PlacementTargets{"v1", "a3"});
+
+  // The first clip was trimmed back rather than left whole beside a second.
+  ASSERT_EQ(track_by_id(p, "a3").clips.size(), 2u);
+  EXPECT_DOUBLE_EQ(clip_end(track_by_id(p, "a3").clips[0]), 2.0);
+  EXPECT_TRUE(track_by_id(p, "a1").clips.empty()) << "it carved a lane nothing was going to";
+}
+
 TEST(PlaceMedia, LanesAreMadeWhenThereAreTooFew) {
   Project p;
   Track v{.id = "v1", .kind = TrackKind::Video};

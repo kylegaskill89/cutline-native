@@ -710,12 +710,34 @@ it.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| Source patch (V1/A1 indicators) | drag to choose which track receives | not separately — targeting does both jobs while there is one source | control |
+| ~~Source patch (V1/A1 indicators)~~ | drag to choose which track receives | **done** — through the target toggle rather than a second control; see below | — |
 | Track targeting for keyboard edits | per track, toggled | **done** — a T in every header, and what insert and overwrite aim at | — |
 | Insert (`,`) and Overwrite (`.`) | from the source monitor at the playhead | **done** — from the pool's selection, on Premiere's own keys | — |
 | Three- and four-point editing | in/out on source and sequence | **done** — `core::edit_points` resolves all four marks; four-point is Fit to Fill | — |
 | Sync lock | which tracks ripple together | **done** — on by default, on the header's own menu | — |
 | Mute / solo / lock / hide | yes | **done** | — |
+
+**The source patch needed no control at all, and the row's size was wrong.**
+Premiere draws a V1/A1 box in every track header *beside* the target toggle,
+because a source can be patched to a lane that is not targeted for keyboard
+edits. Here the target toggle is both: the targeted video track takes the
+picture and the targeted audio track takes the sound. Targeting was already a
+per-track flag that any number of tracks could carry, so "V2 and A3" was
+expressible from the first day — placement simply read the first target and
+derived everything else from it, which is why aiming the sound anywhere but the
+lane paired with the picture was impossible.
+
+So this was a bug wearing a feature's clothes. What went in is
+`core::PlacementTargets`, which carries both lanes, and an `edit_audio_target`
+beside `edit_target`. The converting constructor is what kept fifty call sites
+unchanged, and it preserves both old readings exactly: a video track takes the
+picture, and an audio track takes the sound — the second being the only way a
+source with no picture was ever aimed anywhere but A1.
+
+The overwrite is the case worth having a test for. It reserves the lanes it is
+about to fill so that the hole and the clip land in the same place; re-deriving
+the sound's lane on the way through would carve A1 and fill A3, which is the
+exact fault that reservation was added for.
 
 ### 2.2 Trimming
 

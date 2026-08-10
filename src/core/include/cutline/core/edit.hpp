@@ -13,6 +13,7 @@
 
 #include "cutline/core/model.hpp"
 
+#include <concepts>
 #include <optional>
 #include <span>
 #include <string>
@@ -29,6 +30,42 @@ namespace cutline::core {
 struct PlacementRange {
   double in = 0.0;
   double out = 0.0;
+};
+
+/// Where a placement's picture and its sound each land.
+///
+/// Premiere's **source patch**, which it draws as a V1/A1 box in every track
+/// header beside the target toggle. Here it *is* the target toggle: the
+/// targeted video track takes the picture and the targeted audio track takes
+/// the sound, so one control per header says both. Premiere keeps the two
+/// apart because a source can be patched to a lane that is not targeted for
+/// keyboard edits; at this scale that distinction buys a second control in
+/// every header and answers a question nobody was asking.
+///
+/// What it buys that targeting alone did not: aiming the picture at V2 and the
+/// sound at A3 *at the same time*. Both were expressible — targeting is a
+/// per-track flag and any number of tracks can carry it — and placement simply
+/// read the first one and derived the rest.
+struct PlacementTargets {
+  /// The track the picture lands on. Empty is the topmost video track.
+  std::string_view video;
+
+  /// The lane the **first** audio stream lands on, with later streams taking
+  /// the lanes below it. Empty pairs it with the video track, which is what
+  /// puts V1's sound on A1.
+  std::string_view audio;
+
+  /// Converting, so that every caller with one track in hand still says what it
+  /// always said: a video track takes the picture, and an audio track takes the
+  /// sound — which is the only way a source with no picture can be aimed
+  /// anywhere but A1. Both readings are preserved exactly; this adds the third,
+  /// which is naming both at once.
+  PlacementTargets() noexcept = default;
+  template <typename T>
+    requires std::convertible_to<const T&, std::string_view>
+  PlacementTargets(const T& track_id) noexcept : video(track_id) {}  // NOLINT: converting
+  PlacementTargets(std::string_view video_track, std::string_view audio_track) noexcept
+      : video(video_track), audio(audio_track) {}
 };
 
 /// Places a media on the timeline at `start`: one video clip when the media has
@@ -49,13 +86,9 @@ struct PlacementRange {
 /// Streams still take a lane each. Piling a stereo pair's two streams onto one
 /// lane was the original bug and that half of the rule stands.
 ///
-/// `track_id` is where to aim it. A video track takes the picture and the sound
-/// follows onto the matching lanes; an **audio** track takes the sound, which is
-/// the only way a source with no picture can be aimed anywhere but A1. Empty
-/// means the topmost video track, which is what a placement with nothing to say
-/// about where has always meant.
+/// `targets` is where to aim it — see `PlacementTargets`.
 [[nodiscard]] Project place_media(Project p, std::string_view media_id, double start,
-                                  std::string_view track_id = {},
+                                  PlacementTargets targets = {},
                                   std::optional<PlacementRange> range = std::nullopt);
 
 /// Timeline length a media occupies when placed with an optional source range.
@@ -259,14 +292,14 @@ enum class FitChoice {
 
 /// Insert-edit: ripples the sequence open and places the media in the gap.
 [[nodiscard]] Project insert_media_at(Project p, std::string_view media_id, double at_time,
-                                      std::string_view track_id = {},
+                                      PlacementTargets targets = {},
                                       std::optional<PlacementRange> range = std::nullopt);
 
 /// Overwrite-edit: carves out whatever occupies the span, then places the media
 /// over it. Clips partly covered are trimmed; clips fully covered are dropped.
 /// The lanes it carves are exactly the ones the placement will fill.
 [[nodiscard]] Project overwrite_media_at(Project p, std::string_view media_id, double at_time,
-                                         std::string_view track_id = {},
+                                         PlacementTargets targets = {},
                                          std::optional<PlacementRange> range = std::nullopt);
 
 /// Trims a clip's in or out edge to a new timeline time, moving the whole linked
