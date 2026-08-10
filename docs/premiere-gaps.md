@@ -1061,7 +1061,7 @@ fact about the person and are saved beside the presets.
 | ~~Metadata columns~~ | a real column view, sortable by clicking a heading | **done** — Name, Duration, Used, Kind | — |
 | ~~Icon view~~ | thumbnails, and hover to scrub them | **done** — the List/Icons button | — |
 | ~~Labels~~ | a colour per entry, carried onto its clips | **done** — the pool's Label menu | — |
-| New sequence from a clip | drag onto "New Item", or the menu | **needs sequences**, see below | model |
+| ~~New sequence from a clip~~ | drag onto "New Item", or the menu | **done** — the pool's menu, shaped to the footage, with the clip on it | — |
 
 **Relinking is the smallest of these and the one that loses work without it.**
 Everything needed is present: a source knows its path, `missing_media` says
@@ -1105,8 +1105,13 @@ where the pointer's position across a tile picks the frame, so running along a
 picture walks the source; that is the part worth having, and a grid of stills
 from the middles of files would not have been.
 
-**New sequence from a clip needs something this project does not have yet: more
-than one sequence.** A `Project` holds its tracks directly — there is no
+**New sequence from a clip needed something this project did not have: more
+than one sequence.** It has it now — see the Sequences entry at the bottom of
+this page — and the row above is done. What follows is what the problem looked
+like before it was solved, kept because the audit's mistake about it is the
+useful part.
+
+A `Project` held its tracks directly — there was no
 `Sequence` type — so "new sequence from this clip" has nowhere to put the
 sequence it would make. The audit called this row "wiring" and that was wrong.
 
@@ -1811,8 +1816,28 @@ The rest of the application, in the order it seems worth walking:
   responsive design, styles.
 - **Colour** — the Lumetri Color panel and its scopes workflow.
 - **Export** — presets, queue, and the media encoder relationship.
-- **Sequences** — more than one per project, which section 4 ran into and
-  section 5 did not need. A list of them, which one is open, and a tab strip.
+- ~~**Sequences**~~ — **done**. `core::Sequence` holds one cut and `Project`
+  holds a list of them with the index of the open one; the pool and the bins
+  stay project-wide, because importing a clip once and cutting it into three
+  sequences is what a pool is for. A tab strip above the tracks switches
+  between them, and the pool's menu offers New Sequence and New Sequence From
+  Clip. What is left of it is nesting, which is §2.3's row rather than this one.
+
+  Three things are worth knowing before touching it. The open sequence is a
+  *list and an index*, not an open one held apart from parked ones: parking the
+  closed ones needs the field list written twice and kept in step by hand, and
+  loses where the open one sits in tab order. Switching is **not an edit** — it
+  does not go through `apply`, does not enter the undo stack and does not mark
+  the document modified, because a history that interleaves "I looked at the
+  other cut" with real edits cannot be walked backwards. And the playhead is
+  remembered per sequence in the *session* rather than on the project, so
+  coming back to a cut finds it where you left it without every playhead move
+  being a change to the document.
+
+  The file format did not change for a project with one sequence. The first is
+  written where a project's own fields have always been, so every file written
+  before this reads back as it was and an older build can still open one
+  written now; only a second sequence adds anything.
 - **Keyboard customisation** — pulled out of section 5, where it was the single
   largest row: a command table, a binding store, a conflict check and a panel.
 - **Everything else** — workspaces beyond four, undo history panel. This used to

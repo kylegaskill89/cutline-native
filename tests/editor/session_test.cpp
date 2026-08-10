@@ -7,7 +7,9 @@
 #include "cutline/editor/session.hpp"
 
 #include "cutline/core/edit.hpp"
+#include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
+#include "cutline/core/sequences.hpp"
 
 #include <gtest/gtest.h>
 
@@ -215,6 +217,79 @@ TEST(Session, ThePlayheadNeverGoesNegative) {
   Session session(sample_project());
   session.set_playhead(-10.0);
   EXPECT_DOUBLE_EQ(session.playhead(), 0.0);
+}
+
+// ------------------------------------------------------- switching cuts --
+
+[[nodiscard]] Project two_sequences() {
+  Project p = core::empty_project();
+  p.sequences.front().id = "s1";
+  p.sequences.front().name = "First";
+  p.sequences.front().tracks[0].clips = {
+      Clip{.id = "c1", .media_id = "m1", .source_in = 0.0, .source_out = 10.0, .start = 0.0}};
+  p.media = {Media{.id = "m1", .name = "wide.mp4", .duration = 60.0, .has_video = true}};
+
+  p = core::add_sequence(std::move(p), "Second");
+  p.sequences[1].id = "s2";
+  return p;
+}
+
+TEST(SessionSequences, OpeningOneShowsItsTracks) {
+  Session session{two_sequences()};
+  ASSERT_EQ(session.project().sequence().name, "First");
+
+  EXPECT_TRUE(session.open_sequence("s2"));
+  EXPECT_EQ(session.project().sequence().name, "Second");
+  EXPECT_TRUE(session.project().sequence().tracks[0].clips.empty());
+}
+
+TEST(SessionSequences, OpeningOneThatIsNotThereIsRefused) {
+  Session session{two_sequences()};
+  EXPECT_FALSE(session.open_sequence("nope"));
+  EXPECT_EQ(session.project().sequence().name, "First");
+}
+
+TEST(SessionSequences, EachCutRemembersWhereYouWereLooking) {
+  Session session{two_sequences()};
+  session.set_playhead(4.0);
+
+  ASSERT_TRUE(session.open_sequence("s2"));
+  EXPECT_DOUBLE_EQ(session.playhead(), 0.0) << "a cut never opened starts at the beginning";
+  session.set_playhead(2.0);
+
+  ASSERT_TRUE(session.open_sequence("s1"));
+  EXPECT_DOUBLE_EQ(session.playhead(), 4.0) << "back where it was left";
+  ASSERT_TRUE(session.open_sequence("s2"));
+  EXPECT_DOUBLE_EQ(session.playhead(), 2.0);
+}
+
+TEST(SessionSequences, NothingStaysSelectedAcrossASwitch) {
+  // The selection names clips, and none of this cut's clips are in that one.
+  Session session{two_sequences()};
+  session.select_one("c1");
+  ASSERT_EQ(session.selection().size(), 1u);
+
+  ASSERT_TRUE(session.open_sequence("s2"));
+  EXPECT_TRUE(session.selection().empty());
+}
+
+TEST(SessionSequences, SwitchingIsNotAnEdit) {
+  // It does not go in the undo stack, and it does not make the document
+  // modified: looking at the other cut is not a change to the project.
+  Session session{two_sequences()};
+  session.mark_saved({});
+  ASSERT_FALSE(session.modified());
+
+  ASSERT_TRUE(session.open_sequence("s2"));
+  EXPECT_FALSE(session.can_undo()) << "a change of tab is not something to undo";
+  EXPECT_FALSE(session.modified());
+}
+
+TEST(SessionSequences, SwitchingMovesTheRevisionSoEveryViewRebuilds) {
+  Session session{two_sequences()};
+  const std::uint64_t before = session.revision();
+  ASSERT_TRUE(session.open_sequence("s2"));
+  EXPECT_NE(session.revision(), before);
 }
 
 }  // namespace

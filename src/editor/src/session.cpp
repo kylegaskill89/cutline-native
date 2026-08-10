@@ -1,6 +1,7 @@
 #include "cutline/editor/session.hpp"
 
 #include "cutline/core/query.hpp"
+#include "cutline/core/sequences.hpp"
 #include "cutline/core/time.hpp"
 
 #include <algorithm>
@@ -112,6 +113,31 @@ std::vector<std::string> Session::selected_group() const {
 
 void Session::set_playhead(double seconds) {
   playhead_ = std::max(0.0, core::snap_to_frame(seconds, project_.sequence().fps));
+}
+
+bool Session::open_sequence(std::string_view id) {
+  const std::size_t at = core::sequence_index(project_, id);
+  if (at == std::string::npos || at == project_.open) return at != std::string::npos;
+
+  // Where this one was left, so coming back to a cut finds it as you left it.
+  playheads_[project_.sequence().id] = playhead_;
+
+  project_.open = at;
+
+  const auto found = playheads_.find(project_.sequence().id);
+  // Through the setter, so the restored position is snapped to the frame grid
+  // of the sequence being opened rather than the one being left.
+  set_playhead(found == playheads_.end() ? 0.0 : found->second);
+
+  // Nothing selected in this cut is in that one. `prune_selection` drops what
+  // is not there, which after a switch is everything.
+  prune_selection();
+
+  // Not `apply`: switching is not an edit. The revision still moves, because
+  // every view is showing a different sequence now and all of them have to
+  // rebuild.
+  ++revision_;
+  return true;
 }
 
 void Session::prune_selection() {

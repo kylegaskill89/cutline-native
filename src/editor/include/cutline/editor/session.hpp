@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <span>
 #include <string>
 #include <string_view>
@@ -136,6 +137,24 @@ class Session {
   /// Snapped to a frame and never negative.
   void set_playhead(double seconds);
 
+  // ------------------------------------------------------------ sequences --
+
+  /// Opens a sequence, putting the playhead and the selection where that
+  /// sequence left them.
+  ///
+  /// Switching is not an edit, so it does not go through `apply` and does not
+  /// land in the undo stack — Premiere does not make you undo a change of tab
+  /// either, and a history that interleaves "I looked at the other cut" with
+  /// real edits is one nobody can walk backwards through.
+  ///
+  /// The playhead is remembered per sequence rather than stored on the project.
+  /// Where you were looking in a cut is worth keeping while the application is
+  /// open, and is not worth marking the document modified for, nor an entry in
+  /// the undo stack every time the playhead moves.
+  ///
+  /// Returns whether the sequence was there to open.
+  bool open_sequence(std::string_view id);
+
  private:
   /// Drops selected ids that are not in the project any more.
   void prune_selection();
@@ -154,6 +173,9 @@ class Session {
   std::vector<core::ClipCopy> clipboard_;
   std::string source_media_;
   double playhead_ = 0.0;
+  /// Where the playhead was left in each sequence, by sequence id. Only the
+  /// ones that have been away from; the open one's live value is `playhead_`.
+  std::map<std::string, double> playheads_;
   std::uint64_t revision_ = 0;
 };
 

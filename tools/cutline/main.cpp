@@ -29,6 +29,7 @@
 #include "cutline/core/query.hpp"
 #include "cutline/core/roles.hpp"
 #include "cutline/core/routing.hpp"
+#include "cutline/core/sequences.hpp"
 #include "cutline/core/time.hpp"
 #include "cutline/editor/autosave.hpp"
 #include "cutline/editor/browser_binding.hpp"
@@ -252,6 +253,14 @@ using cutline::ui::built_in_themes;
 
   project.sequence().tracks = {std::move(upper), std::move(lower), std::move(dialogue),
                     std::move(music)};
+
+  // A second sequence, so the headless pass lays out the tab strip. The strip
+  // is only drawn when there is something to switch between, which means a
+  // single-sequence scene never measures it at all — and it is the one part of
+  // this feature that cannot be checked any other way.
+  project.sequence().id = "seq-main";
+  project.sequence().name = "Main";
+  project = add_sequence(std::move(project), "Alternate");
   return project;
 }
 
@@ -3839,9 +3848,25 @@ void open_pool_menu(App& app, double x, double y) {
   };
   std::vector<Item> items;
   items.push_back(Item{"New Bin", [&app] { add_bin(app); }});
+  items.push_back(Item{"New Sequence", [&app] {
+                         app.session.apply(cutline::core::add_sequence(app.session.project()));
+                         refresh_all(app);
+                         app.dock_stale = true;
+                       }});
 
   if (const cutline::ui::MediaItem* chosen = app.browser->selected(); chosen != nullptr) {
     const bool is_bin = !cutline::editor::bin_of_row(chosen->id).empty();
+    if (!is_bin) {
+      // Premiere's New Sequence From Clip: a cut shaped to that footage, with
+      // the clip already on it. It is not opened — see `add_sequence` — so this
+      // does not take somebody away from what they were cutting.
+      items.push_back(Item{"New Sequence From Clip", [&app, id = chosen->id] {
+                             app.session.apply(cutline::core::sequence_from_clip(
+                                 app.session.project(), id));
+                             refresh_all(app);
+                             app.dock_stale = true;
+                           }});
+    }
     items.push_back(Item{"Rename...", [&app] { rename_pool_entry(app); }});
     items.push_back(Item{is_bin ? "Delete Bin" : "Remove", [&app] { remove_from_pool(app); }});
     if (!is_bin) {
@@ -7707,6 +7732,32 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
     if (app != nullptr) show_playhead(*app);
   });
   if (app != nullptr) app->readout = &readout;
+
+  // The sequences, as a strip of tabs above the tracks.
+  //
+  // Only when there is more than one. A project with a single cut has nothing
+  // to switch between, and a row holding one tab is a row of chrome explaining
+  // a choice nobody has — Premiere shows the strip always because a Premiere
+  // project is a bin of sequences from the start, and this one is not.
+  if (app != nullptr && app->session.project().sequences.size() > 1) {
+    auto& strip = panel->emplace<Box>(Axis::Horizontal);
+    strip.set_spacing(2.0);
+    const cutline::core::Project& document = app->session.project();
+    for (std::size_t i = 0; i < document.sequences.size(); ++i) {
+      const cutline::core::Sequence& sequence = document.sequences[i];
+      const std::string label = sequence.name.empty() ? std::string("Sequence") : sequence.name;
+      auto& tab = strip.emplace<Button>(label, [app, id = sequence.id] {
+        if (app == nullptr) return;
+        if (!app->session.open_sequence(id)) return;
+        // Everything is showing a different cut now.
+        refresh_all(*app);
+        app->dock_stale = true;
+      });
+      tab.set_selected(i == document.open);
+      tab.set_tooltip(label);
+    }
+    strip.emplace<Spacer>();
+  }
 
   auto& tracks = panel->emplace<TimelineView>();
   tracks.set_scale(TimeScale{.pixels_per_second = 60.0});

@@ -1436,7 +1436,7 @@ that, but present cost specifically may not be representative.
 Everything is committed and green. Nothing is half-finished, no branch is open,
 and there is no work in progress to reconstruct.
 
-- 3048 tests pass under the `ui` preset, 2621 under `release`. Set
+- 3075 tests pass under the `ui` preset, 2648 under `release`. Set
   `CUTLINE_TEST_MEDIA_DIR` or about fifty decode tests skip while the run still
   says everything passed.
 - **The suite is stable under `-j`, and this has now been fixed twice.** The
