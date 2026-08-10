@@ -12,6 +12,23 @@ reach it, **control** means a new widget, **machinery** means a new subsystem.
 
 Nothing here is scheduled. It is a map, not a plan.
 
+**What counts as done, and why the bar moved.** This page repeatedly says that a
+row was checked "by walking the code rather than this document", and treats that
+as the reliable method. It is not sufficient, and the free-draw mask is the
+proof. Its row read **done — corners in a buffer, even-odd fill, a handle on
+each**, and every part of that sentence was true of the source: the buffer
+existed, the shader filled it, the handles dragged. The mask had nevertheless
+never masked anything in its life, because the step that hands a pass to the
+card built it from a brace list of ten numbers and the corners are a vector that
+a brace list cannot carry. Nothing in the model, the editor or the panel was
+wrong. Only the picture was, and only for the one shape whose definition is not
+a number.
+
+So: **for any row whose output is a picture or a sound, the evidence is a
+rendered frame or a measured signal.** Not the presence of a function, and not a
+test that stops at the layer below the one that was broken. Reading the code
+confirms that something was built; it cannot confirm that it arrives.
+
 ---
 
 ## 1. Effects
@@ -774,7 +791,7 @@ for one keystroke.
 | Speed / duration dialogue | a box with both and a ripple option | **done** — speed, duration, reverse and a ripple, from the clip menu | — |
 | Right-click a clip | the menu most edits are actually reached from | **done** — and it offers only what would do something | — |
 | Nesting | a sequence inside a sequence | none | machinery |
-| Multi-camera | none | none | machinery |
+| Multi-camera | a multicam source sequence, switched live while it plays | none | machinery |
 
 **Alt-drag is a move that reports itself differently.** The timeline knows
 nothing about duplicating: the gesture is captured, clamped, snapped and
