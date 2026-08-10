@@ -44,11 +44,11 @@ Project three_clip_project() {
   v.kind = TrackKind::Video;
   v.clips = {clip_of("a", 0.0, 0.0, 5.0), clip_of("b", 5.0, 5.0, 10.0),
              clip_of("c", 10.0, 10.0, 15.0)};
-  p.tracks = {v};
+  p.sequence().tracks = {v};
   return p;
 }
 
-const Track& video(const Project& p) { return p.tracks[0]; }
+const Track& video(const Project& p) { return p.sequence().tracks[0]; }
 
 // -------------------------------------------------------- layered moves --
 
@@ -75,13 +75,13 @@ Project layered_project() {
   Track a2;
   a2.id = "a2";
   a2.kind = TrackKind::Audio;
-  p.tracks = {v1, v2, a1, a2};
+  p.sequence().tracks = {v1, v2, a1, a2};
   return p;
 }
 
 std::size_t audio_lane_count(const Project& p) {
   std::size_t n = 0;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     if (t.kind == TrackKind::Audio) ++n;
   }
   return n;
@@ -92,12 +92,12 @@ std::size_t audio_lane_count(const Project& p) {
 TEST(LayeredMove, KeepsAudioOnLanesItAlreadyOwns) {
   Project p = layered_project();
   p = place_media(std::move(p), "m1", 0.0, "v2");
-  const std::string video_id = p.tracks[1].clips[0].id;
+  const std::string video_id = p.sequence().tracks[1].clips[0].id;
   const Ids members{group_members(p, video_id)};
 
   p = move_clips_layered(std::move(p), members, 0.0, -1);
 
-  EXPECT_EQ(p.tracks[0].clips.size(), 1u);  // moved up to v1
+  EXPECT_EQ(p.sequence().tracks[0].clips.size(), 1u);  // moved up to v1
   EXPECT_EQ(audio_lane_count(p), 2u);       // no new lanes needed
 }
 
@@ -107,13 +107,13 @@ TEST(LayeredMove, GivesTheSecondLayerItsOwnAudioLanes) {
   p = place_media(std::move(p), "m1", 0.0, "v2");  // first placement fills a1 and a2
   p = place_media(std::move(p), "m1", 20.0, "v2");
 
-  const std::string second_video = p.tracks[1].clips[1].id;
+  const std::string second_video = p.sequence().tracks[1].clips[1].id;
   const Ids members{group_members(p, second_video)};
 
   p = move_clips_layered(std::move(p), members, 0.0, -1);
 
   EXPECT_EQ(audio_lane_count(p), 4u);  // two fresh lanes for the raised layer
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     if (t.kind != TrackKind::Audio) continue;
     // No lane may end up mixing two different groups.
     for (const Clip& c : t.clips) {
@@ -125,14 +125,14 @@ TEST(LayeredMove, GivesTheSecondLayerItsOwnAudioLanes) {
 TEST(LayeredMove, DoesNothingExtraWithoutALayerChange) {
   Project p = layered_project();
   p = place_media(std::move(p), "m1", 0.0, "v2");
-  const std::string video_id = p.tracks[1].clips[0].id;
+  const std::string video_id = p.sequence().tracks[1].clips[0].id;
   const Ids members{group_members(p, video_id)};
 
   const Project before = p;
   p = move_clips_layered(std::move(p), members, 5.0, 0);  // slide only
 
   EXPECT_EQ(audio_lane_count(p), audio_lane_count(before));
-  EXPECT_DOUBLE_EQ(p.tracks[1].clips[0].start, 5.0);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[1].clips[0].start, 5.0);
 }
 
 // --------------------------------------------------------- ripple insert --
@@ -187,7 +187,7 @@ TEST(OverwriteMediaAt, CarvesOutWhatItLandsOn) {
   v.id = "v1";
   v.kind = TrackKind::Video;
   v.clips = {clip_of("a", 0.0, 0.0, 10.0)};
-  p.tracks = {v};
+  p.sequence().tracks = {v};
 
   p = overwrite_media_at(std::move(p), "m2", 3.0);
 
@@ -295,7 +295,7 @@ TEST(Slip, StillsHaveNoSourceToSlip) {
   v.id = "v1";
   v.kind = TrackKind::Video;
   v.clips = {c};
-  p.tracks = {v};
+  p.sequence().tracks = {v};
 
   const Project before = p;
   EXPECT_EQ(slip_clip(before, "s1", 2.0), before);
@@ -343,7 +343,7 @@ TEST(Slide, NeedsSomethingToSlideAgainst) {
   v.id = "v1";
   v.kind = TrackKind::Video;
   v.clips = {clip_of("lonely", 0.0, 0.0, 5.0)};
-  p.tracks = {v};
+  p.sequence().tracks = {v};
 
   const Project before = p;
   EXPECT_EQ(slide_clip(before, "lonely", 1.0), before);
@@ -403,10 +403,10 @@ TEST(RippleTrim, EveryTrackFollows) {
   audio.id = "a1";
   audio.kind = TrackKind::Audio;
   audio.clips = {clip_of("s1", 0.0, 0.0, 5.0), clip_of("s2", 5.0, 5.0, 10.0)};
-  p.tracks.push_back(audio);
+  p.sequence().tracks.push_back(audio);
 
   p = ripple_trim_edge(std::move(p), "a", ClipEdge::Out, 3.0);
-  EXPECT_DOUBLE_EQ(p.tracks[1].clips[1].start, 3.0);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[1].clips[1].start, 3.0);
 }
 
 TEST(RippleTrim, StillStopsWhenTheSourceRunsOut) {
@@ -467,20 +467,20 @@ TEST(RollEdit, StopsWhereEitherSideRunsOutOfSource) {
   v.clips = {clip_of("a", 0.0, 0.0, 5.0), clip_of("b", 5.0, 5.0, 10.0)};
   v.clips[1].source_in = 5.0;
   v.clips[1].source_out = 10.0;
-  p.tracks = {v};
+  p.sequence().tracks = {v};
 
   // a has fifteen seconds of handle to give, so what stops this is b's head
   // running out — it can only give up five before it is at its own source in.
   p = roll_edit(std::move(p), "a", ClipEdge::Out, 40.0);
-  EXPECT_LE(clip_end(p.tracks[0].clips[0]), 10.0 + 1e-9);
-  EXPECT_GE(clip_duration(p.tracks[0].clips[1]), kMinClip - 1e-9);
+  EXPECT_LE(clip_end(p.sequence().tracks[0].clips[0]), 10.0 + 1e-9);
+  EXPECT_GE(clip_duration(p.sequence().tracks[0].clips[1]), kMinClip - 1e-9);
 }
 
 // ------------------------------------------------------------ copy / paste --
 
 TEST(CopyClips, TakesTheWholeClipAndTheLaneItWasOn) {
   Project p = three_clip_project();
-  p.tracks[0].clips[1].gain = 0.5;
+  p.sequence().tracks[0].clips[1].gain = 0.5;
 
   const std::vector<ClipCopy> copies = copy_clips(p, Ids{"b"});
   ASSERT_EQ(copies.size(), 1u);
@@ -535,7 +535,7 @@ TEST(PasteClips, LinksThePastedPairToEachOtherRatherThanToTheOriginal) {
   p = place_media(std::move(p), "m1", 0.0);
 
   Ids placed;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     for (const Clip& c : t.clips) placed.push_back(c.id);
   }
   ASSERT_GE(placed.size(), 2u);
@@ -546,7 +546,7 @@ TEST(PasteClips, LinksThePastedPairToEachOtherRatherThanToTheOriginal) {
   p = paste_clips(std::move(p), copies, 20.0);
 
   std::vector<std::string> pasted_groups;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     for (const Clip& c : t.clips) {
       if (c.start >= 20.0 && c.group_id.has_value()) pasted_groups.push_back(*c.group_id);
     }
@@ -572,11 +572,11 @@ TEST(PasteClips, FallsBackToTheFirstLaneOfItsKindWhenTheOriginalHasGone) {
   Track v;
   v.id = "elsewhere";
   v.kind = TrackKind::Video;
-  other.tracks = {v};
+  other.sequence().tracks = {v};
 
   other = paste_clips(std::move(other), copies, 3.0);
-  ASSERT_EQ(other.tracks[0].clips.size(), 1u);
-  EXPECT_DOUBLE_EQ(other.tracks[0].clips[0].start, 3.0);
+  ASSERT_EQ(other.sequence().tracks[0].clips.size(), 1u);
+  EXPECT_DOUBLE_EQ(other.sequence().tracks[0].clips[0].start, 3.0);
 }
 
 TEST(PasteClips, WithNoLaneOfThatKindNothingHappens) {
@@ -587,7 +587,7 @@ TEST(PasteClips, WithNoLaneOfThatKindNothingHappens) {
   Track a;
   a.id = "a1";
   a.kind = TrackKind::Audio;
-  audio_only.tracks = {a};
+  audio_only.sequence().tracks = {a};
 
   EXPECT_EQ(paste_clips(audio_only, copies, 0.0), audio_only);
 }

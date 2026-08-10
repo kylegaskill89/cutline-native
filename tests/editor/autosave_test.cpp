@@ -154,8 +154,8 @@ class Scratch {
 
 [[nodiscard]] core::Project a_project() {
   core::Project p;
-  p.canvas_w = 1280;
-  p.canvas_h = 720;
+  p.sequence().canvas_w = 1280;
+  p.sequence().canvas_h = 720;
   return p;
 }
 
@@ -168,7 +168,7 @@ TEST(Autosave, ACopyCanBeWrittenAndReadBack) {
 
   const auto loaded = read_project(found->path);
   ASSERT_TRUE(loaded.has_value()) << loaded.error();
-  EXPECT_EQ(loaded->project.canvas_w, 1280);
+  EXPECT_EQ(loaded->project.sequence().canvas_w, 1280);
 }
 
 TEST(Autosave, WithNoCopyThereIsNothingToOffer) {
@@ -205,14 +205,14 @@ TEST(Autosave, ACopyNewerThanTheSavedFileIsOffered) {
 
   std::this_thread::sleep_for(20ms);
   core::Project changed = a_project();
-  changed.canvas_w = 3840;
+  changed.sequence().canvas_w = 3840;
   ASSERT_TRUE(write_autosave(scratch.document(), changed).has_value());
 
   const auto found = find_recovery(scratch.document());
   ASSERT_TRUE(found.has_value());
   const auto loaded = read_project(found->path);
   ASSERT_TRUE(loaded.has_value());
-  EXPECT_EQ(loaded->project.canvas_w, 3840);
+  EXPECT_EQ(loaded->project.sequence().canvas_w, 3840);
 }
 
 // ------------------------------------------------------------- how many kept --
@@ -247,11 +247,11 @@ TEST(AutosaveVersions, PastTheLimitTheOldestGoes) {
 TEST(AutosaveVersions, TheCopyBeforeTheNewestIsStillThere) {
   const Scratch scratch;
   core::Project good = a_project();
-  good.canvas_w = 1280;
+  good.sequence().canvas_w = 1280;
   ASSERT_TRUE(write_autosave(scratch.document(), good, 3, kWhen).has_value());
 
   core::Project bad = a_project();
-  bad.canvas_w = 640;
+  bad.sequence().canvas_w = 640;
   ASSERT_TRUE(write_autosave(scratch.document(), bad, 3, kWhen + 1min).has_value());
 
   const std::vector<Recovery> copies = autosave_copies(scratch.document());
@@ -259,28 +259,28 @@ TEST(AutosaveVersions, TheCopyBeforeTheNewestIsStillThere) {
 
   const auto newest = read_project(copies[0].path);
   ASSERT_TRUE(newest.has_value()) << newest.error();
-  EXPECT_EQ(newest->project.canvas_w, 640);
+  EXPECT_EQ(newest->project.sequence().canvas_w, 640);
 
   const auto before = read_project(copies[1].path);
   ASSERT_TRUE(before.has_value()) << before.error();
-  EXPECT_EQ(before->project.canvas_w, 1280);
+  EXPECT_EQ(before->project.sequence().canvas_w, 1280);
 }
 
 TEST(AutosaveVersions, TheNewestIsTheOneOffered) {
   const Scratch scratch;
   core::Project older = a_project();
-  older.canvas_w = 1280;
+  older.sequence().canvas_w = 1280;
   ASSERT_TRUE(write_autosave(scratch.document(), older, 5, kWhen).has_value());
 
   core::Project newer = a_project();
-  newer.canvas_w = 3840;
+  newer.sequence().canvas_w = 3840;
   ASSERT_TRUE(write_autosave(scratch.document(), newer, 5, kWhen + 1min).has_value());
 
   const auto found = find_recovery(scratch.document());
   ASSERT_TRUE(found.has_value());
   const auto loaded = read_project(found->path);
   ASSERT_TRUE(loaded.has_value());
-  EXPECT_EQ(loaded->project.canvas_w, 3840);
+  EXPECT_EQ(loaded->project.sequence().canvas_w, 3840);
 }
 
 TEST(AutosaveVersions, DiscardingTakesEveryCopy) {

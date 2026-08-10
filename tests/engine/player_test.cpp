@@ -96,7 +96,7 @@ constexpr int kChannels = 2;
 
   Project p;
   p.media = {m};
-  p.tracks = {t};
+  p.sequence().tracks = {t};
   return p;
 }
 
@@ -243,8 +243,8 @@ TEST(Player, ASilentProjectStillKeepsTime) {
   // The transport should work on a project with no audio at all: the device
   // runs, so the playhead still moves.
   Project p;
-  p.canvas_w = 640;
-  p.canvas_h = 480;
+  p.sequence().canvas_w = 640;
+  p.sequence().canvas_h = 480;
 
   Media m;
   m.id = "colour";
@@ -265,7 +265,7 @@ TEST(Player, ASilentProjectStillKeepsTime) {
   t.clips = {c};
 
   p.media = {m};
-  p.tracks = {t};
+  p.sequence().tracks = {t};
 
   auto built = Player::create(p);
   if (!built) GTEST_SKIP() << "no audio output device: " << built.error();
@@ -290,8 +290,8 @@ TEST(Player, ASilentProjectStillKeepsTime) {
 // whenever the player had stopped running, which is exactly when it runs.
 TEST(Player, SeekingAfterTheEndLandsWhereItAsked) {
   Project p;
-  p.canvas_w = 320;
-  p.canvas_h = 240;
+  p.sequence().canvas_w = 320;
+  p.sequence().canvas_h = 240;
 
   Media m;
   m.id = "colour";
@@ -312,7 +312,7 @@ TEST(Player, SeekingAfterTheEndLandsWhereItAsked) {
   t.clips = {c};
 
   p.media = {m};
-  p.tracks = {t};
+  p.sequence().tracks = {t};
 
   auto built = Player::create(p);
   if (!built) GTEST_SKIP() << "no audio output device: " << built.error();

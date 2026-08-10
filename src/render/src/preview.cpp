@@ -45,18 +45,18 @@ constexpr int kSmallestCanvas = 16;
 core::Project scaled_canvas(core::Project project, double factor) {
   if (!(factor > 0.0) || factor == 1.0) return project;
 
-  const int width = scaled(project.canvas_w, factor);
-  const int height = scaled(project.canvas_h, factor);
+  const int width = scaled(project.sequence().canvas_w, factor);
+  const int height = scaled(project.sequence().canvas_h, factor);
   if (width < kSmallestCanvas || height < kSmallestCanvas) return project;
 
   // Taken from the rounded result rather than from `factor`, so everything
   // else is scaled by exactly what the canvas was: a 1919-pixel canvas at a
   // half rounds to 960, and a title scaled by 0.5 instead would be a fraction
   // of a pixel out of step with it. Invisible once; not once it is animated.
-  const double actual = static_cast<double>(width) / project.canvas_w;
+  const double actual = static_cast<double>(width) / project.sequence().canvas_w;
 
-  project.canvas_w = width;
-  project.canvas_h = height;
+  project.sequence().canvas_w = width;
+  project.sequence().canvas_h = height;
 
   for (core::Media& media : project.media) {
     if (!media.text.has_value()) continue;
@@ -64,7 +64,7 @@ core::Project scaled_canvas(core::Project project, double factor) {
     media.text->stroke_width *= actual;
   }
 
-  for (core::Track& track : project.tracks) {
+  for (core::Track& track : project.sequence().tracks) {
     for (core::Clip& clip : track.clips) {
       for (core::ClipEffect& effect : clip.effects) {
         // The stored value and the keyframes both: an animated blur reads its

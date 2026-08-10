@@ -108,9 +108,9 @@ int main(int argc, char** argv) {
 
   const cutline::core::Project& project = loaded->project;
   std::println("{}x{} @ {:.3f} fps on {}",
-               settings.width > 0 ? settings.width : project.canvas_w,
-               settings.height > 0 ? settings.height : project.canvas_h,
-               settings.fps > 0.0 ? settings.fps : project.fps, (*device)->adapter_name());
+               settings.width > 0 ? settings.width : project.sequence().canvas_w,
+               settings.height > 0 ? settings.height : project.sequence().canvas_h,
+               settings.fps > 0.0 ? settings.fps : project.sequence().fps, (*device)->adapter_name());
 
   auto last_report = std::chrono::steady_clock::now();
   const auto progress = [&](const cutline::engine::ExportProgress& p) {

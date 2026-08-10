@@ -224,7 +224,7 @@ int main(int argc, char** argv) {
 
   const int width = 1280;
   const int height = std::max(
-      1, state.project.canvas_h * width / std::max(1, state.project.canvas_w));
+      1, state.project.sequence().canvas_h * width / std::max(1, state.project.sequence().canvas_w));
 
   RECT bounds{0, 0, width, height};
   AdjustWindowRect(&bounds, WS_OVERLAPPEDWINDOW, FALSE);
@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
   state.device = std::move(*device);
 
   auto renderer =
-      FrameRenderer::create(state.device, state.project.canvas_w, state.project.canvas_h);
+      FrameRenderer::create(state.device, state.project.sequence().canvas_w, state.project.sequence().canvas_h);
   if (!renderer) {
     std::println(stderr, "cannot create the renderer: {}", renderer.error());
     return 1;
@@ -272,8 +272,8 @@ int main(int argc, char** argv) {
   std::println("audio:   {} — {} Hz, {} channels{}", state.player->device_name(),
                state.player->sample_rate(), state.player->channels(),
                state.player->silent() ? "  (project has no audio)" : "");
-  std::println("canvas:  {}x{}   timeline: {:.2f}s", state.project.canvas_w,
-               state.project.canvas_h, timeline);
+  std::println("canvas:  {}x{}   timeline: {:.2f}s", state.project.sequence().canvas_w,
+               state.project.sequence().canvas_h, timeline);
   std::println("");
   std::println("space play/pause   left/right seek   shift+arrow 5s   home/end   esc quit");
 
@@ -293,7 +293,7 @@ int main(int argc, char** argv) {
   // The playhead is asked for rather than counted. Re-rendering the same time
   // twice is wasted work, so a frame is drawn only when the position has moved
   // by enough to land on a different one.
-  const double frame_step = state.project.fps > 0.0 ? 1.0 / state.project.fps : 1.0 / 30.0;
+  const double frame_step = state.project.sequence().fps > 0.0 ? 1.0 / state.project.sequence().fps : 1.0 / 30.0;
 
   MSG message{};
   while (message.message != WM_QUIT) {
@@ -340,7 +340,7 @@ int main(int argc, char** argv) {
   if (state.played_seconds > 0.0) {
     const double drawn_per_second =
         static_cast<double>(state.frames_drawn) / state.played_seconds;
-    const double target = state.project.fps > 0.0 ? state.project.fps : 30.0;
+    const double target = state.project.sequence().fps > 0.0 ? state.project.sequence().fps : 30.0;
     const auto per_frame = [count = static_cast<double>(state.frames_drawn)](double total) {
       return count > 0.0 ? total / count * 1000.0 : 0.0;
     };

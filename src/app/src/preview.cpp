@@ -118,7 +118,7 @@ std::expected<ui::ImageView, std::string> ProjectPreview::frame_at(const core::P
                                                                    double t) {
   // The sequence may have been resized under us — opening a different project,
   // most obviously — and rendering at the old size would letterbox wrongly.
-  if (const auto matched = resize(project.canvas_w, project.canvas_h); !matched.has_value()) {
+  if (const auto matched = resize(project.sequence().canvas_w, project.sequence().canvas_h); !matched.has_value()) {
     return std::unexpected(matched.error());
   }
 
@@ -146,7 +146,7 @@ std::expected<ui::ImageView, std::string> ProjectPreview::frame_at(const core::P
 
 std::expected<ui::TextureView, std::string> ProjectPreview::texture_at(
     const core::Project& project, double t) {
-  if (const auto matched = resize(project.canvas_w, project.canvas_h); !matched.has_value()) {
+  if (const auto matched = resize(project.sequence().canvas_w, project.sequence().canvas_h); !matched.has_value()) {
     return std::unexpected(matched.error());
   }
 

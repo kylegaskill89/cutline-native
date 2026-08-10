@@ -126,7 +126,7 @@ TEST(TimelineDuration, IsTheFurthestClipEndAcrossTracks) {
   late.start = 20.0;  // ends at 24
   a.clips.push_back(late);
 
-  p.tracks = {v, a};
+  p.sequence().tracks = {v, a};
   EXPECT_DOUBLE_EQ(timeline_duration(p), 24.0);
 }
 
@@ -200,15 +200,15 @@ TEST(TrackAudibility, MutedTracksAreSilent) {
   Project p;
   Track a = make_track("a1", TrackKind::Audio);
   a.muted = true;
-  p.tracks = {a};
-  EXPECT_FALSE(is_track_audible(p, p.tracks[0]));
+  p.sequence().tracks = {a};
+  EXPECT_FALSE(is_track_audible(p, p.sequence().tracks[0]));
 }
 
 TEST(TrackAudibility, WithoutSoloEveryUnmutedTrackPlays) {
   Project p;
-  p.tracks = {make_track("a1", TrackKind::Audio), make_track("a2", TrackKind::Audio)};
-  EXPECT_TRUE(is_track_audible(p, p.tracks[0]));
-  EXPECT_TRUE(is_track_audible(p, p.tracks[1]));
+  p.sequence().tracks = {make_track("a1", TrackKind::Audio), make_track("a2", TrackKind::Audio)};
+  EXPECT_TRUE(is_track_audible(p, p.sequence().tracks[0]));
+  EXPECT_TRUE(is_track_audible(p, p.sequence().tracks[1]));
 }
 
 TEST(TrackAudibility, SoloSilencesEveryOtherTrack) {
@@ -216,9 +216,9 @@ TEST(TrackAudibility, SoloSilencesEveryOtherTrack) {
   Track a1 = make_track("a1", TrackKind::Audio);
   Track a2 = make_track("a2", TrackKind::Audio);
   a2.solo = true;
-  p.tracks = {a1, a2};
-  EXPECT_FALSE(is_track_audible(p, p.tracks[0]));
-  EXPECT_TRUE(is_track_audible(p, p.tracks[1]));
+  p.sequence().tracks = {a1, a2};
+  EXPECT_FALSE(is_track_audible(p, p.sequence().tracks[0]));
+  EXPECT_TRUE(is_track_audible(p, p.sequence().tracks[1]));
 }
 
 TEST(TrackAudibility, MuteBeatsSoloOnTheSameTrack) {
@@ -226,8 +226,8 @@ TEST(TrackAudibility, MuteBeatsSoloOnTheSameTrack) {
   Track a = make_track("a1", TrackKind::Audio);
   a.solo = true;
   a.muted = true;
-  p.tracks = {a};
-  EXPECT_FALSE(is_track_audible(p, p.tracks[0]));
+  p.sequence().tracks = {a};
+  EXPECT_FALSE(is_track_audible(p, p.sequence().tracks[0]));
 }
 
 // Only audio solo suppresses other audio; a soloed video track is irrelevant.
@@ -235,8 +235,8 @@ TEST(TrackAudibility, VideoSoloDoesNotSuppressAudio) {
   Project p;
   Track v = make_track("v1", TrackKind::Video);
   v.solo = true;
-  p.tracks = {v, make_track("a1", TrackKind::Audio)};
-  EXPECT_TRUE(is_track_audible(p, p.tracks[1]));
+  p.sequence().tracks = {v, make_track("a1", TrackKind::Audio)};
+  EXPECT_TRUE(is_track_audible(p, p.sequence().tracks[1]));
 }
 
 // ---------------------------------------------------------------- lookups --
@@ -247,7 +247,7 @@ Project two_track_project() {
   v.clips.push_back(make_clip("c1"));
   Track a = make_track("a1", TrackKind::Audio);
   a.clips.push_back(make_clip("c2"));
-  p.tracks = {v, a};
+  p.sequence().tracks = {v, a};
   return p;
 }
 
@@ -272,8 +272,8 @@ TEST(Lookups, UnlinkedClipIsItsOwnGroup) {
 
 TEST(Lookups, LinkedClipsReportEveryMember) {
   Project p = two_track_project();
-  p.tracks[0].clips[0].group_id = "g1";
-  p.tracks[1].clips[0].group_id = "g1";
+  p.sequence().tracks[0].clips[0].group_id = "g1";
+  p.sequence().tracks[1].clips[0].group_id = "g1";
   const std::vector<std::string> expected{"c1", "c2"};
   EXPECT_EQ(group_members(p, "c1"), expected);
   EXPECT_EQ(group_members(p, "c2"), expected);

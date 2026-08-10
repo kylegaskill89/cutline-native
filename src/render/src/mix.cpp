@@ -26,7 +26,7 @@ std::vector<PlannedAudioClip> plan_audio(const core::Project& project) {
   std::vector<PlannedAudioClip> planned;
 
   int track_index = 0;
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     if (track.kind != core::TrackKind::Audio) continue;
     const int index = track_index++;
     // The ordinal is taken first, so a bus still owns its lane: the mixer sums

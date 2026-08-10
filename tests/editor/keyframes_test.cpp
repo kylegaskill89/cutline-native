@@ -22,7 +22,7 @@ using core::Keyframe;
 /// A project with one video clip, four seconds long, animated on X.
 [[nodiscard]] core::Project animated() {
   core::Project project;
-  project.tracks.push_back(core::Track{.id = "v1", .kind = core::TrackKind::Video});
+  project.sequence().tracks.push_back(core::Track{.id = "v1", .kind = core::TrackKind::Video});
 
   core::Clip clip;
   clip.id = "c1";
@@ -35,7 +35,7 @@ using core::Keyframe;
       Keyframe{.t = 2.0, .v = 0.5, .e = Interp::Linear},
       Keyframe{.t = 4.0, .v = 1.0, .e = Interp::Linear}};
 
-  project.tracks[0].clips.push_back(std::move(clip));
+  project.sequence().tracks[0].clips.push_back(std::move(clip));
   return project;
 }
 

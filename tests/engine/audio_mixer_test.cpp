@@ -132,7 +132,7 @@ class ToneSource {
 [[nodiscard]] Project one_clip_project(double length = 5.0) {
   Project p;
   p.media = {tone_media()};
-  p.tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, length)})};
+  p.sequence().tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, length)})};
   return p;
 }
 
@@ -210,7 +210,7 @@ constexpr double kSilenceDb = -90.0;
   Track loud = audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0)});
   Track quiet = audio_track("a2", {audio_clip("c2", "m", 0.0, 5.0)});
   quiet.gain = 0.25;
-  p.tracks = {std::move(loud), std::move(quiet)};
+  p.sequence().tracks = {std::move(loud), std::move(quiet)};
   return p;
 }
 
@@ -222,7 +222,7 @@ constexpr double kSilenceDb = -90.0;
   Track picture;
   picture.id = "v1";
   picture.kind = TrackKind::Video;
-  p.tracks = {std::move(picture), audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0)})};
+  p.sequence().tracks = {std::move(picture), audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0)})};
   return p;
 }
 
@@ -243,7 +243,7 @@ TEST(TrackMeters, ATrackIsNamedTheWayTheProjectNumbersItRatherThanThePlan) {
 
 TEST(TrackFader, ItAlsoTakesTheProjectsNumbering) {
   Project p = video_over_audio();
-  p.tracks[1].gain = 0.5;
+  p.sequence().tracks[1].gain = 0.5;
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
 
@@ -320,11 +320,11 @@ TEST(TrackMeters, ALaneWithSeveralClipsAtOnceMetersTheirSum) {
   // are louder together than either is alone.
   Project one;
   one.media = {tone_media()};
-  one.tracks = {audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0)})};
+  one.sequence().tracks = {audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0)})};
 
   Project both;
   both.media = {tone_media()};
-  both.tracks = {audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0),
+  both.sequence().tracks = {audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0),
                                     audio_clip("c2", "m", 0.0, 5.0, 1.0)})};
 
   auto alone = mixer_for(one);
@@ -340,7 +340,7 @@ TEST(TrackMeters, ALaneWithSeveralClipsAtOnceMetersTheirSum) {
 
 TEST(TrackMeters, AMutedLaneReadsAsSilence) {
   Project p = two_lanes();
-  p.tracks[0].muted = true;
+  p.sequence().tracks[0].muted = true;
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
   (void)mix_span(*mixer, 0.0, 0.5);
@@ -427,7 +427,7 @@ TEST(TrackFader, ALaneBuiltSilentStaysWhereTheMixPlannedIt) {
   // rebuild rather than a trim. What matters is that it does not divide by
   // nothing and hand the mixing thread an infinity.
   Project p = two_lanes();
-  p.tracks[0].gain = 0.0;
+  p.sequence().tracks[0].gain = 0.0;
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
 
@@ -458,7 +458,7 @@ TEST(TrackAutomation, TheFaderFollowsItsCurveDownTheSequence) {
   Track lane = audio_track("a1", {audio_clip("c1", "m", 0.0, 8.0)});
   lane.gain_keyframes = {core::Keyframe{.t = 0.0, .v = 1.0},
                          core::Keyframe{.t = 4.0, .v = 0.25}};
-  p.tracks = {std::move(lane)};
+  p.sequence().tracks = {std::move(lane)};
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -475,7 +475,7 @@ TEST(TrackAutomation, ACurveBeatsTheConstantBesideIt) {
   Track lane = audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0)});
   lane.gain = 0.01;  // ignored: the curve is what is read
   lane.gain_keyframes = {core::Keyframe{.t = 0.0, .v = 1.0}};
-  p.tracks = {std::move(lane)};
+  p.sequence().tracks = {std::move(lane)};
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -489,7 +489,7 @@ TEST(TrackAutomation, ThePannerFollowsItsCurveToo) {
   Track lane = audio_track("a1", {audio_clip("c1", "m", 0.0, 8.0)});
   lane.pan_keyframes = {core::Keyframe{.t = 0.0, .v = -1.0},
                         core::Keyframe{.t = 4.0, .v = 1.0}};
-  p.tracks = {std::move(lane)};
+  p.sequence().tracks = {std::move(lane)};
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -510,7 +510,7 @@ TEST(TrackAutomation, TheCurveIsReadAgainstTheSequenceRatherThanTheClip) {
   Track lane = audio_track("a1", {audio_clip("c1", "m", 4.0, 4.0)});
   lane.gain_keyframes = {core::Keyframe{.t = 0.0, .v = 1.0},
                          core::Keyframe{.t = 4.0, .v = 0.05}};
-  p.tracks = {std::move(lane)};
+  p.sequence().tracks = {std::move(lane)};
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -528,7 +528,7 @@ TEST(TrackAutomation, TheCurveIsReadAgainstTheSequenceRatherThanTheClip) {
   Project p = one_clip_project();
   // Hard left through the clip's panner, so the two channels of the *mix*
   // differ and a map that swaps them shows up.
-  p.tracks[0].clips[0].pan = -1.0;
+  p.sequence().tracks[0].clips[0].pan = -1.0;
   return p;
 }
 
@@ -536,14 +536,14 @@ TEST(ChannelMap, AnEmptyMapIsWhatItAlwaysWas) {
   // Every project written before this has one, so it must be sample for sample
   // what it was.
   Project mapped = one_clip_project();
-  mapped.tracks[0].clips[0].channel_map = {};
+  mapped.sequence().tracks[0].clips[0].channel_map = {};
   EXPECT_EQ(mix_span(*mixer_for(mapped), 0.0, 0.3),
             mix_span(*mixer_for(one_clip_project()), 0.0, 0.3));
 }
 
 TEST(ChannelMap, SilencingAChannelSilencesIt) {
   Project p = one_clip_project();
-  p.tracks[0].clips[0].channel_map = {0, -1};
+  p.sequence().tracks[0].clips[0].channel_map = {0, -1};
   const std::vector<float> out = mix_span(*mixer_for(p), 0.0, 0.3);
 
   EXPECT_GT(rms_of_channel(out, 0), 0.01);
@@ -553,7 +553,7 @@ TEST(ChannelMap, SilencingAChannelSilencesIt) {
 TEST(ChannelMap, OneChannelCanFeedBoth) {
   // The case this exists for: a lapel mic on channel one, wanted in both ears.
   Project p = one_clip_project();
-  p.tracks[0].clips[0].channel_map = {0, 0};
+  p.sequence().tracks[0].clips[0].channel_map = {0, 0};
   const std::vector<float> out = mix_span(*mixer_for(p), 0.0, 0.3);
 
   EXPECT_GT(rms_of_channel(out, 0), 0.01);
@@ -565,7 +565,7 @@ TEST(ChannelMap, AChannelTheSourceDoesNotHaveIsSilenceRatherThanTheNearest) {
   // the shoot that turned out not to be true, and quietly handing them channel
   // two would hide it.
   Project p = one_clip_project();
-  p.tracks[0].clips[0].channel_map = {7, 7};
+  p.sequence().tracks[0].clips[0].channel_map = {7, 7};
   const std::vector<float> out = mix_span(*mixer_for(p), 0.0, 0.3);
   EXPECT_NEAR(rms_of(out), 0.0, 1e-6);
 }
@@ -586,7 +586,7 @@ TEST(ChannelMap, ItIsSetAcrossTheLinkedGroupAndOnlyOnTheAudio) {
   vt.clips = {std::move(picture)};
   Track at{.id = "a1", .kind = TrackKind::Audio};
   at.clips = {std::move(sound)};
-  p.tracks = {std::move(vt), std::move(at)};
+  p.sequence().tracks = {std::move(vt), std::move(at)};
 
   p = core::set_clip_channel_map(std::move(p), "v-clip", {1, 1});
 
@@ -610,7 +610,7 @@ TEST(TrackEffects, ALaneWithNoStackIsUnchanged) {
 
 TEST(TrackEffects, AStackOnATrackIsHeard) {
   Project quiet = one_clip_project();
-  quiet.tracks[0].audio_effects.push_back(
+  quiet.sequence().tracks[0].audio_effects.push_back(
       core::AudioClipEffect{.type = "gain", .params = {{"gain", -20.0}}});
 
   const double plain = rms_of(mix_span(*mixer_for(one_clip_project()), 0.0, 0.3));
@@ -625,10 +625,10 @@ TEST(TrackEffects, ItRunsOnWhatTheWholeLaneSumsTo) {
   // two clips with nothing on the track.
   Project both;
   both.media = {tone_media()};
-  both.tracks = {audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0),
+  both.sequence().tracks = {audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0),
                                     audio_clip("c2", "m", 0.0, 5.0, 1.0)})};
   Project cut = both;
-  cut.tracks[0].audio_effects.push_back(
+  cut.sequence().tracks[0].audio_effects.push_back(
       core::AudioClipEffect{.type = "gain", .params = {{"gain", -20.0}}});
 
   EXPECT_LT(rms_of(mix_span(*mixer_for(cut), 0.0, 0.3)),
@@ -637,7 +637,7 @@ TEST(TrackEffects, ItRunsOnWhatTheWholeLaneSumsTo) {
 
 TEST(TrackEffects, ADisabledEntryContributesNothing) {
   Project off = one_clip_project();
-  off.tracks[0].audio_effects.push_back(core::AudioClipEffect{
+  off.sequence().tracks[0].audio_effects.push_back(core::AudioClipEffect{
       .type = "gain", .enabled = false, .params = {{"gain", -20.0}}});
 
   EXPECT_EQ(mix_span(*mixer_for(off), 0.0, 0.3),
@@ -646,7 +646,7 @@ TEST(TrackEffects, ADisabledEntryContributesNothing) {
 
 TEST(TrackEffects, OneLanesStackDoesNotReachAnother) {
   Project p = two_lanes();
-  p.tracks[0].audio_effects.push_back(
+  p.sequence().tracks[0].audio_effects.push_back(
       core::AudioClipEffect{.type = "gain", .params = {{"gain", -24.0}}});
 
   auto mixer = mixer_for(p);
@@ -665,7 +665,7 @@ TEST(TrackEffects, TheMeterReadsTheLaneAfterItsStack) {
   // after a track stack that is not what the clips summed to.
   Project p = one_clip_project();
   Project cut = p;
-  cut.tracks[0].audio_effects.push_back(
+  cut.sequence().tracks[0].audio_effects.push_back(
       core::AudioClipEffect{.type = "gain", .params = {{"gain", -20.0}}});
 
   auto plain = mixer_for(p);
@@ -684,7 +684,7 @@ TEST(TrackEffects, SplittingABlockGivesTheSameSamples) {
   // The guarantee the whole mixer keeps, now that a second chain runs on the
   // same grid: mixing a span in one call and in three must agree.
   Project p = one_clip_project();
-  p.tracks[0].audio_effects.push_back(
+  p.sequence().tracks[0].audio_effects.push_back(
       core::AudioClipEffect{.type = "lowpass", .params = {{"frequency", 800.0}}});
 
   auto whole = mixer_for(p);
@@ -717,7 +717,7 @@ TEST(AudioMixer, AClipIsHeardAtItsOwnLevel) {
 
 TEST(AudioMixer, GainScalesTheClip) {
   Project p = one_clip_project();
-  p.tracks[0].clips[0].gain = 0.5;
+  p.sequence().tracks[0].clips[0].gain = 0.5;
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -728,7 +728,7 @@ TEST(AudioMixer, GainScalesTheClip) {
 
 TEST(AudioMixer, PanningHardLeftEmptiesTheRightAndLeavesTheLeftAlone) {
   Project p = one_clip_project();
-  p.tracks[0].clips[0].pan = -1.0;
+  p.sequence().tracks[0].clips[0].pan = -1.0;
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -743,7 +743,7 @@ TEST(AudioMixer, PanningHardLeftEmptiesTheRightAndLeavesTheLeftAlone) {
 
 TEST(AudioMixer, PanningHalfRightTrimsTheLeftByHalf) {
   Project p = one_clip_project();
-  p.tracks[0].clips[0].pan = 0.5;
+  p.sequence().tracks[0].clips[0].pan = 0.5;
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -762,7 +762,7 @@ TEST(AudioMixer, ACentredClipIsUntouchedByThePanner) {
   const auto before = mix_span(*plain, 0.0, 2.0);
 
   Project p = one_clip_project();
-  p.tracks[0].clips[0].pan = 0.0;
+  p.sequence().tracks[0].clips[0].pan = 0.0;
   auto panned = mixer_for(p);
   ASSERT_NE(panned, nullptr);
   const auto after = mix_span(*panned, 0.0, 2.0);
@@ -774,7 +774,7 @@ TEST(AudioMixer, ACentredClipIsUntouchedByThePanner) {
 TEST(AudioMixer, NothingIsHeardBeforeOrAfterAClip) {
   Project p;
   p.media = {tone_media()};
-  p.tracks = {audio_track("a1", {audio_clip("c", "m", 2.0, 2.0)})};
+  p.sequence().tracks = {audio_track("a1", {audio_clip("c", "m", 2.0, 2.0)})};
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -787,7 +787,7 @@ TEST(AudioMixer, NothingIsHeardBeforeOrAfterAClip) {
 
 TEST(AudioMixer, AFadeInRampsUpFromSilence) {
   Project p = one_clip_project();
-  p.tracks[0].clips[0].fade_in = 2.0;
+  p.sequence().tracks[0].clips[0].fade_in = 2.0;
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -804,7 +804,7 @@ TEST(AudioMixer, TracksSumRatherThanAveraging) {
   // instead would make adding a track quieten everything already there.
   Project p;
   p.media = {tone_media()};
-  p.tracks = {audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0)}),
+  p.sequence().tracks = {audio_track("a1", {audio_clip("c1", "m", 0.0, 5.0)}),
               audio_track("a2", {audio_clip("c2", "m", 0.0, 5.0)})};
 
   auto mixer = mixer_for(p);
@@ -820,7 +820,7 @@ TEST(AudioMixer, TracksSumRatherThanAveraging) {
 
 TEST(AudioMixer, AMutedTrackContributesNothing) {
   Project p = one_clip_project();
-  p.tracks[0].muted = true;
+  p.sequence().tracks[0].muted = true;
 
   const auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -831,7 +831,7 @@ TEST(AudioMixer, AnEffectStackChangesTheSound) {
   // A high-pass well above the tone should remove most of it, which is the
   // check that the chain is actually reached rather than built and ignored.
   Project p = one_clip_project();
-  p.tracks[0].clips[0].audio_effects = {
+  p.sequence().tracks[0].clips[0].audio_effects = {
       core::AudioClipEffect{.type = "highpass", .params = {{"freq", 2000.0}}}};
 
   auto mixer = mixer_for(p);
@@ -867,8 +867,8 @@ TEST(AudioMixer, ARetimedClipKeepsItsPitch) {
   // a tape-speed effect rather than a speed change.
   Project p;
   p.media = {tone_media()};
-  p.tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 8.0)})};
-  p.tracks[0].clips[0].speed = 2.0;
+  p.sequence().tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 8.0)})};
+  p.sequence().tracks[0].clips[0].speed = 2.0;
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -883,8 +883,8 @@ TEST(AudioMixer, ARetimedClipOccupiesItsRetimedSpan) {
   // there should be sound throughout and silence after.
   Project p;
   p.media = {tone_media()};
-  p.tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 8.0)})};
-  p.tracks[0].clips[0].speed = 2.0;
+  p.sequence().tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 8.0)})};
+  p.sequence().tracks[0].clips[0].speed = 2.0;
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -896,8 +896,8 @@ TEST(AudioMixer, ARetimedClipOccupiesItsRetimedSpan) {
 TEST(AudioMixer, ASlowedClipAlsoKeepsItsPitch) {
   Project p;
   p.media = {tone_media()};
-  p.tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 2.0)})};
-  p.tracks[0].clips[0].speed = 0.5;
+  p.sequence().tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 2.0)})};
+  p.sequence().tracks[0].clips[0].speed = 0.5;
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -910,8 +910,8 @@ TEST(AudioMixer, ASlowedClipAlsoKeepsItsPitch) {
 TEST(AudioMixer, AReversedClipStillPlays) {
   Project p;
   p.media = {tone_media()};
-  p.tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 5.0)})};
-  p.tracks[0].clips[0].reverse = true;
+  p.sequence().tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 5.0)})};
+  p.sequence().tracks[0].clips[0].reverse = true;
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -952,7 +952,7 @@ TEST(AudioMixer, AnAnimatedEffectSweepsOverTheClip) {
   core::AudioClipEffect sweep;
   sweep.type = "gain";
   sweep.keyframes["gain"] = {{.t = 0.0, .v = -24.0}, {.t = 4.0, .v = 0.0}};
-  p.tracks[0].clips[0].audio_effects = {sweep};
+  p.sequence().tracks[0].clips[0].audio_effects = {sweep};
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -974,7 +974,7 @@ TEST(AudioMixer, AnAnimatedEffectSoundsTheSameWhateverTheBlockSize) {
     core::AudioClipEffect sweep;
     sweep.type = "lowpass";
     sweep.keyframes["freq"] = {{.t = 0.0, .v = 800.0}, {.t = 4.0, .v = 12000.0}};
-    p.tracks[0].clips[0].audio_effects = {sweep};
+    p.sequence().tracks[0].clips[0].audio_effects = {sweep};
     return p;
   };
 
@@ -1039,7 +1039,7 @@ TEST(AudioMixer, AMissingSourceIsRecordedRatherThanFatal) {
 
   Project p;
   p.media = {absent};
-  p.tracks = {audio_track("a1", {audio_clip("c", "gone", 0.0, 5.0)})};
+  p.sequence().tracks = {audio_track("a1", {audio_clip("c", "gone", 0.0, 5.0)})};
 
   const auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -1080,8 +1080,8 @@ TEST(AudioMixerFootage, EachAudioStreamOrdinalSelectsDifferentAudio) {
 
     Project p;
     p.media = {m};
-    p.tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 20.0, 30.0)})};
-    p.tracks[0].clips[0].audio_stream = ordinal;
+    p.sequence().tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 20.0, 30.0)})};
+    p.sequence().tracks[0].clips[0].audio_stream = ordinal;
 
     auto mixer = AudioMixer::create(p, {.sample_rate = kRate, .channels = kChannels});
     EXPECT_TRUE(mixer.has_value()) << (mixer ? "" : mixer.error());
@@ -1121,8 +1121,8 @@ TEST(AudioMixerFootage, AnOrdinalPastTheLastStreamIsReportedRatherThanGuessed) {
 
   Project p;
   p.media = {m};
-  p.tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 5.0)})};
-  p.tracks[0].clips[0].audio_stream = 9;
+  p.sequence().tracks = {audio_track("a1", {audio_clip("c", "m", 0.0, 5.0)})};
+  p.sequence().tracks[0].clips[0].audio_stream = 9;
 
   const auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -1237,7 +1237,7 @@ class WithLongTone : public ::testing::Test {
   [[nodiscard]] Project whole_source_project() const {
     Project p;
     p.media = {media_};
-    p.tracks = {audio_track("a1", {audio_clip("c", "long", 0.0, kLongToneSeconds)})};
+    p.sequence().tracks = {audio_track("a1", {audio_clip("c", "long", 0.0, kLongToneSeconds)})};
     return p;
   }
 
@@ -1323,7 +1323,7 @@ TEST_F(WithLongTone, TheBlockSizeDoesNotChangeTheSamples) {
 [[nodiscard]] Project bus_project() {
   Project p = one_clip_project();
   p = core::add_submix_track(std::move(p), "Dialogue");
-  p = core::set_track_output(std::move(p), "a1", p.tracks.back().id);
+  p = core::set_track_output(std::move(p), "a1", p.sequence().tracks.back().id);
   return p;
 }
 
@@ -1345,7 +1345,7 @@ TEST(Submixes, GoingThroughABusSoundsExactlyTheSameAsNotHavingOne) {
 
 TEST(Submixes, TheBusFaderRidesEverythingOnIt) {
   Project p = bus_project();
-  p.tracks[1].gain = 0.5;
+  p.sequence().tracks[1].gain = 0.5;
 
   auto plain = mixer_for(bus_project());
   auto ridden = mixer_for(p);
@@ -1365,7 +1365,7 @@ TEST(Submixes, AStackOnTheBusProcessesTheWholeGroup) {
   core::AudioClipEffect trim;
   trim.type = "gain";
   trim.params["gain"] = -12.0;
-  p.tracks[1].audio_effects = {trim};
+  p.sequence().tracks[1].audio_effects = {trim};
 
   auto plain = mixer_for(bus_project());
   auto processed = mixer_for(p);
@@ -1388,7 +1388,7 @@ TEST(Submixes, TheBusMetersWhatWasPouredIntoIt) {
 
 TEST(Submixes, MutingTheBusSilencesEverythingThroughIt) {
   Project p = bus_project();
-  p.tracks[1].muted = true;
+  p.sequence().tracks[1].muted = true;
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -1398,8 +1398,8 @@ TEST(Submixes, MutingTheBusSilencesEverythingThroughIt) {
 
 TEST(Submixes, SoloingTheBusKeepsWhatFeedsItAndDropsWhatDoesNot) {
   Project p = bus_project();
-  p.tracks.push_back(audio_track("a2", {audio_clip("c2", "m", 0.0, 5.0)}));
-  p.tracks[1].solo = true;
+  p.sequence().tracks.push_back(audio_track("a2", {audio_clip("c2", "m", 0.0, 5.0)}));
+  p.sequence().tracks[1].solo = true;
 
   auto mixer = mixer_for(p);
   ASSERT_NE(mixer, nullptr);
@@ -1416,7 +1416,7 @@ TEST(Sends, ASendIsACopyRatherThanADiversion) {
   // 0.5, so sending a full copy of it puts the sum at full scale and the master
   // limiter — correctly — takes some of it back. The arithmetic being checked
   // here is the routing's, so it is kept below the ceiling.
-  p = core::set_send(std::move(p), "a1", p.tracks.back().id, 0.5);
+  p = core::set_send(std::move(p), "a1", p.sequence().tracks.back().id, 0.5);
 
   auto dry = mixer_for(one_clip_project());
   auto sent = mixer_for(p);
@@ -1433,7 +1433,7 @@ TEST(Sends, APostFaderSendFollowsTheFaderAndAPreFaderOneDoesNot) {
   const auto bus_level = [](bool pre_fader, double fader) {
     Project p = one_clip_project();
     p = core::add_submix_track(std::move(p), "Reverb");
-    p = core::set_send(std::move(p), "a1", p.tracks.back().id, 1.0, pre_fader);
+    p = core::set_send(std::move(p), "a1", p.sequence().tracks.back().id, 1.0, pre_fader);
     auto mixer = mixer_for(p);
     EXPECT_NE(mixer, nullptr);
     if (mixer == nullptr) return 0.0;

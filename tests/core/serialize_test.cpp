@@ -15,10 +15,10 @@ namespace {
 /// trip: generated media, animation, effects, transitions, and markers.
 Project rich_project() {
   Project p;
-  p.canvas_w = 3840;
-  p.canvas_h = 2160;
-  p.fps = 60.0;
-  p.master_gain = 0.7;
+  p.sequence().canvas_w = 3840;
+  p.sequence().canvas_h = 2160;
+  p.sequence().fps = 60.0;
+  p.sequence().master_gain = 0.7;
 
   Media footage;
   footage.id = "m1";
@@ -123,10 +123,10 @@ Project rich_project() {
   a.solo = true;
   a.locked = true;
 
-  p.tracks = {v, a};
-  p.markers = {Marker{.id = "k1", .time = 3.0, .label = "cue", .color = "#ff0000"}};
-  p.in_point = 1.5;
-  p.out_point = 8.25;
+  p.sequence().tracks = {v, a};
+  p.sequence().markers = {Marker{.id = "k1", .time = 3.0, .label = "cue", .color = "#ff0000"}};
+  p.sequence().in_point = 1.5;
+  p.sequence().out_point = 8.25;
   return p;
 }
 
@@ -165,11 +165,11 @@ TEST(Serialize, AbsentFieldsFallBackToDefaults) {
 
   ASSERT_TRUE(loaded.has_value()) << loaded.error();
   const Project& p = loaded->project;
-  EXPECT_EQ(p.canvas_w, 1920);
-  EXPECT_DOUBLE_EQ(p.fps, 30.0);
-  EXPECT_DOUBLE_EQ(p.master_gain, 1.0);
+  EXPECT_EQ(p.sequence().canvas_w, 1920);
+  EXPECT_DOUBLE_EQ(p.sequence().fps, 30.0);
+  EXPECT_DOUBLE_EQ(p.sequence().master_gain, 1.0);
 
-  const Clip& c = p.tracks[0].clips[0];
+  const Clip& c = p.sequence().tracks[0].clips[0];
   EXPECT_DOUBLE_EQ(c.gain, 1.0);
   EXPECT_DOUBLE_EQ(c.pan, 0.0) << "a file written before there was a panner is centred";
   EXPECT_DOUBLE_EQ(c.opacity, 1.0);
@@ -194,7 +194,7 @@ TEST(Serialize, ATransformWrittenBeforeThereWasAnAnchorIsCentred) {
   })");
 
   ASSERT_TRUE(loaded.has_value()) << loaded.error();
-  const Transform& t = loaded->project.tracks[0].clips[0].transform;
+  const Transform& t = loaded->project.sequence().tracks[0].clips[0].transform;
   EXPECT_DOUBLE_EQ(t.x, 0.25);
   EXPECT_DOUBLE_EQ(t.rotation, 45.0);
   EXPECT_DOUBLE_EQ(t.anchor_x, 0.5);
@@ -212,7 +212,7 @@ TEST(Serialize, AnEffectWrittenBeforeThereWereMasksAppliesEverywhere) {
   })");
 
   ASSERT_TRUE(loaded.has_value()) << loaded.error();
-  EXPECT_FALSE(loaded->project.tracks[0].clips[0].effects[0].mask.active());
+  EXPECT_FALSE(loaded->project.sequence().tracks[0].clips[0].effects[0].mask.active());
 }
 
 TEST(Serialize, RejectsMalformedInput) {
@@ -331,12 +331,12 @@ TEST(Serialize, ABinIdFromAFileIsNotHandedOutAgain) {
 
 TEST(Serialize, HowTimecodeIsCountedTravelsWithTheCut) {
   Project p = empty_project();
-  p.fps = 30000.0 / 1001.0;
-  p.drop_frame = false;
+  p.sequence().fps = 30000.0 / 1001.0;
+  p.sequence().drop_frame = false;
 
   const auto loaded = from_json(to_json(p));
   ASSERT_TRUE(loaded.has_value()) << loaded.error();
-  EXPECT_FALSE(loaded->project.drop_frame)
+  EXPECT_FALSE(loaded->project.sequence().drop_frame)
       << "a sequence handed to somebody else has to number its frames the same way there";
 }
 
@@ -347,7 +347,7 @@ TEST(Serialize, AProjectWrittenBeforeDropFrameCountsItTheBroadcastWay) {
   // older behaviour worth preserving.
   const auto loaded = from_json(R"({"version": 1, "project": {"fps": 29.97}})");
   ASSERT_TRUE(loaded.has_value()) << loaded.error();
-  EXPECT_TRUE(loaded->project.drop_frame);
+  EXPECT_TRUE(loaded->project.sequence().drop_frame);
 }
 
 TEST(Serialize, ReportsMissingMediaWithoutDroppingIt) {
@@ -373,7 +373,7 @@ TEST(Serialize, WritesEnumsAsStableNames) {
   c.blend = BlendMode::Difference;
   c.transition_out = Transition{.kind = TransitionKind::DipBlack, .duration = 1.0};
   c.keyframes[anim_prop_index(AnimProp::ScaleX)] = {{.t = 0.0, .v = 1.0, .e = Interp::Ease}};
-  p.tracks[0].clips = {c};
+  p.sequence().tracks[0].clips = {c};
 
   const std::string text = to_json(p);
   EXPECT_NE(text.find("\"difference\""), std::string::npos);
@@ -389,7 +389,7 @@ TEST(History, UndoAndRedoWalkTheStack) {
   History history;
   const Project first = empty_project(1, 0);
   Project second = first;
-  second.canvas_w = 1280;
+  second.sequence().canvas_w = 1280;
 
   EXPECT_FALSE(history.can_undo());
   history.push(first);
@@ -397,12 +397,12 @@ TEST(History, UndoAndRedoWalkTheStack) {
 
   const std::optional<Project> undone = history.undo(second);
   ASSERT_TRUE(undone.has_value());
-  EXPECT_EQ(undone->canvas_w, 1920);
+  EXPECT_EQ(undone->sequence().canvas_w, 1920);
   EXPECT_TRUE(history.can_redo());
 
   const std::optional<Project> redone = history.redo(*undone);
   ASSERT_TRUE(redone.has_value());
-  EXPECT_EQ(redone->canvas_w, 1280);
+  EXPECT_EQ(redone->sequence().canvas_w, 1280);
 }
 
 TEST(History, RefusesToStepPastTheEnds) {
@@ -454,14 +454,14 @@ TEST(History, TrimmingKeepsTheMostRecentEdits) {
   History history(10);
   for (int i = 0; i < 5; ++i) {
     Project p = empty_project();
-    p.canvas_w = 100 + i;
+    p.sequence().canvas_w = 100 + i;
     history.push(p);
   }
 
   history.set_limit(2);
   const std::optional<Project> last = history.undo(empty_project());
   ASSERT_TRUE(last.has_value());
-  EXPECT_EQ(last->canvas_w, 104) << "the newest snapshot pushed";
+  EXPECT_EQ(last->sequence().canvas_w, 104) << "the newest snapshot pushed";
 }
 
 TEST(History, RaisingTheLimitKeepsWhatIsThere) {
@@ -498,7 +498,7 @@ TEST(Ids, LoadingAProjectClaimsTheNamesItAlreadyUses) {
   c.group_id = "grp_12";
   Track t{.id = "v1", .kind = TrackKind::Video};
   t.clips = {std::move(c)};
-  p.tracks = {std::move(t)};
+  p.sequence().tracks = {std::move(t)};
 
   reset_ids();  // as if the application had just started
   const auto loaded = from_json(to_json(p));
@@ -539,8 +539,8 @@ TEST(History, ClearDropsBothStacks) {
 
 TEST(Serialize, APathKeepsItsHandles) {
   Project p;
-  p.canvas_w = 1920;
-  p.canvas_h = 1080;
+  p.sequence().canvas_w = 1920;
+  p.sequence().canvas_h = 1080;
 
   ClipEffect blur;
   blur.type = "blur";
@@ -551,7 +551,7 @@ TEST(Serialize, APathKeepsItsHandles) {
 
   Clip c{.id = "c1", .media_id = "m1", .kind = TrackKind::Video, .source_out = 1.0};
   c.effects = {blur};
-  p.tracks = {Track{.id = "v1", .kind = TrackKind::Video, .clips = {c}}};
+  p.sequence().tracks = {Track{.id = "v1", .kind = TrackKind::Video, .clips = {c}}};
 
   const auto loaded = from_json(to_json(p));
   ASSERT_TRUE(loaded.has_value()) << loaded.error();
@@ -578,7 +578,7 @@ TEST(Serialize, APathWrittenBeforeHandlesExistedReadsAsCorners) {
 
   const auto loaded = from_json(older);
   ASSERT_TRUE(loaded.has_value()) << loaded.error();
-  const Mask& mask = loaded->project.tracks[0].clips[0].effects[0].mask;
+  const Mask& mask = loaded->project.sequence().tracks[0].clips[0].effects[0].mask;
   ASSERT_EQ(mask.points.size(), 3u);
   for (const MaskPoint& point : mask.points) EXPECT_TRUE(point.sharp());
 }
@@ -594,7 +594,7 @@ TEST(Serialize, SharpCornersCostNothingToWriteDown) {
                               MaskPoint{.x = 0.0, .y = 0.2}}};
   Clip c{.id = "c1", .media_id = "m1", .kind = TrackKind::Video, .source_out = 1.0};
   c.effects = {blur};
-  p.tracks = {Track{.id = "v1", .kind = TrackKind::Video, .clips = {c}}};
+  p.sequence().tracks = {Track{.id = "v1", .kind = TrackKind::Video, .clips = {c}}};
 
   const std::string written = to_json(p);
   EXPECT_EQ(written.find("out_x"), std::string::npos)

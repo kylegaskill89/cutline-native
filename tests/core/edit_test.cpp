@@ -27,7 +27,7 @@ Project empty_project() {
   Track a2;
   a2.id = "a2";
   a2.kind = TrackKind::Audio;
-  p.tracks = {v, a1, a2};
+  p.sequence().tracks = {v, a1, a2};
   return p;
 }
 
@@ -63,19 +63,19 @@ Project one_clip_project(double start = 0.0) {
   v.id = "v1";
   v.kind = TrackKind::Video;
   v.clips = {c};
-  p.tracks = {v};
+  p.sequence().tracks = {v};
   return p;
 }
 
 const Track& track_by_id(const Project& p, std::string_view id) {
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     if (t.id == id) return t;
   }
   throw std::runtime_error("no such track");
 }
 
 Track& track_by_id_mut(Project& p, std::string_view id) {
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     if (t.id == id) return t;
   }
   throw std::runtime_error("no such track");
@@ -533,7 +533,7 @@ TEST(PlaceMedia, TheSoundGoesWhereThePictureWentEvenIfTheLaneIsBusy) {
   p = place_media(std::move(p), "m1", 0.0);
   p = place_media(std::move(p), "m1", 0.0);  // the same span, twice
 
-  EXPECT_EQ(p.tracks.size(), 3u) << "no lanes were invented";
+  EXPECT_EQ(p.sequence().tracks.size(), 3u) << "no lanes were invented";
   EXPECT_EQ(track_by_id(p, "v1").clips.size(), 2u);
   EXPECT_EQ(track_by_id(p, "a1").clips.size(), 2u);
   EXPECT_EQ(track_by_id(p, "a2").clips.size(), 2u);
@@ -544,7 +544,7 @@ TEST(PlaceMedia, TheSecondVideoLanesSoundLandsOnTheSecondAudioLane) {
   // one anybody reading a timeline assumes.
   Project p = empty_project();
   Track v2{.id = "v2", .kind = TrackKind::Video};
-  p.tracks.insert(p.tracks.begin(), v2);  // stored topmost first, so V2 is V1's senior
+  p.sequence().tracks.insert(p.sequence().tracks.begin(), v2);  // stored topmost first, so V2 is V1's senior
 
   Media mono = footage();
   mono.audio_stream_count = 1;
@@ -558,12 +558,12 @@ TEST(PlaceMedia, TheSecondVideoLanesSoundLandsOnTheSecondAudioLane) {
 TEST(PlaceMedia, LanesAreMadeWhenThereAreTooFew) {
   Project p;
   Track v{.id = "v1", .kind = TrackKind::Video};
-  p.tracks = {v};  // no audio lanes at all
+  p.sequence().tracks = {v};  // no audio lanes at all
   p = add_media(std::move(p), footage());
 
   p = place_media(std::move(p), "m1", 0.0);
   std::size_t lanes = 0;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     if (t.kind == TrackKind::Audio) ++lanes;
   }
   EXPECT_EQ(lanes, 2u) << "one per stream";
@@ -574,7 +574,7 @@ TEST(PlaceMedia, TwoPlacementsApartShareTheSameLanes) {
   p = place_media(std::move(p), "m1", 0.0);
   p = place_media(std::move(p), "m1", 20.0);
 
-  EXPECT_EQ(p.tracks.size(), 3u);
+  EXPECT_EQ(p.sequence().tracks.size(), 3u);
   EXPECT_EQ(track_by_id(p, "a1").clips.size(), 2u);
   EXPECT_EQ(track_by_id(p, "a2").clips.size(), 2u);
 }
@@ -594,7 +594,7 @@ TEST(PlaceMedia, TargetsAChosenVideoTrack) {
   Track v2;
   v2.id = "v2";
   v2.kind = TrackKind::Video;
-  p.tracks.insert(p.tracks.begin() + 1, v2);
+  p.sequence().tracks.insert(p.sequence().tracks.begin() + 1, v2);
   p = add_media(std::move(p), footage());
 
   p = place_media(std::move(p), "m1", 0.0, "v2");
@@ -626,22 +626,22 @@ TEST(SplitAt, CutsASpanningClipInTwo) {
 
 TEST(SplitAt, IgnoresClipsTheCutDoesNotSpan) {
   const Project before = one_clip_project();
-  EXPECT_EQ(split_at(before, 0.0, Ids{"c1"}).tracks[0].clips.size(), 1u);   // at the start
-  EXPECT_EQ(split_at(before, 5.0, Ids{"c1"}).tracks[0].clips.size(), 1u);   // at the end
-  EXPECT_EQ(split_at(before, 99.0, Ids{"c1"}).tracks[0].clips.size(), 1u);  // beyond
+  EXPECT_EQ(split_at(before, 0.0, Ids{"c1"}).sequence().tracks[0].clips.size(), 1u);   // at the start
+  EXPECT_EQ(split_at(before, 5.0, Ids{"c1"}).sequence().tracks[0].clips.size(), 1u);   // at the end
+  EXPECT_EQ(split_at(before, 99.0, Ids{"c1"}).sequence().tracks[0].clips.size(), 1u);  // beyond
 }
 
 TEST(SplitAt, OnlyCutsListedClips) {
   Project p = one_clip_project();
   p = split_at(std::move(p), 2.0, Ids{"other"});
-  EXPECT_EQ(p.tracks[0].clips.size(), 1u);
+  EXPECT_EQ(p.sequence().tracks[0].clips.size(), 1u);
 }
 
 // A reversed clip plays its source backwards, so the left piece keeps the
 // *later* source range and the right piece takes the earlier one.
 TEST(SplitAt, IsReverseAware) {
   Project p = one_clip_project();
-  p.tracks[0].clips[0].reverse = true;
+  p.sequence().tracks[0].clips[0].reverse = true;
   p = split_at(std::move(p), 2.0, Ids{"c1"});
 
   const Track& v = track_by_id(p, "v1");
@@ -674,12 +674,12 @@ TEST(SplitAt, RightPiecesFormTheirOwnGroup) {
 // original offsets, shifting the animation by the length of the left piece.
 TEST(SplitAt, RebasesKeyframesOntoTheNewOrigin) {
   Project p = one_clip_project();
-  Clip& c = p.tracks[0].clips[0];
+  Clip& c = p.sequence().tracks[0].clips[0];
   // x ramps 0 -> 1 across the clip's five seconds.
   c.keyframes[anim_prop_index(AnimProp::X)] = {{.t = 0.0, .v = 0.0}, {.t = 4.0, .v = 1.0}};
 
   p = split_at(std::move(p), 2.0, Ids{"c1"});
-  const Clip& right = p.tracks[0].clips[1];
+  const Clip& right = p.sequence().tracks[0].clips[1];
 
   const std::vector<Keyframe>& kfs = right.keyframes[anim_prop_index(AnimProp::X)];
   ASSERT_EQ(kfs.size(), 2u);
@@ -692,7 +692,7 @@ TEST(SplitAt, RebasesKeyframesOntoTheNewOrigin) {
 
 TEST(SplitAt, RebasesGainAndEffectKeyframes) {
   Project p = one_clip_project();
-  Clip& c = p.tracks[0].clips[0];
+  Clip& c = p.sequence().tracks[0].clips[0];
   c.gain_keyframes = {{.t = 0.0, .v = 0.0}, {.t = 4.0, .v = 1.0}};
   ClipEffect blur;
   blur.type = "blur";
@@ -700,45 +700,45 @@ TEST(SplitAt, RebasesGainAndEffectKeyframes) {
   c.effects = {blur};
 
   p = split_at(std::move(p), 2.0, Ids{"c1"});
-  const Clip& right = p.tracks[0].clips[1];
+  const Clip& right = p.sequence().tracks[0].clips[1];
 
   EXPECT_DOUBLE_EQ(right.gain_keyframes[0].t, -2.0);
   EXPECT_DOUBLE_EQ(right.effects[0].keyframes.at("amount")[0].t, -1.0);
   // The left piece keeps its origin, so its keyframes do not move.
-  EXPECT_DOUBLE_EQ(p.tracks[0].clips[0].gain_keyframes[0].t, 0.0);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[0].clips[0].gain_keyframes[0].t, 0.0);
 }
 
 TEST(SplitAt, FadesStayOnTheEdgesThatOwnThem) {
   Project p = one_clip_project();
-  Clip& c = p.tracks[0].clips[0];
+  Clip& c = p.sequence().tracks[0].clips[0];
   c.fade_in = 1.0;
   c.fade_out = 1.5;
 
   p = split_at(std::move(p), 2.0, Ids{"c1"});
 
-  EXPECT_DOUBLE_EQ(p.tracks[0].clips[0].fade_in, 1.0);
-  EXPECT_DOUBLE_EQ(p.tracks[0].clips[0].fade_out, 0.0);  // no fade at the cut
-  EXPECT_DOUBLE_EQ(p.tracks[0].clips[1].fade_in, 0.0);
-  EXPECT_DOUBLE_EQ(p.tracks[0].clips[1].fade_out, 1.5);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[0].clips[0].fade_in, 1.0);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[0].clips[0].fade_out, 0.0);  // no fade at the cut
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[0].clips[1].fade_in, 0.0);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[0].clips[1].fade_out, 1.5);
 }
 
 TEST(SplitAt, TheOutTransitionFollowsTheOutEdge) {
   Project p = one_clip_project();
-  p.tracks[0].clips[0].transition_out =
+  p.sequence().tracks[0].clips[0].transition_out =
       Transition{.kind = TransitionKind::Dissolve, .duration = 1.0};
 
   p = split_at(std::move(p), 2.0, Ids{"c1"});
 
-  EXPECT_FALSE(p.tracks[0].clips[0].transition_out.has_value());
-  ASSERT_TRUE(p.tracks[0].clips[1].transition_out.has_value());
-  EXPECT_DOUBLE_EQ(p.tracks[0].clips[1].transition_out->duration, 1.0);
+  EXPECT_FALSE(p.sequence().tracks[0].clips[0].transition_out.has_value());
+  ASSERT_TRUE(p.sequence().tracks[0].clips[1].transition_out.has_value());
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[0].clips[1].transition_out->duration, 1.0);
 }
 
 TEST(SplitAt, UnlinkedClipsProduceUnlinkedPieces) {
   Project p = one_clip_project();
   p = split_at(std::move(p), 2.0, Ids{"c1"});
-  EXPECT_FALSE(p.tracks[0].clips[0].group_id.has_value());
-  EXPECT_FALSE(p.tracks[0].clips[1].group_id.has_value());
+  EXPECT_FALSE(p.sequence().tracks[0].clips[0].group_id.has_value());
+  EXPECT_FALSE(p.sequence().tracks[0].clips[1].group_id.has_value());
 }
 
 // ------------------------------------------------------------------ moves --
@@ -746,13 +746,13 @@ TEST(SplitAt, UnlinkedClipsProduceUnlinkedPieces) {
 TEST(MoveClips, ShiftsAlongTheTimeline) {
   Project p = one_clip_project(2.0);
   p = move_clips(std::move(p), Ids{"c1"}, 3.0);
-  EXPECT_DOUBLE_EQ(p.tracks[0].clips[0].start, 5.0);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[0].clips[0].start, 5.0);
 }
 
 TEST(MoveClips, ClampsTheWholeSetAgainstZero) {
   Project p = one_clip_project(2.0);
   p = move_clips(std::move(p), Ids{"c1"}, -10.0);
-  EXPECT_DOUBLE_EQ(p.tracks[0].clips[0].start, 0.0);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[0].clips[0].start, 0.0);
 }
 
 TEST(MoveClips, MovesBetweenTracksOfTheSameKind) {
@@ -760,7 +760,7 @@ TEST(MoveClips, MovesBetweenTracksOfTheSameKind) {
   Track v2;
   v2.id = "v2";
   v2.kind = TrackKind::Video;
-  p.tracks.push_back(v2);
+  p.sequence().tracks.push_back(v2);
 
   p = move_clips(std::move(p), Ids{"c1"}, 0.0, 1);
   EXPECT_TRUE(track_by_id(p, "v1").clips.empty());
@@ -774,19 +774,19 @@ TEST(DuplicateClips, LeavesTheOriginalAndMovesTheCopy) {
   std::vector<std::string> made;
   p = duplicate_clips(std::move(p), Ids{"c1"}, 8.0, 0, TrackKind::Video, &made);
 
-  ASSERT_EQ(p.tracks[0].clips.size(), 2u);
+  ASSERT_EQ(p.sequence().tracks[0].clips.size(), 2u);
   ASSERT_EQ(made.size(), 1u);
-  EXPECT_DOUBLE_EQ(p.tracks[0].clips[0].start, 2.0) << "the original stays";
-  EXPECT_DOUBLE_EQ(p.tracks[0].clips[1].start, 10.0);
-  EXPECT_EQ(p.tracks[0].clips[1].id, made[0]);
-  EXPECT_NE(p.tracks[0].clips[1].id, "c1") << "and the copy is its own clip";
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[0].clips[0].start, 2.0) << "the original stays";
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[0].clips[1].start, 10.0);
+  EXPECT_EQ(p.sequence().tracks[0].clips[1].id, made[0]);
+  EXPECT_NE(p.sequence().tracks[0].clips[1].id, "c1") << "and the copy is its own clip";
 }
 
 TEST(DuplicateClips, CopiesEverythingTheClipCarried) {
   Project p = one_clip_project();
-  p.tracks[0].clips[0].opacity = 0.4;
-  p.tracks[0].clips[0].label_color = "#5f8f5f";
-  p.tracks[0].clips[0].effects = {ClipEffect{.type = "blur", .params = {{"amount", 3.0}}}};
+  p.sequence().tracks[0].clips[0].opacity = 0.4;
+  p.sequence().tracks[0].clips[0].label_color = "#5f8f5f";
+  p.sequence().tracks[0].clips[0].effects = {ClipEffect{.type = "blur", .params = {{"amount", 3.0}}}};
 
   std::vector<std::string> made;
   p = duplicate_clips(std::move(p), Ids{"c1"}, 9.0, 0, TrackKind::Video, &made);
@@ -804,7 +804,7 @@ TEST(DuplicateClips, CopiesEverythingTheClipCarried) {
 TEST(DuplicateClips, RemapsGroupsToTheCopies) {
   Project p = add_media(empty_project(), footage());
   p = place_media(std::move(p), "m1", 0.0);
-  const std::vector<std::string> group = group_members(p, p.tracks[0].clips[0].id);
+  const std::vector<std::string> group = group_members(p, p.sequence().tracks[0].clips[0].id);
   ASSERT_GE(group.size(), 2u);
 
   std::vector<std::string> made;
@@ -825,7 +825,7 @@ TEST(DuplicateClips, CanLandOnAnotherLane) {
   Track v2;
   v2.id = "v2";
   v2.kind = TrackKind::Video;
-  p.tracks.push_back(v2);
+  p.sequence().tracks.push_back(v2);
 
   std::vector<std::string> made;
   p = duplicate_clips(std::move(p), Ids{"c1"}, 0.0, 1, TrackKind::Video, &made);
@@ -839,7 +839,7 @@ TEST(DuplicateClips, NothingNamedLeavesTheProjectAlone) {
   const Project p = one_clip_project();
   std::vector<std::string> made;
   const Project after = duplicate_clips(p, Ids{"nobody"}, 5.0, 0, TrackKind::Video, &made);
-  EXPECT_EQ(after.tracks, p.tracks);
+  EXPECT_EQ(after.sequence().tracks, p.sequence().tracks);
   EXPECT_TRUE(made.empty());
 }
 
@@ -859,7 +859,7 @@ TEST(MoveClips, RestrictKindLimitsVerticalMovement) {
   Track v2;
   v2.id = "v2";
   v2.kind = TrackKind::Video;
-  p.tracks.insert(p.tracks.begin(), v2);
+  p.sequence().tracks.insert(p.sequence().tracks.begin(), v2);
   p = add_media(std::move(p), footage());
   p = place_media(std::move(p), "m1", 0.0, "v1");
 
@@ -884,7 +884,7 @@ TEST(SetClipEdge, TrimmingTheInEdgeConsumesSource) {
   Project p = one_clip_project();
   p = set_clip_edge(std::move(p), "c1", ClipEdge::In, 1.0);
 
-  const Clip& c = p.tracks[0].clips[0];
+  const Clip& c = p.sequence().tracks[0].clips[0];
   EXPECT_DOUBLE_EQ(c.start, 1.0);
   EXPECT_DOUBLE_EQ(c.source_in, 6.0);
   EXPECT_DOUBLE_EQ(c.source_out, 10.0);
@@ -892,10 +892,10 @@ TEST(SetClipEdge, TrimmingTheInEdgeConsumesSource) {
 
 TEST(SetClipEdge, ExtendingTheInEdgeIsBoundedBySource) {
   Project p = one_clip_project(3.0);
-  p.tracks[0].clips[0].source_in = 1.0;  // only one second of head available
+  p.sequence().tracks[0].clips[0].source_in = 1.0;  // only one second of head available
   p = set_clip_edge(std::move(p), "c1", ClipEdge::In, 0.0);
 
-  const Clip& c = p.tracks[0].clips[0];
+  const Clip& c = p.sequence().tracks[0].clips[0];
   EXPECT_DOUBLE_EQ(c.start, 2.0);
   EXPECT_DOUBLE_EQ(c.source_in, 0.0);
 }
@@ -903,14 +903,14 @@ TEST(SetClipEdge, ExtendingTheInEdgeIsBoundedBySource) {
 TEST(SetClipEdge, TheInEdgeCannotCrossZero) {
   Project p = one_clip_project(1.0);
   p = set_clip_edge(std::move(p), "c1", ClipEdge::In, -5.0);
-  EXPECT_DOUBLE_EQ(p.tracks[0].clips[0].start, 0.0);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[0].clips[0].start, 0.0);
 }
 
 TEST(SetClipEdge, ExtendingTheOutEdgeConsumesTailSource) {
   Project p = one_clip_project();
   p = set_clip_edge(std::move(p), "c1", ClipEdge::Out, 8.0);
 
-  const Clip& c = p.tracks[0].clips[0];
+  const Clip& c = p.sequence().tracks[0].clips[0];
   EXPECT_DOUBLE_EQ(c.source_out, 13.0);
   EXPECT_DOUBLE_EQ(clip_end(c), 8.0);
 }
@@ -923,10 +923,10 @@ TEST(SetClipEdge, TheOutEdgeStopsAtTheNextClip) {
   neighbour.source_in = 0.0;
   neighbour.source_out = 2.0;
   neighbour.start = 6.0;
-  p.tracks[0].clips.push_back(neighbour);
+  p.sequence().tracks[0].clips.push_back(neighbour);
 
   p = set_clip_edge(std::move(p), "c1", ClipEdge::Out, 99.0);
-  EXPECT_DOUBLE_EQ(clip_end(p.tracks[0].clips[0]), 6.0);
+  EXPECT_DOUBLE_EQ(clip_end(p.sequence().tracks[0].clips[0]), 6.0);
 }
 
 TEST(SetClipEdge, TrimIsBoundedByTheMinimumClipLength) {
@@ -935,7 +935,7 @@ TEST(SetClipEdge, TrimIsBoundedByTheMinimumClipLength) {
   // The clamp reaches the limit through `source_out + (kMinClip - duration)`,
   // so the result carries a few ULP of cancellation error rather than landing
   // exactly on kMinClip.
-  EXPECT_NEAR(clip_duration(p.tracks[0].clips[0]), kMinClip, 1e-12);
+  EXPECT_NEAR(clip_duration(p.sequence().tracks[0].clips[0]), kMinClip, 1e-12);
 }
 
 TEST(SetClipEdge, TheWholeLinkedGroupTrimsTogether) {
@@ -954,10 +954,10 @@ TEST(SetClipEdge, TheWholeLinkedGroupTrimsTogether) {
 // Reverse anchors the timeline edges to the opposite source edges.
 TEST(SetClipEdge, IsReverseAware) {
   Project p = one_clip_project();
-  p.tracks[0].clips[0].reverse = true;
+  p.sequence().tracks[0].clips[0].reverse = true;
   p = set_clip_edge(std::move(p), "c1", ClipEdge::In, 1.0);
 
-  const Clip& c = p.tracks[0].clips[0];
+  const Clip& c = p.sequence().tracks[0].clips[0];
   EXPECT_DOUBLE_EQ(c.start, 1.0);
   EXPECT_DOUBLE_EQ(c.source_in, 5.0);
   EXPECT_DOUBLE_EQ(c.source_out, 9.0);
@@ -973,7 +973,7 @@ TEST(SetClipEdge, UnknownClipIsANoOp) {
 TEST(RemoveClips, LeavesAGap) {
   Project p = one_clip_project();
   p = remove_clips(std::move(p), Ids{"c1"});
-  EXPECT_TRUE(p.tracks[0].clips.empty());
+  EXPECT_TRUE(p.sequence().tracks[0].clips.empty());
 }
 
 TEST(RippleDelete, ClosesTheGapAcrossEveryTrack) {
@@ -987,12 +987,12 @@ TEST(RippleDelete, ClosesTheGapAcrossEveryTrack) {
   Clip third = second;
   third.id = "c3";
   third.start = 10.0;
-  p.tracks[0].clips.push_back(second);
-  p.tracks[0].clips.push_back(third);
+  p.sequence().tracks[0].clips.push_back(second);
+  p.sequence().tracks[0].clips.push_back(third);
 
   p = ripple_delete(std::move(p), Ids{"c2"});
 
-  const Track& v = p.tracks[0];
+  const Track& v = p.sequence().tracks[0];
   ASSERT_EQ(v.clips.size(), 2u);
   EXPECT_EQ(v.clips[0].id, "c1");
   EXPECT_DOUBLE_EQ(v.clips[0].start, 0.0);
@@ -1007,7 +1007,7 @@ TEST(RippleDelete, TakesTheWholeLinkedGroup) {
 
   p = ripple_delete(std::move(p), Ids{video_id});
 
-  for (const Track& t : p.tracks) EXPECT_TRUE(t.clips.empty());
+  for (const Track& t : p.sequence().tracks) EXPECT_TRUE(t.clips.empty());
 }
 
 TEST(RippleDelete, UnknownClipsAreANoOp) {
@@ -1024,7 +1024,7 @@ TEST(Linking, LinkJoinsClipsIntoOneGroup) {
   other.media_id = "m1";
   other.source_out = 2.0;
   other.start = 6.0;
-  p.tracks[0].clips.push_back(other);
+  p.sequence().tracks[0].clips.push_back(other);
 
   p = link_clips(std::move(p), Ids{"c1", "c2"});
   EXPECT_EQ(group_members(p, "c1").size(), 2u);
@@ -1052,7 +1052,7 @@ TEST(Linking, UnlinkGroupDetachesEveryMember) {
   const std::string video_id = track_by_id(p, "v1").clips[0].id;
 
   p = unlink_group(std::move(p), video_id);
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     for (const Clip& c : t.clips) EXPECT_FALSE(c.group_id.has_value());
   }
 }

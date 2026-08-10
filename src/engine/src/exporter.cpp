@@ -19,7 +19,7 @@ std::expected<ExportResult, std::string> export_project(
   if (!device) return std::unexpected("an export needs a device");
   if (settings.path.empty()) return std::unexpected("an export needs an output path");
 
-  const double fps = settings.fps > 0.0 ? settings.fps : project.fps;
+  const double fps = settings.fps > 0.0 ? settings.fps : project.sequence().fps;
   if (fps <= 0.0) return std::unexpected("the output frame rate must be positive");
 
   const double timeline = core::timeline_duration(project);
@@ -39,8 +39,8 @@ std::expected<ExportResult, std::string> export_project(
   // Rounded down to even, because both codecs encode in even-sized blocks and
   // the encoder rounds to reach one. Doing it here as well is what keeps the
   // frames the renderer produces the size the encoder is expecting.
-  const int width = (settings.width > 0 ? settings.width : project.canvas_w) & ~1;
-  const int height = (settings.height > 0 ? settings.height : project.canvas_h) & ~1;
+  const int width = (settings.width > 0 ? settings.width : project.sequence().canvas_w) & ~1;
+  const int height = (settings.height > 0 ? settings.height : project.sequence().canvas_h) & ~1;
   if (width <= 0 || height <= 0) {
     return std::unexpected("the output size must be at least two pixels each way");
   }
@@ -50,10 +50,10 @@ std::expected<ExportResult, std::string> export_project(
   // A copy, because the caller's project is not the export's to change.
   core::Project resized;
   const core::Project* source = &project;
-  if (width != project.canvas_w || height != project.canvas_h) {
+  if (width != project.sequence().canvas_w || height != project.sequence().canvas_h) {
     resized = project;
-    resized.canvas_w = width;
-    resized.canvas_h = height;
+    resized.sequence().canvas_w = width;
+    resized.sequence().canvas_h = height;
     source = &resized;
   }
 
@@ -92,7 +92,7 @@ std::expected<ExportResult, std::string> export_project(
 
     if (settings.separate_audio) {
       int index = 0;
-      for (const core::Track& track : source->tracks) {
+      for (const core::Track& track : source->sequence().tracks) {
         if (track.kind != core::TrackKind::Audio) continue;
         if (auto ok = add(index); !ok) return std::unexpected(ok.error());
         ++index;

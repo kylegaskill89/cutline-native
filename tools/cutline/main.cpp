@@ -188,8 +188,8 @@ using cutline::ui::built_in_themes;
 /// do anything" is a step no editor asks for. More are a menu away.
 [[nodiscard]] cutline::core::Project new_project_model() {
   cutline::core::Project project;
-  project.fps = 30.0;
-  project.tracks = {
+  project.sequence().fps = 30.0;
+  project.sequence().tracks = {
       cutline::core::Track{.id = "v1", .kind = cutline::core::TrackKind::Video},
       cutline::core::Track{.id = "a1", .kind = cutline::core::TrackKind::Audio},
   };
@@ -209,7 +209,7 @@ using cutline::ui::built_in_themes;
   Project project;
   // 29.97, so the headless pass lays out the drop-frame control at all — it is
   // only shown where it means something, and at 30 it means nothing.
-  project.fps = 30000.0 / 1001.0;
+  project.sequence().fps = 30000.0 / 1001.0;
   project.media = {
       Media{.id = "wide", .name = "wide.mp4", .duration = 120.0, .has_video = true},
       Media{.id = "close", .name = "close.mp4", .duration = 120.0, .has_video = true},
@@ -250,7 +250,7 @@ using cutline::ui::built_in_themes;
   Track music{.id = "a2", .kind = TrackKind::Audio, .muted = true};
   music.clips = {clip("m1", "score", 2.0, 36.0, TrackKind::Audio)};
 
-  project.tracks = {std::move(upper), std::move(lower), std::move(dialogue),
+  project.sequence().tracks = {std::move(upper), std::move(lower), std::move(dialogue),
                     std::move(music)};
   return project;
 }
@@ -1268,8 +1268,8 @@ void show_playhead(App& app) {
   if (app.readout == nullptr) return;
   if (app.main.host != nullptr && app.main.host->focused() == app.readout) return;
   app.readout->set_text(
-      cutline::core::seconds_to_timecode(app.session.playhead(), app.session.project().fps,
-                                         app.session.project().drop_frame));
+      cutline::core::seconds_to_timecode(app.session.playhead(), app.session.project().sequence().fps,
+                                         app.session.project().sequence().drop_frame));
 }
 
 void follow_playhead(App& app) {
@@ -3221,7 +3221,7 @@ void refresh_inspector(App& app) {
 void request_media([[maybe_unused]] App& app) {
 #if CUTLINE_HAVE_PREVIEW
   const cutline::core::Project& project = app.session.project();
-  for (const cutline::core::Track& track : project.tracks) {
+  for (const cutline::core::Track& track : project.sequence().tracks) {
     const bool audio = track.kind == cutline::core::TrackKind::Audio;
     for (const cutline::core::Clip& clip : track.clips) {
       const auto media =
@@ -3529,7 +3529,7 @@ void place_media_from(App& app, const std::string& media_id,
   std::string track_id;
 
   if (where.has_value() && app.timeline != nullptr) {
-    at = cutline::core::snap_to_frame(where->time, app.session.project().fps);
+    at = cutline::core::snap_to_frame(where->time, app.session.project().sequence().fps);
 
     // Only a video track can be named here: `place_media` puts the audio
     // streams on lanes of its own choosing, and handing it an audio track as
@@ -3602,7 +3602,7 @@ void refresh_drop_ghost(App& app) {
       if (media != project.media.end()) {
         ghost = cutline::ui::DropGhost{
             .track = where->track,
-            .start = cutline::core::snap_to_frame(where->time, project.fps),
+            .start = cutline::core::snap_to_frame(where->time, project.sequence().fps),
             .duration = cutline::core::placed_length(
                 *media, cutline::core::source_range(project, dragged)),
             .label = media->name};
@@ -4077,8 +4077,8 @@ void toggle_use_proxies([[maybe_unused]] App& app) {
 void release_stale_picture(App& app, const cutline::core::Project& about_to_render) {
 #if CUTLINE_HAVE_PREVIEW
   if (app.preview == nullptr || app.monitor == nullptr) return;
-  if (app.preview->width() == about_to_render.canvas_w &&
-      app.preview->height() == about_to_render.canvas_h) {
+  if (app.preview->width() == about_to_render.sequence().canvas_w &&
+      app.preview->height() == about_to_render.sequence().canvas_h) {
     return;
   }
   app.monitor->clear_frame();
@@ -4101,7 +4101,7 @@ void refresh_preview(App& app) {
   // project would replace the colour bars with a black rectangle and look
   // like a fault.
   bool has_media = false;
-  for (const cutline::core::Track& track : app.session.project().tracks) {
+  for (const cutline::core::Track& track : app.session.project().sequence().tracks) {
     if (!track.clips.empty()) has_media = true;
   }
   if (!has_media) return;
@@ -4120,7 +4120,7 @@ void refresh_preview(App& app) {
     // The same device the windows draw on, when there is one. That is what
     // lets the finished frame be handed over rather than copied.
     auto made =
-        cutline::app::ProjectPreview::create(project.canvas_w, project.canvas_h, app.device);
+        cutline::app::ProjectPreview::create(project.sequence().canvas_w, project.sequence().canvas_h, app.device);
     if (!made.has_value()) {
       // Once, and then never again: a machine with no usable device will not
       // acquire one, and complaining on every scrub would be unbearable.
@@ -4157,7 +4157,7 @@ void refresh_preview(App& app) {
     app.monitor->set_frame(*frame);
   }
 
-  app.monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
+  app.monitor->set_canvas_aspect(static_cast<double>(project.sequence().canvas_w) / project.sequence().canvas_h);
   mark_dirty(app);
 #else
   (void)app;
@@ -4174,9 +4174,9 @@ void refresh_preview(App& app) {
 /// trusting when deciding what to place.
 [[nodiscard]] cutline::core::Project source_project(const cutline::core::Media& media) {
   cutline::core::Project project;
-  project.canvas_w = std::max(1, media.width.value_or(1280));
-  project.canvas_h = std::max(1, media.height.value_or(720));
-  project.fps = media.fps.value_or(30.0) > 0.0 ? *media.fps : 30.0;
+  project.sequence().canvas_w = std::max(1, media.width.value_or(1280));
+  project.sequence().canvas_h = std::max(1, media.height.value_or(720));
+  project.sequence().fps = media.fps.value_or(30.0) > 0.0 ? *media.fps : 30.0;
   project.media = {media};
 
   cutline::core::Track track;
@@ -4191,11 +4191,11 @@ void refresh_preview(App& app) {
   // The whole of it, marks and all. The marks say what will be *placed*; the
   // monitor still shows the entire source, because a mark you cannot see past
   // is one you cannot move.
-  clip.source_out = std::max(media.duration, 1.0 / project.fps);
+  clip.source_out = std::max(media.duration, 1.0 / project.sequence().fps);
   clip.start = 0.0;
   track.clips.push_back(std::move(clip));
 
-  project.tracks.push_back(std::move(track));
+  project.sequence().tracks.push_back(std::move(track));
   return project;
 }
 
@@ -4447,7 +4447,7 @@ void refresh_source([[maybe_unused]] App& app) {
   // size and sources are not all the same shape.
   if (app.source_preview == nullptr || app.source_built_for != media->id) {
     auto made =
-        cutline::app::ProjectPreview::create(project.canvas_w, project.canvas_h, app.device);
+        cutline::app::ProjectPreview::create(project.sequence().canvas_w, project.sequence().canvas_h, app.device);
     if (!made.has_value()) {
       app.source_failed = true;
       complain(app.main.window, "The source monitor is unavailable.\n\n" + made.error());
@@ -4462,8 +4462,8 @@ void refresh_source([[maybe_unused]] App& app) {
   }
   // And when the same preview is asked for a differently shaped sequence, which
   // rebuilds its compositor in place.
-  if (app.source_preview->width() != project.canvas_w ||
-      app.source_preview->height() != project.canvas_h) {
+  if (app.source_preview->width() != project.sequence().canvas_w ||
+      app.source_preview->height() != project.sequence().canvas_h) {
     app.source_monitor->clear_frame();
   }
 
@@ -4486,8 +4486,8 @@ void refresh_source([[maybe_unused]] App& app) {
     app.source_monitor->set_frame(*frame);
   }
 
-  app.source_monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) /
-                                        project.canvas_h);
+  app.source_monitor->set_canvas_aspect(static_cast<double>(project.sequence().canvas_w) /
+                                        project.sequence().canvas_h);
   mark_dirty(app);
 #endif
 }
@@ -4585,11 +4585,11 @@ constexpr std::array kCanvasPresets{
 /// show that size rather than the word "Custom", which says nothing.
 [[nodiscard]] std::string canvas_label(const cutline::core::Project& project) {
   for (const CanvasPreset& preset : kCanvasPresets) {
-    if (preset.width == project.canvas_w && preset.height == project.canvas_h) {
+    if (preset.width == project.sequence().canvas_w && preset.height == project.sequence().canvas_h) {
       return std::string(preset.name);
     }
   }
-  return std::to_string(project.canvas_w) + "x" + std::to_string(project.canvas_h);
+  return std::to_string(project.sequence().canvas_w) + "x" + std::to_string(project.sequence().canvas_h);
 }
 
 /// The resolutions the preview offers, and what each is called.
@@ -4616,7 +4616,7 @@ void apply_canvas(App& app, int width, int height) {
   }
   if (app.monitor != nullptr) {
     const cutline::core::Project& project = app.session.project();
-    app.monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
+    app.monitor->set_canvas_aspect(static_cast<double>(project.sequence().canvas_w) / project.sequence().canvas_h);
   }
   refresh_title(app);
   invalidate_preview(app);
@@ -4690,8 +4690,8 @@ void build_sequence_page(App& app, Box& into) {
     const CanvasPreset& preset = kCanvasPresets[i];
     sizes.push_back(std::string(preset.name) + "  " + std::to_string(preset.width) + "x" +
                     std::to_string(preset.height));
-    if (preset.width == app.session.project().canvas_w &&
-        preset.height == app.session.project().canvas_h) {
+    if (preset.width == app.session.project().sequence().canvas_w &&
+        preset.height == app.session.project().sequence().canvas_h) {
       chosen_size = i;
     }
   }
@@ -4704,9 +4704,9 @@ void build_sequence_page(App& app, Box& into) {
   });
 
   auto& custom = into.emplace<Box>(Axis::Horizontal);
-  auto& width = custom.emplace<TextField>(std::to_string(app.session.project().canvas_w));
+  auto& width = custom.emplace<TextField>(std::to_string(app.session.project().sequence().canvas_w));
   custom.emplace<Label>("x").set_small(true);
-  auto& height = custom.emplace<TextField>(std::to_string(app.session.project().canvas_h));
+  auto& height = custom.emplace<TextField>(std::to_string(app.session.project().sequence().canvas_h));
   custom.emplace<Button>("Set", [&app, w = &width, h = &height] {
     // Anything that is not a number leaves the sequence alone rather than
     // becoming zero, which the clamp would turn into the smallest canvas there
@@ -4736,7 +4736,7 @@ void build_sequence_page(App& app, Box& into) {
     names.push_back(fps_label(kFrameRates[i]));
     // Compared with a tolerance: 23.976 is not the number the file holds, and a
     // preset that never looks chosen is one nobody trusts they pressed.
-    if (std::abs(app.session.project().fps - kFrameRates[i]) < 0.005) chosen = i;
+    if (std::abs(app.session.project().sequence().fps - kFrameRates[i]) < 0.005) chosen = i;
   }
   auto& choice = rates.emplace<Dropdown>(std::move(names), chosen);
   choice.set_on_change([&app](std::size_t index) {
@@ -4744,7 +4744,7 @@ void build_sequence_page(App& app, Box& into) {
   });
 
   rates.emplace<Spacer>();
-  auto& typed = rates.emplace<TextField>(fps_label(app.session.project().fps));
+  auto& typed = rates.emplace<TextField>(fps_label(app.session.project().sequence().fps));
   rates.emplace<Button>("Set", [&app, field = &typed] {
     double rate = 0.0;
     if (std::from_chars(field->text().data(), field->text().data() + field->text().size(), rate)
@@ -4757,7 +4757,7 @@ void build_sequence_page(App& app, Box& into) {
   // Only where it means anything. At 25 or 30 the timecode already counts real
   // seconds, and a choice between two spellings of one thing is a control that
   // teaches somebody the wrong lesson about their own sequence.
-  if (cutline::core::supports_drop_frame(app.session.project().fps)) {
+  if (cutline::core::supports_drop_frame(app.session.project().sequence().fps)) {
     into.emplace<Label>("Timecode").set_bold(true);
 
     auto& counting = into.emplace<Box>(Axis::Horizontal);
@@ -4766,7 +4766,7 @@ void build_sequence_page(App& app, Box& into) {
 
     auto& how = counting.emplace<Dropdown>(
         std::vector<std::string>{"Drop frame", "Non-drop frame"},
-        app.session.project().drop_frame ? 0u : 1u);
+        app.session.project().sequence().drop_frame ? 0u : 1u);
     how.set_on_change([&app](std::size_t index) {
       app.session.apply(cutline::core::set_drop_frame(app.session.project(), index == 0));
       refresh_all(app);
@@ -5755,7 +5755,7 @@ void advance_shuttle(App& app) {
   // playhead moves continuously and the picture does not have to. Without this
   // a shuttle rebuilt the timeline and asked for a render as fast as the loop
   // could turn, which is a busy core for pictures nobody sees.
-  const double fps = app.session.project().fps > 0.0 ? app.session.project().fps : 30.0;
+  const double fps = app.session.project().sequence().fps > 0.0 ? app.session.project().sequence().fps : 30.0;
   const auto frame = static_cast<long long>(app.session.playhead() * fps);
   if (frame == app.shown_frame) {
     Sleep(1);
@@ -5860,10 +5860,10 @@ void advance_playback(App& app) {
     // button came up would mean it could only ever be set against silence. The
     // mixer takes it live, and nothing that was decoded depends on it — so the
     // change is handed over and then discounted from the comparison below.
-    const double master = app.session.project().master_gain;
-    if (master != app.player_project.master_gain) {
+    const double master = app.session.project().sequence().master_gain;
+    if (master != app.player_project.sequence().master_gain) {
       app.player->set_master_gain(master);
-      app.player_project.master_gain = master;
+      app.player_project.sequence().master_gain = master;
     }
 
     if (app.player_project != app.session.project()) {
@@ -5931,7 +5931,7 @@ void advance_playback(App& app) {
   // Once per frame of the sequence, not once per turn of the loop. Rendering
   // faster than the project's frame rate would draw the same picture twice and
   // charge a decode for it.
-  const double fps = app.session.project().fps > 0.0 ? app.session.project().fps : 30.0;
+  const double fps = app.session.project().sequence().fps > 0.0 ? app.session.project().sequence().fps : 30.0;
   const auto frame = static_cast<long long>(at * fps);
   if (frame == app.shown_frame) {
     // Nothing due yet. Sleeping rather than spinning, because the audio thread
@@ -5990,12 +5990,12 @@ void refresh_all(App& app) {
   // The master fader belongs to the document, so a loaded project moves it.
   if (app.master_fader != nullptr) {
     app.master_fader->set_value(
-        cutline::ui::gain_to_fader_db(app.session.project().master_gain));
-    show_master_gain(app, app.session.project().master_gain);
+        cutline::ui::gain_to_fader_db(app.session.project().sequence().master_gain));
+    show_master_gain(app, app.session.project().sequence().master_gain);
   }
   if (app.monitor != nullptr) {
     const cutline::core::Project& project = app.session.project();
-    app.monitor->set_canvas_aspect(static_cast<double>(project.canvas_w) / project.canvas_h);
+    app.monitor->set_canvas_aspect(static_cast<double>(project.sequence().canvas_w) / project.sequence().canvas_h);
   }
   // After the browser, which is what may have changed which source is chosen.
   refresh_source(app);
@@ -7173,7 +7173,7 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
   const cutline::core::Clip* anchor = cutline::core::find_clip(app.session.project(), clips[0]);
   if (anchor == nullptr) return;
 
-  const double fps = app.session.project().fps;
+  const double fps = app.session.project().sequence().fps;
   const double span = cutline::core::source_span(*anchor);
   const double speed = cutline::core::clip_speed(*anchor);
 
@@ -7190,7 +7190,7 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
   length_row.emplace<Label>("Duration");
   auto& length_field = length_row.emplace<TextField>(
       cutline::core::seconds_to_timecode(cutline::core::clip_duration(*anchor), fps,
-                                         app.session.project().drop_frame));
+                                         app.session.project().sequence().drop_frame));
   length_field.set_columns(11);
 
   auto& reverse = panel->emplace<Checkbox>("Reverse speed", anchor->reverse);
@@ -7198,7 +7198,7 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
 
   // Each field rewrites the other when its edit ends. `span` is fixed by the
   // trim, so it is the constant the two are computed through.
-  const bool drop_frame = app.session.project().drop_frame;
+  const bool drop_frame = app.session.project().sequence().drop_frame;
   speed_field.set_on_finish([field = &speed_field, other = &length_field, span, fps, drop_frame] {
     double percent = 0.0;
     if (std::from_chars(field->text().data(), field->text().data() + field->text().size(),
@@ -7326,14 +7326,14 @@ void open_fit_dialog(App& app) {
 /// are looking at it.
 void open_marker_dialog(App& app, std::size_t index) {
   if (app.main.host == nullptr || app.timeline == nullptr) return;
-  const std::vector<cutline::core::Marker>& markers = app.session.project().markers;
+  const std::vector<cutline::core::Marker>& markers = app.session.project().sequence().markers;
   if (index >= markers.size()) return;
   const cutline::core::Marker marker = markers[index];
-  const double fps = app.session.project().fps;
+  const double fps = app.session.project().sequence().fps;
 
   auto panel = std::make_unique<Panel>();
   panel->emplace<Label>("Marker at " + cutline::core::seconds_to_timecode(
-                                          marker.time, fps, app.session.project().drop_frame))
+                                          marker.time, fps, app.session.project().sequence().drop_frame))
       .set_bold(true);
 
   auto& name_row = panel->emplace<Box>(Axis::Horizontal);
@@ -7352,7 +7352,7 @@ void open_marker_dialog(App& app, std::size_t index) {
   // Zero reads as a point marker, which is what it writes back as too.
   auto& span = span_row.emplace<TextField>(
       cutline::core::seconds_to_timecode(marker.duration, fps,
-                                         app.session.project().drop_frame));
+                                         app.session.project().sequence().drop_frame));
   span.set_columns(11);
 
   panel->emplace<Label>("Colour").set_small(true);
@@ -7393,9 +7393,9 @@ void open_marker_dialog(App& app, std::size_t index) {
     // A duration that does not parse leaves the one it had rather than
     // becoming zero, which would silently turn a span back into a point.
     const std::optional<double> length =
-        cutline::core::timecode_to_seconds(d->text(), fps, app.session.project().drop_frame);
+        cutline::core::timecode_to_seconds(d->text(), fps, app.session.project().sequence().drop_frame);
     const cutline::core::Marker* was = nullptr;
-    for (const cutline::core::Marker& m : app.session.project().markers) {
+    for (const cutline::core::Marker& m : app.session.project().sequence().markers) {
       if (m.id == id) was = &m;
     }
     const double duration = length.value_or(was != nullptr ? was->duration : 0.0);
@@ -7471,9 +7471,9 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
 
   const std::string id = rows[track].id;
   const cutline::core::Track* held =
-      std::ranges::find(app.session.project().tracks, id, &cutline::core::Track::id) !=
-              app.session.project().tracks.end()
-          ? &*std::ranges::find(app.session.project().tracks, id, &cutline::core::Track::id)
+      std::ranges::find(app.session.project().sequence().tracks, id, &cutline::core::Track::id) !=
+              app.session.project().sequence().tracks.end()
+          ? &*std::ranges::find(app.session.project().sequence().tracks, id, &cutline::core::Track::id)
           : nullptr;
   if (held == nullptr) return;
 
@@ -7547,7 +7547,7 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
                            // read — and the name is what both the timeline head
                            // and the mixer strip show.
                            std::size_t count = 0;
-                           for (const cutline::core::Track& t : app.session.project().tracks) {
+                           for (const cutline::core::Track& t : app.session.project().sequence().tracks) {
                              if (t.submix) ++count;
                            }
                            app.session.apply(cutline::core::add_submix_track(
@@ -7683,8 +7683,8 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
   readout.set_on_commit([app](const std::string& typed) {
     if (app == nullptr) return;
     const std::optional<double> at =
-        cutline::core::timecode_to_seconds(typed, app->session.project().fps,
-                                           app->session.project().drop_frame);
+        cutline::core::timecode_to_seconds(typed, app->session.project().sequence().fps,
+                                           app->session.project().sequence().drop_frame);
     // Nothing that parses leaves the playhead where it is rather than sending
     // it to zero, which is what a mistyped character would otherwise do.
     if (!at.has_value()) {
@@ -8094,7 +8094,7 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
   const double t = app.session.playhead();
 
   std::optional<std::string> found;
-  for (const cutline::core::Track& track : project.tracks) {
+  for (const cutline::core::Track& track : project.sequence().tracks) {
     if (track.kind != cutline::core::TrackKind::Video || track.hidden) continue;
     for (const cutline::core::Clip& clip : track.clips) {
       if (clip.disabled) continue;
@@ -8497,10 +8497,10 @@ void open_loudness_dialog(App& app) {
     const double offset = cutline::audio::loudness_offset_db(at, kTargets[index].lufs);
     if (offset == 0.0) return;
 
-    const double now = app.session.project().master_gain;
+    const double now = app.session.project().sequence().master_gain;
     const double moved = now * std::pow(10.0, offset / 20.0);
     app.session.apply(cutline::core::set_master_gain(app.session.project(), moved));
-    show_master_gain(app, app.session.project().master_gain);
+    show_master_gain(app, app.session.project().sequence().master_gain);
     refresh_all(app);
     stop_playback(app);
     mark_dirty(app);
@@ -8733,10 +8733,10 @@ void open_strip_effects(App& app, const std::string& track_id) {
   const bool master = track_id.empty();
 
   const auto stack_of = [&app, track_id, master]() -> std::vector<cutline::core::AudioClipEffect> {
-    if (master) return app.session.project().master_effects;
-    const auto found = std::ranges::find(app.session.project().tracks, track_id,
+    if (master) return app.session.project().sequence().master_effects;
+    const auto found = std::ranges::find(app.session.project().sequence().tracks, track_id,
                                          &cutline::core::Track::id);
-    return found == app.session.project().tracks.end()
+    return found == app.session.project().sequence().tracks.end()
                ? std::vector<cutline::core::AudioClipEffect>{}
                : found->audio_effects;
   };
@@ -8881,9 +8881,9 @@ void record_automation(App& app) {
   const double now = app.session.playhead();
 
   for (App::AutomationPass& pass : app.automation) {
-    const auto track = std::ranges::find(app.session.project().tracks, pass.track_id,
+    const auto track = std::ranges::find(app.session.project().sequence().tracks, pass.track_id,
                                          &cutline::core::Track::id);
-    if (track == app.session.project().tracks.end()) continue;
+    if (track == app.session.project().sequence().tracks.end()) continue;
     if (!pass_is_writing(track->automation, pass)) continue;
 
     // Never backwards. A pass is walked forwards, and a seek during one would
@@ -8893,7 +8893,7 @@ void record_automation(App& app) {
   }
 
   App::AutomationPass& master = app.master_automation;
-  if (pass_is_writing(app.session.project().master_automation, master) &&
+  if (pass_is_writing(app.session.project().sequence().master_automation, master) &&
       (master.written.empty() || now > master.written.back().t)) {
     master.written.push_back(cutline::core::Keyframe{.t = now, .v = master.gain});
   }
@@ -8945,8 +8945,8 @@ struct BusChoices {
 [[nodiscard]] BusChoices bus_choices(const cutline::core::Project& project,
                                      const cutline::core::Track& track) {
   BusChoices out;
-  for (std::size_t i = 0; i < project.tracks.size(); ++i) {
-    const cutline::core::Track& bus = project.tracks[i];
+  for (std::size_t i = 0; i < project.sequence().tracks.size(); ++i) {
+    const cutline::core::Track& bus = project.sequence().tracks[i];
     if (!bus.submix) continue;
     if (bus.id != track.output && !cutline::core::can_route(project, track.id, bus.id)) continue;
     out.names.push_back(bus.label.empty()
@@ -8968,9 +8968,9 @@ void open_strip_sends(App& app, const std::string& track_id) {
   if (app.main.host == nullptr) return;
 
   const auto track_now = [&app, track_id]() -> const cutline::core::Track* {
-    const auto found = std::ranges::find(app.session.project().tracks, track_id,
+    const auto found = std::ranges::find(app.session.project().sequence().tracks, track_id,
                                          &cutline::core::Track::id);
-    return found == app.session.project().tracks.end() ? nullptr : &*found;
+    return found == app.session.project().sequence().tracks.end() ? nullptr : &*found;
   };
   const cutline::core::Track* track = track_now();
   if (track == nullptr) return;
@@ -8983,8 +8983,8 @@ void open_strip_sends(App& app, const std::string& track_id) {
   // second menu: there are only ever a handful of buses, and showing them all
   // is both shorter to build and shorter to read.
   bool any = false;
-  for (std::size_t i = 0; i < app.session.project().tracks.size(); ++i) {
-    const cutline::core::Track& bus = app.session.project().tracks[i];
+  for (std::size_t i = 0; i < app.session.project().sequence().tracks.size(); ++i) {
+    const cutline::core::Track& bus = app.session.project().sequence().tracks[i];
     if (!bus.submix) continue;
     if (!cutline::core::can_route(app.session.project(), track_id, bus.id)) continue;
     any = true;
@@ -9135,18 +9135,18 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
   });
   sends.set_selected(!track.sends.empty());
   auto& mute = switches.emplace<Button>("M", [&app, track_id] {
-    const auto now = std::ranges::find(app.session.project().tracks, track_id,
+    const auto now = std::ranges::find(app.session.project().sequence().tracks, track_id,
                                        &cutline::core::Track::id);
-    if (now == app.session.project().tracks.end()) return;
+    if (now == app.session.project().sequence().tracks.end()) return;
     app.session.apply(cutline::core::update_track(
         app.session.project(), track_id, cutline::core::TrackPropsPatch{.muted = !now->muted}));
     refresh_all(app);
   });
   mute.set_selected(track.muted);
   auto& solo = switches.emplace<Button>("S", [&app, track_id] {
-    const auto now = std::ranges::find(app.session.project().tracks, track_id,
+    const auto now = std::ranges::find(app.session.project().sequence().tracks, track_id,
                                        &cutline::core::Track::id);
-    if (now == app.session.project().tracks.end()) return;
+    if (now == app.session.project().sequence().tracks.end()) return;
     app.session.apply(cutline::core::update_track(
         app.session.project(), track_id, cutline::core::TrackPropsPatch{.solo = !now->solo}));
     refresh_all(app);
@@ -9209,9 +9209,9 @@ void build_track_strip(App& app, Box& strips, const cutline::core::Track& track,
     // A track that is recording a pass does not also take the fader as its
     // constant — the pass is what is being set, and writing the constant too
     // would leave the curve and the number underneath it disagreeing.
-    const auto track = std::ranges::find(app.session.project().tracks, track_id,
+    const auto track = std::ranges::find(app.session.project().sequence().tracks, track_id,
                                          &cutline::core::Track::id);
-    if (track != app.session.project().tracks.end() &&
+    if (track != app.session.project().sequence().tracks.end() &&
         pass_is_writing(track->automation, automation_pass(app, track_id))) {
       return;
     }
@@ -9277,7 +9277,7 @@ void fill_audio_panel(App* app, Panel& panel) {
   // Tracks first and the master at the right-hand end, where a mixer puts it:
   // signal flows left to right and the master is where it all arrives.
   if (app != nullptr) {
-    const std::vector<cutline::core::Track>& tracks = app->session.project().tracks;
+    const std::vector<cutline::core::Track>& tracks = app->session.project().sequence().tracks;
     for (std::size_t i = 0; i < tracks.size(); ++i) {
       if (tracks[i].kind != cutline::core::TrackKind::Audio) continue;
       build_track_strip(*app, strips, tracks[i], i);
@@ -9305,7 +9305,7 @@ void fill_audio_panel(App* app, Panel& panel) {
       cutline::core::AutomationMode::Touch};
   const cutline::core::AutomationMode mode =
       app == nullptr ? cutline::core::AutomationMode::Read
-                     : app->session.project().master_automation;
+                     : app->session.project().sequence().master_automation;
   const auto at_mode = std::ranges::find(kMasterModes, mode);
   auto& master_modes = column.emplace<Dropdown>(
       std::vector<std::string>{"Off", "Read", "Write", "Latch", "Touch"},
@@ -9326,10 +9326,10 @@ void fill_audio_panel(App* app, Panel& panel) {
   auto& master_fx = master_switches.emplace<Button>("fx");
   if (app != nullptr) {
     master_fx.set_on_click([app] { open_strip_effects(*app, {}); });
-    master_fx.set_selected(!app->session.project().master_effects.empty());
+    master_fx.set_selected(!app->session.project().sequence().master_effects.empty());
   }
 
-  const double gain = app == nullptr ? 1.0 : app->session.project().master_gain;
+  const double gain = app == nullptr ? 1.0 : app->session.project().sequence().master_gain;
   auto& master_row = column.emplace<Box>(Axis::Horizontal);
   auto& fader = master_row.emplace<cutline::ui::Fader>(
       cutline::ui::ValueRange{
@@ -9380,13 +9380,13 @@ void fill_audio_panel(App* app, Panel& panel) {
       app->master_automation.holding = false;
       // A fader recording a pass does not also write the constant underneath
       // it: the pass is what is being set, and both would disagree.
-      if (pass_is_writing(app->session.project().master_automation, app->master_automation)) {
+      if (pass_is_writing(app->session.project().sequence().master_automation, app->master_automation)) {
         return;
       }
       app->session.apply(cutline::core::set_master_gain(
           app->session.project(),
           cutline::ui::fader_db_to_gain(db, cutline::core::kMaxMasterGain)));
-      show_master_gain(*app, app->session.project().master_gain);
+      show_master_gain(*app, app->session.project().sequence().master_gain);
     });
   }
 }
@@ -10239,7 +10239,7 @@ constexpr std::array kExportMixdowns{
   const auto even = [](double value) {
     return std::max(2, static_cast<int>(std::llround(value)) & ~1);
   };
-  return {even(project.canvas_w * scale), even(project.canvas_h * scale)};
+  return {even(project.sequence().canvas_w * scale), even(project.sequence().canvas_h * scale)};
 }
 
 void close_export_dialog(App& app);
@@ -10510,8 +10510,8 @@ void settle_export(App& app) {
   std::string range = "Only the marked range";
   if (marked) {
     const cutline::core::MarkedSpan span = cutline::core::marked_span(app->session.project());
-    const double fps = app->session.project().fps;
-    const bool drop = app->session.project().drop_frame;
+    const double fps = app->session.project().sequence().fps;
+    const bool drop = app->session.project().sequence().drop_frame;
     range += std::format(" ({} to {})",
                          cutline::core::seconds_to_timecode(span.start, fps, drop),
                          cutline::core::seconds_to_timecode(span.start + span.duration, fps,
@@ -11983,7 +11983,7 @@ template <typename T>
       // controls are among the ones laid out. The topmost track's clip is on
       // its own, and a clip with no join has no transition to configure.
       std::string clip_id;
-      for (const auto& track : app.session.project().tracks) {
+      for (const auto& track : app.session.project().sequence().tracks) {
         if (track.kind != cutline::core::TrackKind::Video) continue;
         for (const auto& clip : track.clips) {
           if (clip_id.empty()) clip_id = clip.id;
@@ -12062,7 +12062,7 @@ template <typename T>
       // registry. Every audio effect on it, for the same reason every visual
       // one goes on the clip above.
       std::string audio_clip;
-      for (const auto& track : app.session.project().tracks) {
+      for (const auto& track : app.session.project().sequence().tracks) {
         if (track.kind != cutline::core::TrackKind::Audio || track.clips.empty()) continue;
         audio_clip = track.clips.front().id;
         break;

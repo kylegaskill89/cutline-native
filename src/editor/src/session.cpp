@@ -111,7 +111,7 @@ std::vector<std::string> Session::selected_group() const {
 }
 
 void Session::set_playhead(double seconds) {
-  playhead_ = std::max(0.0, core::snap_to_frame(seconds, project_.fps));
+  playhead_ = std::max(0.0, core::snap_to_frame(seconds, project_.sequence().fps));
 }
 
 void Session::prune_selection() {

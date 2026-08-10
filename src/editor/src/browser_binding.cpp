@@ -61,7 +61,7 @@ std::string media_detail(const core::Media& media, double fps, bool drop_frame) 
 int media_uses(const core::Project& project, std::string_view media_id) noexcept {
   if (media_id.empty()) return 0;
   int count = 0;
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     for (const core::Clip& clip : track.clips) {
       if (clip.media_id == media_id) ++count;
     }
@@ -131,7 +131,7 @@ void order(std::vector<ui::MediaItem>& rows, const BrowserOptions& options) {
   item.name = media.name.empty() ? media.path : media.name;
   item.kind = media_kind(media);
   item.duration = media.duration;
-  item.detail = media_detail(media, project.fps, project.drop_frame);
+  item.detail = media_detail(media, project.sequence().fps, project.sequence().drop_frame);
   item.uses = media_uses(project, media.id);
   item.label_color = media.label_color;
   item.offline = !media.path.empty() &&
@@ -235,7 +235,7 @@ std::vector<ui::MediaItem> browser_items(const core::Project& project,
 core::Project remove_media(core::Project project, std::string_view media_id) {
   if (media_id.empty()) return project;
 
-  for (core::Track& track : project.tracks) {
+  for (core::Track& track : project.sequence().tracks) {
     std::erase_if(track.clips,
                   [media_id](const core::Clip& clip) { return clip.media_id == media_id; });
   }

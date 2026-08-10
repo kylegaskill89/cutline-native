@@ -23,11 +23,11 @@ Project one_clip_project() {
   v.id = "v1";
   v.kind = TrackKind::Video;
   v.clips = {c};
-  p.tracks = {v};
+  p.sequence().tracks = {v};
   return p;
 }
 
-const Clip& only_clip(const Project& p) { return p.tracks[0].clips[0]; }
+const Clip& only_clip(const Project& p) { return p.sequence().tracks[0].clips[0]; }
 
 const std::vector<Keyframe>& kfs_of(const Project& p, AnimProp prop) {
   return only_clip(p).keyframes[anim_prop_index(prop)];
@@ -151,7 +151,7 @@ TEST(GainKeyframes, MoveRelocatesAPoint) {
 
 TEST(GainKeyframes, ClearReturnsToConstantGain) {
   Project p = one_clip_project();
-  p.tracks[0].clips[0].gain = 0.5;
+  p.sequence().tracks[0].clips[0].gain = 0.5;
   p = set_gain_keyframe(std::move(p), "c1", 0.0, 1.0);
   p = clear_gain_keyframes(std::move(p), "c1");
 
@@ -441,11 +441,11 @@ Project one_audio_track() {
   a.id = "a1";
   a.kind = TrackKind::Audio;
   a.gain = 0.5;
-  p.tracks = {a};
+  p.sequence().tracks = {a};
   return p;
 }
 
-const Track& only_track(const Project& p) { return p.tracks[0]; }
+const Track& only_track(const Project& p) { return p.sequence().tracks[0]; }
 
 TEST(TrackAutomation, AKeyframeIsSetAtATimelineTime) {
   Project p = one_audio_track();
@@ -584,18 +584,18 @@ TEST(TrackPass, ClearingLeavesTheModeAlone) {
 
 TEST(MasterAutomation, ThePassBecomesTheCurveAndOffIgnoresIt) {
   Project p = one_audio_track();
-  p.master_gain = 0.5;
+  p.sequence().master_gain = 0.5;
   const std::vector<Keyframe> pass{{.t = 0.0, .v = 1.0}, {.t = 2.0, .v = 0.25}};
   p = write_master_gain_pass(std::move(p), pass);
 
-  ASSERT_EQ(p.master_gain_keyframes.size(), 2u);
+  ASSERT_EQ(p.sequence().master_gain_keyframes.size(), 2u);
   EXPECT_TRUE(is_master_gain_animated(p));
   EXPECT_DOUBLE_EQ(master_gain_at(p, 0.0), 1.0);
 
   p = set_master_automation(std::move(p), AutomationMode::Off);
   EXPECT_FALSE(is_master_gain_animated(p));
   EXPECT_DOUBLE_EQ(master_gain_at(p, 0.0), 0.5) << "the constant, and the curve is kept";
-  EXPECT_EQ(p.master_gain_keyframes.size(), 2u);
+  EXPECT_EQ(p.sequence().master_gain_keyframes.size(), 2u);
 }
 
 TEST(MasterAutomation, APassReplacesOnlyWhatItCovers) {
@@ -607,9 +607,9 @@ TEST(MasterAutomation, APassReplacesOnlyWhatItCovers) {
   p = write_master_gain_pass(std::move(p), std::vector<Keyframe>{{.t = 4.0, .v = 0.2},
                                                                  {.t = 6.0, .v = 0.3}});
 
-  ASSERT_EQ(p.master_gain_keyframes.size(), 4u);
-  EXPECT_DOUBLE_EQ(p.master_gain_keyframes[0].t, 0.0);
-  EXPECT_DOUBLE_EQ(p.master_gain_keyframes[3].t, 10.0);
+  ASSERT_EQ(p.sequence().master_gain_keyframes.size(), 4u);
+  EXPECT_DOUBLE_EQ(p.sequence().master_gain_keyframes[0].t, 0.0);
+  EXPECT_DOUBLE_EQ(p.sequence().master_gain_keyframes[3].t, 10.0);
 }
 
 TEST(MasterAutomation, ClearingLeavesTheModeAlone) {
@@ -617,8 +617,8 @@ TEST(MasterAutomation, ClearingLeavesTheModeAlone) {
   p = write_master_gain_pass(std::move(p), std::vector<Keyframe>{{.t = 1.0, .v = 0.5}});
   p = clear_master_gain_keyframes(std::move(p));
 
-  EXPECT_TRUE(p.master_gain_keyframes.empty());
-  EXPECT_EQ(p.master_automation, AutomationMode::Touch);
+  EXPECT_TRUE(p.sequence().master_gain_keyframes.empty());
+  EXPECT_EQ(p.sequence().master_automation, AutomationMode::Touch);
 }
 
 }  // namespace

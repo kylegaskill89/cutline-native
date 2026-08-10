@@ -21,6 +21,7 @@
 
 #include "cutline/core/keyframe.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <map>
@@ -730,7 +731,29 @@ struct Marker {
 // ----------------------------------------------------------------- project --
 
 /// The whole editing session.
-struct Project {
+/// One cut: the tracks, the canvas they are cut for, and everything else that
+/// belongs to *this* arrangement rather than to the project that holds it.
+///
+/// The split is the one Premiere makes. A project has a pool of footage and a
+/// set of folders, and those are shared by every sequence in it — importing a
+/// clip once and cutting it into three sequences is the whole point of a pool.
+/// Everything that describes an *arrangement* of that footage is here: what
+/// size and rate it is cut for, the tracks, the markers on them, the marked
+/// span, and the master strip, which is per-sequence because each cut is mixed
+/// to its own master.
+///
+/// Defined once and used for every sequence, open or not. An earlier sketch
+/// kept the open one's fields on `Project` and parked the rest in a list of
+/// this type — which reads the same and quietly needs two copies of this field
+/// list kept in step by hand. The bins went the other way for the same reason,
+/// and the note on them says why: the arrangement where two containers can
+/// disagree is the one that eventually does.
+struct Sequence {
+  /// Stable across renames, because a nested sequence and the tab strip both
+  /// have to name one and neither should break when it is renamed.
+  std::string id;
+  std::string name;
+
   int canvas_w = 1920;
   int canvas_h = 1080;
   double fps = 30.0;
@@ -757,18 +780,6 @@ struct Project {
   /// push it back over the ceiling the limiter had just brought it under.
   std::vector<AudioClipEffect> master_effects;
 
-  /// Whether to cut against proxies where a source has one.
-  ///
-  /// Premiere's "Toggle Proxies", and a property of the *project* rather than
-  /// of the machine, because it is a thing you turn on to work and off to
-  /// check. Sources with no proxy are unaffected either way, so a project part
-  /// way through making them shows the small ones and the originals side by
-  /// side and behaves the same.
-  ///
-  /// Export ignores it entirely — see `FrameRenderer::set_use_proxies`, which
-  /// defaults to off so that nothing has to remember to turn it off.
-  bool use_proxies = false;
-
   /// Whether timecode is shown drop-frame where the rate allows it.
   ///
   /// A property of the sequence, not of the person: it is how the times in
@@ -782,9 +793,6 @@ struct Project {
   /// means by timecode.
   bool drop_frame = true;
 
-  std::vector<Media> media;
-  /// Folders the pool is filed into. Flat, and nested by `Bin::parent`.
-  std::vector<Bin> bins;
   /// Video tracks first (topmost), then audio. Note that video tracks composite
   /// bottom-first, so the render order is the reverse of the storage order.
   std::vector<Track> tracks;
@@ -799,6 +807,54 @@ struct Project {
   /// something every reader has to remember to check for. See `marked_span`.
   std::optional<double> in_point;
   std::optional<double> out_point;
+
+  friend bool operator==(const Sequence&, const Sequence&) = default;
+};
+
+struct Project {
+  /// Every sequence in the project, in the order the tab strip shows them.
+  ///
+  /// **Never empty.** A project is always cutting something, and code that has
+  /// to check first is code that will one day forget to. `sequence()` is the
+  /// one everything means when it says "the sequence", and it holds up even if
+  /// this is emptied by hand.
+  std::vector<Sequence> sequences{Sequence{}};
+  /// Which of them is being cut.
+  std::size_t open = 0;
+
+  /// The sequence being cut.
+  ///
+  /// A list and an index rather than an open one held apart from the rest,
+  /// which was the first sketch: parking the closed ones loses where the open
+  /// one sits among them, and a tab strip whose tabs reorder as you switch
+  /// between them is worse than one extra indirection at six hundred call
+  /// sites.
+  [[nodiscard]] Sequence& sequence() noexcept {
+    static Sequence nothing;
+    if (sequences.empty()) return nothing;
+    return sequences[std::min(open, sequences.size() - 1)];
+  }
+  [[nodiscard]] const Sequence& sequence() const noexcept {
+    static const Sequence nothing;
+    if (sequences.empty()) return nothing;
+    return sequences[std::min(open, sequences.size() - 1)];
+  }
+
+  std::vector<Media> media;
+  /// Folders the pool is filed into. Flat, and nested by `Bin::parent`.
+  std::vector<Bin> bins;
+
+  /// Whether to cut against proxies where a source has one.
+  ///
+  /// Premiere's "Toggle Proxies", and a property of the *project* rather than
+  /// of the machine, because it is a thing you turn on to work and off to
+  /// check. Sources with no proxy are unaffected either way, so a project part
+  /// way through making them shows the small ones and the originals side by
+  /// side and behaves the same.
+  ///
+  /// Export ignores it entirely — see `FrameRenderer::set_use_proxies`, which
+  /// defaults to off so that nothing has to remember to turn it off.
+  bool use_proxies = false;
 
   friend bool operator==(const Project&, const Project&) = default;
 };

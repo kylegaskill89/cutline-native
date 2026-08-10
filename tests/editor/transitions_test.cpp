@@ -35,7 +35,7 @@ using core::TransitionKind;
 /// seconds and each clip uses five of the middle of it.
 [[nodiscard]] Project abutting() {
   Project project;
-  project.fps = 30.0;
+  project.sequence().fps = 30.0;
   project.media.push_back(
       Media{.id = "m1", .name = "wide.mp4", .duration = 60.0, .has_video = true});
 
@@ -44,14 +44,14 @@ using core::TransitionKind;
       Clip{.id = "a", .media_id = "m1", .source_in = 10.0, .source_out = 15.0, .start = 0.0},
       Clip{.id = "b", .media_id = "m1", .source_in = 30.0, .source_out = 35.0, .start = 5.0},
   };
-  project.tracks.push_back(std::move(video));
+  project.sequence().tracks.push_back(std::move(video));
   return project;
 }
 
 /// The same, with a gap between the two.
 [[nodiscard]] Project with_a_gap() {
   Project project = abutting();
-  project.tracks[0].clips[1].start = 8.0;
+  project.sequence().tracks[0].clips[1].start = 8.0;
   return project;
 }
 
@@ -59,7 +59,7 @@ using core::TransitionKind;
 /// neither has anything to lend.
 [[nodiscard]] Project without_handles() {
   Project project;
-  project.fps = 30.0;
+  project.sequence().fps = 30.0;
   project.media.push_back(Media{.id = "m1", .duration = 10.0, .has_video = true});
   project.media.push_back(Media{.id = "m2", .duration = 10.0, .has_video = true});
 
@@ -70,7 +70,7 @@ using core::TransitionKind;
       // Starts at the first frame of m2: no head.
       Clip{.id = "b", .media_id = "m2", .source_in = 0.0, .source_out = 5.0, .start = 5.0},
   };
-  project.tracks.push_back(std::move(video));
+  project.sequence().tracks.push_back(std::move(video));
   return project;
 }
 
@@ -123,8 +123,8 @@ TEST(Transitions, AnOverlappingKindIsBoundedByTheHandlesToo) {
   // Now trim the handles to half a second each, and they become the limit.
   Project tight = project;
   tight.media[0].duration = 15.5;                  // half a second past a's out
-  tight.tracks[0].clips[1].source_in = 0.5;        // half a second of head on b
-  tight.tracks[0].clips[1].source_out = 5.5;
+  tight.sequence().tracks[0].clips[1].source_in = 0.5;        // half a second of head on b
+  tight.sequence().tracks[0].clips[1].source_out = 5.5;
   EXPECT_DOUBLE_EQ(longest_transition(tight, "a", TransitionKind::Dissolve), 1.0);
 }
 
@@ -146,7 +146,7 @@ TEST(Transitions, AStillHasAllTheHandleAnyoneCouldWant) {
   // be an arbitrary rule about generated media.
   Project project = abutting();
   project.media.push_back(Media{.id = "t1", .has_video = true, .is_text = true});
-  project.tracks[0].clips[1].media_id = "t1";
+  project.sequence().tracks[0].clips[1].media_id = "t1";
 
   EXPECT_FALSE(clip_transition(project, "a").handles_exhausted);
   EXPECT_GT(longest_transition(project, "a", TransitionKind::Dissolve), 0.0);
@@ -196,8 +196,8 @@ TEST(Transitions, ANewOneIsASecondOrAsMuchAsFits) {
   // A join with only half a second of handle gets half a second.
   Project tight = abutting();
   tight.media[0].duration = 15.25;
-  tight.tracks[0].clips[1].source_in = 0.25;
-  tight.tracks[0].clips[1].source_out = 5.25;
+  tight.sequence().tracks[0].clips[1].source_in = 0.25;
+  tight.sequence().tracks[0].clips[1].source_out = 5.25;
   EXPECT_DOUBLE_EQ(default_transition_length(tight, "a", TransitionKind::Dissolve), 0.5);
 }
 
@@ -209,7 +209,7 @@ TEST(Transitions, WhatIsSetIsWhatTheResolverActuallyDoes) {
   // resolver what the picture does.
   const Project project = set_transition(abutting(), "a", TransitionKind::Dissolve, 2.0);
   const std::vector<core::VideoSeg> segs = core::resolve_video_segments(
-      project.tracks[0], [&project](std::string_view id) {
+      project.sequence().tracks[0], [&project](std::string_view id) {
         const auto media = std::ranges::find(project.media, id, &core::Media::id);
         return media == project.media.end() ? 0.0 : media->duration;
       });
@@ -223,11 +223,11 @@ TEST(Transitions, WhatTheLayerRefusesIsWhatTheResolverWouldHaveSkipped) {
   // The agreement that matters: this says a dissolve is impossible here, and
   // the resolver — asked to do one anyway — does nothing.
   Project forced = without_handles();
-  forced.tracks[0].clips[0].transition_out =
+  forced.sequence().tracks[0].clips[0].transition_out =
       core::Transition{.kind = TransitionKind::Dissolve, .duration = 1.0};
 
   const std::vector<core::VideoSeg> segs = core::resolve_video_segments(
-      forced.tracks[0], [&forced](std::string_view id) {
+      forced.sequence().tracks[0], [&forced](std::string_view id) {
         const auto media = std::ranges::find(forced.media, id, &core::Media::id);
         return media == forced.media.end() ? 0.0 : media->duration;
       });

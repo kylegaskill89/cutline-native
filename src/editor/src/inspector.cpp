@@ -85,7 +85,7 @@ constexpr double kSliderMaxSpeed = 4.0;
 /// value divide by nothing, so it falls back to one — the stored fraction shown
 /// raw, which is at least a number that moves.
 [[nodiscard]] double position_scale(const core::Project& project, ClipParam param) noexcept {
-  const int extent = param == ClipParam::X ? project.canvas_w : project.canvas_h;
+  const int extent = param == ClipParam::X ? project.sequence().canvas_w : project.sequence().canvas_h;
   return extent > 0 ? static_cast<double>(extent) : 1.0;
 }
 
@@ -100,8 +100,8 @@ constexpr double kSliderMaxSpeed = 4.0;
                                     const core::Clip& clip) noexcept {
   const auto found = std::ranges::find(project.media, clip.media_id, &core::Media::id);
   const core::Media* media = found == project.media.end() ? nullptr : &*found;
-  return core::natural_size(media, static_cast<double>(project.canvas_w),
-                            static_cast<double>(project.canvas_h));
+  return core::natural_size(media, static_cast<double>(project.sequence().canvas_w),
+                            static_cast<double>(project.sequence().canvas_h));
 }
 
 /// Pixels per stored unit for the anchor point, which is the *layer's* own

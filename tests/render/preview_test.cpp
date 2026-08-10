@@ -20,8 +20,8 @@ namespace {
 
 [[nodiscard]] core::Project sequence() {
   core::Project p;
-  p.canvas_w = 1920;
-  p.canvas_h = 1080;
+  p.sequence().canvas_w = 1920;
+  p.sequence().canvas_h = 1080;
 
   core::Media footage;
   footage.id = "m1";
@@ -38,13 +38,13 @@ namespace {
                                    .kind = core::TrackKind::Video,
                                    .source_in = 0.0,
                                    .source_out = 4.0});
-  p.tracks.push_back(std::move(track));
+  p.sequence().tracks.push_back(std::move(track));
   return p;
 }
 
 [[nodiscard]] const core::Media* media_of(const core::Project& p) { return &p.media.front(); }
 [[nodiscard]] const core::Clip& clip_of(const core::Project& p) {
-  return p.tracks.front().clips.front();
+  return p.sequence().tracks.front().clips.front();
 }
 
 TEST(ScaledCanvas, AFactorOfOneChangesNothingAtAll) {
@@ -62,22 +62,22 @@ TEST(ScaledCanvas, ANonsenseFactorIsRefusedRatherThanApplied) {
 
 TEST(ScaledCanvas, TheCanvasShrinksAndKeepsItsShape) {
   const core::Project half = scaled_canvas(sequence(), 0.5);
-  EXPECT_EQ(half.canvas_w, 960);
-  EXPECT_EQ(half.canvas_h, 540);
+  EXPECT_EQ(half.sequence().canvas_w, 960);
+  EXPECT_EQ(half.sequence().canvas_h, 540);
 }
 
 // The whole promise, stated as arithmetic: every layer lands in the same place,
 // measured as a fraction of the canvas it is on.
 TEST(ScaledCanvas, ALayerIsInTheSamePlaceRelativeToTheFrame) {
   core::Project full = sequence();
-  full.tracks[0].clips[0].transform = {
+  full.sequence().tracks[0].clips[0].transform = {
       .x = 0.3, .y = 0.7, .scale_x = 0.8, .scale_y = 0.6, .rotation = 15.0};
   const core::Project quarter = scaled_canvas(full, 0.25);
 
   const core::LayerBox big =
-      core::layer_box(clip_of(full), media_of(full), full.canvas_w, full.canvas_h, 0.0);
+      core::layer_box(clip_of(full), media_of(full), full.sequence().canvas_w, full.sequence().canvas_h, 0.0);
   const core::LayerBox small = core::layer_box(clip_of(quarter), media_of(quarter),
-                                               quarter.canvas_w, quarter.canvas_h, 0.0);
+                                               quarter.sequence().canvas_w, quarter.sequence().canvas_h, 0.0);
 
   EXPECT_NEAR(small.center_x * 4.0, big.center_x, 1e-9);
   EXPECT_NEAR(small.center_y * 4.0, big.center_y, 1e-9);
@@ -108,7 +108,7 @@ TEST(ScaledCanvas, ATitleShrinksWithTheCanvasItIsSetIn) {
 
 TEST(ScaledCanvas, ABlurRadiusShrinksBecauseItIsMeasuredInPixels) {
   core::Project p = sequence();
-  p.tracks[0].clips[0].effects.push_back(
+  p.sequence().tracks[0].clips[0].effects.push_back(
       core::ClipEffect{.type = "blur", .params = {{"amount", 20.0}}});
 
   const core::Project half = scaled_canvas(p, 0.5);
@@ -122,7 +122,7 @@ TEST(ScaledCanvas, AnAnimatedBlurShrinksItsKeyframesToo) {
   core::ClipEffect blur{.type = "blur", .params = {{"amount", 20.0}}};
   blur.keyframes["amount"] = {core::Keyframe{.t = 0.0, .v = 0.0},
                               core::Keyframe{.t = 2.0, .v = 40.0}};
-  p.tracks[0].clips[0].effects.push_back(std::move(blur));
+  p.sequence().tracks[0].clips[0].effects.push_back(std::move(blur));
 
   const core::Project half = scaled_canvas(p, 0.5);
   const auto& frames = clip_of(half).effects[0].keyframes.at("amount");
@@ -134,7 +134,7 @@ TEST(ScaledCanvas, AnAnimatedBlurShrinksItsKeyframesToo) {
 // the bug. A crop of ten per cent is ten per cent at any size.
 TEST(ScaledCanvas, AnEffectMeasuredInFractionsIsLeftAlone) {
   core::Project p = sequence();
-  p.tracks[0].clips[0].effects.push_back(
+  p.sequence().tracks[0].clips[0].effects.push_back(
       core::ClipEffect{.type = "crop", .params = {{"left", 10.0}, {"top", 25.0}}});
 
   const core::Project half = scaled_canvas(p, 0.5);
@@ -147,8 +147,8 @@ TEST(ScaledCanvas, AnEffectMeasuredInFractionsIsLeftAlone) {
 // sequence drifts a fraction of a pixel out of step with the frame around it.
 TEST(ScaledCanvas, EverythingIsScaledByWhatTheCanvasBecame) {
   core::Project p = sequence();
-  p.canvas_w = 1919;
-  p.canvas_h = 1079;
+  p.sequence().canvas_w = 1919;
+  p.sequence().canvas_h = 1079;
 
   core::Media title;
   title.id = "t1";
@@ -157,7 +157,7 @@ TEST(ScaledCanvas, EverythingIsScaledByWhatTheCanvasBecame) {
   p.media.push_back(title);
 
   const core::Project half = scaled_canvas(p, 0.5);
-  EXPECT_EQ(half.canvas_w, 960);
+  EXPECT_EQ(half.sequence().canvas_w, 960);
   EXPECT_DOUBLE_EQ(half.media[1].text->font_size, 100.0 * 960.0 / 1919.0);
 }
 
@@ -166,8 +166,8 @@ TEST(ScaledCanvas, NothingIsLostFromTheProjectOnTheWayThrough) {
   const core::Project half = scaled_canvas(p, 0.5);
 
   EXPECT_EQ(half.media.size(), p.media.size());
-  EXPECT_EQ(half.tracks.size(), p.tracks.size());
-  EXPECT_EQ(half.tracks[0].clips.size(), p.tracks[0].clips.size());
+  EXPECT_EQ(half.sequence().tracks.size(), p.sequence().tracks.size());
+  EXPECT_EQ(half.sequence().tracks[0].clips.size(), p.sequence().tracks[0].clips.size());
   EXPECT_EQ(clip_of(half).id, clip_of(p).id);
 }
 
@@ -190,7 +190,7 @@ TEST(ScaledCanvas, EveryPixelParameterInTheCatalogueIsScaled) {
       core::ClipEffect effect{.type = std::string(spec.type)};
       effect.params[std::string(param.key)] = 20.0;
       effect.keyframes[std::string(param.key)] = {core::Keyframe{.t = 0.0, .v = 40.0}};
-      p.tracks[0].clips[0].effects.push_back(std::move(effect));
+      p.sequence().tracks[0].clips[0].effects.push_back(std::move(effect));
 
       const core::Project half = scaled_canvas(p, 0.5);
       const core::ClipEffect& scaled = clip_of(half).effects[0];
@@ -212,7 +212,7 @@ TEST(ScaledCanvas, NothingElseInTheCatalogueIsTouched) {
       core::Project p = sequence();
       core::ClipEffect effect{.type = std::string(spec.type)};
       effect.params[std::string(param.key)] = 20.0;
-      p.tracks[0].clips[0].effects.push_back(std::move(effect));
+      p.sequence().tracks[0].clips[0].effects.push_back(std::move(effect));
 
       const core::Project half = scaled_canvas(p, 0.5);
       EXPECT_DOUBLE_EQ(clip_of(half).effects[0].params.at(std::string(param.key)), 20.0)

@@ -49,7 +49,7 @@ using core::TrackKind;
 [[nodiscard]] Project project(std::vector<Track> tracks, std::vector<Media> media = {}) {
   Project p;
   p.media = media.empty() ? std::vector<Media>{source("m")} : std::move(media);
-  p.tracks = std::move(tracks);
+  p.sequence().tracks = std::move(tracks);
   return p;
 }
 
@@ -81,21 +81,21 @@ TEST(PlanAudio, VideoTracksContributeNothing) {
   video.kind = TrackKind::Video;
   video.clips = {clip("c", "m", 0.0, 5.0)};
   video.clips[0].kind = TrackKind::Video;
-  p.tracks.insert(p.tracks.begin(), video);
+  p.sequence().tracks.insert(p.sequence().tracks.begin(), video);
 
   EXPECT_TRUE(plan_audio(p).empty());
 }
 
 TEST(PlanAudio, MutedTracksAreSilent) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
-  p.tracks[0].muted = true;
+  p.sequence().tracks[0].muted = true;
   EXPECT_TRUE(plan_audio(p).empty());
 }
 
 TEST(PlanAudio, SoloSilencesEveryOtherTrack) {
   Project p = project({audio_track("a1", {clip("c1", "m", 0.0, 5.0)}),
                        audio_track("a2", {clip("c2", "m", 0.0, 5.0)})});
-  p.tracks[1].solo = true;
+  p.sequence().tracks[1].solo = true;
 
   const auto planned = plan_audio(p);
   ASSERT_EQ(planned.size(), 1u);
@@ -105,21 +105,21 @@ TEST(PlanAudio, SoloSilencesEveryOtherTrack) {
 TEST(PlanAudio, ASoloedTrackThatIsAlsoMutedStaysSilent) {
   // Mute wins: it is the more explicit statement of the two.
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
-  p.tracks[0].solo = true;
-  p.tracks[0].muted = true;
+  p.sequence().tracks[0].solo = true;
+  p.sequence().tracks[0].muted = true;
   EXPECT_TRUE(plan_audio(p).empty());
 }
 
 TEST(PlanAudio, DisabledClipsAreSkipped) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
-  p.tracks[0].clips[0].disabled = true;
+  p.sequence().tracks[0].clips[0].disabled = true;
   EXPECT_TRUE(plan_audio(p).empty());
 }
 
 TEST(PlanAudio, AClipPinnedToSilenceIsSkipped) {
   // Decoding it would be work with no audible result.
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
-  p.tracks[0].clips[0].gain = 0.0;
+  p.sequence().tracks[0].clips[0].gain = 0.0;
   EXPECT_TRUE(plan_audio(p).empty());
 }
 
@@ -147,7 +147,7 @@ TEST(PlanAudio, GeneratedMediaHaveNothingToDecode) {
 
 TEST(PlanAudio, TheStreamOrdinalIsCarried) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
-  p.tracks[0].clips[0].audio_stream = 2;
+  p.sequence().tracks[0].clips[0].audio_stream = 2;
   ASSERT_EQ(plan_audio(p).size(), 1u);
   EXPECT_EQ(plan_audio(p)[0].audio_stream, 2);
 }
@@ -156,8 +156,8 @@ TEST(PlanAudio, RetimingIsCarriedRatherThanApplied) {
   // The mixer needs the rate to resample with; baking it into the span here
   // would lose the information it needs.
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 8.0)})});
-  p.tracks[0].clips[0].speed = 2.0;
-  p.tracks[0].clips[0].reverse = true;
+  p.sequence().tracks[0].clips[0].speed = 2.0;
+  p.sequence().tracks[0].clips[0].reverse = true;
 
   const auto planned = plan_audio(p);
   ASSERT_EQ(planned.size(), 1u);
@@ -204,7 +204,7 @@ TEST(AudioGain, UnityByDefault) {
 
 TEST(AudioGain, ConstantGainApplies) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
-  p.tracks[0].clips[0].gain = 0.5;
+  p.sequence().tracks[0].clips[0].gain = 0.5;
   EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 2.0), 0.5);
 }
 
@@ -216,7 +216,7 @@ TEST(AudioGain, OutsideTheClipIsSilent) {
 
 TEST(AudioGain, AFadeInRampsFromSilence) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 10.0)})});
-  p.tracks[0].clips[0].fade_in = 2.0;
+  p.sequence().tracks[0].clips[0].fade_in = 2.0;
 
   EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 0.0), 0.0);
   EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 1.0), 0.5);
@@ -226,7 +226,7 @@ TEST(AudioGain, AFadeInRampsFromSilence) {
 
 TEST(AudioGain, AFadeOutRampsToSilence) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 10.0)})});
-  p.tracks[0].clips[0].fade_out = 4.0;
+  p.sequence().tracks[0].clips[0].fade_out = 4.0;
 
   EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 5.0), 1.0);
   EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 8.0), 0.5);
@@ -235,7 +235,7 @@ TEST(AudioGain, AFadeOutRampsToSilence) {
 
 TEST(AudioGain, FadesAreRelativeToTheClipNotTheTimeline) {
   Project p = project({audio_track("a1", {clip("c", "m", 30.0, 10.0)})});
-  p.tracks[0].clips[0].fade_in = 2.0;
+  p.sequence().tracks[0].clips[0].fade_in = 2.0;
 
   EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 30.0), 0.0);
   EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 31.0), 0.5);
@@ -246,8 +246,8 @@ TEST(AudioGain, FadesMultiplyTheClipGainRatherThanReplacingIt) {
   // A clip both faded in and turned down should end up quiet, not merely one of
   // the two. This mirrors how `segment_alpha` treats video opacity.
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 10.0)})});
-  p.tracks[0].clips[0].gain = 0.5;
-  p.tracks[0].clips[0].fade_in = 2.0;
+  p.sequence().tracks[0].clips[0].gain = 0.5;
+  p.sequence().tracks[0].clips[0].fade_in = 2.0;
 
   EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 1.0), 0.25);
   EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 5.0), 0.5);
@@ -257,8 +257,8 @@ TEST(AudioGain, OverlappingFadesStillReachSilenceAtBothEnds) {
   // Fades longer than half the clip overlap in the middle; the result should
   // stay sane rather than exceeding unity or going negative.
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 4.0)})});
-  p.tracks[0].clips[0].fade_in = 3.0;
-  p.tracks[0].clips[0].fade_out = 3.0;
+  p.sequence().tracks[0].clips[0].fade_in = 3.0;
+  p.sequence().tracks[0].clips[0].fade_out = 3.0;
 
   EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 0.0), 0.0);
   EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 4.0), 0.0);
@@ -271,7 +271,7 @@ TEST(AudioGain, OverlappingFadesStillReachSilenceAtBothEnds) {
 
 TEST(AudioGain, AutomationOverridesTheConstantGain) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 10.0)})});
-  p.tracks[0].clips[0].gain = 1.0;
+  p.sequence().tracks[0].clips[0].gain = 1.0;
   p = core::set_gain_keyframe(std::move(p), "c", 0.0, 0.0);
   p = core::set_gain_keyframe(std::move(p), "c", 10.0, 1.0);
 
@@ -282,7 +282,7 @@ TEST(AudioGain, AutomationOverridesTheConstantGain) {
 
 TEST(AudioGain, AutomationAndFadesCombine) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 10.0)})});
-  p.tracks[0].clips[0].fade_out = 2.0;
+  p.sequence().tracks[0].clips[0].fade_out = 2.0;
   p = core::set_gain_keyframe(std::move(p), "c", 0.0, 0.5);
   p = core::set_gain_keyframe(std::move(p), "c", 10.0, 0.5);
 
@@ -304,7 +304,7 @@ TEST(AudioPan, CentredIsUnityOnBothSides) {
 
 TEST(AudioPan, HardLeftSilencesTheRightAndLeavesTheLeftAlone) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
-  p.tracks[0].clips[0].pan = -1.0;
+  p.sequence().tracks[0].clips[0].pan = -1.0;
   const StereoGain gain = audio_pan_at(only(p), 2.0);
   EXPECT_DOUBLE_EQ(gain.left, 1.0) << "no boost, ever";
   EXPECT_DOUBLE_EQ(gain.right, 0.0);
@@ -312,7 +312,7 @@ TEST(AudioPan, HardLeftSilencesTheRightAndLeavesTheLeftAlone) {
 
 TEST(AudioPan, HalfRightTrimsTheLeftByHalf) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
-  p.tracks[0].clips[0].pan = 0.5;
+  p.sequence().tracks[0].clips[0].pan = 0.5;
   const StereoGain gain = audio_pan_at(only(p), 2.0);
   EXPECT_DOUBLE_EQ(gain.left, 0.5);
   EXPECT_DOUBLE_EQ(gain.right, 1.0);
@@ -334,8 +334,8 @@ TEST(AudioPan, DoesNotFade) {
   // The fades belong to the gain. A clip fading out does not also drift across
   // the image, which is what multiplying the ramp in here would do.
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 10.0)})});
-  p.tracks[0].clips[0].fade_out = 2.0;
-  p.tracks[0].clips[0].pan = -0.5;
+  p.sequence().tracks[0].clips[0].fade_out = 2.0;
+  p.sequence().tracks[0].clips[0].pan = -0.5;
   EXPECT_EQ(audio_pan_at(only(p), 2.0), audio_pan_at(only(p), 9.0));
 }
 
@@ -349,7 +349,7 @@ TEST(AudioSourceTime, TracksTheTimelineThroughTheTrim) {
 
 TEST(AudioSourceTime, SpeedScalesHowFastTheSourceIsConsumed) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 10.0)})});
-  p.tracks[0].clips[0].speed = 2.0;
+  p.sequence().tracks[0].clips[0].speed = 2.0;
   EXPECT_DOUBLE_EQ(audio_source_time_at(only(p), 2.0), 4.0);
 }
 
@@ -369,8 +369,8 @@ TEST(AudioSourceTime, StaysInsideTheTrim) {
 
 TEST(TrackMixer, TheTrackFaderMultipliesTheClipsOwn) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
-  p.tracks[0].gain = 0.5;
-  p.tracks[0].clips[0].gain = 0.5;
+  p.sequence().tracks[0].gain = 0.5;
+  p.sequence().tracks[0].clips[0].gain = 0.5;
 
   EXPECT_DOUBLE_EQ(audio_gain_at(only(p), 2.0), 0.25);
 }
@@ -382,7 +382,7 @@ TEST(TrackMixer, AUnityTrackChangesNothing) {
 
 TEST(TrackMixer, TheTrackPannerAppliesAfterTheClipsOwn) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
-  p.tracks[0].pan = 0.5;  // half right
+  p.sequence().tracks[0].pan = 0.5;  // half right
 
   const StereoGain gain = audio_pan_at(only(p), 2.0);
   EXPECT_DOUBLE_EQ(gain.left, 0.5);
@@ -395,8 +395,8 @@ TEST(TrackMixer, OppositePansCancelToSilenceRatherThanToCentre) {
   // series do; added, the two pans would cancel and it would play centred,
   // which is not what either control was asked for.
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
-  p.tracks[0].clips[0].pan = -1.0;
-  p.tracks[0].pan = 1.0;
+  p.sequence().tracks[0].clips[0].pan = -1.0;
+  p.sequence().tracks[0].pan = 1.0;
 
   const StereoGain gain = audio_pan_at(only(p), 2.0);
   EXPECT_DOUBLE_EQ(gain.left, 0.0);
@@ -408,7 +408,7 @@ TEST(TrackMixer, ATrackPanIsCarriedOnEveryClipThatCameOffIt) {
   // into a project that may have moved on.
   Project p = project({audio_track("a1", {clip("c1", "m", 0.0, 2.0),
                                           clip("c2", "m", 3.0, 2.0)})});
-  p.tracks[0].pan = -1.0;
+  p.sequence().tracks[0].pan = -1.0;
 
   const auto planned = plan_audio(p);
   ASSERT_EQ(planned.size(), 2u);
@@ -418,8 +418,8 @@ TEST(TrackMixer, ATrackPanIsCarriedOnEveryClipThatCameOffIt) {
 
 TEST(TrackMixer, ANonsenseTrackMixIsClampedRatherThanTrusted) {
   Project p = project({audio_track("a1", {clip("c", "m", 0.0, 5.0)})});
-  p.tracks[0].gain = 100.0;
-  p.tracks[0].pan = -8.0;
+  p.sequence().tracks[0].gain = 100.0;
+  p.sequence().tracks[0].pan = -8.0;
 
   const auto planned = plan_audio(p);
   ASSERT_EQ(planned.size(), 1u);

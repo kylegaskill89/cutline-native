@@ -30,7 +30,7 @@ using core::TrackKind;
 
 [[nodiscard]] Project sample_project() {
   Project project;
-  project.fps = 30.0;
+  project.sequence().fps = 30.0;
   project.media = {
       Media{.id = "m1", .name = "wide.mp4", .duration = 60.0, .has_video = true},
       Media{.id = "m2", .name = "music.wav", .duration = 60.0, .audio_stream_count = 1},
@@ -44,7 +44,7 @@ using core::TrackKind;
   audio.clips = {Clip{.id = "a1c", .media_id = "m2", .kind = TrackKind::Audio,
                       .source_in = 0.0, .source_out = 8.0, .start = 0.0}};
 
-  project.tracks = {std::move(video), std::move(audio)};
+  project.sequence().tracks = {std::move(video), std::move(audio)};
   return project;
 }
 
@@ -198,7 +198,7 @@ TEST(Inspector, VolumeRoundTripsToo) {
 TEST(Inspector, HalvingTheVolumeTwiceIsTwoEqualSteps) {
   const auto shown = [](double gain) {
     Project project = sample_project();
-    project.tracks[1].clips[0].gain = gain;
+    project.sequence().tracks[1].clips[0].gain = gain;
     return find(clip_parameters(project, "a1c"), ClipParam::Gain)->value;
   };
 
@@ -234,7 +234,7 @@ TEST(Inspector, TheBottomOfTheVolumeRangeIsSilence) {
   // And a silent clip reads back at the foot rather than at minus infinity,
   // which is not a number a slider can be put at.
   Project quiet = sample_project();
-  quiet.tracks[1].clips[0].gain = 0.0;
+  quiet.sequence().tracks[1].clips[0].gain = 0.0;
   EXPECT_DOUBLE_EQ(find(clip_parameters(quiet, "a1c"), ClipParam::Gain)->value,
                    ui::kGainFloorDb);
 }
@@ -334,7 +334,7 @@ TEST(Inspector, SettingAnAnimatedParameterWritesAKeyframeRatherThanTheStoredValu
   // Three quarters across a 1920-wide canvas, in the pixels the row is in.
   p = set_clip_parameter(std::move(p), "c1", ClipParam::X, 1440.0, 3.0);
 
-  const Clip& clip = p.tracks.front().clips.front();
+  const Clip& clip = p.sequence().tracks.front().clips.front();
   const auto& frames = clip.keyframes[core::anim_prop_index(core::AnimProp::X)];
   ASSERT_EQ(frames.size(), 2u);
   EXPECT_DOUBLE_EQ(frames[1].t, 3.0);
@@ -377,10 +377,10 @@ TEST(Position, FollowsTheSequenceSizeWithoutMovingTheClip) {
   // the picture is: the model stores a fraction.
   Project p = sample_project();
   p = set_clip_parameter(std::move(p), "c1", ClipParam::X, 480.0);
-  const double stored = p.tracks.front().clips.front().transform.x;
+  const double stored = p.sequence().tracks.front().clips.front().transform.x;
 
-  p.canvas_w = 3840;
-  EXPECT_DOUBLE_EQ(p.tracks.front().clips.front().transform.x, stored);
+  p.sequence().canvas_w = 3840;
+  EXPECT_DOUBLE_EQ(p.sequence().tracks.front().clips.front().transform.x, stored);
   EXPECT_DOUBLE_EQ(find(clip_parameters(p, "c1"), ClipParam::X)->value, 960.0);
 }
 
@@ -402,19 +402,19 @@ TEST(Position, SurvivesTheStopwatchBeingTurnedOffAgain) {
   p = set_clip_parameter(std::move(p), "c1", ClipParam::X, 1440.0, 0.0);
   p = set_clip_parameter_animated(std::move(p), "c1", ClipParam::X, false, 0.0);
 
-  EXPECT_DOUBLE_EQ(p.tracks.front().clips.front().transform.x, 0.75);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks.front().clips.front().transform.x, 0.75);
   EXPECT_DOUBLE_EQ(find(clip_parameters(p, "c1"), ClipParam::X)->value, 1440.0);
 }
 
 TEST(Position, ACanvasOfNothingIsNotADivisionByZero) {
   Project p = sample_project();
-  p.canvas_w = 0;
-  p.canvas_h = 0;
+  p.sequence().canvas_w = 0;
+  p.sequence().canvas_h = 0;
   const std::vector<ParamSpec> specs = clip_parameters(p, "c1");
   EXPECT_DOUBLE_EQ(find(specs, ClipParam::X)->value, 0.5) << "the stored fraction, shown raw";
 
   const Project written = set_clip_parameter(p, "c1", ClipParam::X, 0.25);
-  EXPECT_DOUBLE_EQ(written.tracks.front().clips.front().transform.x, 0.25);
+  EXPECT_DOUBLE_EQ(written.sequence().tracks.front().clips.front().transform.x, 0.25);
 }
 
 // ---------------------------------------------------------- anchor point --
@@ -456,10 +456,10 @@ TEST(AnchorPoint, WritesTheFractionTheModelStores) {
   // The layer's top left corner.
   p = set_clip_parameter(std::move(p), "c1", ClipParam::AnchorX, 0.0);
   p = set_clip_parameter(std::move(p), "c1", ClipParam::AnchorY, 0.0);
-  EXPECT_DOUBLE_EQ(p.tracks.front().clips.front().transform.anchor_x, 0.0);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks.front().clips.front().transform.anchor_x, 0.0);
 
   p = set_clip_parameter(std::move(p), "c1", ClipParam::AnchorX, 1920.0);
-  EXPECT_DOUBLE_EQ(p.tracks.front().clips.front().transform.anchor_x, 1.0);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks.front().clips.front().transform.anchor_x, 1.0);
 }
 
 TEST(AnchorPoint, CanBeAnimated) {
@@ -514,13 +514,13 @@ TEST(Balance, StartsCentredAndReadsInHundredths) {
 
 TEST(Balance, WritesTheFractionTheModelStores) {
   Project p = set_clip_parameter(sample_project(), "a1c", ClipParam::Pan, -50.0);
-  EXPECT_DOUBLE_EQ(p.tracks[1].clips.front().pan, -0.5);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[1].clips.front().pan, -0.5);
   EXPECT_DOUBLE_EQ(find(clip_parameters(p, "a1c"), ClipParam::Pan)->value, -50.0);
 }
 
 TEST(Balance, CannotBeDraggedPastEitherEnd) {
   const Project p = set_clip_parameter(sample_project(), "a1c", ClipParam::Pan, 400.0);
-  EXPECT_DOUBLE_EQ(p.tracks[1].clips.front().pan, 1.0);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[1].clips.front().pan, 1.0);
 }
 
 TEST(Balance, CanBeAnimated) {
@@ -532,7 +532,7 @@ TEST(Balance, CanBeAnimated) {
   EXPECT_TRUE(row->animated);
   EXPECT_DOUBLE_EQ(row->value, 50.0) << "halfway across";
   // And the stored value is left alone, the way every animated property is.
-  EXPECT_DOUBLE_EQ(p.tracks[1].clips.front().pan, 0.0);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks[1].clips.front().pan, 0.0);
 }
 
 TEST(Balance, ComesAfterVolume) {
@@ -549,7 +549,7 @@ TEST(Inspector, TurningTheStopwatchOffKeepsTheValueAtThatTime) {
   p = set_clip_parameter(std::move(p), "c1", ClipParam::Opacity, 100.0, 4.0);
   p = set_clip_parameter_animated(std::move(p), "c1", ClipParam::Opacity, false, 1.0);
 
-  const Clip& clip = p.tracks.front().clips.front();
+  const Clip& clip = p.sequence().tracks.front().clips.front();
   EXPECT_TRUE(clip.keyframes[core::anim_prop_index(core::AnimProp::Opacity)].empty());
   EXPECT_DOUBLE_EQ(clip.opacity, 0.25) << "a quarter of the way along the ramp";
 }
@@ -560,7 +560,7 @@ TEST(Inspector, AKeyframeCanBeAddedAndTakenAwayWithoutChangingTheAnimation) {
   p = set_clip_parameter(std::move(p), "c1", ClipParam::Opacity, 100.0, 4.0);
 
   const Project added = toggle_clip_parameter_keyframe(p, "c1", ClipParam::Opacity, 2.0);
-  ASSERT_EQ(added.tracks.front().clips.front()
+  ASSERT_EQ(added.sequence().tracks.front().clips.front()
                 .keyframes[core::anim_prop_index(core::AnimProp::Opacity)]
                 .size(),
             3u);

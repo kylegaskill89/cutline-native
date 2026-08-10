@@ -232,13 +232,13 @@ TEST(AnchorPoint, IsKeyframeableLikeTheRestOfTheTransform) {
   track.id = "v1";
   track.kind = TrackKind::Video;
   track.clips = {clip_at(0.0, 4.0)};
-  p.tracks = {track};
+  p.sequence().tracks = {track};
 
   p = set_keyframe(p, "c", AnimProp::AnchorX, 0.0, 0.5);
   p = set_keyframe(p, "c", AnimProp::AnchorX, 4.0, 0.0);
   p = set_keyframe_interp(p, "c", AnimProp::AnchorX, Interp::Linear);
 
-  const Clip& c = p.tracks[0].clips[0];
+  const Clip& c = p.sequence().tracks[0].clips[0];
   // Halfway along, the anchor is a quarter of the way across the layer, so the
   // centre sits a quarter of the layer's width to the right of it.
   EXPECT_DOUBLE_EQ(layer_box(c, &m, kCanvasW, kCanvasH, 0.0).center_x, 960.0);
@@ -254,7 +254,7 @@ TEST(LayerBox, KeyframesAreEvaluatedInClipLocalTime) {
   track.id = "v1";
   track.kind = TrackKind::Video;
   track.clips = {clip_at(10.0, 4.0)};
-  p.tracks = {track};
+  p.sequence().tracks = {track};
 
   // Animate x from 0 to 1 over the clip's four seconds. The keyframe times are
   // local, so timeline 12 is local 2 — halfway.
@@ -262,7 +262,7 @@ TEST(LayerBox, KeyframesAreEvaluatedInClipLocalTime) {
   p = set_keyframe(p, "c", AnimProp::X, 4.0, 1.0);
   p = set_keyframe_interp(p, "c", AnimProp::X, Interp::Linear);
 
-  const Clip& c = p.tracks[0].clips[0];
+  const Clip& c = p.sequence().tracks[0].clips[0];
   EXPECT_DOUBLE_EQ(layer_box(c, &m, kCanvasW, kCanvasH, 10.0).center_x, 0.0);
   EXPECT_DOUBLE_EQ(layer_box(c, &m, kCanvasW, kCanvasH, 12.0).center_x, 960.0);
   EXPECT_DOUBLE_EQ(layer_box(c, &m, kCanvasW, kCanvasH, 14.0).center_x, 1920.0);

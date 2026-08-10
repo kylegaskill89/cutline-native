@@ -68,16 +68,16 @@ namespace {
 }  // namespace
 
 std::string default_track_label(const core::Project& project, std::size_t index) {
-  if (index >= project.tracks.size()) return {};
-  const core::Track& track = project.tracks[index];
+  if (index >= project.sequence().tracks.size()) return {};
+  const core::Track& track = project.sequence().tracks[index];
   if (!track.label.empty()) return track.label;
 
   if (track.kind == core::TrackKind::Video) {
     // Counted from the bottom: V1 is the base layer everything stacks onto, so
     // the topmost track has the highest number.
     std::size_t below = 0;
-    for (std::size_t i = index + 1; i < project.tracks.size(); ++i) {
-      if (project.tracks[i].kind == core::TrackKind::Video) ++below;
+    for (std::size_t i = index + 1; i < project.sequence().tracks.size(); ++i) {
+      if (project.sequence().tracks[i].kind == core::TrackKind::Video) ++below;
     }
     return "V" + std::to_string(below + 1);
   }
@@ -86,7 +86,7 @@ std::string default_track_label(const core::Project& project, std::size_t index)
   // schemes meet in the middle of the timeline.
   std::size_t above = 0;
   for (std::size_t i = 0; i < index; ++i) {
-    if (project.tracks[i].kind == core::TrackKind::Audio) ++above;
+    if (project.sequence().tracks[i].kind == core::TrackKind::Audio) ++above;
   }
   return "A" + std::to_string(above + 1);
 }
@@ -95,28 +95,28 @@ ui::TimelineModel timeline_model(const core::Project& project,
                                  std::span<const std::string> selection,
                                  const TimelineMedia& media) {
   ui::TimelineModel model;
-  model.fps = project.fps;
-  model.drop_frame = project.drop_frame;
+  model.fps = project.sequence().fps;
+  model.drop_frame = project.sequence().drop_frame;
   model.duration = core::timeline_duration(project);
-  model.in_point = project.in_point;
-  model.out_point = project.out_point;
+  model.in_point = project.sequence().in_point;
+  model.out_point = project.sequence().out_point;
   // Taken from the model rather than left at the timeline's own default, so the
   // top of a volume band is the loudest gain the core will actually store. A
   // band that reached higher would refuse the last part of its own travel.
   model.max_gain = core::kMaxGain;
 
-  model.markers.reserve(project.markers.size());
-  for (const core::Marker& marker : project.markers) {
+  model.markers.reserve(project.sequence().markers.size());
+  for (const core::Marker& marker : project.sequence().markers) {
     model.markers.push_back(ui::TimelineMarker{.time = marker.time,
                                                .label = marker.label,
                                                .color = marker.color,
                                                .duration = marker.duration,
                                                .comment = marker.comment});
   }
-  model.tracks.reserve(project.tracks.size());
+  model.tracks.reserve(project.sequence().tracks.size());
 
-  for (std::size_t i = 0; i < project.tracks.size(); ++i) {
-    const core::Track& track = project.tracks[i];
+  for (std::size_t i = 0; i < project.sequence().tracks.size(); ++i) {
+    const core::Track& track = project.sequence().tracks[i];
     const bool audio = track.kind == core::TrackKind::Audio;
 
     ui::TimelineTrack row;
@@ -310,7 +310,7 @@ core::Project apply_timeline_edit(core::Project project, std::string_view clip_i
       // fall inside, so this is "cut through everything" without the caller
       // having to work out what that means.
       std::vector<std::string> every;
-      for (const core::Track& track : project.tracks) {
+      for (const core::Track& track : project.sequence().tracks) {
         for (const core::Clip& c : track.clips) every.push_back(c.id);
       }
       return core::split_at(std::move(project), edit.at, every);
@@ -354,8 +354,8 @@ core::Project apply_timeline_edit(core::Project project, std::string_view clip_i
 
 core::Project toggle_track_switch(core::Project project, std::string_view track_id,
                                   ui::TrackControl control) {
-  const auto found = std::ranges::find(project.tracks, track_id, &core::Track::id);
-  if (found == project.tracks.end()) return project;
+  const auto found = std::ranges::find(project.sequence().tracks, track_id, &core::Track::id);
+  if (found == project.sequence().tracks.end()) return project;
 
   // Read then flip, so the interface never has to hold the current value and
   // cannot get out of step with the document by holding a stale one.

@@ -28,16 +28,16 @@ using core::TrackKind;
 
 [[nodiscard]] Project sample_project() {
   Project project;
-  project.fps = 30.0;
-  project.canvas_w = 1280;
-  project.canvas_h = 720;
+  project.sequence().fps = 30.0;
+  project.sequence().canvas_w = 1280;
+  project.sequence().canvas_h = 720;
   project.media.push_back(
       Media{.id = "m1", .name = "wide.mp4", .duration = 60.0, .has_video = true});
 
   Track video{.id = "v1", .kind = TrackKind::Video};
   video.clips = {
       Clip{.id = "c1", .media_id = "m1", .source_in = 0.0, .source_out = 5.0, .start = 0.0}};
-  project.tracks.push_back(std::move(video));
+  project.sequence().tracks.push_back(std::move(video));
   return project;
 }
 
@@ -97,12 +97,12 @@ TEST_F(Scratch, SavingOverAProjectReplacesIt) {
   ASSERT_TRUE(write_project(path, sample_project()).has_value());
 
   Project changed = sample_project();
-  changed.fps = 24.0;
+  changed.sequence().fps = 24.0;
   ASSERT_TRUE(write_project(path, changed).has_value());
 
   const auto loaded = read_project(path);
   ASSERT_TRUE(loaded.has_value());
-  EXPECT_DOUBLE_EQ(loaded->project.fps, 24.0);
+  EXPECT_DOUBLE_EQ(loaded->project.sequence().fps, 24.0);
 }
 
 // --------------------------------------------------------------- failures --
@@ -143,12 +143,12 @@ TEST_F(Scratch, AFailedWriteLeavesTheOldFileAlone) {
   ASSERT_FALSE(error);
 
   Project changed = sample_project();
-  changed.fps = 24.0;
+  changed.sequence().fps = 24.0;
   EXPECT_FALSE(write_project(path, changed).has_value());
 
   const auto loaded = read_project(path);
   ASSERT_TRUE(loaded.has_value()) << "the original was damaged";
-  EXPECT_DOUBLE_EQ(loaded->project.fps, 30.0);
+  EXPECT_DOUBLE_EQ(loaded->project.sequence().fps, 30.0);
 }
 
 // ------------------------------------------------------------- extensions --

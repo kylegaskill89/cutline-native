@@ -82,8 +82,8 @@ namespace {
 /// The track by id, or null. Its own helper because every function below wants
 /// it and `find_clip` has no counterpart in this header's neighbourhood.
 [[nodiscard]] Track* find_track_for(Project& p, std::string_view track_id) noexcept {
-  const auto found = std::ranges::find(p.tracks, track_id, &Track::id);
-  return found == p.tracks.end() ? nullptr : &*found;
+  const auto found = std::ranges::find(p.sequence().tracks, track_id, &Track::id);
+  return found == p.sequence().tracks.end() ? nullptr : &*found;
 }
 
 }  // namespace
@@ -158,17 +158,17 @@ void lay_pass_over(std::vector<Keyframe>& curve, std::span<const Keyframe> pass)
 }  // namespace
 
 Project set_master_automation(Project p, AutomationMode mode) {
-  p.master_automation = mode;
+  p.sequence().master_automation = mode;
   return p;
 }
 
 Project clear_master_gain_keyframes(Project p) {
-  p.master_gain_keyframes.clear();
+  p.sequence().master_gain_keyframes.clear();
   return p;
 }
 
 Project write_master_gain_pass(Project p, std::span<const Keyframe> pass) {
-  lay_pass_over(p.master_gain_keyframes, pass);
+  lay_pass_over(p.sequence().master_gain_keyframes, pass);
   return p;
 }
 

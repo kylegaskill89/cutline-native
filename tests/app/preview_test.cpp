@@ -93,10 +93,10 @@ TEST_F(WithFootage, AnImportedClipRendersToPixels) {
   // After the import, because importing into an empty sequence takes the
   // footage's shape — setting it first would be setting it only to have the
   // 4K reference clip overwrite it.
-  project.canvas_w = 640;
-  project.canvas_h = 360;
+  project.sequence().canvas_w = 640;
+  project.sequence().canvas_h = 360;
 
-  auto preview = ProjectPreview::create(project.canvas_w, project.canvas_h);
+  auto preview = ProjectPreview::create(project.sequence().canvas_w, project.sequence().canvas_h);
   if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
 
   const auto frame = (*preview)->frame_at(project, 0.5);
@@ -126,10 +126,10 @@ TEST_F(WithFootage, DifferentTimesGiveDifferentFrames) {
 
   core::Project project = core::empty_project(1, 2);
   project = editor::import_and_place(std::move(project), *source, 0.0);
-  project.canvas_w = 320;
-  project.canvas_h = 180;
+  project.sequence().canvas_w = 320;
+  project.sequence().canvas_h = 180;
 
-  auto preview = ProjectPreview::create(project.canvas_w, project.canvas_h);
+  auto preview = ProjectPreview::create(project.sequence().canvas_w, project.sequence().canvas_h);
   if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
 
   const auto early = (*preview)->frame_at(project, 0.2);
@@ -155,12 +155,12 @@ TEST_F(WithFootage, ProxiesAreReadFromOnlyWhenTheProjectAsks) {
   ASSERT_TRUE(source.has_value());
 
   core::Project project = editor::import_and_place(core::empty_project(1, 2), *source, 0.0);
-  project.canvas_w = 320;
-  project.canvas_h = 180;
+  project.sequence().canvas_w = 320;
+  project.sequence().canvas_h = 180;
   ASSERT_FALSE(project.media.empty());
-  ASSERT_FALSE(project.tracks.front().clips.empty()) << "nothing was placed to decode";
+  ASSERT_FALSE(project.sequence().tracks.front().clips.empty()) << "nothing was placed to decode";
 
-  auto preview = ProjectPreview::create(project.canvas_w, project.canvas_h);
+  auto preview = ProjectPreview::create(project.sequence().canvas_w, project.sequence().canvas_h);
   if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
 
   ASSERT_TRUE((*preview)->frame_at(project, 0.5).has_value());
@@ -186,8 +186,8 @@ TEST_F(WithFootage, TheRendererFollowsTheSequenceSize) {
 
   core::Project project = core::empty_project(1, 2);
   project = editor::import_and_place(std::move(project), *source, 0.0);
-  project.canvas_w = 320;
-  project.canvas_h = 180;
+  project.sequence().canvas_w = 320;
+  project.sequence().canvas_h = 180;
 
   auto preview = ProjectPreview::create(1920, 1080);
   if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
@@ -215,7 +215,7 @@ TEST(Preview, AnEmptyProjectRendersWithoutComplaining) {
 
   // At the *project's* size, not the one the preview was made at: the sequence
   // decides, which is what stops a monitor letterboxing to a stale shape.
-  EXPECT_EQ(frame->width, project.canvas_w);
+  EXPECT_EQ(frame->width, project.sequence().canvas_w);
 }
 
 TEST(Preview, RendersToATextureWithoutCopyingItBack) {
@@ -227,8 +227,8 @@ TEST(Preview, RendersToATextureWithoutCopyingItBack) {
   ASSERT_TRUE(frame.has_value()) << frame.error();
 
   EXPECT_FALSE(frame->empty());
-  EXPECT_EQ(frame->width, project.canvas_w);
-  EXPECT_EQ(frame->height, project.canvas_h);
+  EXPECT_EQ(frame->width, project.sequence().canvas_w);
+  EXPECT_EQ(frame->height, project.sequence().canvas_h);
 }
 
 TEST(Preview, AGivenDeviceIsTheOneItRendersOn) {
@@ -263,14 +263,14 @@ TEST(Preview, ResizingHandsBackADifferentGeneration) {
   if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
 
   core::Project project = core::empty_project(1, 1);
-  project.canvas_w = 160;
-  project.canvas_h = 90;
+  project.sequence().canvas_w = 160;
+  project.sequence().canvas_h = 90;
   const auto first = (*preview)->texture_at(project, 0.0);
   ASSERT_TRUE(first.has_value()) << first.error();
   const unsigned was = first->generation;
 
-  project.canvas_w = 320;
-  project.canvas_h = 180;
+  project.sequence().canvas_w = 320;
+  project.sequence().canvas_h = 180;
   const auto second = (*preview)->texture_at(project, 0.0);
   ASSERT_TRUE(second.has_value()) << second.error();
 
@@ -290,8 +290,8 @@ TEST(Preview, TwoPreviewsNeverShareAGeneration) {
   ASSERT_TRUE(two.has_value()) << two.error();
 
   core::Project project = core::empty_project(1, 1);
-  project.canvas_w = 160;
-  project.canvas_h = 90;
+  project.sequence().canvas_w = 160;
+  project.sequence().canvas_h = 90;
 
   const auto from_one = (*one)->texture_at(project, 0.0);
   const auto from_two = (*two)->texture_at(project, 0.0);
@@ -308,8 +308,8 @@ TEST(Preview, ResizingToTheSameShapeKeepsEverything) {
   if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
 
   core::Project project = core::empty_project(1, 1);
-  project.canvas_w = 160;
-  project.canvas_h = 90;
+  project.sequence().canvas_w = 160;
+  project.sequence().canvas_h = 90;
 
   const auto first = (*preview)->texture_at(project, 0.0);
   ASSERT_TRUE(first.has_value()) << first.error();
@@ -336,8 +336,8 @@ TEST_F(WithFootage, ChangingTheCanvasKeepsTheDecodersOpen) {
   if (!preview.has_value()) GTEST_SKIP() << "no usable device: " << preview.error();
 
   core::Project project;
-  project.canvas_w = 320;
-  project.canvas_h = 180;
+  project.sequence().canvas_w = 320;
+  project.sequence().canvas_h = 180;
 
   core::Media media;
   media.id = "m";
@@ -352,7 +352,7 @@ TEST_F(WithFootage, ChangingTheCanvasKeepsTheDecodersOpen) {
                                    .kind = core::TrackKind::Video,
                                    .source_in = 0.0,
                                    .source_out = 4.0});
-  project.tracks = {std::move(track)};
+  project.sequence().tracks = {std::move(track)};
 
   // Scrub about first, deliberately, to build up a *history* of seeks. That
   // history is the thing being tested: it is carried by the renderer, and a
@@ -372,8 +372,8 @@ TEST_F(WithFootage, ChangingTheCanvasKeepsTheDecodersOpen) {
 
   // Half resolution, which is what the quality control does, then carry on to
   // the very next frame — which from here needs no seek at all.
-  project.canvas_w = 160;
-  project.canvas_h = 90;
+  project.sequence().canvas_w = 160;
+  project.sequence().canvas_h = 90;
   ASSERT_TRUE((*preview)->texture_at(project, 3.5 + 1.0 / kFps).has_value());
 
   const auto after = (*preview)->decode_stats();

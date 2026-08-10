@@ -27,15 +27,15 @@ using core::TrackKind;
 
 [[nodiscard]] Project empty_sequence() {
   Project project;
-  project.fps = 30.0;
-  project.tracks = {Track{.id = "v1", .kind = TrackKind::Video},
+  project.sequence().fps = 30.0;
+  project.sequence().tracks = {Track{.id = "v1", .kind = TrackKind::Video},
                     Track{.id = "a1", .kind = TrackKind::Audio}};
   return project;
 }
 
 [[nodiscard]] std::size_t clip_count(const Project& project) {
   std::size_t count = 0;
-  for (const Track& track : project.tracks) count += track.clips.size();
+  for (const Track& track : project.sequence().tracks) count += track.clips.size();
   return count;
 }
 

@@ -36,7 +36,7 @@ namespace {
 /// Two video clips and a still in the pool, with the first one placed twice.
 [[nodiscard]] core::Project sample_project() {
   core::Project project = core::empty_project(1, 1);
-  project.fps = 30.0;
+  project.sequence().fps = 30.0;
 
   project.media.push_back(clip_media("m1", "Boiler.mp4", 12.0));
   project.media.push_back(clip_media("m2", "Beach.mov", 4.0));

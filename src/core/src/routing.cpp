@@ -13,7 +13,7 @@ namespace cutline::core {
 namespace {
 
 Track* mutable_track(Project& p, std::string_view id) noexcept {
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     if (t.id == id) return &t;
   }
   return nullptr;
@@ -37,14 +37,14 @@ void steps_from(const Track& t, std::vector<std::string_view>& into) {
 
 const Track* track_with_id(const Project& p, std::string_view id) noexcept {
   if (id.empty()) return nullptr;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     if (t.id == id) return &t;
   }
   return nullptr;
 }
 
 bool has_submixes(const Project& p) noexcept {
-  return std::ranges::any_of(p.tracks, [](const Track& t) { return t.submix; });
+  return std::ranges::any_of(p.sequence().tracks, [](const Track& t) { return t.submix; });
 }
 
 bool reaches(const Project& p, std::string_view from_id, std::string_view to_id) {
@@ -100,8 +100,8 @@ std::vector<BusRoute> bus_routes(const Project& p) {
   std::unordered_map<std::string, int> lane_of;
 
   int lane = 0;
-  for (std::size_t i = 0; i < p.tracks.size(); ++i) {
-    const Track& t = p.tracks[i];
+  for (std::size_t i = 0; i < p.sequence().tracks.size(); ++i) {
+    const Track& t = p.sequence().tracks[i];
     if (t.kind != TrackKind::Audio) continue;
     BusRoute route;
     route.lane = lane++;
@@ -114,7 +114,7 @@ std::vector<BusRoute> bus_routes(const Project& p) {
   // Resolved in a second pass, because a route may name a track further down
   // the list than the one that names it.
   for (BusRoute& route : routes) {
-    const Track& t = p.tracks[static_cast<std::size_t>(route.track_index)];
+    const Track& t = p.sequence().tracks[static_cast<std::size_t>(route.track_index)];
     if (const Track* out = routed_output(p, t)) {
       const auto found = lane_of.find(out->id);
       if (found != lane_of.end()) route.output_lane = found->second;
@@ -183,7 +183,7 @@ Project add_submix_track(Project p, std::string label) {
   t.kind = TrackKind::Audio;
   t.submix = true;
   t.label = std::move(label);
-  p.tracks.push_back(std::move(t));
+  p.sequence().tracks.push_back(std::move(t));
   return p;
 }
 

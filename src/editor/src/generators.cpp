@@ -24,7 +24,7 @@ namespace {
 /// uses, and the reason it is here is that it is now used twice.
 [[nodiscard]] std::vector<std::string> clip_ids(const core::Project& project) {
   std::vector<std::string> ids;
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     for (const core::Clip& clip : track.clips) ids.push_back(clip.id);
   }
   return ids;
@@ -33,7 +33,7 @@ namespace {
 void report_new_clip(const core::Project& project, std::string_view media_id,
                      const std::vector<std::string>& before, std::string* clip_id) {
   if (clip_id == nullptr) return;
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     for (const core::Clip& clip : track.clips) {
       if (clip.media_id != media_id) continue;
       if (std::ranges::find(before, clip.id) != before.end()) continue;

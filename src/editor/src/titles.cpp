@@ -62,7 +62,7 @@ core::Project add_title_at(core::Project project, core::TextSpec spec, double at
   project = add_title(std::move(project), std::move(spec), &media_id);
 
   std::vector<std::string> existing;
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     for (const core::Clip& clip : track.clips) existing.push_back(clip.id);
   }
 
@@ -72,7 +72,7 @@ core::Project add_title_at(core::Project project, core::TextSpec spec, double at
   // what it just made. Comparing against what was there beats guessing at the
   // id generator's next value.
   if (clip_id != nullptr) {
-    for (const core::Track& track : project.tracks) {
+    for (const core::Track& track : project.sequence().tracks) {
       for (const core::Clip& clip : track.clips) {
         if (clip.media_id != media_id) continue;
         if (std::ranges::find(existing, clip.id) != existing.end()) continue;

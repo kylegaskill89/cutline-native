@@ -343,19 +343,51 @@ json write(const Marker& m) {
   return j;
 }
 
-json write(const Project& p) {
-  json j{{"canvas_w", p.canvas_w},
-         {"canvas_h", p.canvas_h},
-         {"fps", p.fps},
-         {"master_gain", p.master_gain},
-         {"use_proxies", p.use_proxies},
-         {"drop_frame", p.drop_frame}};
-  put_unless_empty(j, "master_gain_keyframes", write(p.master_gain_keyframes));
-  if (p.master_automation != AutomationMode::Read) j["master_automation"] = p.master_automation;
+/// One sequence, in the shape a project used to be written in.
+///
+/// The field names are the ones a single-sequence project has always used, so
+/// the sequence a project opens with reads and writes exactly as it did — see
+/// `write(const Project&)` for why that is worth keeping.
+json write(const Sequence& s) {
+  json j{{"canvas_w", s.canvas_w},
+         {"canvas_h", s.canvas_h},
+         {"fps", s.fps},
+         {"master_gain", s.master_gain},
+         {"drop_frame", s.drop_frame}};
+  if (!s.id.empty()) j["id"] = s.id;
+  if (!s.name.empty()) j["name"] = s.name;
+  put_unless_empty(j, "master_gain_keyframes", write(s.master_gain_keyframes));
+  if (s.master_automation != AutomationMode::Read) j["master_automation"] = s.master_automation;
 
   json master_effects = json::array();
-  for (const AudioClipEffect& e : p.master_effects) master_effects.push_back(write(e));
+  for (const AudioClipEffect& e : s.master_effects) master_effects.push_back(write(e));
   put_unless_empty(j, "master_effects", master_effects);
+
+  json tracks = json::array();
+  for (const Track& t : s.tracks) tracks.push_back(write(t));
+  put_unless_empty(j, "tracks", tracks);
+
+  json markers = json::array();
+  for (const Marker& m : s.markers) markers.push_back(write(m));
+  put_unless_empty(j, "markers", markers);
+
+  put_if_set(j, "in_point", s.in_point);
+  put_if_set(j, "out_point", s.out_point);
+  return j;
+}
+
+/// A project.
+///
+/// **The first sequence is written where a project's own fields have always
+/// been.** A project with one sequence — which is every project written before
+/// there could be two, and most of them after — comes out byte for byte the
+/// shape it always did, and an older build can still open it. Only the second
+/// and later sequences go in `sequences`, and only then does a file appear that
+/// an older build would read as its first sequence alone. Losing the others is
+/// a poor outcome; refusing to open the file at all is a worse one.
+json write(const Project& p) {
+  json j = p.sequences.empty() ? write(Sequence{}) : write(p.sequences.front());
+  j["use_proxies"] = p.use_proxies;
 
   json media = json::array();
   for (const Media& m : p.media) media.push_back(write(m));
@@ -365,16 +397,12 @@ json write(const Project& p) {
   for (const Bin& b : p.bins) bins.push_back(write(b));
   put_unless_empty(j, "bins", bins);
 
-  json tracks = json::array();
-  for (const Track& t : p.tracks) tracks.push_back(write(t));
-  put_unless_empty(j, "tracks", tracks);
-
-  json markers = json::array();
-  for (const Marker& m : p.markers) markers.push_back(write(m));
-  put_unless_empty(j, "markers", markers);
-
-  put_if_set(j, "in_point", p.in_point);
-  put_if_set(j, "out_point", p.out_point);
+  if (p.sequences.size() > 1) {
+    json rest = json::array();
+    for (std::size_t i = 1; i < p.sequences.size(); ++i) rest.push_back(write(p.sequences[i]));
+    j["sequences"] = std::move(rest);
+    j["open"] = p.open;
+  }
 
   return j;
 }
@@ -668,21 +696,63 @@ Track read_track(const json& j) {
   return t;
 }
 
-Project read_project(const json& j) {
-  Project p;
-  p.canvas_w = read_or(j, "canvas_w", p.canvas_w);
-  p.canvas_h = read_or(j, "canvas_h", p.canvas_h);
-  p.fps = read_or(j, "fps", p.fps);
-  p.master_gain = read_or(j, "master_gain", p.master_gain);
-  p.use_proxies = read_or(j, "use_proxies", p.use_proxies);
-  p.drop_frame = read_or(j, "drop_frame", p.drop_frame);
+/// One sequence, from the shape `write(const Sequence&)` puts it in — which is
+/// also the shape a whole project used to be, so this reads an old file's
+/// top-level fields without knowing that is what it is doing.
+Sequence read_sequence(const json& j) {
+  Sequence s;
+  s.id = read_or(j, "id", std::string{});
+  s.name = read_or(j, "name", std::string{});
+  s.canvas_w = read_or(j, "canvas_w", s.canvas_w);
+  s.canvas_h = read_or(j, "canvas_h", s.canvas_h);
+  s.fps = read_or(j, "fps", s.fps);
+  s.master_gain = read_or(j, "master_gain", s.master_gain);
+  s.drop_frame = read_or(j, "drop_frame", s.drop_frame);
+
   const auto master_keys = j.find("master_gain_keyframes");
-  if (master_keys != j.end()) p.master_gain_keyframes = read_keyframes(*master_keys);
-  p.master_automation = read_or(j, "master_automation", AutomationMode::Read);
+  if (master_keys != j.end()) s.master_gain_keyframes = read_keyframes(*master_keys);
+  s.master_automation = read_or(j, "master_automation", AutomationMode::Read);
   const auto master_effects = j.find("master_effects");
   if (master_effects != j.end() && master_effects->is_array()) {
-    for (const json& e : *master_effects) p.master_effects.push_back(read_audio_effect(e));
+    for (const json& e : *master_effects) s.master_effects.push_back(read_audio_effect(e));
   }
+
+  const auto tracks = j.find("tracks");
+  if (tracks != j.end() && tracks->is_array()) {
+    for (const json& t : *tracks) s.tracks.push_back(read_track(t));
+  }
+
+  const auto markers = j.find("markers");
+  if (markers != j.end() && markers->is_array()) {
+    for (const json& m : *markers) {
+      s.markers.push_back(Marker{
+          .id = read_or(m, "id", std::string{}),
+          .time = read_or(m, "time", 0.0),
+          .label = read_or(m, "label", std::string{}),
+          .color = read_or(m, "color", std::string{}),
+          .duration = read_or(m, "duration", 0.0),
+          .comment = read_or(m, "comment", std::string{}),
+      });
+    }
+  }
+
+  s.in_point = read_optional<double>(j, "in_point");
+  s.out_point = read_optional<double>(j, "out_point");
+  return s;
+}
+
+Project read_project(const json& j) {
+  Project p;
+  // The first sequence is the project's own top-level fields, which is where a
+  // single-sequence project has always kept them.
+  p.sequences = {read_sequence(j)};
+  p.use_proxies = read_or(j, "use_proxies", p.use_proxies);
+
+  const auto sequences = j.find("sequences");
+  if (sequences != j.end() && sequences->is_array()) {
+    for (const json& s : *sequences) p.sequences.push_back(read_sequence(s));
+  }
+  p.open = std::min(read_or(j, "open", std::size_t{0}), p.sequences.size() - 1);
 
   const auto media = j.find("media");
   if (media != j.end() && media->is_array()) {
@@ -700,27 +770,6 @@ Project read_project(const json& j) {
     }
   }
 
-  const auto tracks = j.find("tracks");
-  if (tracks != j.end() && tracks->is_array()) {
-    for (const json& t : *tracks) p.tracks.push_back(read_track(t));
-  }
-
-  const auto markers = j.find("markers");
-  if (markers != j.end() && markers->is_array()) {
-    for (const json& m : *markers) {
-      p.markers.push_back(Marker{
-          .id = read_or(m, "id", std::string{}),
-          .time = read_or(m, "time", 0.0),
-          .label = read_or(m, "label", std::string{}),
-          .color = read_or(m, "color", std::string{}),
-          .duration = read_or(m, "duration", 0.0),
-          .comment = read_or(m, "comment", std::string{}),
-      });
-    }
-  }
-
-  p.in_point = read_optional<double>(j, "in_point");
-  p.out_point = read_optional<double>(j, "out_point");
   return p;
 }
 
@@ -729,8 +778,8 @@ Project read_project(const json& j) {
 void note_ids(const Project& p) {
   for (const Media& m : p.media) note_id(m.id);
   for (const Bin& b : p.bins) note_id(b.id);
-  for (const Marker& m : p.markers) note_id(m.id);
-  for (const Track& t : p.tracks) {
+  for (const Marker& m : p.sequence().markers) note_id(m.id);
+  for (const Track& t : p.sequence().tracks) {
     note_id(t.id);
     for (const Clip& c : t.clips) {
       note_id(c.id);

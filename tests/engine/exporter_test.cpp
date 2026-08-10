@@ -96,11 +96,11 @@ class TempFile {
   t.clips = {std::move(c)};
 
   Project p;
-  p.canvas_w = kWidth;
-  p.canvas_h = kHeight;
-  p.fps = 30.0;
+  p.sequence().canvas_w = kWidth;
+  p.sequence().canvas_h = kHeight;
+  p.sequence().fps = 30.0;
   p.media = {std::move(m)};
-  p.tracks = {std::move(t)};
+  p.sequence().tracks = {std::move(t)};
   return p;
 }
 
@@ -180,7 +180,7 @@ class ToneSource {
     t.id = "a" + std::to_string(i + 1);
     t.kind = TrackKind::Audio;
     t.clips = {std::move(c)};
-    p.tracks.push_back(std::move(t));
+    p.sequence().tracks.push_back(std::move(t));
   }
   return p;
 }
@@ -234,7 +234,7 @@ TEST_F(ExportTest, ATrackWithNothingOnItGetsNoStream) {
   Track bare;
   bare.id = "a3";
   bare.kind = TrackKind::Audio;
-  p.tracks.push_back(std::move(bare));
+  p.sequence().tracks.push_back(std::move(bare));
 
   const TempFile file(".mp4");
   const auto info =
@@ -373,7 +373,7 @@ class ExportAudioTest : public ExportTest {
     t.id = "a1";
     t.kind = TrackKind::Audio;
     t.clips = {std::move(c)};
-    p.tracks.push_back(std::move(t));
+    p.sequence().tracks.push_back(std::move(t));
     return p;
   }
 

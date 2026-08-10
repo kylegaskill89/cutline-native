@@ -36,11 +36,11 @@ Project one_clip_project() {
   v.id = "v1";
   v.kind = TrackKind::Video;
   v.clips = {c};
-  p.tracks = {v};
+  p.sequence().tracks = {v};
   return p;
 }
 
-const Clip& only_clip(const Project& p) { return p.tracks[0].clips[0]; }
+const Clip& only_clip(const Project& p) { return p.sequence().tracks[0].clips[0]; }
 
 // -------------------------------------------------------- clip properties --
 
@@ -62,24 +62,24 @@ TEST(ClipProperties, BlendMode) {
 
 TEST(ClipProperties, GainIsClamped) {
   Project p = one_clip_project();
-  EXPECT_DOUBLE_EQ(set_clip_gain(p, "c1", -1.0).tracks[0].clips[0].gain, 0.0);
-  EXPECT_DOUBLE_EQ(set_clip_gain(p, "c1", 99.0).tracks[0].clips[0].gain, kMaxGain);
-  EXPECT_DOUBLE_EQ(set_clip_gain(p, "c1", 0.5).tracks[0].clips[0].gain, 0.5);
+  EXPECT_DOUBLE_EQ(set_clip_gain(p, "c1", -1.0).sequence().tracks[0].clips[0].gain, 0.0);
+  EXPECT_DOUBLE_EQ(set_clip_gain(p, "c1", 99.0).sequence().tracks[0].clips[0].gain, kMaxGain);
+  EXPECT_DOUBLE_EQ(set_clip_gain(p, "c1", 0.5).sequence().tracks[0].clips[0].gain, 0.5);
 }
 
 TEST(CanvasProperties, TheSequenceCanBeResized) {
   const Project p;
   const Project wide = set_canvas(p, 3840, 2160);
-  EXPECT_EQ(wide.canvas_w, 3840);
-  EXPECT_EQ(wide.canvas_h, 2160);
+  EXPECT_EQ(wide.sequence().canvas_w, 3840);
+  EXPECT_EQ(wide.sequence().canvas_h, 2160);
 }
 
 TEST(CanvasProperties, TheFrameRateCanBeChangedAndIsClamped) {
   const Project p;
-  EXPECT_DOUBLE_EQ(set_fps(p, 59.94).fps, 59.94);
-  EXPECT_DOUBLE_EQ(set_fps(p, 0.0).fps, kMinFps) << "zero would divide by nothing";
-  EXPECT_DOUBLE_EQ(set_fps(p, -24.0).fps, kMinFps) << "and negative is reverse by another name";
-  EXPECT_DOUBLE_EQ(set_fps(p, 100000.0).fps, kMaxFps);
+  EXPECT_DOUBLE_EQ(set_fps(p, 59.94).sequence().fps, 59.94);
+  EXPECT_DOUBLE_EQ(set_fps(p, 0.0).sequence().fps, kMinFps) << "zero would divide by nothing";
+  EXPECT_DOUBLE_EQ(set_fps(p, -24.0).sequence().fps, kMinFps) << "and negative is reverse by another name";
+  EXPECT_DOUBLE_EQ(set_fps(p, 100000.0).sequence().fps, kMaxFps);
 }
 
 TEST(CanvasProperties, ChangingTheFrameRateLeavesTheClipsWhereTheyAre) {
@@ -92,18 +92,18 @@ TEST(CanvasProperties, ChangingTheFrameRateLeavesTheClipsWhereTheyAre) {
   c.source_out = 4.0;
   Track t{.id = "v1", .kind = TrackKind::Video};
   t.clips = {std::move(c)};
-  p.tracks = {std::move(t)};
+  p.sequence().tracks = {std::move(t)};
 
   const Project faster = set_fps(p, 60.0);
-  EXPECT_DOUBLE_EQ(faster.tracks[0].clips[0].start, 2.5);
-  EXPECT_DOUBLE_EQ(faster.tracks[0].clips[0].source_out, 4.0);
+  EXPECT_DOUBLE_EQ(faster.sequence().tracks[0].clips[0].start, 2.5);
+  EXPECT_DOUBLE_EQ(faster.sequence().tracks[0].clips[0].source_out, 4.0);
 }
 
 TEST(CanvasProperties, ASizeOutsideTheRangeIsClampedRatherThanRefused) {
   const Project p;
-  EXPECT_EQ(set_canvas(p, 0, 0).canvas_w, kMinCanvas);
-  EXPECT_EQ(set_canvas(p, -100, -100).canvas_h, kMinCanvas);
-  EXPECT_EQ(set_canvas(p, 999999, 999999).canvas_w, kMaxCanvas);
+  EXPECT_EQ(set_canvas(p, 0, 0).sequence().canvas_w, kMinCanvas);
+  EXPECT_EQ(set_canvas(p, -100, -100).sequence().canvas_h, kMinCanvas);
+  EXPECT_EQ(set_canvas(p, 999999, 999999).sequence().canvas_w, kMaxCanvas);
 }
 
 // Transforms are canvas fractions, so a resize is the same picture at a
@@ -111,28 +111,28 @@ TEST(CanvasProperties, ASizeOutsideTheRangeIsClampedRatherThanRefused) {
 // rewrote them would make the operation impossible to undo cleanly.
 TEST(CanvasProperties, ResizingLeavesTheClipsAlone) {
   Project p = one_clip_project();
-  p.tracks[0].clips[0].transform = {.x = 0.25, .y = 0.75, .scale_x = 0.5};
+  p.sequence().tracks[0].clips[0].transform = {.x = 0.25, .y = 0.75, .scale_x = 0.5};
 
   const Project resized = set_canvas(p, 1080, 1920);
-  EXPECT_EQ(resized.tracks, p.tracks);
+  EXPECT_EQ(resized.sequence().tracks, p.sequence().tracks);
 }
 
 TEST(MasterProperties, MasterGainIsClamped) {
 
   const Project p;
-  EXPECT_DOUBLE_EQ(set_master_gain(p, -1.0).master_gain, 0.0);
-  EXPECT_DOUBLE_EQ(set_master_gain(p, 99.0).master_gain, kMaxMasterGain);
-  EXPECT_DOUBLE_EQ(set_master_gain(p, 0.5).master_gain, 0.5);
+  EXPECT_DOUBLE_EQ(set_master_gain(p, -1.0).sequence().master_gain, 0.0);
+  EXPECT_DOUBLE_EQ(set_master_gain(p, 99.0).sequence().master_gain, kMaxMasterGain);
+  EXPECT_DOUBLE_EQ(set_master_gain(p, 0.5).sequence().master_gain, 0.5);
 }
 
 TEST(MasterProperties, AFreshProjectMixesAtUnity) {
-  EXPECT_DOUBLE_EQ(Project{}.master_gain, 1.0);
+  EXPECT_DOUBLE_EQ(Project{}.sequence().master_gain, 1.0);
 }
 
 TEST(ClipProperties, OpacityIsClamped) {
   const Project p = one_clip_project();
-  EXPECT_DOUBLE_EQ(set_clip_opacity(p, "c1", -1.0).tracks[0].clips[0].opacity, 0.0);
-  EXPECT_DOUBLE_EQ(set_clip_opacity(p, "c1", 5.0).tracks[0].clips[0].opacity, 1.0);
+  EXPECT_DOUBLE_EQ(set_clip_opacity(p, "c1", -1.0).sequence().tracks[0].clips[0].opacity, 0.0);
+  EXPECT_DOUBLE_EQ(set_clip_opacity(p, "c1", 5.0).sequence().tracks[0].clips[0].opacity, 1.0);
 }
 
 TEST(ClipProperties, TransformIsReplacedWholesale) {
@@ -170,29 +170,29 @@ TEST(ClipProperties, TransitionSetAndClear) {
 TEST(Markers, CarryANoteAndALength) {
   Project p;
   p = add_marker(std::move(p), 4.0, "cue");
-  ASSERT_EQ(p.markers.size(), 1u);
+  ASSERT_EQ(p.sequence().markers.size(), 1u);
 
-  const std::string id = p.markers[0].id;
+  const std::string id = p.sequence().markers[0].id;
   p = set_marker(std::move(p), id, "reshoot", "the boom is in frame here", "#c07a92", 3.0);
 
-  EXPECT_EQ(p.markers[0].label, "reshoot");
-  EXPECT_EQ(p.markers[0].comment, "the boom is in frame here");
-  EXPECT_EQ(p.markers[0].color, "#c07a92");
-  EXPECT_DOUBLE_EQ(p.markers[0].duration, 3.0);
-  EXPECT_DOUBLE_EQ(p.markers[0].time, 4.0) << "when it is is not what this edits";
+  EXPECT_EQ(p.sequence().markers[0].label, "reshoot");
+  EXPECT_EQ(p.sequence().markers[0].comment, "the boom is in frame here");
+  EXPECT_EQ(p.sequence().markers[0].color, "#c07a92");
+  EXPECT_DOUBLE_EQ(p.sequence().markers[0].duration, 3.0);
+  EXPECT_DOUBLE_EQ(p.sequence().markers[0].time, 4.0) << "when it is is not what this edits";
 }
 
 // A marker that ended before it began would draw backwards and mean nothing.
 TEST(Markers, ANegativeLengthBecomesAPoint) {
   Project p = add_marker(Project{}, 1.0);
-  p = set_marker(std::move(p), p.markers[0].id, {}, {}, {}, -5.0);
-  EXPECT_DOUBLE_EQ(p.markers[0].duration, 0.0);
+  p = set_marker(std::move(p), p.sequence().markers[0].id, {}, {}, {}, -5.0);
+  EXPECT_DOUBLE_EQ(p.sequence().markers[0].duration, 0.0);
 }
 
 TEST(Markers, SettingOneThatIsNotThereChangesNothing) {
   const Project p = add_marker(Project{}, 1.0);
   const Project after = set_marker(p, "nobody", "x", "y", "#fff", 2.0);
-  EXPECT_EQ(after.markers, p.markers);
+  EXPECT_EQ(after.sequence().markers, p.sequence().markers);
 }
 
 // ------------------------------------------------------ marks on a source --
@@ -220,8 +220,8 @@ TEST(SourceMarks, TheMarksAreKeptOnTheSourceRatherThanTheSequence) {
 
   EXPECT_DOUBLE_EQ(*p.media[0].in_point, 4.0);
   EXPECT_DOUBLE_EQ(*p.media[0].out_point, 9.0);
-  EXPECT_FALSE(p.in_point.has_value());
-  EXPECT_FALSE(p.out_point.has_value());
+  EXPECT_FALSE(p.sequence().in_point.has_value());
+  EXPECT_FALSE(p.sequence().out_point.has_value());
 }
 
 TEST(SourceMarks, AMarkPastTheEndOfTheSourceLandsOnTheEnd) {
@@ -300,9 +300,9 @@ TEST(MatchSequence, AnEmptySequenceTakesTheFootagesShapeAndRate) {
   p.media = {footage_media(3840, 2160, 60.0)};
 
   p = match_sequence_to(std::move(p), "f1");
-  EXPECT_EQ(p.canvas_w, 3840);
-  EXPECT_EQ(p.canvas_h, 2160);
-  EXPECT_DOUBLE_EQ(p.fps, 60.0);
+  EXPECT_EQ(p.sequence().canvas_w, 3840);
+  EXPECT_EQ(p.sequence().canvas_h, 2160);
+  EXPECT_DOUBLE_EQ(p.sequence().fps, 60.0);
 }
 
 // Once anything has been placed, the shape is one somebody has been working to.
@@ -311,8 +311,8 @@ TEST(MatchSequence, ASequenceWithAnythingInItIsLeftAlone) {
   p.media.push_back(footage_media(3840, 2160, 60.0));
 
   const Project after = match_sequence_to(p, "f1");
-  EXPECT_EQ(after.canvas_w, p.canvas_w);
-  EXPECT_DOUBLE_EQ(after.fps, p.fps);
+  EXPECT_EQ(after.sequence().canvas_w, p.sequence().canvas_w);
+  EXPECT_DOUBLE_EQ(after.sequence().fps, p.sequence().fps);
 }
 
 // A title takes the canvas's shape rather than giving it one, and has no rate.
@@ -327,8 +327,8 @@ TEST(MatchSequence, GeneratedSourcesGiveTheSequenceNothing) {
   p.media = {title};
 
   const Project after = match_sequence_to(p, "t1");
-  EXPECT_EQ(after.canvas_w, Project{}.canvas_w);
-  EXPECT_DOUBLE_EQ(after.fps, Project{}.fps);
+  EXPECT_EQ(after.sequence().canvas_w, Project{}.sequence().canvas_w);
+  EXPECT_DOUBLE_EQ(after.sequence().fps, Project{}.sequence().fps);
 }
 
 TEST(MatchSequence, FootageThatKnowsNeitherChangesNothing) {
@@ -339,13 +339,13 @@ TEST(MatchSequence, FootageThatKnowsNeitherChangesNothing) {
   p.media = {unknown};
 
   const Project after = match_sequence_to(p, "u1");
-  EXPECT_EQ(after.canvas_w, Project{}.canvas_w);
-  EXPECT_DOUBLE_EQ(after.fps, Project{}.fps);
+  EXPECT_EQ(after.sequence().canvas_w, Project{}.sequence().canvas_w);
+  EXPECT_DOUBLE_EQ(after.sequence().fps, Project{}.sequence().fps);
 }
 
 TEST(MatchSequence, AMediaThatIsNotThereChangesNothing) {
   const Project p;
-  EXPECT_EQ(match_sequence_to(p, "nobody").canvas_w, p.canvas_w);
+  EXPECT_EQ(match_sequence_to(p, "nobody").sequence().canvas_w, p.sequence().canvas_w);
 }
 
 // The rates and sizes a file can claim are not always ones a sequence may have.
@@ -354,8 +354,8 @@ TEST(MatchSequence, AnAbsurdFormatIsClampedRatherThanTaken) {
   p.media = {footage_media(99999, 99999, 100000.0)};
   p = match_sequence_to(std::move(p), "f1");
 
-  EXPECT_EQ(p.canvas_w, kMaxCanvas);
-  EXPECT_DOUBLE_EQ(p.fps, kMaxFps);
+  EXPECT_EQ(p.sequence().canvas_w, kMaxCanvas);
+  EXPECT_DOUBLE_EQ(p.sequence().fps, kMaxFps);
 }
 
 // ------------------------------------------------------------------- fades --
@@ -392,8 +392,8 @@ TEST(Speed, RetimesWithoutChangingSource) {
 
 TEST(Speed, IsClampedToTheAllowedRange) {
   const Project p = one_clip_project();
-  EXPECT_DOUBLE_EQ(set_clip_speed(p, "c1", 0.0).tracks[0].clips[0].speed, kMinSpeed);
-  EXPECT_DOUBLE_EQ(set_clip_speed(p, "c1", 1e6).tracks[0].clips[0].speed, kMaxSpeed);
+  EXPECT_DOUBLE_EQ(set_clip_speed(p, "c1", 0.0).sequence().tracks[0].clips[0].speed, kMinSpeed);
+  EXPECT_DOUBLE_EQ(set_clip_speed(p, "c1", 1e6).sequence().tracks[0].clips[0].speed, kMaxSpeed);
 }
 
 TEST(Speed, SetsReverseOnlyWhenAsked) {
@@ -469,7 +469,7 @@ TEST(FrameHold, LeavesAudioAlone) {
   sound.source_out = 10.0;
   Track a{.id = "a1", .kind = TrackKind::Audio};
   a.clips = {std::move(sound)};
-  p.tracks.push_back(std::move(a));
+  p.sequence().tracks.push_back(std::move(a));
 
   p = set_clips_hold(std::move(p), Ids{"c1", "a1c"}, 4.0);
   EXPECT_TRUE(only_clip(p).hold.has_value());
@@ -491,7 +491,7 @@ Project three_clip_project() {
   second.start = 10.0;
   second.source_in = 0.0;
   second.source_out = 5.0;
-  p.tracks[0].clips.push_back(second);
+  p.sequence().tracks[0].clips.push_back(second);
 
   Clip other;
   other.id = "c3";
@@ -504,7 +504,7 @@ Project three_clip_project() {
   v2.id = "v2";
   v2.kind = TrackKind::Video;
   v2.clips = {other};
-  p.tracks.push_back(v2);
+  p.sequence().tracks.push_back(v2);
   return p;
 }
 
@@ -540,7 +540,7 @@ TEST(SpeedAcrossSelection, RippleMakesRoomForASlowDown) {
 // A pinned track sits still through an edit made somewhere else.
 TEST(SpeedAcrossSelection, RippleSkipsATrackWithoutSyncLock) {
   Project p = three_clip_project();
-  p.tracks[1].sync_locked = false;
+  p.sequence().tracks[1].sync_locked = false;
   p = set_clips_speed(std::move(p), Ids{"c1"}, 2.0, std::nullopt, true);
 
   EXPECT_DOUBLE_EQ(clip(p, "c2")->start, 5.0);
@@ -550,10 +550,10 @@ TEST(SpeedAcrossSelection, RippleSkipsATrackWithoutSyncLock) {
 // The linked pair is one edit, not two, so the sequence closes up once.
 TEST(SpeedAcrossSelection, ALinkedPairShiftsTheSequenceOnce) {
   Project p = three_clip_project();
-  p.tracks[0].clips[0].group_id = "g";
-  p.tracks[1].clips[0].group_id = "g";
-  p.tracks[1].clips[0].start = 0.0;
-  p.tracks[1].clips[0].source_out = 10.0;  // the same length, and linked
+  p.sequence().tracks[0].clips[0].group_id = "g";
+  p.sequence().tracks[1].clips[0].group_id = "g";
+  p.sequence().tracks[1].clips[0].start = 0.0;
+  p.sequence().tracks[1].clips[0].source_out = 10.0;  // the same length, and linked
 
   p = set_clips_speed(std::move(p), Ids{"c1"}, 2.0, std::nullopt, true);
 
@@ -621,41 +621,41 @@ TEST(GeneratedMedia, MatteSettersIgnoreOtherMedia) {
 TEST(Tracks, VideoTracksAreAddedOnTop) {
   Project p = one_clip_project();
   p = add_video_track(std::move(p));
-  EXPECT_EQ(p.tracks[0].kind, TrackKind::Video);
-  EXPECT_TRUE(p.tracks[0].clips.empty());
-  EXPECT_EQ(p.tracks[1].id, "v1");
+  EXPECT_EQ(p.sequence().tracks[0].kind, TrackKind::Video);
+  EXPECT_TRUE(p.sequence().tracks[0].clips.empty());
+  EXPECT_EQ(p.sequence().tracks[1].id, "v1");
 }
 
 TEST(Tracks, AudioTracksAreAddedAtTheBottom) {
   Project p = one_clip_project();
   p = add_audio_track(std::move(p));
-  EXPECT_EQ(p.tracks.back().kind, TrackKind::Audio);
+  EXPECT_EQ(p.sequence().tracks.back().kind, TrackKind::Audio);
 }
 
 TEST(Tracks, LabelIsTrimmedAndClearable) {
   Project p = one_clip_project();
   p = set_track_label(std::move(p), "v1", "  Overlay  ");
-  EXPECT_EQ(p.tracks[0].label, "Overlay");
+  EXPECT_EQ(p.sequence().tracks[0].label, "Overlay");
 
   p = set_track_label(std::move(p), "v1", "   ");
-  EXPECT_EQ(p.tracks[0].label, "");
+  EXPECT_EQ(p.sequence().tracks[0].label, "");
 }
 
 TEST(Tracks, PatchTouchesOnlyWhatItSets) {
   Project p = one_clip_project();
   p = update_track(std::move(p), "v1", TrackPropsPatch{.hidden = true});
-  EXPECT_TRUE(p.tracks[0].hidden);
-  EXPECT_FALSE(p.tracks[0].locked);
+  EXPECT_TRUE(p.sequence().tracks[0].hidden);
+  EXPECT_FALSE(p.sequence().tracks[0].locked);
 
   p = update_track(std::move(p), "v1", TrackPropsPatch{.locked = true});
-  EXPECT_TRUE(p.tracks[0].hidden);  // still set
-  EXPECT_TRUE(p.tracks[0].locked);
+  EXPECT_TRUE(p.sequence().tracks[0].hidden);  // still set
+  EXPECT_TRUE(p.sequence().tracks[0].locked);
 }
 
 TEST(Tracks, RemoveTakesItsClipsWithIt) {
   Project p = one_clip_project();
   p = remove_track(std::move(p), "v1");
-  EXPECT_TRUE(p.tracks.empty());
+  EXPECT_TRUE(p.sequence().tracks.empty());
   EXPECT_EQ(find_clip(p, "c1"), nullptr);
 }
 
@@ -678,10 +678,10 @@ Project marked_project() {
 
 TEST(Markers, AreKeptInTimeOrder) {
   const Project p = marked_project();
-  ASSERT_EQ(p.markers.size(), 3u);
-  EXPECT_DOUBLE_EQ(p.markers[0].time, 1.0);
-  EXPECT_DOUBLE_EQ(p.markers[1].time, 3.0);
-  EXPECT_DOUBLE_EQ(p.markers[2].time, 5.0);
+  ASSERT_EQ(p.sequence().markers.size(), 3u);
+  EXPECT_DOUBLE_EQ(p.sequence().markers[0].time, 1.0);
+  EXPECT_DOUBLE_EQ(p.sequence().markers[1].time, 3.0);
+  EXPECT_DOUBLE_EQ(p.sequence().markers[2].time, 5.0);
 }
 
 TEST(Markers, NearFindsTheClosestWithinTolerance) {
@@ -704,13 +704,13 @@ TEST(Markers, NavigateForwardsAndBackwards) {
 
 TEST(Markers, RemoveAndClear) {
   Project p = marked_project();
-  const std::string id = p.markers[1].id;
+  const std::string id = p.sequence().markers[1].id;
 
   p = remove_marker(std::move(p), id);
-  EXPECT_EQ(p.markers.size(), 2u);
+  EXPECT_EQ(p.sequence().markers.size(), 2u);
 
   p = clear_markers(std::move(p));
-  EXPECT_TRUE(p.markers.empty());
+  EXPECT_TRUE(p.sequence().markers.empty());
 }
 
 // --------------------------------------------------------------- factories --
@@ -719,22 +719,22 @@ TEST(EmptyProject, HasTheRequestedLanesAndNoMedia) {
   reset_ids();
   const Project p = empty_project();
 
-  ASSERT_EQ(p.tracks.size(), 3u);
-  EXPECT_EQ(p.tracks[0].kind, TrackKind::Video);
-  EXPECT_EQ(p.tracks[1].kind, TrackKind::Audio);
-  EXPECT_EQ(p.tracks[2].kind, TrackKind::Audio);
+  ASSERT_EQ(p.sequence().tracks.size(), 3u);
+  EXPECT_EQ(p.sequence().tracks[0].kind, TrackKind::Video);
+  EXPECT_EQ(p.sequence().tracks[1].kind, TrackKind::Audio);
+  EXPECT_EQ(p.sequence().tracks[2].kind, TrackKind::Audio);
   EXPECT_TRUE(p.media.empty());
-  EXPECT_EQ(p.canvas_w, 1920);
-  EXPECT_EQ(p.canvas_h, 1080);
-  EXPECT_DOUBLE_EQ(p.fps, 30.0);
+  EXPECT_EQ(p.sequence().canvas_w, 1920);
+  EXPECT_EQ(p.sequence().canvas_h, 1080);
+  EXPECT_DOUBLE_EQ(p.sequence().fps, 30.0);
 }
 
 TEST(EmptyProject, HonoursACustomTrackCount) {
   const Project p = empty_project(2, 1);
-  ASSERT_EQ(p.tracks.size(), 3u);
-  EXPECT_EQ(p.tracks[0].kind, TrackKind::Video);
-  EXPECT_EQ(p.tracks[1].kind, TrackKind::Video);
-  EXPECT_EQ(p.tracks[2].kind, TrackKind::Audio);
+  ASSERT_EQ(p.sequence().tracks.size(), 3u);
+  EXPECT_EQ(p.sequence().tracks[0].kind, TrackKind::Video);
+  EXPECT_EQ(p.sequence().tracks[1].kind, TrackKind::Video);
+  EXPECT_EQ(p.sequence().tracks[2].kind, TrackKind::Audio);
 }
 
 // ------------------------------------------------------------- in and out --
@@ -769,8 +769,8 @@ TEST(Marks, AnInPastTheOutClearsTheOut) {
   Project p = set_out_point(one_clip_project(), 3.0);
   p = set_in_point(std::move(p), 6.0);
 
-  EXPECT_FALSE(p.out_point.has_value());
-  EXPECT_DOUBLE_EQ(*p.in_point, 6.0);
+  EXPECT_FALSE(p.sequence().out_point.has_value());
+  EXPECT_DOUBLE_EQ(*p.sequence().in_point, 6.0);
   EXPECT_EQ(marked_span(p), (MarkedSpan{.start = 6.0, .duration = 4.0}));
 }
 
@@ -778,8 +778,8 @@ TEST(Marks, AnOutBeforeTheInClearsTheIn) {
   Project p = set_in_point(one_clip_project(), 6.0);
   p = set_out_point(std::move(p), 3.0);
 
-  EXPECT_FALSE(p.in_point.has_value());
-  EXPECT_DOUBLE_EQ(*p.out_point, 3.0);
+  EXPECT_FALSE(p.sequence().in_point.has_value());
+  EXPECT_DOUBLE_EQ(*p.sequence().out_point, 3.0);
 }
 
 TEST(Marks, TheTwoCanNeverBeInverted) {
@@ -791,8 +791,8 @@ TEST(Marks, TheTwoCanNeverBeInverted) {
     EXPECT_GE(marked_span(p).duration, 0.0);
     p = set_out_point(std::move(p), 10.0 - at);
     EXPECT_GE(marked_span(p).duration, 0.0);
-    if (p.in_point.has_value() && p.out_point.has_value()) {
-      EXPECT_LT(*p.in_point, *p.out_point);
+    if (p.sequence().in_point.has_value() && p.sequence().out_point.has_value()) {
+      EXPECT_LT(*p.sequence().in_point, *p.sequence().out_point);
     }
   }
 }
@@ -852,10 +852,10 @@ TEST(Marks, AreClampedToTheSequence) {
   // A mark left behind by a clip that has since been deleted must not ask the
   // exporter for frames that are not there.
   const Project negative = set_in_point(one_clip_project(), -5.0);
-  EXPECT_DOUBLE_EQ(*negative.in_point, 0.0) << "negative times are clamped when set";
+  EXPECT_DOUBLE_EQ(*negative.sequence().in_point, 0.0) << "negative times are clamped when set";
 
   Project stale = one_clip_project();
-  stale.out_point = 900.0;  // as a file written before a clip was deleted might
+  stale.sequence().out_point = 900.0;  // as a file written before a clip was deleted might
   EXPECT_EQ(marked_span(stale), (MarkedSpan{.start = 0.0, .duration = 10.0}));
 }
 
@@ -864,8 +864,8 @@ TEST(Marks, SettingNothingClearsOnlyThatOne) {
   p = set_out_point(std::move(p), 7.0);
 
   p = set_in_point(std::move(p), std::nullopt);
-  EXPECT_FALSE(p.in_point.has_value());
-  EXPECT_TRUE(p.out_point.has_value()) << "the other one is not collateral";
+  EXPECT_FALSE(p.sequence().in_point.has_value());
+  EXPECT_TRUE(p.sequence().out_point.has_value()) << "the other one is not collateral";
 }
 
 
@@ -873,28 +873,28 @@ TEST(Marks, SettingNothingClearsOnlyThatOne) {
 
 TEST(TrackMix, SetsTheFaderAndThePanner) {
   Project p = empty_project();
-  p.tracks.push_back(Track{.id = "a1", .kind = TrackKind::Audio});
+  p.sequence().tracks.push_back(Track{.id = "a1", .kind = TrackKind::Audio});
 
   p = set_track_gain(std::move(p), "a1", 0.5);
   p = set_track_pan(std::move(p), "a1", -0.25);
 
-  EXPECT_DOUBLE_EQ(p.tracks.back().gain, 0.5);
-  EXPECT_DOUBLE_EQ(p.tracks.back().pan, -0.25);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks.back().gain, 0.5);
+  EXPECT_DOUBLE_EQ(p.sequence().tracks.back().pan, -0.25);
 }
 
 TEST(TrackMix, IsClampedToWhatTheMixerWillHold) {
   Project p = empty_project();
-  p.tracks.push_back(Track{.id = "a1", .kind = TrackKind::Audio});
+  p.sequence().tracks.push_back(Track{.id = "a1", .kind = TrackKind::Audio});
 
-  EXPECT_DOUBLE_EQ(set_track_gain(p, "a1", 99.0).tracks.back().gain, kMaxGain);
-  EXPECT_DOUBLE_EQ(set_track_pan(p, "a1", 4.0).tracks.back().pan, 1.0);
-  EXPECT_DOUBLE_EQ(set_track_pan(p, "a1", -4.0).tracks.back().pan, -1.0);
+  EXPECT_DOUBLE_EQ(set_track_gain(p, "a1", 99.0).sequence().tracks.back().gain, kMaxGain);
+  EXPECT_DOUBLE_EQ(set_track_pan(p, "a1", 4.0).sequence().tracks.back().pan, 1.0);
+  EXPECT_DOUBLE_EQ(set_track_pan(p, "a1", -4.0).sequence().tracks.back().pan, -1.0);
 }
 
 TEST(TrackMix, AVideoTrackHasNothingToMix) {
   const Project p = empty_project();
-  EXPECT_EQ(set_track_gain(p, p.tracks.front().id, 0.5), p);
-  EXPECT_EQ(set_track_pan(p, p.tracks.front().id, 0.5), p);
+  EXPECT_EQ(set_track_gain(p, p.sequence().tracks.front().id, 0.5), p);
+  EXPECT_EQ(set_track_pan(p, p.sequence().tracks.front().id, 0.5), p);
 }
 
 TEST(TrackMix, ATrackThatIsNotThereChangesNothing) {
@@ -909,10 +909,10 @@ TEST(ClipLabel, ColoursEveryClipNamed) {
   // Labelling is done to a selection: a shot is usually several clips, and
   // colouring the picture and leaving the sound is not what anybody means.
   Project p = one_clip_project();
-  Clip second = p.tracks[0].clips[0];
+  Clip second = p.sequence().tracks[0].clips[0];
   second.id = "c2";
   second.start = 20.0;
-  p.tracks[0].clips.push_back(second);
+  p.sequence().tracks[0].clips.push_back(second);
 
   p = set_clips_label(std::move(p), std::vector<std::string>{"c1", "c2"}, "#8f7bb8");
 
@@ -956,8 +956,8 @@ TEST(MediaLabel, IsPutOnClipsCutFromItAfterwards) {
   p = set_media_label(std::move(p), "f1", "#8f7bb8");
   p = place_media(std::move(p), "f1", 0.0);
 
-  ASSERT_FALSE(p.tracks.front().clips.empty());
-  EXPECT_EQ(p.tracks.front().clips.front().label_color, "#8f7bb8");
+  ASSERT_FALSE(p.sequence().tracks.front().clips.empty());
+  EXPECT_EQ(p.sequence().tracks.front().clips.front().label_color, "#8f7bb8");
 }
 
 TEST(MediaLabel, DoesNotRepaintClipsAlreadyOnTheTimeline) {
@@ -971,7 +971,7 @@ TEST(MediaLabel, DoesNotRepaintClipsAlreadyOnTheTimeline) {
   p.media = {media};
 
   p = place_media(std::move(p), "f1", 0.0);
-  const std::string clip_id = p.tracks.front().clips.front().id;
+  const std::string clip_id = p.sequence().tracks.front().clips.front().id;
   p = set_clips_label(std::move(p), std::vector<std::string>{clip_id}, "#c05050");
 
   p = set_media_label(std::move(p), "f1", "#8f7bb8");

@@ -566,12 +566,12 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
   }
 
   impl->missing.assign(missing.begin(), missing.end());
-  impl->master_gain.store(std::clamp(project.master_gain, 0.0, core::kMaxMasterGain),
+  impl->master_gain.store(std::clamp(project.sequence().master_gain, 0.0, core::kMaxMasterGain),
                           std::memory_order_relaxed);
-  if (core::is_master_gain_animated(project)) impl->master_curve = project.master_gain_keyframes;
-  if (!project.master_effects.empty()) {
+  if (core::is_master_gain_animated(project)) impl->master_curve = project.sequence().master_gain_keyframes;
+  if (!project.sequence().master_effects.empty()) {
     impl->master_chain =
-        audio::EffectChain::build(project.master_effects, static_cast<double>(settings.sample_rate),
+        audio::EffectChain::build(project.sequence().master_effects, static_cast<double>(settings.sample_rate),
                                   settings.channels, 0.0);
   }
   const audio::LimiterSettings limiting;
@@ -592,7 +592,7 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
   // and a lane sized out of existence is a bus that cannot be fed. Empty lanes
   // cost a meter and a cleared block each.
   std::size_t lanes = 0;
-  for (const core::Track& track : impl->project.tracks) {
+  for (const core::Track& track : impl->project.sequence().tracks) {
     if (track.kind == core::TrackKind::Audio) ++lanes;
   }
   impl->track_meters.reserve(lanes);
@@ -606,7 +606,7 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
 
   // Which lane each project track owns, walked in the same order the plan
   // walks them so the two numberings cannot disagree.
-  impl->lane_of_track.assign(impl->project.tracks.size(), -1);
+  impl->lane_of_track.assign(impl->project.sequence().tracks.size(), -1);
   impl->built_track_gain.assign(lanes, 1.0);
   impl->track_chains.resize(lanes);
   impl->lane_gain_curve.assign(lanes, {});
@@ -614,8 +614,8 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
   impl->lane_pan_curve.assign(lanes, {});
   impl->lane_audible.assign(lanes, true);
   int ordinal = 0;
-  for (std::size_t i = 0; i < impl->project.tracks.size(); ++i) {
-    const core::Track& track = impl->project.tracks[i];
+  for (std::size_t i = 0; i < impl->project.sequence().tracks.size(); ++i) {
+    const core::Track& track = impl->project.sequence().tracks[i];
     if (track.kind != core::TrackKind::Audio) continue;
     const auto lane = static_cast<std::size_t>(ordinal++);
     impl->lane_of_track[i] = static_cast<int>(lane);

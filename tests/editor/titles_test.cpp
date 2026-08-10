@@ -20,8 +20,8 @@ using core::TrackKind;
 
 [[nodiscard]] Project with_tracks() {
   Project project;
-  project.fps = 30.0;
-  project.tracks = {Track{.id = "v2", .kind = TrackKind::Video},
+  project.sequence().fps = 30.0;
+  project.sequence().tracks = {Track{.id = "v2", .kind = TrackKind::Video},
                     Track{.id = "v1", .kind = TrackKind::Video},
                     Track{.id = "a1", .kind = TrackKind::Audio}};
   return project;
@@ -92,7 +92,7 @@ TEST(Titles, PlacingHonoursTheTrackItIsGiven) {
   std::string clip_id;
   const Project p = add_title_at(with_tracks(), saying("Hello"), 0.0, "v1", &clip_id);
 
-  const auto& lower = p.tracks[1];
+  const auto& lower = p.sequence().tracks[1];
   ASSERT_EQ(lower.id, "v1");
   ASSERT_EQ(lower.clips.size(), 1u);
   EXPECT_EQ(lower.clips.front().id, clip_id);

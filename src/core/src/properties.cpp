@@ -18,8 +18,8 @@ namespace {
 }
 
 [[nodiscard]] Track* find_track(Project& p, std::string_view track_id) noexcept {
-  const auto it = std::ranges::find(p.tracks, track_id, &Track::id);
-  return it == p.tracks.end() ? nullptr : &*it;
+  const auto it = std::ranges::find(p.sequence().tracks, track_id, &Track::id);
+  return it == p.sequence().tracks.end() ? nullptr : &*it;
 }
 
 /// How close two times have to be to count as the same instant. A clip that
@@ -47,7 +47,7 @@ constexpr double kTouchEps = 1e-3;
 
 Project set_clips_enabled(Project p, std::span<const std::string> clip_ids, bool enabled) {
   const std::unordered_set<std::string> ids(clip_ids.begin(), clip_ids.end());
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     for (Clip& c : t.clips) {
       if (ids.contains(c.id)) c.disabled = !enabled;
     }
@@ -58,7 +58,7 @@ Project set_clips_enabled(Project p, std::span<const std::string> clip_ids, bool
 Project set_clips_label(Project p, std::span<const std::string> clip_ids,
                         std::string color) {
   const std::unordered_set<std::string> ids(clip_ids.begin(), clip_ids.end());
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     for (Clip& c : t.clips) {
       if (ids.contains(c.id)) c.label_color = color;
     }
@@ -102,8 +102,8 @@ Project set_clip_pan(Project p, std::string_view clip_id, double pan) {
 namespace {
 
 [[nodiscard]] Track* find_audio_track(Project& p, std::string_view track_id) {
-  const auto found = std::ranges::find(p.tracks, track_id, &Track::id);
-  if (found == p.tracks.end() || found->kind != TrackKind::Audio) return nullptr;
+  const auto found = std::ranges::find(p.sequence().tracks, track_id, &Track::id);
+  if (found == p.sequence().tracks.end() || found->kind != TrackKind::Audio) return nullptr;
   return &*found;
 }
 
@@ -124,22 +124,22 @@ Project set_track_pan(Project p, std::string_view track_id, double pan) {
 }
 
 Project set_canvas(Project p, int width, int height) {
-  p.canvas_w = std::clamp(width, kMinCanvas, kMaxCanvas);
-  p.canvas_h = std::clamp(height, kMinCanvas, kMaxCanvas);
+  p.sequence().canvas_w = std::clamp(width, kMinCanvas, kMaxCanvas);
+  p.sequence().canvas_h = std::clamp(height, kMinCanvas, kMaxCanvas);
   return p;
 }
 
 Project set_fps(Project p, double fps) {
   // A rate of zero would divide by nothing in every walk of the timeline, and a
   // negative one is reverse wearing the wrong name.
-  p.fps = std::clamp(fps, kMinFps, kMaxFps);
+  p.sequence().fps = std::clamp(fps, kMinFps, kMaxFps);
   return p;
 }
 
 Project match_sequence_to(Project p, std::string_view media_id) {
   // Anything at all placed, and the question is closed: the sequence has a
   // shape somebody has been working to.
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     if (!t.clips.empty()) return p;
   }
 
@@ -165,7 +165,7 @@ Project match_sequence_to(Project p, std::string_view media_id) {
 }
 
 Project set_master_gain(Project p, double gain) {
-  p.master_gain = std::clamp(gain, 0.0, kMaxMasterGain);
+  p.sequence().master_gain = std::clamp(gain, 0.0, kMaxMasterGain);
   return p;
 }
 
@@ -188,7 +188,7 @@ Project set_clip_channel_map(Project p, std::string_view clip_id, std::vector<in
   const std::vector<std::string> member_ids = group_members(p, clip_id);
   const std::unordered_set<std::string> members(member_ids.begin(), member_ids.end());
 
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     for (Clip& c : t.clips) {
       // The audio clips of the group only. A picture has no channels, and
       // giving it a map would be a field that means nothing and reads as
@@ -206,7 +206,7 @@ Project set_clip_speed(Project p, std::string_view clip_id, double speed,
   const std::unordered_set<std::string> members(member_ids.begin(), member_ids.end());
   const double clamped = std::clamp(speed, kMinSpeed, kMaxSpeed);
 
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     for (Clip& c : t.clips) {
       if (!members.contains(c.id)) continue;
       c.speed = clamped;
@@ -239,7 +239,7 @@ Project set_clips_speed(Project p, std::span<const std::string> clip_ids, double
   // would shift the sequence twice for one edit.
   std::vector<std::pair<double, double>> shifts;
 
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     for (Clip& c : t.clips) {
       if (!members.contains(c.id)) continue;
       const double was_end = clip_end(c);
@@ -271,7 +271,7 @@ Project set_clips_speed(Project p, std::span<const std::string> clip_ids, double
       }
     }
     shifts = std::move(distinct);
-    for (Track& t : p.tracks) {
+    for (Track& t : p.sequence().tracks) {
       const bool holds_target =
           std::ranges::any_of(t.clips, [&](const Clip& c) { return members.contains(c.id); });
       // A pinned track still carries its own retimed clips — sync lock decides
@@ -288,14 +288,14 @@ Project set_clips_speed(Project p, std::span<const std::string> clip_ids, double
     }
   }
 
-  for (Track& t : p.tracks) std::ranges::stable_sort(t.clips, {}, &Clip::start);
+  for (Track& t : p.sequence().tracks) std::ranges::stable_sort(t.clips, {}, &Clip::start);
   return p;
 }
 
 Project set_clips_hold(Project p, std::span<const std::string> clip_ids,
                        std::optional<double> at_timeline_time) {
   const std::unordered_set<std::string> ids(clip_ids.begin(), clip_ids.end());
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     // Video only. A held frame with its sound still running is the effect, and
     // freezing the audio's "source time" would mean a stuck sample rather than
     // silence — a noise nobody asked for.
@@ -360,7 +360,7 @@ Project add_video_track(Project p) {
   Track t;
   t.id = new_id("track");
   t.kind = TrackKind::Video;
-  p.tracks.insert(p.tracks.begin(), std::move(t));
+  p.sequence().tracks.insert(p.sequence().tracks.begin(), std::move(t));
   return p;
 }
 
@@ -368,7 +368,7 @@ Project add_audio_track(Project p) {
   Track t;
   t.id = new_id("track");
   t.kind = TrackKind::Audio;
-  p.tracks.push_back(std::move(t));
+  p.sequence().tracks.push_back(std::move(t));
   return p;
 }
 
@@ -400,7 +400,7 @@ Project set_track_height(Project p, std::string_view track_id, std::optional<dou
 }
 
 Project remove_track(Project p, std::string_view track_id) {
-  std::erase_if(p.tracks, [&](const Track& t) { return t.id == track_id; });
+  std::erase_if(p.sequence().tracks, [&](const Track& t) { return t.id == track_id; });
   return p;
 }
 
@@ -409,7 +409,7 @@ Project remove_track(Project p, std::string_view track_id) {
 const Marker* marker_near(const Project& p, double time, double tolerance) noexcept {
   const Marker* best = nullptr;
   double best_distance = tolerance;
-  for (const Marker& m : p.markers) {
+  for (const Marker& m : p.sequence().markers) {
     const double distance = std::abs(m.time - time);
     if (distance <= best_distance) {
       best_distance = distance;
@@ -420,20 +420,20 @@ const Marker* marker_near(const Project& p, double time, double tolerance) noexc
 }
 
 Project add_marker(Project p, double time, std::string label, std::string color) {
-  p.markers.push_back(Marker{
+  p.sequence().markers.push_back(Marker{
       .id = new_id("mark"),
       .time = time,
       .label = std::move(label),
       .color = std::move(color),
   });
-  std::ranges::stable_sort(p.markers, {}, &Marker::time);
+  std::ranges::stable_sort(p.sequence().markers, {}, &Marker::time);
   return p;
 }
 
 Project set_marker(Project p, std::string_view marker_id, std::string label,
                    std::string comment, std::string color, double duration) {
-  const auto it = std::ranges::find(p.markers, marker_id, &Marker::id);
-  if (it == p.markers.end()) return p;
+  const auto it = std::ranges::find(p.sequence().markers, marker_id, &Marker::id);
+  if (it == p.sequence().markers.end()) return p;
   it->label = std::move(label);
   it->comment = std::move(comment);
   it->color = std::move(color);
@@ -444,24 +444,24 @@ Project set_marker(Project p, std::string_view marker_id, std::string label,
 }
 
 Project remove_marker(Project p, std::string_view marker_id) {
-  std::erase_if(p.markers, [&](const Marker& m) { return m.id == marker_id; });
+  std::erase_if(p.sequence().markers, [&](const Marker& m) { return m.id == marker_id; });
   return p;
 }
 
 Project clear_markers(Project p) {
-  p.markers.clear();
+  p.sequence().markers.clear();
   return p;
 }
 
 const Marker* next_marker(const Project& p, double time) noexcept {
-  const auto it = std::ranges::find_if(p.markers,
+  const auto it = std::ranges::find_if(p.sequence().markers,
                                        [&](const Marker& m) { return m.time > time + 1e-4; });
-  return it == p.markers.end() ? nullptr : &*it;
+  return it == p.sequence().markers.end() ? nullptr : &*it;
 }
 
 const Marker* previous_marker(const Project& p, double time) noexcept {
   const Marker* found = nullptr;
-  for (const Marker& m : p.markers) {
+  for (const Marker& m : p.sequence().markers) {
     if (m.time < time - 1e-4) found = &m;
   }
   return found;
@@ -471,32 +471,32 @@ const Marker* previous_marker(const Project& p, double time) noexcept {
 
 Project set_in_point(Project p, std::optional<double> time) {
   if (!time.has_value()) {
-    p.in_point.reset();
+    p.sequence().in_point.reset();
     return p;
   }
   const double at = std::max(0.0, *time);
-  p.in_point = at;
+  p.sequence().in_point = at;
   // Cleared rather than pushed along. Somebody marking an in past the out has
   // moved on to a different span, and dragging the out after it would silently
   // keep a boundary they had stopped caring about.
-  if (p.out_point.has_value() && *p.out_point <= at) p.out_point.reset();
+  if (p.sequence().out_point.has_value() && *p.sequence().out_point <= at) p.sequence().out_point.reset();
   return p;
 }
 
 Project set_out_point(Project p, std::optional<double> time) {
   if (!time.has_value()) {
-    p.out_point.reset();
+    p.sequence().out_point.reset();
     return p;
   }
   const double at = std::max(0.0, *time);
-  p.out_point = at;
-  if (p.in_point.has_value() && *p.in_point >= at) p.in_point.reset();
+  p.sequence().out_point = at;
+  if (p.sequence().in_point.has_value() && *p.sequence().in_point >= at) p.sequence().in_point.reset();
   return p;
 }
 
 Project clear_marks(Project p) {
-  p.in_point.reset();
-  p.out_point.reset();
+  p.sequence().in_point.reset();
+  p.sequence().out_point.reset();
   return p;
 }
 
@@ -556,7 +556,7 @@ Project set_proxy_path(Project p, std::string_view media_id, std::string path) {
 }
 
 Project set_drop_frame(Project p, bool drop_frame) {
-  p.drop_frame = drop_frame;
+  p.sequence().drop_frame = drop_frame;
   return p;
 }
 
@@ -578,13 +578,13 @@ std::size_t proxy_count(const Project& p) noexcept {
 }
 
 bool has_marks(const Project& p) noexcept {
-  return p.in_point.has_value() || p.out_point.has_value();
+  return p.sequence().in_point.has_value() || p.sequence().out_point.has_value();
 }
 
 MarkedSpan marked_span(const Project& p) noexcept {
   const double total = timeline_duration(p);
-  const double start = std::clamp(p.in_point.value_or(0.0), 0.0, total);
-  const double end = std::clamp(p.out_point.value_or(total), 0.0, total);
+  const double start = std::clamp(p.sequence().in_point.value_or(0.0), 0.0, total);
+  const double end = std::clamp(p.sequence().out_point.value_or(total), 0.0, total);
   return MarkedSpan{.start = start, .duration = std::max(0.0, end - start)};
 }
 
@@ -611,13 +611,13 @@ Project empty_project(int video_tracks, int audio_tracks) {
     Track t;
     t.id = new_id("track");
     t.kind = TrackKind::Video;
-    p.tracks.push_back(std::move(t));
+    p.sequence().tracks.push_back(std::move(t));
   }
   for (int i = 0; i < audio_tracks; ++i) {
     Track t;
     t.id = new_id("track");
     t.kind = TrackKind::Audio;
-    p.tracks.push_back(std::move(t));
+    p.sequence().tracks.push_back(std::move(t));
   }
   return p;
 }

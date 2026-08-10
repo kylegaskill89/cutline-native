@@ -33,11 +33,11 @@ using core::TrackKind;
   t.clips = {std::move(c)};
 
   Project p;
-  p.tracks = {std::move(t)};
+  p.sequence().tracks = {std::move(t)};
   return p;
 }
 
-[[nodiscard]] const Clip& only_clip(const Project& p) { return p.tracks.front().clips.front(); }
+[[nodiscard]] const Clip& only_clip(const Project& p) { return p.sequence().tracks.front().clips.front(); }
 
 // ------------------------------------------------------------------ adding --
 
@@ -136,7 +136,7 @@ TEST(ClipEffects, AParameterTheEffectDoesNotCarryReadsAsItsDefault) {
   Project p = one_clip();
   core::ClipEffect bare;
   bare.type = "contrast";
-  p.tracks.front().clips.front().effects = {bare};
+  p.sequence().tracks.front().clips.front().effects = {bare};
 
   const std::vector<EffectRow> rows = clip_effects(p, "c1");
   ASSERT_EQ(rows.size(), 1u);
@@ -186,7 +186,7 @@ TEST(ClipEffects, AnUnknownEffectIsShownAsItselfRatherThanDropped) {
   Project p = one_clip();
   core::ClipEffect future;
   future.type = "holographic-tilt-shift";
-  p.tracks.front().clips.front().effects = {future};
+  p.sequence().tracks.front().clips.front().effects = {future};
 
   const std::vector<EffectRow> rows = clip_effects(p, "c1");
   ASSERT_EQ(rows.size(), 1u);
@@ -416,7 +416,7 @@ TEST(AudioEffects, RowsCarryTheRegistrysRangesAndUnits) {
 TEST(AudioEffects, AParameterTheStoredEffectDoesNotCarryReadsAsItsDefault) {
   // Missing is not zero. An absent cutoff means the registry default, not DC.
   Project p = add_audio_effect(one_clip(), "c1", "highpass");
-  p.tracks[0].clips[0].audio_effects[0].params.clear();
+  p.sequence().tracks[0].clips[0].audio_effects[0].params.clear();
 
   const std::vector<EffectRow> rows = clip_audio_effects(p, "c1");
   ASSERT_EQ(rows.size(), 1u);
@@ -459,7 +459,7 @@ TEST(AudioEffects, AnEffectThisBuildDoesNotKnowStillShowsUp) {
   // it names — and the stack should say something is there rather than leaving
   // a gap that reads as data lost.
   Project p = one_clip();
-  p.tracks[0].clips[0].audio_effects.push_back(
+  p.sequence().tracks[0].clips[0].audio_effects.push_back(
       core::AudioClipEffect{.type = "no-such-effect"});
 
   const std::vector<EffectRow> rows = clip_audio_effects(p, "c1");
@@ -498,7 +498,7 @@ TEST(AudioEffects, AClipWithNoneHasNoRows) {
   at.clips = {std::move(audio)};
 
   Project p;
-  p.tracks = {std::move(vt), std::move(at)};
+  p.sequence().tracks = {std::move(vt), std::move(at)};
   return p;
 }
 
@@ -563,7 +563,7 @@ TEST(EffectClipboard, CopyingAClipThatIsNotThereGivesNothing) {
 // and it is the one anybody would try.
 TEST(EffectClipboard, CopyingACleanClipIsHowAStackGetsCleared) {
   Project p = a_pair();
-  p.tracks[0].clips.push_back(Clip{.id = "v-clean",
+  p.sequence().tracks[0].clips.push_back(Clip{.id = "v-clean",
                                    .media_id = "m1",
                                    .kind = TrackKind::Video,
                                    .source_out = 5.0,
@@ -602,7 +602,7 @@ TEST(EffectClipboard, PastingReplacesTheStackRatherThanAddingToIt) {
 
 TEST(EffectClipboard, PastingReachesEveryClipNamed) {
   Project p = a_pair();
-  p.tracks[0].clips.push_back(Clip{.id = "v-other",
+  p.sequence().tracks[0].clips.push_back(Clip{.id = "v-other",
                                    .media_id = "m1",
                                    .kind = TrackKind::Video,
                                    .source_out = 5.0,
@@ -637,7 +637,7 @@ TEST(EffectClipboard, AVideoStackPastedAcrossAPairLeavesTheAudioAlone) {
 
 TEST(EffectClipboard, AnAudioStackPastedOntoAnAudioClipArrives) {
   Project p = a_pair();
-  p.tracks[1].clips.push_back(Clip{.id = "a-other",
+  p.sequence().tracks[1].clips.push_back(Clip{.id = "a-other",
                                    .media_id = "m1",
                                    .kind = TrackKind::Audio,
                                    .source_out = 5.0,
@@ -732,7 +732,7 @@ TEST(ResetAudioEffect, PutsEveryParameterBackToItsDefault) {
   t.id = "a-track";
   t.kind = TrackKind::Audio;
   t.clips = {std::move(a)};
-  p.tracks.push_back(std::move(t));
+  p.sequence().tracks.push_back(std::move(t));
 
   p = add_audio_effect(std::move(p), "a1", "lowpass");
   const double moved = clip_audio_effects(p, "a1").front().params.front().range.maximum;
@@ -762,7 +762,7 @@ TEST(ResetAudioEffect, PutsEveryParameterBackToItsDefault) {
   t.clips = {std::move(c)};
 
   Project p;
-  p.tracks = {std::move(t)};
+  p.sequence().tracks = {std::move(t)};
   return p;
 }
 
@@ -798,13 +798,13 @@ TEST(AudioEffectKeyframes, AnAnimatedParameterIsReadAtTheTimeAsked) {
 TEST(AudioEffectKeyframes, SettingAnAnimatedParameterWritesAKeyframe) {
   Project p = audio_clip_project();
   p = add_audio_effect(std::move(p), "a1", "lowpass");
-  const double stored = p.tracks.front().clips.front().audio_effects.front().params.at("freq");
+  const double stored = p.sequence().tracks.front().clips.front().audio_effects.front().params.at("freq");
 
   p = set_audio_effect_parameter_animated(std::move(p), "a1", 0, "freq", true, 0.0);
   p = set_audio_effect_parameter(std::move(p), "a1", 0, "freq", 300.0, 3.0);
 
   const core::AudioClipEffect& effect =
-      p.tracks.front().clips.front().audio_effects.front();
+      p.sequence().tracks.front().clips.front().audio_effects.front();
   EXPECT_EQ(effect.keyframes.at("freq").size(), 2u);
   EXPECT_DOUBLE_EQ(effect.params.at("freq"), stored) << "the stored value is left alone";
 }
@@ -819,7 +819,7 @@ TEST(AudioEffectKeyframes, TurningTheStopwatchOffKeepsTheValueAtThatTime) {
   p = set_audio_effect_parameter_animated(std::move(p), "a1", 0, "freq", false, 2.0);
 
   const core::AudioClipEffect& effect =
-      p.tracks.front().clips.front().audio_effects.front();
+      p.sequence().tracks.front().clips.front().audio_effects.front();
   EXPECT_TRUE(effect.keyframes.empty());
   EXPECT_DOUBLE_EQ(effect.params.at("freq"), 6400.0) << "halfway along the sweep";
 }
@@ -837,7 +837,7 @@ TEST(AudioEffectKeyframes, AMarkerAddsAndTakesAwayWithoutBendingTheCurve) {
   p = set_audio_effect_parameter(std::move(p), "a1", 0, "freq", 12000.0, 4.0);
 
   const Project added = toggle_audio_effect_keyframe(p, "a1", 0, "freq", 2.0);
-  EXPECT_EQ(added.tracks.front().clips.front().audio_effects.front().keyframes.at("freq").size(),
+  EXPECT_EQ(added.sequence().tracks.front().clips.front().audio_effects.front().keyframes.at("freq").size(),
             3u);
   EXPECT_DOUBLE_EQ(clip_audio_effects(added, "a1", 2.0).front().params.front().value,
                    clip_audio_effects(p, "a1", 2.0).front().params.front().value);
@@ -852,7 +852,7 @@ TEST(AudioEffectKeyframes, ResettingAnEffectClearsThemToo) {
   p = set_audio_effect_parameter(std::move(p), "a1", 0, "freq", 300.0, 3.0);
 
   const Project reset = reset_audio_effect(p, "a1", 0);
-  EXPECT_TRUE(reset.tracks.front().clips.front().audio_effects.front().keyframes.empty());
+  EXPECT_TRUE(reset.sequence().tracks.front().clips.front().audio_effects.front().keyframes.empty());
 }
 
 TEST(AudioEffectKeyframes, AnEffectThatIsNotThereChangesNothing) {
@@ -906,7 +906,7 @@ TEST(CopyOneEffect, AnIndexThatNamesNothingLeavesTheClipboardAlone) {
   t.id = "a-track";
   t.kind = TrackKind::Audio;
   t.clips = {std::move(a)};
-  p.tracks.push_back(std::move(t));
+  p.sequence().tracks.push_back(std::move(t));
   return p;
 }
 
@@ -957,7 +957,7 @@ TEST(EffectLibrary, EveryEntryCanBeApplied) {
   second.kind = TrackKind::Video;
   second.source_out = 5.0;
   second.start = 5.0;
-  p.tracks.front().clips.push_back(std::move(second));
+  p.sequence().tracks.front().clips.push_back(std::move(second));
   return p;
 }
 
@@ -1081,7 +1081,7 @@ TEST(ApplyLibraryEntry, RefusesATransitionWhereNothingAbutsTheClip) {
   next.media_id = "m1";
   next.source_out = 5.0;
   next.start = 5.0;
-  p.tracks.front().clips.push_back(std::move(next));
+  p.sequence().tracks.front().clips.push_back(std::move(next));
   return p;
 }
 
@@ -1259,11 +1259,11 @@ TEST(EffectMask, ThePathSurvivesAnEditToEveryOtherNumber) {
   t.clips = {std::move(c)};
 
   Project p;
-  p.tracks = {std::move(t)};
+  p.sequence().tracks = {std::move(t)};
   return p;
 }
 
-[[nodiscard]] const Clip& audio_clip_of(const Project& p) { return p.tracks.front().clips.front(); }
+[[nodiscard]] const Clip& audio_clip_of(const Project& p) { return p.sequence().tracks.front().clips.front(); }
 
 TEST(RolePreset, TheRoleIsSetAndTheProcessingComesWithIt) {
   const Project p = apply_role_preset(one_audio_clip(), "a", core::AudioRole::Dialogue);

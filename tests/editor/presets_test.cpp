@@ -40,7 +40,7 @@ using core::TrackKind;
   sound.clips = {std::move(audio)};
 
   Project p;
-  p.tracks = {std::move(picture), std::move(sound)};
+  p.sequence().tracks = {std::move(picture), std::move(sound)};
   return p;
 }
 
@@ -53,12 +53,12 @@ using core::TrackKind;
 
 [[nodiscard]] Project with_blur(double amount = 6.0) {
   Project p = two_clips();
-  p.tracks[0].clips[0].effects = {blur(amount)};
+  p.sequence().tracks[0].clips[0].effects = {blur(amount)};
   return p;
 }
 
-[[nodiscard]] const Clip& picture_clip(const Project& p) { return p.tracks[0].clips[0]; }
-[[nodiscard]] const Clip& sound_clip(const Project& p) { return p.tracks[1].clips[0]; }
+[[nodiscard]] const Clip& picture_clip(const Project& p) { return p.sequence().tracks[0].clips[0]; }
+[[nodiscard]] const Clip& sound_clip(const Project& p) { return p.sequence().tracks[1].clips[0]; }
 
 // ------------------------------------------------------------------ saving --
 
@@ -161,7 +161,7 @@ TEST(Presets, KeyframesAndMasksComeWithIt) {
   core::ClipEffect shaped = blur(2.0);
   shaped.keyframes["amount"] = {{.t = 0.0, .v = 0.0}, {.t = 2.0, .v = 8.0}};
   shaped.mask = core::Mask{.shape = core::MaskShape::Ellipse, .feather = 0.1};
-  p.tracks[0].clips[0].effects = {shaped};
+  p.sequence().tracks[0].clips[0].effects = {shaped};
 
   Presets presets;
   ASSERT_TRUE(save_preset(presets, p, "v", "Shaped"));
@@ -184,8 +184,8 @@ TEST(Presets, RoundTripThroughItsFile) {
   core::AudioClipEffect filter;
   filter.type = "lowpass";
   filter.params["freq"] = 800.0;
-  p.tracks[0].clips[0].effects = {shaped};
-  p.tracks[0].clips[0].audio_effects = {filter};
+  p.sequence().tracks[0].clips[0].effects = {shaped};
+  p.sequence().tracks[0].clips[0].audio_effects = {filter};
   ASSERT_TRUE(save_preset(presets, p, "v", "Everything"));
 
   const auto read = presets_from_json(to_json(presets));

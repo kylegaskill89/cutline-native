@@ -204,15 +204,15 @@ TEST(Relink, TheEntryKeepsItsIdSoEveryClipIsRepaired) {
   Project project = import_media(with_tracks(), a_video(), &id);
   project = core::place_media(std::move(project), id, 0.0);
   project = core::place_media(std::move(project), id, 60.0);
-  const std::size_t clips = project.tracks[0].clips.size();
+  const std::size_t clips = project.sequence().tracks[0].clips.size();
   ASSERT_EQ(clips, 2u);
 
   project = relink_media(std::move(project), id, a_video("E:/moved/wide.mp4"));
 
   EXPECT_EQ(project.media[0].id, id) << "the id changed, so the clips point at nothing";
   EXPECT_EQ(project.media[0].path, "E:/moved/wide.mp4");
-  EXPECT_EQ(project.tracks[0].clips.size(), clips);
-  for (const core::Clip& clip : project.tracks[0].clips) EXPECT_EQ(clip.media_id, id);
+  EXPECT_EQ(project.sequence().tracks[0].clips.size(), clips);
+  for (const core::Clip& clip : project.sequence().tracks[0].clips) EXPECT_EQ(clip.media_id, id);
 }
 
 TEST(Relink, TheProbedFactsComeWithTheNewPath) {
@@ -338,7 +338,7 @@ TEST(Import, PlacingPutsClipsOnTheTimeline) {
 
   int video_clips = 0;
   int audio_clips = 0;
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     for (const core::Clip& clip : track.clips) {
       (clip.kind == TrackKind::Video ? video_clips : audio_clips) += 1;
     }
@@ -351,7 +351,7 @@ TEST(Import, PlacedClipsAreLinked) {
   // Video and its audio have to move together or they drift out of sync.
   const Project project = import_and_place(with_tracks(), a_video(), 0.0);
 
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     for (const core::Clip& clip : track.clips) {
       EXPECT_TRUE(clip.group_id.has_value()) << clip.id << " was placed unlinked";
     }
@@ -361,7 +361,7 @@ TEST(Import, PlacedClipsAreLinked) {
 TEST(Import, PlacingLandsWhereItWasAsked) {
   const Project project = import_and_place(with_tracks(), a_video(), 7.5);
   bool found = false;
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     for (const core::Clip& clip : track.clips) {
       if (clip.kind == TrackKind::Video) {
         EXPECT_DOUBLE_EQ(clip.start, 7.5);
@@ -374,18 +374,18 @@ TEST(Import, PlacingLandsWhereItWasAsked) {
 
 TEST(Import, PlacingBeforeTheStartIsPulledForward) {
   const Project project = import_and_place(with_tracks(), a_video(), -10.0);
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     for (const core::Clip& clip : track.clips) EXPECT_GE(clip.start, 0.0);
   }
 }
 
 TEST(Import, PlacingTheSameFileTwiceReusesTheMediaButAddsClips) {
   Project project = import_and_place(with_tracks(), a_video(), 0.0);
-  const std::size_t after_first = project.tracks[0].clips.size();
+  const std::size_t after_first = project.sequence().tracks[0].clips.size();
   project = import_and_place(std::move(project), a_video(), 60.0);
 
   EXPECT_EQ(project.media.size(), 1u);
-  EXPECT_GT(project.tracks[0].clips.size(), after_first);
+  EXPECT_GT(project.sequence().tracks[0].clips.size(), after_first);
 }
 
 // ----------------------------------------------------------- extensions --
@@ -467,8 +467,8 @@ TEST(Import, AStillPlacesAsSomethingYouCanSee) {
   source.audio_stream_count = 0;
 
   const Project project = import_and_place(with_tracks(), source, 0.0);
-  ASSERT_FALSE(project.tracks.front().clips.empty()) << "nothing was placed";
-  const core::Clip& clip = project.tracks.front().clips.front();
+  ASSERT_FALSE(project.sequence().tracks.front().clips.empty()) << "nothing was placed";
+  const core::Clip& clip = project.sequence().tracks.front().clips.front();
   EXPECT_DOUBLE_EQ(clip.source_out - clip.source_in, kStillLength);
 }
 
@@ -482,8 +482,8 @@ TEST(Import, AChosenStillLengthIsWhatGetsPlaced) {
   source.audio_stream_count = 0;
 
   const Project project = import_and_place(with_tracks(), source, 0.0, {}, 2.5);
-  ASSERT_FALSE(project.tracks.front().clips.empty());
-  const core::Clip& clip = project.tracks.front().clips.front();
+  ASSERT_FALSE(project.sequence().tracks.front().clips.empty());
+  const core::Clip& clip = project.sequence().tracks.front().clips.front();
   EXPECT_DOUBLE_EQ(clip.source_out - clip.source_in, 2.5);
 }
 

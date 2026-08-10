@@ -51,10 +51,10 @@ Track video_track(std::string id, std::vector<Clip> clips) {
 /// A project with one video track holding one ten-second clip.
 Project single_clip() {
   Project p;
-  p.canvas_w = kCanvasW;
-  p.canvas_h = kCanvasH;
+  p.sequence().canvas_w = kCanvasW;
+  p.sequence().canvas_h = kCanvasH;
   p.media = {source("m")};
-  p.tracks = {video_track("v1", {clip("a", "m", 0.0, 10.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("a", "m", 0.0, 10.0)})};
   return p;
 }
 
@@ -89,10 +89,10 @@ TEST(PlanFrame, TheClipStartIsInclusiveAndTheEndExclusive) {
 
 TEST(PlanFrame, AbuttingClipsNeverBothDraw) {
   Project p;
-  p.canvas_w = kCanvasW;
-  p.canvas_h = kCanvasH;
+  p.sequence().canvas_w = kCanvasW;
+  p.sequence().canvas_h = kCanvasH;
   p.media = {source("m")};
-  p.tracks = {video_track("v1", {clip("a", "m", 0.0, 5.0), clip("b", "m", 5.0, 5.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("a", "m", 0.0, 5.0), clip("b", "m", 5.0, 5.0)})};
 
   const std::vector<PlannedLayer> at_cut = plan_frame(p, 5.0);
   ASSERT_EQ(at_cut.size(), 1u);
@@ -103,24 +103,24 @@ TEST(PlanFrame, AbuttingClipsNeverBothDraw) {
 
 TEST(PlanFrame, ADisabledClipIsLeftOut) {
   Project p = single_clip();
-  p.tracks[0].clips[0].disabled = true;
+  p.sequence().tracks[0].clips[0].disabled = true;
   EXPECT_TRUE(plan_frame(p, 5.0).empty());
 }
 
 TEST(PlanFrame, AHiddenTrackIsLeftOut) {
   Project p = single_clip();
-  p.tracks[0].hidden = true;
+  p.sequence().tracks[0].hidden = true;
   EXPECT_TRUE(plan_frame(p, 5.0).empty());
 }
 
 TEST(PlanFrame, HidingOneTrackLeavesTheOthers) {
   Project p;
-  p.canvas_w = kCanvasW;
-  p.canvas_h = kCanvasH;
+  p.sequence().canvas_w = kCanvasW;
+  p.sequence().canvas_h = kCanvasH;
   p.media = {source("m")};
-  p.tracks = {video_track("top", {clip("t", "m", 0.0, 10.0)}),
+  p.sequence().tracks = {video_track("top", {clip("t", "m", 0.0, 10.0)}),
               video_track("bottom", {clip("b", "m", 0.0, 10.0)})};
-  p.tracks[0].hidden = true;
+  p.sequence().tracks[0].hidden = true;
 
   const std::vector<PlannedLayer> layers = plan_frame(p, 5.0);
   ASSERT_EQ(layers.size(), 1u);
@@ -133,7 +133,7 @@ TEST(PlanFrame, AudioTracksAreNotPlanned) {
   audio.id = "a1";
   audio.kind = TrackKind::Audio;
   audio.clips = {clip("audio", "m", 0.0, 10.0)};
-  p.tracks.push_back(audio);
+  p.sequence().tracks.push_back(audio);
 
   const std::vector<PlannedLayer> layers = plan_frame(p, 5.0);
   ASSERT_EQ(layers.size(), 1u);
@@ -146,10 +146,10 @@ TEST(PlanFrame, TheBottomTrackDrawsFirst) {
   // Tracks are stored top-first, so the last one in the list is the base and
   // must come out of the plan first — everything else composites over it.
   Project p;
-  p.canvas_w = kCanvasW;
-  p.canvas_h = kCanvasH;
+  p.sequence().canvas_w = kCanvasW;
+  p.sequence().canvas_h = kCanvasH;
   p.media = {source("m")};
-  p.tracks = {video_track("top", {clip("t", "m", 0.0, 10.0)}),
+  p.sequence().tracks = {video_track("top", {clip("t", "m", 0.0, 10.0)}),
               video_track("middle", {clip("m2", "m", 0.0, 10.0)}),
               video_track("bottom", {clip("b", "m", 0.0, 10.0)})};
 
@@ -162,10 +162,10 @@ TEST(PlanFrame, TheBottomTrackDrawsFirst) {
 
 TEST(PlanFrame, TrackIndexCountsFromTheBottom) {
   Project p;
-  p.canvas_w = kCanvasW;
-  p.canvas_h = kCanvasH;
+  p.sequence().canvas_w = kCanvasW;
+  p.sequence().canvas_h = kCanvasH;
   p.media = {source("m")};
-  p.tracks = {video_track("top", {clip("t", "m", 0.0, 10.0)}),
+  p.sequence().tracks = {video_track("top", {clip("t", "m", 0.0, 10.0)}),
               video_track("bottom", {clip("b", "m", 0.0, 10.0)})};
 
   const std::vector<PlannedLayer> layers = plan_frame(p, 5.0);
@@ -179,13 +179,13 @@ TEST(PlanFrame, DuringADissolveTheIncomingClipDrawsOnTop) {
   // later is the incoming clip, and it has to land over the outgoing one or
   // the cross-fade runs backwards.
   Project p;
-  p.canvas_w = kCanvasW;
-  p.canvas_h = kCanvasH;
+  p.sequence().canvas_w = kCanvasW;
+  p.sequence().canvas_h = kCanvasH;
   p.media = {source("m")};
 
   Clip a = clip("a", "m", 0.0, 5.0, 5.0);
   a.transition_out = core::Transition{.kind = core::TransitionKind::Dissolve, .duration = 2.0};
-  p.tracks = {video_track("v1", {a, clip("b", "m", 5.0, 5.0, 5.0)})};
+  p.sequence().tracks = {video_track("v1", {a, clip("b", "m", 5.0, 5.0, 5.0)})};
 
   // Mid-transition: the overlap is centred on the cut.
   const std::vector<PlannedLayer> layers = plan_frame(p, 5.0);
@@ -200,8 +200,8 @@ TEST(PlanFrame, DuringADissolveTheIncomingClipDrawsOnTop) {
 
 TEST(PlanFrame, RecognisesEachKindOfGeneratedMedia) {
   Project p;
-  p.canvas_w = kCanvasW;
-  p.canvas_h = kCanvasH;
+  p.sequence().canvas_w = kCanvasW;
+  p.sequence().canvas_h = kCanvasH;
 
   Media title;
   title.id = "title";
@@ -225,7 +225,7 @@ TEST(PlanFrame, RecognisesEachKindOfGeneratedMedia) {
 
   p.media = {title, matte, adjustment, still};
   // Stored top-first, so this list reverses on the way out.
-  p.tracks = {video_track("v4", {clip("d", "still", 0.0, 10.0)}),
+  p.sequence().tracks = {video_track("v4", {clip("d", "still", 0.0, 10.0)}),
               video_track("v3", {clip("c", "adj", 0.0, 10.0)}),
               video_track("v2", {clip("b", "matte", 0.0, 10.0)}),
               video_track("v1", {clip("a", "title", 0.0, 10.0)})};
@@ -254,13 +254,13 @@ TEST(PlanFrame, AClipWithMissingMediaStillPlansRatherThanVanishing) {
 
 TEST(PlanFrame, CarriesTheBlendMode) {
   Project p = single_clip();
-  p.tracks[0].clips[0].blend = BlendMode::Screen;
+  p.sequence().tracks[0].clips[0].blend = BlendMode::Screen;
   EXPECT_EQ(plan_frame(p, 5.0)[0].blend, BlendMode::Screen);
 }
 
 TEST(PlanFrame, CarriesOpacityAsAlpha) {
   Project p = single_clip();
-  p.tracks[0].clips[0].opacity = 0.25;
+  p.sequence().tracks[0].clips[0].opacity = 0.25;
   EXPECT_DOUBLE_EQ(plan_frame(p, 5.0)[0].alpha, 0.25);
 }
 
@@ -278,11 +278,11 @@ TEST(PlanFrame, GeometryComesFromTheCanvasSize) {
 
 TEST(PlanFrame, SourceTimeTracksThePlayheadThroughTheTrim) {
   Project p;
-  p.canvas_w = kCanvasW;
-  p.canvas_h = kCanvasH;
+  p.sequence().canvas_w = kCanvasW;
+  p.sequence().canvas_h = kCanvasH;
   p.media = {source("m")};
   // Source [20, 30) placed at timeline 4.
-  p.tracks = {video_track("v1", {clip("a", "m", 4.0, 10.0, 20.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("a", "m", 4.0, 10.0, 20.0)})};
 
   EXPECT_DOUBLE_EQ(plan_frame(p, 4.0)[0].source_time, 20.0);
   EXPECT_DOUBLE_EQ(plan_frame(p, 9.0)[0].source_time, 25.0);
@@ -290,7 +290,7 @@ TEST(PlanFrame, SourceTimeTracksThePlayheadThroughTheTrim) {
 
 TEST(PlanFrame, SourceTimeAccountsForSpeed) {
   Project p = single_clip();
-  p.tracks[0].clips[0].speed = 2.0;
+  p.sequence().tracks[0].clips[0].speed = 2.0;
 
   // At double speed, one second of timeline consumes two of source.
   EXPECT_DOUBLE_EQ(plan_frame(p, 1.0)[0].source_time, 2.0);
@@ -298,12 +298,12 @@ TEST(PlanFrame, SourceTimeAccountsForSpeed) {
 
 TEST(PlanFrame, SourceTimeRunsBackwardsForAReversedClip) {
   Project p;
-  p.canvas_w = kCanvasW;
-  p.canvas_h = kCanvasH;
+  p.sequence().canvas_w = kCanvasW;
+  p.sequence().canvas_h = kCanvasH;
   p.media = {source("m")};
   Clip c = clip("a", "m", 0.0, 10.0, 0.0);
   c.reverse = true;
-  p.tracks = {video_track("v1", {c})};
+  p.sequence().tracks = {video_track("v1", {c})};
 
   const double early = plan_frame(p, 1.0)[0].source_time;
   const double late = plan_frame(p, 8.0)[0].source_time;
@@ -314,10 +314,10 @@ TEST(PlanFrame, SourceTimeNeverReachesTheSegmentEnd) {
   // Landing exactly on source_out would decode the first frame past the trim,
   // showing one frame of the wrong shot.
   Project p;
-  p.canvas_w = kCanvasW;
-  p.canvas_h = kCanvasH;
+  p.sequence().canvas_w = kCanvasW;
+  p.sequence().canvas_h = kCanvasH;
   p.media = {source("m")};
-  p.tracks = {video_track("v1", {clip("a", "m", 0.0, 10.0, 5.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("a", "m", 0.0, 10.0, 5.0)})};
 
   const PlannedLayer last = plan_frame(p, 9.9999)[0];
   EXPECT_LT(last.source_time, 15.0);
@@ -325,10 +325,10 @@ TEST(PlanFrame, SourceTimeNeverReachesTheSegmentEnd) {
 
 TEST(PlanFrame, SourceTimeNeverPrecedesTheSegmentStart) {
   Project p;
-  p.canvas_w = kCanvasW;
-  p.canvas_h = kCanvasH;
+  p.sequence().canvas_w = kCanvasW;
+  p.sequence().canvas_h = kCanvasH;
   p.media = {source("m")};
-  p.tracks = {video_track("v1", {clip("a", "m", 0.0, 10.0, 5.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("a", "m", 0.0, 10.0, 5.0)})};
 
   EXPECT_GE(plan_frame(p, 0.0)[0].source_time, 5.0);
 }

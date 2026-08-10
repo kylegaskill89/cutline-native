@@ -966,7 +966,7 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
   Impl& d = *impl_;
   d.missing.clear();
 
-  if (auto ok = d.compositor->resize(project.canvas_w, project.canvas_h); !ok) {
+  if (auto ok = d.compositor->resize(project.sequence().canvas_w, project.sequence().canvas_h); !ok) {
     return std::unexpected(ok.error());
   }
 

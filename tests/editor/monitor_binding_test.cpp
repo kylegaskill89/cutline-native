@@ -23,8 +23,8 @@ namespace {
 /// A 1920x1080 sequence with one clip of `media_w` by `media_h` footage on it.
 [[nodiscard]] core::Project project_with(int media_w, int media_h) {
   core::Project p;
-  p.canvas_w = 1920;
-  p.canvas_h = 1080;
+  p.sequence().canvas_w = 1920;
+  p.sequence().canvas_h = 1080;
 
   core::Media media;
   media.id = "m1";
@@ -42,12 +42,12 @@ namespace {
                                    .source_in = 0.0,
                                    .source_out = 4.0,
                                    .start = 2.0});
-  p.tracks.push_back(std::move(track));
+  p.sequence().tracks.push_back(std::move(track));
   return p;
 }
 
 [[nodiscard]] const core::Clip& only_clip(const core::Project& p) {
-  return p.tracks.front().clips.front();
+  return p.sequence().tracks.front().clips.front();
 }
 
 TEST(MonitorBinding, FootageTheShapeOfTheFrameFillsIt) {
@@ -74,7 +74,7 @@ TEST(MonitorBinding, SquareFootageInAWideSequenceIsTallAndNarrow) {
 
 TEST(MonitorBinding, TheStoredTransformIsWhereTheBoxIs) {
   core::Project p = project_with(1920, 1080);
-  p.tracks[0].clips[0].transform = {
+  p.sequence().tracks[0].clips[0].transform = {
       .x = 0.25, .y = 0.75, .scale_x = 0.5, .scale_y = 0.25, .rotation = 30.0};
 
   const auto box = monitor_box(p, "c1", 2.0);
@@ -101,8 +101,8 @@ TEST(MonitorBinding, ThereIsNoBoxForThingsThatDrawNoPicture) {
   EXPECT_FALSE(monitor_box(project_with(1920, 1080), "nope", 2.0).has_value());
 
   core::Project audio = project_with(1920, 1080);
-  audio.tracks[0].kind = core::TrackKind::Audio;
-  audio.tracks[0].clips[0].kind = core::TrackKind::Audio;
+  audio.sequence().tracks[0].kind = core::TrackKind::Audio;
+  audio.sequence().tracks[0].clips[0].kind = core::TrackKind::Audio;
   EXPECT_FALSE(monitor_box(audio, "c1", 2.0).has_value());
 
   // An adjustment layer sets `has_video` — it contributes a filter, not a
@@ -150,8 +150,8 @@ TEST(MonitorBinding, TheBoxSurroundsTheLayerWhenTheAnchorHasBeenMoved) {
   // Anchored at its top left corner and placed in the middle of the frame, the
   // layer hangs down and to the right — so its centre, which is what the
   // handles go round, is half a layer past the middle on each axis.
-  p.tracks.front().clips.front().transform.anchor_x = 0.0;
-  p.tracks.front().clips.front().transform.anchor_y = 0.0;
+  p.sequence().tracks.front().clips.front().transform.anchor_x = 0.0;
+  p.sequence().tracks.front().clips.front().transform.anchor_y = 0.0;
 
   const auto box = monitor_box(p, "c1", 2.0);
   ASSERT_TRUE(box.has_value());
@@ -161,8 +161,8 @@ TEST(MonitorBinding, TheBoxSurroundsTheLayerWhenTheAnchorHasBeenMoved) {
 
 TEST(MonitorBinding, ADraggedBoxComesBackTheSameWithAMovedAnchor) {
   core::Project p = project_with(1000, 1000);
-  p.tracks.front().clips.front().transform.anchor_x = 0.2;
-  p.tracks.front().clips.front().transform.anchor_y = 0.9;
+  p.sequence().tracks.front().clips.front().transform.anchor_x = 0.2;
+  p.sequence().tracks.front().clips.front().transform.anchor_y = 0.9;
 
   const ui::MonitorBox wanted{
       .x = 0.3, .y = 0.6, .width = 0.4, .height = 0.8, .rotation = -45.0};
@@ -225,7 +225,7 @@ TEST(MonitorBinding, ABoxForAClipThatIsNotThereChangesNothing) {
   blur.type = "blur";
   blur.params["amount"] = 4.0;
   blur.mask = mask;
-  p.tracks.front().clips.front().effects = {blur};
+  p.sequence().tracks.front().clips.front().effects = {blur};
   return p;
 }
 
@@ -243,7 +243,7 @@ TEST(MaskOverlays, AMaskInTheMiddleOfACentredLayerIsInTheMiddleOfTheFrame) {
 
 TEST(MaskOverlays, AMaskFollowsTheLayerWhenItMoves) {
   core::Project p = with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse});
-  p.tracks.front().clips.front().transform.x = 0.25;
+  p.sequence().tracks.front().clips.front().transform.x = 0.25;
 
   const std::vector<MaskOverlayRef> masks = mask_overlays(p, "c1", 2.0);
   ASSERT_EQ(masks.size(), 1u);
@@ -252,8 +252,8 @@ TEST(MaskOverlays, AMaskFollowsTheLayerWhenItMoves) {
 
 TEST(MaskOverlays, AMaskShrinksWithTheLayer) {
   core::Project p = with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse});
-  p.tracks.front().clips.front().transform.scale_x = 0.5;
-  p.tracks.front().clips.front().transform.scale_y = 0.5;
+  p.sequence().tracks.front().clips.front().transform.scale_x = 0.5;
+  p.sequence().tracks.front().clips.front().transform.scale_y = 0.5;
 
   const std::vector<MaskOverlayRef> masks = mask_overlays(p, "c1", 2.0);
   ASSERT_EQ(masks.size(), 1u);
@@ -264,7 +264,7 @@ TEST(MaskOverlays, AMaskShrinksWithTheLayer) {
 TEST(MaskOverlays, AMaskTurnsWithTheLayerAndKeepsItsOwnTurn) {
   core::Project p =
       with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Rectangle, .rotation = 20.0});
-  p.tracks.front().clips.front().transform.rotation = 30.0;
+  p.sequence().tracks.front().clips.front().transform.rotation = 30.0;
 
   const std::vector<MaskOverlayRef> masks = mask_overlays(p, "c1", 2.0);
   ASSERT_EQ(masks.size(), 1u);
@@ -277,7 +277,7 @@ TEST(MaskOverlays, AMaskOffTheLayersCentreSwingsRoundWithIt) {
   core::Project p = with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse,
                                                      .x = 0.75,
                                                      .y = 0.5});
-  p.tracks.front().clips.front().transform.rotation = 90.0;
+  p.sequence().tracks.front().clips.front().transform.rotation = 90.0;
 
   const std::vector<MaskOverlayRef> masks = mask_overlays(p, "c1", 2.0);
   ASSERT_EQ(masks.size(), 1u);
@@ -290,7 +290,7 @@ TEST(MaskOverlays, AnUnmaskedOrDisabledEffectDrawsNothing) {
   EXPECT_TRUE(mask_overlays(plain, "c1", 2.0).empty()) << "no shape, no overlay";
 
   core::Project off = with_mask(1920, 1080, core::Mask{.shape = core::MaskShape::Ellipse});
-  off.tracks.front().clips.front().effects.front().enabled = false;
+  off.sequence().tracks.front().clips.front().effects.front().enabled = false;
   EXPECT_TRUE(mask_overlays(off, "c1", 2.0).empty()) << "a disabled effect masks nothing";
 }
 
@@ -299,7 +299,7 @@ TEST(MaskOverlays, ADraggedOverlayComesBackTheSame) {
   // survive the trip back into layer space and out again, or a mask would creep
   // every time it was touched.
   core::Project p = with_mask(1000, 1000, core::Mask{.shape = core::MaskShape::Ellipse});
-  core::Clip& clip = p.tracks.front().clips.front();
+  core::Clip& clip = p.sequence().tracks.front().clips.front();
   clip.transform.x = 0.3;
   clip.transform.y = 0.7;
   clip.transform.scale_x = 0.6;
@@ -332,7 +332,7 @@ TEST(MaskOverlays, ADragKeepsWhatItWasNotAsking) {
   const ui::MaskOverlay moved{.shape = 2, .x = 0.3, .y = 0.3};
   const core::Project after = apply_mask_overlay(p, "c1", 0, moved, 2.0);
 
-  const core::Mask& mask = after.tracks.front().clips.front().effects.front().mask;
+  const core::Mask& mask = after.sequence().tracks.front().clips.front().effects.front().mask;
   EXPECT_DOUBLE_EQ(mask.feather, 0.2);
   EXPECT_DOUBLE_EQ(mask.opacity, 0.4);
   EXPECT_TRUE(mask.inverted);
@@ -360,7 +360,7 @@ TEST(MaskOverlays, APathCanBeEmptied) {
   cleared.points.clear();
 
   p = apply_mask_overlay(p, "c1", 0, cleared, 2.0);
-  EXPECT_TRUE(p.tracks.front().clips.front().effects.front().mask.points.empty());
+  EXPECT_TRUE(p.sequence().tracks.front().clips.front().effects.front().mask.points.empty());
 }
 
 // And the other two shapes must not lose theirs, which is what makes switching
@@ -373,7 +373,7 @@ TEST(MaskOverlays, AnEllipseLeavesAPathsCornersAlone) {
   const std::vector<MaskOverlayRef> shown = mask_overlays(p, "c1", 2.0);
   ASSERT_EQ(shown.size(), 1u);
   p = apply_mask_overlay(p, "c1", 0, shown[0].overlay, 2.0);
-  EXPECT_EQ(p.tracks.front().clips.front().effects.front().mask.points.size(), 3u);
+  EXPECT_EQ(p.sequence().tracks.front().clips.front().effects.front().mask.points.size(), 3u);
 }
 
 // A path lives in its corners and ignores the half-extents. But the half-extents
@@ -399,7 +399,7 @@ TEST(MaskOverlays, DraggingAPathCornerKeepsTheHalfExtentsDescribingIt) {
   dragged.points[2] = {0.4, 0.4};
 
   p = apply_mask_overlay(p, "c1", 0, dragged, 2.0);
-  const core::Mask& mask = p.tracks.front().clips.front().effects.front().mask;
+  const core::Mask& mask = p.sequence().tracks.front().clips.front().effects.front().mask;
 
   EXPECT_NEAR(mask.points[2].x, 0.4, 1e-9);
   EXPECT_NEAR(mask.width, 0.4, 1e-9) << "the box no longer contains the corners";
@@ -420,7 +420,7 @@ TEST(MaskOverlays, TheBoxAPathLeavesBehindIsTheOneAnEllipseWouldUse) {
   ASSERT_EQ(shown.size(), 1u);
   p = apply_mask_overlay(p, "c1", 0, shown[0].overlay, 2.0);
 
-  core::Mask mask = p.tracks.front().clips.front().effects.front().mask;
+  core::Mask mask = p.sequence().tracks.front().clips.front().effects.front().mask;
   EXPECT_NEAR(mask.width, 0.3, 1e-9);
   EXPECT_NEAR(mask.height, 0.2, 1e-9);
 
@@ -465,7 +465,7 @@ TEST(MaskOverlays, DraggingAnAnimatedMaskWritesAKeyframe) {
   p = apply_mask_overlay(std::move(p), "c1", 0, moved, 4.0);
 
   const std::vector<core::Keyframe>& keys =
-      p.tracks.front().clips.front().effects[0].keyframes.at("mask.x");
+      p.sequence().tracks.front().clips.front().effects[0].keyframes.at("mask.x");
   ASSERT_EQ(keys.size(), 2u) << "the drag did not leave a keyframe behind";
   EXPECT_DOUBLE_EQ(keys[1].t, 2.0) << "at the moment it was dragged, clip-local";
   EXPECT_NEAR(keys[1].v, 0.8, 1e-9);
@@ -482,7 +482,7 @@ TEST(MaskOverlays, DraggingAMaskThatIsNotAnimatedStillJustMovesIt) {
   moved.x = 0.8;
   p = apply_mask_overlay(std::move(p), "c1", 0, moved, 4.0);
 
-  const core::ClipEffect& effect = p.tracks.front().clips.front().effects[0];
+  const core::ClipEffect& effect = p.sequence().tracks.front().clips.front().effects[0];
   EXPECT_TRUE(effect.keyframes.empty()) << "a drag invented an animation";
   EXPECT_NEAR(effect.mask.x, 0.8, 1e-9);
 }
@@ -546,7 +546,7 @@ TEST(ScaleToFrame, AudioIsPassedOver) {
                                    .source_in = 0.0,
                                    .source_out = 4.0,
                                    .start = 2.0});
-  p.tracks.push_back(std::move(audio));
+  p.sequence().tracks.push_back(std::move(audio));
 
   const std::vector<std::string> ids{"s1"};
   const core::Project before = p;

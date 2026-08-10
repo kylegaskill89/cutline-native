@@ -55,7 +55,7 @@ Project set_clip_role(Project p, std::string_view clip_id, AudioRole role) {
 }
 
 Project set_track_role(Project p, std::string_view track_id, AudioRole role) {
-  for (Track& track : p.tracks) {
+  for (Track& track : p.sequence().tracks) {
     if (track.id != track_id) continue;
     if (track.kind != TrackKind::Audio) return p;
     for (Clip& clip : track.clips) clip.role = role;
@@ -68,7 +68,7 @@ std::vector<RoleSpan> role_spans(const Project& p, AudioRole role) {
   std::vector<RoleSpan> spans;
   if (role == AudioRole::None) return spans;
 
-  for (const Track& track : p.tracks) {
+  for (const Track& track : p.sequence().tracks) {
     if (track.kind != TrackKind::Audio) continue;
     if (!is_track_audible(p, track)) continue;
     for (const Clip& clip : track.clips) {
@@ -173,7 +173,7 @@ Project duck_role(Project p, AudioRole role, const DuckSettings& settings) {
   // Collected first, because ducking a clip rewrites the project and the loop
   // would otherwise be walking a copy of it that is one edit out of date.
   std::vector<std::string> ids;
-  for (const Track& track : p.tracks) {
+  for (const Track& track : p.sequence().tracks) {
     if (track.kind != TrackKind::Audio) continue;
     for (const Clip& clip : track.clips) {
       if (clip.role == role && !clip.disabled) ids.push_back(clip.id);

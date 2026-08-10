@@ -30,7 +30,7 @@ constexpr double kFps = 30.0;
 
 [[nodiscard]] Project sample_project() {
   Project project;
-  project.fps = kFps;
+  project.sequence().fps = kFps;
   project.media.push_back(
       Media{.id = "m1", .name = "wide.mp4", .duration = 60.0, .has_video = true});
 
@@ -39,13 +39,13 @@ constexpr double kFps = 30.0;
       Clip{.id = "c1", .media_id = "m1", .source_in = 0.0, .source_out = 5.0, .start = 0.0},
       Clip{.id = "c2", .media_id = "m1", .source_in = 5.0, .source_out = 12.0, .start = 5.0},
   };
-  project.tracks.push_back(std::move(video));
+  project.sequence().tracks.push_back(std::move(video));
   return project;
 }
 
 [[nodiscard]] std::size_t clip_count(const Project& project) {
   std::size_t count = 0;
-  for (const Track& track : project.tracks) count += track.clips.size();
+  for (const Track& track : project.sequence().tracks) count += track.clips.size();
   return count;
 }
 
@@ -205,8 +205,8 @@ TEST(Commands, TrimmingFollowsTheTargetedTrack) {
   second.clips = {
       Clip{.id = "d1", .media_id = "m1", .source_in = 0.0, .source_out = 9.0, .start = 0.0}};
   // Stored above v1, and the only one targeted.
-  project.tracks.insert(project.tracks.begin(), std::move(second));
-  project.tracks[0].targeted = true;
+  project.sequence().tracks.insert(project.sequence().tracks.begin(), std::move(second));
+  project.sequence().tracks[0].targeted = true;
 
   Session session(std::move(project));
   session.set_playhead(2.0);
@@ -372,8 +372,8 @@ TEST(Marks, MarkInPutsTheInAtThePlayhead) {
   session.set_playhead(3.0);
 
   ASSERT_TRUE(run(session, Command::MarkIn));
-  ASSERT_TRUE(session.project().in_point.has_value());
-  EXPECT_DOUBLE_EQ(*session.project().in_point, 3.0);
+  ASSERT_TRUE(session.project().sequence().in_point.has_value());
+  EXPECT_DOUBLE_EQ(*session.project().sequence().in_point, 3.0);
 }
 
 TEST(Marks, MarkingWhereTheMarkAlreadyIsTakesItAway) {
@@ -384,7 +384,7 @@ TEST(Marks, MarkingWhereTheMarkAlreadyIsTakesItAway) {
   ASSERT_TRUE(run(session, Command::MarkIn));
 
   ASSERT_TRUE(run(session, Command::MarkIn));
-  EXPECT_FALSE(session.project().in_point.has_value());
+  EXPECT_FALSE(session.project().sequence().in_point.has_value());
 }
 
 TEST(Marks, MarkingSomewhereElseMovesIt) {
@@ -394,7 +394,7 @@ TEST(Marks, MarkingSomewhereElseMovesIt) {
 
   session.set_playhead(6.0);
   ASSERT_TRUE(run(session, Command::MarkIn));
-  EXPECT_DOUBLE_EQ(*session.project().in_point, 6.0);
+  EXPECT_DOUBLE_EQ(*session.project().sequence().in_point, 6.0);
 }
 
 TEST(Marks, MarkOutIsTheSameTheOtherWayRound) {
@@ -402,8 +402,8 @@ TEST(Marks, MarkOutIsTheSameTheOtherWayRound) {
   session.set_playhead(8.0);
 
   ASSERT_TRUE(run(session, Command::MarkOut));
-  EXPECT_DOUBLE_EQ(*session.project().out_point, 8.0);
-  EXPECT_FALSE(session.project().in_point.has_value());
+  EXPECT_DOUBLE_EQ(*session.project().sequence().out_point, 8.0);
+  EXPECT_FALSE(session.project().sequence().in_point.has_value());
 }
 
 TEST(Marks, ClearingIsOnlyOfferedWhenThereIsSomethingToClear) {
@@ -447,8 +447,8 @@ TEST(Markers, AreDroppedAtThePlayhead) {
   session.set_playhead(3.0);
 
   ASSERT_TRUE(run(session, Command::AddMarker));
-  ASSERT_EQ(session.project().markers.size(), 1u);
-  EXPECT_DOUBLE_EQ(session.project().markers.front().time, 3.0);
+  ASSERT_EQ(session.project().sequence().markers.size(), 1u);
+  EXPECT_DOUBLE_EQ(session.project().sequence().markers.front().time, 3.0);
 }
 
 TEST(Markers, DroppingOneWhereOneAlreadyIsTakesItAway) {
@@ -459,7 +459,7 @@ TEST(Markers, DroppingOneWhereOneAlreadyIsTakesItAway) {
   ASSERT_TRUE(run(session, Command::AddMarker));
 
   ASSERT_TRUE(run(session, Command::AddMarker));
-  EXPECT_TRUE(session.project().markers.empty());
+  EXPECT_TRUE(session.project().sequence().markers.empty());
 }
 
 TEST(Markers, AreNotConfusedWithOneAFrameAway) {
@@ -469,7 +469,7 @@ TEST(Markers, AreNotConfusedWithOneAFrameAway) {
 
   session.set_playhead(3.0 + 1.0 / kFps);
   ASSERT_TRUE(run(session, Command::AddMarker));
-  EXPECT_EQ(session.project().markers.size(), 2u) << "a frame apart is two markers";
+  EXPECT_EQ(session.project().sequence().markers.size(), 2u) << "a frame apart is two markers";
 }
 
 TEST(Markers, KeepTheirOrderWhateverOrderTheyWereMadeIn) {
@@ -479,10 +479,10 @@ TEST(Markers, KeepTheirOrderWhateverOrderTheyWereMadeIn) {
     ASSERT_TRUE(run(session, Command::AddMarker));
   }
 
-  ASSERT_EQ(session.project().markers.size(), 3u);
-  EXPECT_DOUBLE_EQ(session.project().markers[0].time, 2.0);
-  EXPECT_DOUBLE_EQ(session.project().markers[1].time, 4.0);
-  EXPECT_DOUBLE_EQ(session.project().markers[2].time, 6.0);
+  ASSERT_EQ(session.project().sequence().markers.size(), 3u);
+  EXPECT_DOUBLE_EQ(session.project().sequence().markers[0].time, 2.0);
+  EXPECT_DOUBLE_EQ(session.project().sequence().markers[1].time, 4.0);
+  EXPECT_DOUBLE_EQ(session.project().sequence().markers[2].time, 6.0);
 }
 
 TEST(Markers, TheJumpsWalkFromWhereThePlayheadIs) {
@@ -523,7 +523,7 @@ TEST(Markers, ClearingIsOnlyOfferedWhenThereAreSome) {
   EXPECT_TRUE(can_run(session, Command::ClearMarkers));
 
   ASSERT_TRUE(run(session, Command::ClearMarkers));
-  EXPECT_TRUE(session.project().markers.empty());
+  EXPECT_TRUE(session.project().sequence().markers.empty());
 }
 
 TEST(Markers, AJumpIsNotAnEditAndDoesNotGoOnTheUndoStack) {
@@ -604,7 +604,7 @@ TEST(Commands, AVideoTrackGoesOnTopAndAnAudioTrackAtTheBottom) {
   ASSERT_TRUE(run(session, Command::AddVideoTrack));
   ASSERT_TRUE(run(session, Command::AddAudioTrack));
 
-  const std::vector<Track>& tracks = session.project().tracks;
+  const std::vector<Track>& tracks = session.project().sequence().tracks;
   ASSERT_EQ(tracks.size(), 3u);
   EXPECT_EQ(tracks.front().kind, TrackKind::Video) << "the new video layer is the topmost";
   EXPECT_EQ(tracks.back().kind, TrackKind::Audio) << "the new lane is the last one";
@@ -615,7 +615,7 @@ TEST(Commands, ATrackCanBeAddedToAnEmptySequence) {
   Session session{};
   EXPECT_TRUE(can_run(session, Command::AddVideoTrack));
   EXPECT_TRUE(run(session, Command::AddVideoTrack));
-  EXPECT_EQ(session.project().tracks.size(), 1u);
+  EXPECT_EQ(session.project().sequence().tracks.size(), 1u);
 }
 
 TEST(Commands, RemovingATrackNeedsToKnowWhichOne) {
@@ -631,7 +631,7 @@ TEST(Commands, RemovingATrackTakesItsClipsWithIt) {
   session.select({"c1"});
   ASSERT_TRUE(run(session, Command::RemoveTrack));
 
-  EXPECT_TRUE(session.project().tracks.empty());
+  EXPECT_TRUE(session.project().sequence().tracks.empty());
   EXPECT_EQ(clip_count(session.project()), 0u);
 }
 
@@ -642,7 +642,7 @@ TEST(Commands, ASelectionAcrossTwoTracksNamesNoTrack) {
   Track second{.id = "v2", .kind = TrackKind::Video};
   second.clips = {Clip{.id = "c3", .media_id = "m1", .source_in = 0.0, .source_out = 4.0,
                        .start = 0.0}};
-  project.tracks.push_back(std::move(second));
+  project.sequence().tracks.push_back(std::move(second));
 
   Session session(std::move(project));
   session.select({"c1", "c3"});
@@ -699,7 +699,7 @@ TEST(Commands, PastingPutsTheCopyAtThePlayhead) {
   ASSERT_TRUE(run(session, Command::Paste));
 
   EXPECT_EQ(clip_count(session.project()), 3u);
-  const Track& video = session.project().tracks[0];
+  const Track& video = session.project().sequence().tracks[0];
   EXPECT_DOUBLE_EQ(video.clips.back().start, 20.0);
 }
 
@@ -710,7 +710,7 @@ TEST(Commands, CutTakesTheClipAndLeavesTheGap) {
 
   EXPECT_EQ(clip_count(session.project()), 1u);
   // c2 has not moved: cutting lifts, and closing the gap is Ripple Delete.
-  EXPECT_DOUBLE_EQ(session.project().tracks[0].clips[0].start, 5.0);
+  EXPECT_DOUBLE_EQ(session.project().sequence().tracks[0].clips[0].start, 5.0);
   EXPECT_FALSE(session.clipboard().empty());
 }
 
@@ -722,7 +722,7 @@ TEST(Commands, WhatWasCutCanBePastedBack) {
   session.set_playhead(0.0);
   ASSERT_TRUE(run(session, Command::Paste));
   EXPECT_EQ(clip_count(session.project()), 2u);
-  EXPECT_DOUBLE_EQ(session.project().tracks[0].clips[0].start, 0.0);
+  EXPECT_DOUBLE_EQ(session.project().sequence().tracks[0].clips[0].start, 0.0);
 }
 
 TEST(Commands, WhatWasPastedIsWhatIsSelectedAfterwards) {
@@ -746,7 +746,7 @@ TEST(Commands, PasteInsertMovesWhatWasAlreadyThere) {
   session.set_playhead(5.0);
   ASSERT_TRUE(run(session, Command::PasteInsert));
 
-  const Track& video = session.project().tracks[0];
+  const Track& video = session.project().sequence().tracks[0];
   ASSERT_EQ(video.clips.size(), 3u);
   EXPECT_DOUBLE_EQ(video.clips[1].start, 5.0);
   EXPECT_DOUBLE_EQ(video.clips[2].start, 10.0) << "c2 was pushed along";
@@ -771,8 +771,8 @@ TEST(Commands, TheClipboardSurvivesOpeningAnotherDocument) {
   Project project = sample_project();
   project.media.push_back(
       Media{.id = "m2", .name = "insert.mp4", .duration = 8.0, .has_video = true});
-  project.tracks.insert(project.tracks.begin(), Track{.id = "v2", .kind = TrackKind::Video});
-  project.tracks.push_back(Track{.id = "a1", .kind = TrackKind::Audio});
+  project.sequence().tracks.insert(project.sequence().tracks.begin(), Track{.id = "v2", .kind = TrackKind::Video});
+  project.sequence().tracks.push_back(Track{.id = "a1", .kind = TrackKind::Audio});
   return project;
 }
 
@@ -790,7 +790,7 @@ TEST(Commands, PlacingNeedsATargetedTrack) {
   EXPECT_FALSE(can_run(session, Command::Insert));
 
   Project project = session.project();
-  project.tracks[0].targeted = true;
+  project.sequence().tracks[0].targeted = true;
   session.reset(std::move(project));
   session.set_source_media("m2");
   EXPECT_TRUE(can_run(session, Command::Insert));
@@ -798,28 +798,28 @@ TEST(Commands, PlacingNeedsATargetedTrack) {
 
 TEST(Commands, AnOverwriteLandsOnTheTargetedTrack) {
   Project project = targetable_project();
-  project.tracks[0].targeted = true;  // v2, above the one holding the clips
+  project.sequence().tracks[0].targeted = true;  // v2, above the one holding the clips
   Session session(std::move(project));
   session.set_source_media("m2");
   session.set_playhead(2.0);
 
   ASSERT_TRUE(run(session, Command::Overwrite));
-  EXPECT_EQ(session.project().tracks[0].clips.size(), 1u);
-  EXPECT_DOUBLE_EQ(session.project().tracks[0].clips[0].start, 2.0);
+  EXPECT_EQ(session.project().sequence().tracks[0].clips.size(), 1u);
+  EXPECT_DOUBLE_EQ(session.project().sequence().tracks[0].clips[0].start, 2.0);
   // v1's clips are untouched: the overwrite carved the track it was aimed at.
-  EXPECT_EQ(session.project().tracks[1].clips.size(), 2u);
+  EXPECT_EQ(session.project().sequence().tracks[1].clips.size(), 2u);
 }
 
 TEST(Commands, AnInsertRipplesWhatWasAlreadyThere) {
   Project project = targetable_project();
-  project.tracks[1].targeted = true;  // v1, which holds c1 and c2
+  project.sequence().tracks[1].targeted = true;  // v1, which holds c1 and c2
   Session session(std::move(project));
   session.set_source_media("m2");
   session.set_playhead(5.0);
 
   ASSERT_TRUE(run(session, Command::Insert));
 
-  const Track& lane = session.project().tracks[1];
+  const Track& lane = session.project().sequence().tracks[1];
   ASSERT_EQ(lane.clips.size(), 3u);
   EXPECT_DOUBLE_EQ(lane.clips[1].start, 5.0);
   EXPECT_EQ(lane.clips[1].media_id, "m2");
@@ -831,7 +831,7 @@ TEST(Commands, AnInsertPlacesOnlyTheMarkedPartOfTheSource) {
   // by every placement operation and set by nothing, so however a source was
   // marked the whole of it went down.
   Project project = targetable_project();
-  project.tracks[1].targeted = true;
+  project.sequence().tracks[1].targeted = true;
   project = core::set_source_in_point(std::move(project), "m2", 2.0);
   project = core::set_source_out_point(std::move(project), "m2", 5.0);
   Session session(std::move(project));
@@ -840,7 +840,7 @@ TEST(Commands, AnInsertPlacesOnlyTheMarkedPartOfTheSource) {
 
   ASSERT_TRUE(run(session, Command::Insert));
 
-  const Track& lane = session.project().tracks[1];
+  const Track& lane = session.project().sequence().tracks[1];
   ASSERT_EQ(lane.clips.size(), 3u);
   EXPECT_DOUBLE_EQ(lane.clips[1].source_in, 2.0);
   EXPECT_DOUBLE_EQ(lane.clips[1].source_out, 5.0);
@@ -849,14 +849,14 @@ TEST(Commands, AnInsertPlacesOnlyTheMarkedPartOfTheSource) {
 
 TEST(Commands, AnOverwriteTakesTheMarkedPartToo) {
   Project project = targetable_project();
-  project.tracks[0].targeted = true;
+  project.sequence().tracks[0].targeted = true;
   project = core::set_source_out_point(std::move(project), "m2", 3.0);
   Session session(std::move(project));
   session.set_source_media("m2");
   session.set_playhead(2.0);
 
   ASSERT_TRUE(run(session, Command::Overwrite));
-  const Clip& placed = session.project().tracks[0].clips.at(0);
+  const Clip& placed = session.project().sequence().tracks[0].clips.at(0);
   EXPECT_DOUBLE_EQ(placed.source_in, 0.0);
   EXPECT_DOUBLE_EQ(placed.source_out, 3.0);
 }
@@ -866,19 +866,19 @@ TEST(Commands, AnOverwriteLandsOnTheSequenceInPointRatherThanThePlayhead) {
   // an edit should go did nothing: the mark was stored, saved and drawn, and
   // the placement used the playhead regardless.
   Project project = targetable_project();
-  project.tracks[0].targeted = true;
+  project.sequence().tracks[0].targeted = true;
   project = core::set_in_point(std::move(project), 6.0);
   Session session(std::move(project));
   session.set_source_media("m2");
   session.set_playhead(1.0);
 
   ASSERT_TRUE(run(session, Command::Overwrite));
-  EXPECT_DOUBLE_EQ(session.project().tracks[0].clips.at(0).start, 6.0);
+  EXPECT_DOUBLE_EQ(session.project().sequence().tracks[0].clips.at(0).start, 6.0);
 }
 
 TEST(Commands, AnInsertBackTimesToASequenceOut) {
   Project project = targetable_project();
-  project.tracks[0].targeted = true;
+  project.sequence().tracks[0].targeted = true;
   project = core::set_out_point(std::move(project), 20.0);
   Session session(std::move(project));
   session.set_source_media("m2");
@@ -886,12 +886,12 @@ TEST(Commands, AnInsertBackTimesToASequenceOut) {
 
   ASSERT_TRUE(run(session, Command::Insert));
   // Eight seconds of source, ending on the mark.
-  EXPECT_DOUBLE_EQ(session.project().tracks[0].clips.at(0).start, 12.0);
+  EXPECT_DOUBLE_EQ(session.project().sequence().tracks[0].clips.at(0).start, 12.0);
 }
 
 TEST(Commands, BothSequenceMarksDecideHowMuchOfTheSourceGoesDown) {
   Project project = targetable_project();
-  project.tracks[0].targeted = true;
+  project.sequence().tracks[0].targeted = true;
   project = core::set_source_in_point(std::move(project), "m2", 1.0);
   project = core::set_in_point(std::move(project), 4.0);
   project = core::set_out_point(std::move(project), 6.5);
@@ -900,7 +900,7 @@ TEST(Commands, BothSequenceMarksDecideHowMuchOfTheSourceGoesDown) {
   session.set_playhead(0.0);
 
   ASSERT_TRUE(run(session, Command::Overwrite));
-  const Clip& placed = session.project().tracks[0].clips.at(0);
+  const Clip& placed = session.project().sequence().tracks[0].clips.at(0);
   EXPECT_DOUBLE_EQ(placed.start, 4.0);
   EXPECT_DOUBLE_EQ(placed.source_in, 1.0);
   EXPECT_DOUBLE_EQ(placed.source_out, 3.5) << "the span decided the unmarked end";
@@ -910,20 +910,20 @@ TEST(Commands, WithNoSequenceMarksPlacingIsExactlyWhatItWas) {
   // The guard on the whole change: an unmarked sequence has to behave as it
   // did before, or every placement in the application moved.
   Project project = targetable_project();
-  project.tracks[0].targeted = true;
+  project.sequence().tracks[0].targeted = true;
   Session session(std::move(project));
   session.set_source_media("m2");
   session.set_playhead(3.0);
 
   ASSERT_TRUE(run(session, Command::Overwrite));
-  EXPECT_DOUBLE_EQ(session.project().tracks[0].clips.at(0).start, 3.0);
+  EXPECT_DOUBLE_EQ(session.project().sequence().tracks[0].clips.at(0).start, 3.0);
 }
 
 /// All four marks set, with the source three seconds long and the destination
 /// six — so it has to run at half speed to fill it.
 [[nodiscard]] Project four_marks() {
   Project project = targetable_project();
-  project.tracks[0].targeted = true;
+  project.sequence().tracks[0].targeted = true;
   project = core::set_source_in_point(std::move(project), "m2", 1.0);
   project = core::set_source_out_point(std::move(project), "m2", 4.0);
   project = core::set_in_point(std::move(project), 10.0);
@@ -935,7 +935,7 @@ TEST(Commands, FitToFillIsOnlyOfferedWhenTheMarksActuallyConflict) {
   // Three marks derive the fourth and an overwrite already lands it exactly.
   // Offering to "fit" something that fits would retime it by 100%.
   Project three = targetable_project();
-  three.tracks[0].targeted = true;
+  three.sequence().tracks[0].targeted = true;
   three = core::set_source_in_point(std::move(three), "m2", 1.0);
   three = core::set_in_point(std::move(three), 10.0);
   three = core::set_out_point(std::move(three), 16.0);
@@ -960,7 +960,7 @@ TEST(Commands, FitToFillFillsTheMarkedSpanExactly) {
 
   ASSERT_TRUE(run(session, Command::FitToFill));
 
-  const Clip& placed = session.project().tracks[0].clips.at(0);
+  const Clip& placed = session.project().sequence().tracks[0].clips.at(0);
   EXPECT_DOUBLE_EQ(placed.start, 10.0);
   EXPECT_DOUBLE_EQ(core::clip_end(placed), 16.0);
 }
@@ -973,7 +973,7 @@ TEST(Commands, FitToFillKeepsTheMarkedPartOfTheSourceAndRetimesIt) {
 
   ASSERT_TRUE(run(session, Command::FitToFill));
 
-  const Clip& placed = session.project().tracks[0].clips.at(0);
+  const Clip& placed = session.project().sequence().tracks[0].clips.at(0);
   EXPECT_DOUBLE_EQ(placed.source_in, 1.0);
   EXPECT_DOUBLE_EQ(placed.source_out, 4.0);
   EXPECT_DOUBLE_EQ(placed.speed, 0.5) << "three seconds stretched across six";
@@ -981,7 +981,7 @@ TEST(Commands, FitToFillKeepsTheMarkedPartOfTheSourceAndRetimesIt) {
 
 TEST(Commands, FitToFillSpeedsUpAsWellAsSlowsDown) {
   Project project = targetable_project();
-  project.tracks[0].targeted = true;
+  project.sequence().tracks[0].targeted = true;
   project = core::set_source_in_point(std::move(project), "m2", 0.0);
   project = core::set_source_out_point(std::move(project), "m2", 8.0);
   project = core::set_in_point(std::move(project), 0.0);
@@ -990,14 +990,14 @@ TEST(Commands, FitToFillSpeedsUpAsWellAsSlowsDown) {
   session.set_source_media("m2");
 
   ASSERT_TRUE(run(session, Command::FitToFill));
-  const Clip& placed = session.project().tracks[0].clips.at(0);
+  const Clip& placed = session.project().sequence().tracks[0].clips.at(0);
   EXPECT_DOUBLE_EQ(placed.speed, 4.0);
   EXPECT_DOUBLE_EQ(core::clip_end(placed), 2.0);
 }
 
 TEST(Commands, AnOverwriteLeavesTheSequenceTheLengthItWas) {
   Project project = targetable_project();
-  project.tracks[1].targeted = true;
+  project.sequence().tracks[1].targeted = true;
   Session session(std::move(project));
   session.set_source_media("m2");
   session.set_playhead(0.0);
@@ -1009,7 +1009,7 @@ TEST(Commands, AnOverwriteLeavesTheSequenceTheLengthItWas) {
 
 TEST(Commands, SourceThatIsNoLongerInThePoolIsNotOffered) {
   Project project = targetable_project();
-  project.tracks[0].targeted = true;
+  project.sequence().tracks[0].targeted = true;
   Session session(std::move(project));
   session.set_source_media("gone");
   EXPECT_FALSE(can_run(session, Command::Insert));

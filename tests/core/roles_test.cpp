@@ -19,7 +19,7 @@ Project sequence() {
     Track t;
     t.id = id;
     t.kind = TrackKind::Audio;
-    p.tracks.push_back(t);
+    p.sequence().tracks.push_back(t);
   }
   return p;
 }
@@ -58,7 +58,7 @@ TEST(RoleName, EveryRoleHasOneAndNoneIsNotBlank) {
 
 TEST(SetClipRole, ItIsSetOnTheClip) {
   Project p = sequence();
-  p.tracks[0].clips.push_back(audio_clip("c1", 0.0, 4.0, AudioRole::None));
+  p.sequence().tracks[0].clips.push_back(audio_clip("c1", 0.0, 4.0, AudioRole::None));
   p = set_clip_role(std::move(p), "c1", AudioRole::Dialogue);
   EXPECT_EQ(find_clip(p, "c1")->role, AudioRole::Dialogue);
 }
@@ -67,7 +67,7 @@ TEST(SetClipRole, ThePictureHalfOfAPairHasNoRole) {
   Project p = sequence();
   Clip video = audio_clip("v", 0.0, 4.0, AudioRole::None);
   video.kind = TrackKind::Video;
-  p.tracks[0].clips.push_back(video);
+  p.sequence().tracks[0].clips.push_back(video);
 
   p = set_clip_role(std::move(p), "v", AudioRole::Dialogue);
   EXPECT_EQ(find_clip(p, "v")->role, AudioRole::None) << "a role is about sound";
@@ -75,9 +75,9 @@ TEST(SetClipRole, ThePictureHalfOfAPairHasNoRole) {
 
 TEST(SetTrackRole, ItReachesEveryClipOnTheLane) {
   Project p = sequence();
-  p.tracks[0].clips.push_back(audio_clip("c1", 0.0, 2.0, AudioRole::None));
-  p.tracks[0].clips.push_back(audio_clip("c2", 4.0, 2.0, AudioRole::None));
-  p.tracks[1].clips.push_back(audio_clip("c3", 0.0, 8.0, AudioRole::None));
+  p.sequence().tracks[0].clips.push_back(audio_clip("c1", 0.0, 2.0, AudioRole::None));
+  p.sequence().tracks[0].clips.push_back(audio_clip("c2", 4.0, 2.0, AudioRole::None));
+  p.sequence().tracks[1].clips.push_back(audio_clip("c3", 0.0, 8.0, AudioRole::None));
 
   p = set_track_role(std::move(p), "a1", AudioRole::Dialogue);
   EXPECT_EQ(find_clip(p, "c1")->role, AudioRole::Dialogue);
@@ -89,8 +89,8 @@ TEST(SetTrackRole, ItReachesEveryClipOnTheLane) {
 
 TEST(RoleSpans, TwoOverlappingLinesAreOneStretchOfSpeech) {
   Project p = sequence();
-  p.tracks[0].clips.push_back(audio_clip("c1", 2.0, 4.0, AudioRole::Dialogue));
-  p.tracks[1].clips.push_back(audio_clip("c2", 5.0, 4.0, AudioRole::Dialogue));
+  p.sequence().tracks[0].clips.push_back(audio_clip("c1", 2.0, 4.0, AudioRole::Dialogue));
+  p.sequence().tracks[1].clips.push_back(audio_clip("c2", 5.0, 4.0, AudioRole::Dialogue));
 
   const auto spans = role_spans(p, AudioRole::Dialogue);
   ASSERT_EQ(spans.size(), 1u) << "ducking under each separately would pump between the sentences";
@@ -100,8 +100,8 @@ TEST(RoleSpans, TwoOverlappingLinesAreOneStretchOfSpeech) {
 
 TEST(RoleSpans, ARealGapStaysTwoStretches) {
   Project p = sequence();
-  p.tracks[0].clips.push_back(audio_clip("c1", 0.0, 2.0, AudioRole::Dialogue));
-  p.tracks[0].clips.push_back(audio_clip("c2", 10.0, 2.0, AudioRole::Dialogue));
+  p.sequence().tracks[0].clips.push_back(audio_clip("c1", 0.0, 2.0, AudioRole::Dialogue));
+  p.sequence().tracks[0].clips.push_back(audio_clip("c2", 10.0, 2.0, AudioRole::Dialogue));
 
   const auto spans = role_spans(p, AudioRole::Dialogue);
   ASSERT_EQ(spans.size(), 2u);
@@ -112,9 +112,9 @@ TEST(RoleSpans, WhatIsNotHeardIsNotCounted) {
   Project p = sequence();
   Clip disabled = audio_clip("c1", 0.0, 2.0, AudioRole::Dialogue);
   disabled.disabled = true;
-  p.tracks[0].clips.push_back(disabled);
-  p.tracks[1].clips.push_back(audio_clip("c2", 4.0, 2.0, AudioRole::Dialogue));
-  p.tracks[1].muted = true;
+  p.sequence().tracks[0].clips.push_back(disabled);
+  p.sequence().tracks[1].clips.push_back(audio_clip("c2", 4.0, 2.0, AudioRole::Dialogue));
+  p.sequence().tracks[1].muted = true;
 
   EXPECT_TRUE(role_spans(p, AudioRole::Dialogue).empty())
       << "nothing should get out of the way of something nobody hears";
@@ -122,7 +122,7 @@ TEST(RoleSpans, WhatIsNotHeardIsNotCounted) {
 
 TEST(RoleSpans, NoneIsNotARoleToLookFor) {
   Project p = sequence();
-  p.tracks[0].clips.push_back(audio_clip("c1", 0.0, 2.0, AudioRole::None));
+  p.sequence().tracks[0].clips.push_back(audio_clip("c1", 0.0, 2.0, AudioRole::None));
   EXPECT_TRUE(role_spans(p, AudioRole::None).empty());
 }
 
@@ -131,8 +131,8 @@ TEST(RoleSpans, NoneIsNotARoleToLookFor) {
 /// Dialogue from 4 to 8, music underneath it for the whole twenty seconds.
 Project bed_under_speech() {
   Project p = sequence();
-  p.tracks[0].clips.push_back(audio_clip("speech", 4.0, 4.0, AudioRole::Dialogue));
-  p.tracks[1].clips.push_back(audio_clip("music", 0.0, 20.0, AudioRole::Music));
+  p.sequence().tracks[0].clips.push_back(audio_clip("speech", 4.0, 4.0, AudioRole::Dialogue));
+  p.sequence().tracks[1].clips.push_back(audio_clip("music", 0.0, 20.0, AudioRole::Music));
   return p;
 }
 
@@ -176,9 +176,9 @@ TEST(Ducking, TheUnduckedLevelIsTheClipsOwnGain) {
 
 TEST(Ducking, TwoLinesCloseTogetherStayDownBetweenThem) {
   Project p = sequence();
-  p.tracks[0].clips.push_back(audio_clip("one", 4.0, 2.0, AudioRole::Dialogue));
-  p.tracks[0].clips.push_back(audio_clip("two", 7.0, 2.0, AudioRole::Dialogue));
-  p.tracks[1].clips.push_back(audio_clip("music", 0.0, 20.0, AudioRole::Music));
+  p.sequence().tracks[0].clips.push_back(audio_clip("one", 4.0, 2.0, AudioRole::Dialogue));
+  p.sequence().tracks[0].clips.push_back(audio_clip("two", 7.0, 2.0, AudioRole::Dialogue));
+  p.sequence().tracks[1].clips.push_back(audio_clip("music", 0.0, 20.0, AudioRole::Music));
 
   p = duck_clip(std::move(p), "music", DuckSettings{.amount_db = -12.0, .fade = 2.0});
   const double ducked = std::pow(10.0, -12.0 / 20.0);
@@ -188,8 +188,8 @@ TEST(Ducking, TwoLinesCloseTogetherStayDownBetweenThem) {
 
 TEST(Ducking, ADuckThatStartsBeforeTheClipArrivesAlreadyDown) {
   Project p = sequence();
-  p.tracks[0].clips.push_back(audio_clip("speech", 0.0, 10.0, AudioRole::Dialogue));
-  p.tracks[1].clips.push_back(audio_clip("music", 4.0, 10.0, AudioRole::Music));
+  p.sequence().tracks[0].clips.push_back(audio_clip("speech", 0.0, 10.0, AudioRole::Dialogue));
+  p.sequence().tracks[1].clips.push_back(audio_clip("music", 4.0, 10.0, AudioRole::Music));
 
   p = duck_clip(std::move(p), "music", DuckSettings{.amount_db = -12.0, .fade = 1.0});
   EXPECT_NEAR(curve_at(p, "music", 0.0), std::pow(10.0, -12.0 / 20.0), 1e-9)
@@ -198,7 +198,7 @@ TEST(Ducking, ADuckThatStartsBeforeTheClipArrivesAlreadyDown) {
 
 TEST(Ducking, NothingToDuckUnderLeavesThePlainFader) {
   Project p = sequence();
-  p.tracks[1].clips.push_back(audio_clip("music", 0.0, 20.0, AudioRole::Music));
+  p.sequence().tracks[1].clips.push_back(audio_clip("music", 0.0, 20.0, AudioRole::Music));
   p = duck_clip(std::move(p), "music", DuckSettings{});
   EXPECT_TRUE(find_clip(p, "music")->gain_keyframes.empty())
       << "a flat curve says what no curve says, and the one that is not there can still be drawn "
@@ -215,8 +215,8 @@ TEST(Ducking, ItReplacesWhateverWasThereRatherThanLayeringOverIt) {
 
 TEST(DuckRole, EveryClipCarryingTheRoleIsDucked) {
   Project p = bed_under_speech();
-  p.tracks[1].clips.push_back(audio_clip("more_music", 24.0, 4.0, AudioRole::Music));
-  p.tracks[0].clips.push_back(audio_clip("more_speech", 25.0, 1.0, AudioRole::Dialogue));
+  p.sequence().tracks[1].clips.push_back(audio_clip("more_music", 24.0, 4.0, AudioRole::Music));
+  p.sequence().tracks[0].clips.push_back(audio_clip("more_speech", 25.0, 1.0, AudioRole::Dialogue));
 
   p = duck_role(std::move(p), AudioRole::Music, DuckSettings{.amount_db = -12.0, .fade = 0.5});
   EXPECT_FALSE(find_clip(p, "music")->gain_keyframes.empty());
@@ -233,7 +233,7 @@ TEST(DuckRole, DuckingNothingChangesNothing) {
 
 TEST(RoleFile, ARoleSurvivesARoundTrip) {
   Project p = sequence();
-  p.tracks[0].clips.push_back(audio_clip("c1", 0.0, 4.0, AudioRole::Ambience));
+  p.sequence().tracks[0].clips.push_back(audio_clip("c1", 0.0, 4.0, AudioRole::Ambience));
 
   const auto loaded = from_json(to_json(p));
   ASSERT_TRUE(loaded.has_value()) << loaded.error();
@@ -242,7 +242,7 @@ TEST(RoleFile, ARoleSurvivesARoundTrip) {
 
 TEST(RoleFile, AClipWithoutOneWritesNothing) {
   Project p = sequence();
-  p.tracks[0].clips.push_back(audio_clip("c1", 0.0, 4.0, AudioRole::None));
+  p.sequence().tracks[0].clips.push_back(audio_clip("c1", 0.0, 4.0, AudioRole::None));
   EXPECT_EQ(to_json(p).find("\"role\""), std::string::npos);
 }
 

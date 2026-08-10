@@ -104,7 +104,7 @@ SourceRange clip_sub_source(const Clip& c, double a, double b) noexcept {
 
 double timeline_duration(const Project& p) noexcept {
   double max = 0.0;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     for (const Clip& c : t.clips) max = std::max(max, clip_end(c));
   }
   return max;
@@ -204,17 +204,17 @@ double track_pan_at(const Track& t, double time) noexcept {
 }
 
 bool is_master_gain_animated(const Project& p) noexcept {
-  return p.master_automation != AutomationMode::Off && !p.master_gain_keyframes.empty();
+  return p.sequence().master_automation != AutomationMode::Off && !p.sequence().master_gain_keyframes.empty();
 }
 
 double master_gain_at(const Project& p, double time) noexcept {
-  if (!is_master_gain_animated(p)) return std::clamp(p.master_gain, 0.0, kMaxMasterGain);
-  return std::clamp(eval_keyframes(p.master_gain_keyframes, time), 0.0, kMaxMasterGain);
+  if (!is_master_gain_animated(p)) return std::clamp(p.sequence().master_gain, 0.0, kMaxMasterGain);
+  return std::clamp(eval_keyframes(p.sequence().master_gain_keyframes, time), 0.0, kMaxMasterGain);
 }
 
 bool is_track_audible(const Project& p, const Track& track) noexcept {
   if (track.muted) return false;
-  const bool any_solo = std::ranges::any_of(p.tracks, [](const Track& t) {
+  const bool any_solo = std::ranges::any_of(p.sequence().tracks, [](const Track& t) {
     return t.kind == TrackKind::Audio && t.solo;
   });
   if (!any_solo || track.solo) return true;
@@ -224,14 +224,14 @@ bool is_track_audible(const Project& p, const Track& track) noexcept {
   // makes "something is soloed" true, and then nothing that is not itself
   // soloed plays, which includes every track pouring into the thing you asked
   // to hear.
-  return std::ranges::any_of(p.tracks, [&](const Track& t) {
+  return std::ranges::any_of(p.sequence().tracks, [&](const Track& t) {
     return t.kind == TrackKind::Audio && t.submix && t.solo && !t.muted &&
            reaches(p, track.id, t.id);
   });
 }
 
 const Clip* find_clip(const Project& p, std::string_view clip_id) noexcept {
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     for (const Clip& c : t.clips) {
       if (c.id == clip_id) return &c;
     }
@@ -244,7 +244,7 @@ Clip* find_clip(Project& p, std::string_view clip_id) noexcept {
 }
 
 const Track* track_of_clip(const Project& p, std::string_view clip_id) noexcept {
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     if (std::ranges::any_of(t.clips, [&](const Clip& c) { return c.id == clip_id; })) {
       return &t;
     }
@@ -262,7 +262,7 @@ std::vector<std::string> group_members(const Project& p, std::string_view clip_i
   if (!clip->group_id.has_value()) return {clip->id};
 
   std::vector<std::string> ids;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     for (const Clip& c : t.clips) {
       if (c.group_id == clip->group_id) ids.push_back(c.id);
     }

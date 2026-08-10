@@ -25,7 +25,7 @@ using core::TrackKind;
 
 [[nodiscard]] Project sample_project() {
   Project project;
-  project.fps = 30.0;
+  project.sequence().fps = 30.0;
   project.media.push_back(Media{.id = "m1", .name = "wide.mp4", .duration = 60.0,
                                 .has_video = true});
 
@@ -34,7 +34,7 @@ using core::TrackKind;
       Clip{.id = "c1", .media_id = "m1", .source_in = 0.0, .source_out = 5.0, .start = 0.0},
       Clip{.id = "c2", .media_id = "m1", .source_in = 5.0, .source_out = 12.0, .start = 5.0},
   };
-  project.tracks.push_back(std::move(video));
+  project.sequence().tracks.push_back(std::move(video));
   return project;
 }
 
@@ -151,7 +151,7 @@ TEST(Session, UndoingBackPastAClipDeselectsIt) {
   session.apply(core::split_at(session.project(), 2.0, ids));
 
   // The split produced a second piece; select it, then undo the split away.
-  const core::Track& track = session.project().tracks[0];
+  const core::Track& track = session.project().sequence().tracks[0];
   ASSERT_GE(track.clips.size(), 3u);
   const std::string fresh = track.clips[1].id;
   session.select_one(fresh);
@@ -177,7 +177,7 @@ TEST(Session, TheSelectedGroupBringsLinkedClipsAlong) {
 
   Session session(std::move(project));
   const core::Clip* placed = nullptr;
-  for (const core::Track& track : session.project().tracks) {
+  for (const core::Track& track : session.project().sequence().tracks) {
     for (const core::Clip& clip : track.clips) {
       if (clip.media_id == "m2" && clip.kind == core::TrackKind::Video) placed = &clip;
     }

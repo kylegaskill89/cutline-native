@@ -38,7 +38,7 @@ using core::TrackKind;
 
 [[nodiscard]] Project sample_project() {
   Project project;
-  project.fps = 30.0;
+  project.sequence().fps = 30.0;
   project.media = {
       Media{.id = "m1", .name = "wide.mp4", .duration = 60.0, .has_video = true},
       Media{.id = "m2", .name = "music.wav", .duration = 60.0, .audio_stream_count = 1},
@@ -58,7 +58,7 @@ using core::TrackKind;
   audio.clips = {Clip{.id = "a", .media_id = "m2", .kind = TrackKind::Audio, .source_in = 0.0,
                       .source_out = 12.0, .start = 0.0}};
 
-  project.tracks = {std::move(upper), std::move(lower), std::move(audio)};
+  project.sequence().tracks = {std::move(upper), std::move(lower), std::move(audio)};
   return project;
 }
 
@@ -168,7 +168,7 @@ TEST(Binding, VideoCountsUpFromTheBottomAndAudioDownFromTheTop) {
 
 TEST(Binding, AGivenLabelIsUsedAsIs) {
   Project project = sample_project();
-  project.tracks[0].label = "Titles";
+  project.sequence().tracks[0].label = "Titles";
   EXPECT_EQ(default_track_label(project, 0), "Titles");
 }
 
@@ -180,7 +180,7 @@ TEST(Binding, AnIndexPastTheEndIsHarmless) {
 
 TEST(Binding, AHiddenVideoTrackReadsAsMuted) {
   Project project = sample_project();
-  project.tracks[0].hidden = true;
+  project.sequence().tracks[0].hidden = true;
   EXPECT_TRUE(timeline_model(project).tracks[0].muted);
 }
 
@@ -189,7 +189,7 @@ TEST(Binding, SoloingOneAudioTrackMutesTheOthers) {
   // silenced by something happening on a different track entirely.
   Project project = sample_project();
   Track second{.id = "a2", .kind = TrackKind::Audio, .solo = true};
-  project.tracks.push_back(std::move(second));
+  project.sequence().tracks.push_back(std::move(second));
 
   const ui::TimelineModel model = timeline_model(project);
   EXPECT_TRUE(model.tracks[2].muted) << "a1 should be silenced by a2's solo";
@@ -230,9 +230,9 @@ TEST(Binding, AMoveThatChangedLaneMovesTheClipBetweenTracks) {
                        .lanes = -1});
 
   // v2 is the track above v1 in storage order, so one lane up is -1.
-  EXPECT_TRUE(std::ranges::none_of(after.tracks[1].clips,
+  EXPECT_TRUE(std::ranges::none_of(after.sequence().tracks[1].clips,
                                    [](const core::Clip& c) { return c.id == "c1"; }));
-  EXPECT_TRUE(std::ranges::any_of(after.tracks[0].clips,
+  EXPECT_TRUE(std::ranges::any_of(after.sequence().tracks[0].clips,
                                   [](const core::Clip& c) { return c.id == "c1"; }));
 }
 
@@ -242,7 +242,7 @@ TEST(Binding, AMoveAlongTheTrackLeavesTheLaneAlone) {
       ui::TimelineEdit{.mode = ui::DragMode::Move,
                        .result = ui::TimelineBlock{.start = 8.0, .end = 13.0}});
 
-  EXPECT_TRUE(std::ranges::any_of(after.tracks[1].clips,
+  EXPECT_TRUE(std::ranges::any_of(after.sequence().tracks[1].clips,
                                   [](const core::Clip& c) { return c.id == "c1"; }));
   EXPECT_DOUBLE_EQ(core::find_clip(after, "c1")->start, 8.0);
 }
@@ -335,7 +335,7 @@ TEST(Switches, ShowWhatTheProjectHoldsRatherThanWhatTakesEffect) {
   // light up saying it is.
   Project project = sample_project();
   Track quiet{.id = "a2", .kind = TrackKind::Audio, .solo = true};
-  project.tracks.push_back(std::move(quiet));
+  project.sequence().tracks.push_back(std::move(quiet));
 
   const ui::TimelineModel model = timeline_model(project);
   EXPECT_TRUE(model.tracks[2].muted) << "a1 is not heard";
@@ -345,8 +345,8 @@ TEST(Switches, ShowWhatTheProjectHoldsRatherThanWhatTakesEffect) {
 
 TEST(Switches, CarryEveryFlagAcross) {
   Project project = sample_project();
-  project.tracks[0].hidden = true;
-  project.tracks[0].locked = true;
+  project.sequence().tracks[0].hidden = true;
+  project.sequence().tracks[0].locked = true;
 
   // By value. `timeline_model` returns a model, and a reference bound to a
   // *member* of a temporary is not lifetime-extended — see the note at the top.
@@ -360,31 +360,31 @@ TEST(Switches, TogglingReadsTheCurrentValueOutOfTheProject) {
   // The interface never holds the truth about a switch, so it cannot toggle
   // from a stale copy of one.
   const Project before = sample_project();
-  ASSERT_FALSE(before.tracks[0].hidden);
+  ASSERT_FALSE(before.sequence().tracks[0].hidden);
 
   const Project on = toggle_track_switch(before, "v2", ui::TrackControl::Hide);
-  EXPECT_TRUE(on.tracks[0].hidden);
+  EXPECT_TRUE(on.sequence().tracks[0].hidden);
 
   const Project off = toggle_track_switch(on, "v2", ui::TrackControl::Hide);
-  EXPECT_FALSE(off.tracks[0].hidden);
+  EXPECT_FALSE(off.sequence().tracks[0].hidden);
 }
 
 TEST(Switches, TogglingOneLeavesTheOthersAlone) {
   Project before = sample_project();
-  before.tracks[0].locked = true;
+  before.sequence().tracks[0].locked = true;
 
   const Project after = toggle_track_switch(before, "v2", ui::TrackControl::Hide);
-  EXPECT_TRUE(after.tracks[0].hidden);
-  EXPECT_TRUE(after.tracks[0].locked) << "the patch touches one field";
+  EXPECT_TRUE(after.sequence().tracks[0].hidden);
+  EXPECT_TRUE(after.sequence().tracks[0].locked) << "the patch touches one field";
 }
 
 TEST(Switches, MuteAndSoloReachTheAudioTrack) {
   const Project muted = toggle_track_switch(sample_project(), "a1", ui::TrackControl::Mute);
-  EXPECT_TRUE(muted.tracks[2].muted);
-  EXPECT_FALSE(core::is_track_audible(muted, muted.tracks[2]));
+  EXPECT_TRUE(muted.sequence().tracks[2].muted);
+  EXPECT_FALSE(core::is_track_audible(muted, muted.sequence().tracks[2]));
 
   const Project soloed = toggle_track_switch(sample_project(), "a1", ui::TrackControl::Solo);
-  EXPECT_TRUE(soloed.tracks[2].solo);
+  EXPECT_TRUE(soloed.sequence().tracks[2].solo);
 }
 
 TEST(Switches, AnUnknownTrackChangesNothing) {
@@ -817,9 +817,9 @@ TEST(Binding, NoSourceOfEnvelopesIsSimplyAClipWithoutOne) {
 
 TEST(Binding, ABlockCarriesWhatMapsItOntoItsSource) {
   Project project = sample_project();
-  project.tracks[2].clips[0].source_in = 4.0;
-  project.tracks[2].clips[0].speed = 2.0;
-  project.tracks[2].clips[0].reverse = true;
+  project.sequence().tracks[2].clips[0].source_in = 4.0;
+  project.sequence().tracks[2].clips[0].speed = 2.0;
+  project.sequence().tracks[2].clips[0].reverse = true;
 
   const ui::TimelineModel model = timeline_model(project);
   const ui::TimelineBlock& block = model.tracks[2].blocks[0];
@@ -840,7 +840,7 @@ TEST(Binding, AClipWithNoSpeedSetRunsAtOne) {
 // file, and cutting a clip in half does not give it two shapes.
 TEST(Binding, EveryClipOfASourceSharesOneEnvelope) {
   Project project = sample_project();
-  project.tracks[2].clips.push_back(Clip{.id = "a2",
+  project.sequence().tracks[2].clips.push_back(Clip{.id = "a2",
                                          .media_id = "m2",
                                          .kind = TrackKind::Audio,
                                          .source_in = 20.0,

@@ -26,8 +26,8 @@ namespace {
 /// scale of 1 covers. Zero on either axis means there is nothing to scale.
 [[nodiscard]] core::Size natural_fraction(const core::Project& project,
                                           const core::Clip& clip) noexcept {
-  const auto canvas_w = static_cast<double>(project.canvas_w);
-  const auto canvas_h = static_cast<double>(project.canvas_h);
+  const auto canvas_w = static_cast<double>(project.sequence().canvas_w);
+  const auto canvas_h = static_cast<double>(project.sequence().canvas_h);
   if (canvas_w <= 0.0 || canvas_h <= 0.0) return {};
 
   // A title is measured by the text layer, which is nowhere near here, so its
@@ -47,8 +47,8 @@ namespace {
 [[nodiscard]] core::Offset anchor_shift(const core::Project& project,
                                         const core::Transform& transform,
                                         core::Size drawn_fraction) noexcept {
-  const auto canvas_w = static_cast<double>(project.canvas_w);
-  const auto canvas_h = static_cast<double>(project.canvas_h);
+  const auto canvas_w = static_cast<double>(project.sequence().canvas_w);
+  const auto canvas_h = static_cast<double>(project.sequence().canvas_h);
   if (canvas_w <= 0.0 || canvas_h <= 0.0) return {};
 
   const core::Offset px = core::anchor_offset(
@@ -328,9 +328,9 @@ core::Project apply_monitor_box(core::Project project, std::string_view clip_id,
       {box.width, box.height});
 
   project = set_clip_parameter(std::move(project), clip_id, ClipParam::X,
-                               (box.x - shift.dx) * canvas(project.canvas_w), local_t);
+                               (box.x - shift.dx) * canvas(project.sequence().canvas_w), local_t);
   project = set_clip_parameter(std::move(project), clip_id, ClipParam::Y,
-                               (box.y - shift.dy) * canvas(project.canvas_h), local_t);
+                               (box.y - shift.dy) * canvas(project.sequence().canvas_h), local_t);
   project = set_clip_parameter(std::move(project), clip_id, ClipParam::ScaleX,
                                box.width / natural.width * kPercent, local_t);
   project = set_clip_parameter(std::move(project), clip_id, ClipParam::ScaleY,

@@ -183,7 +183,7 @@ int main(int argc, char** argv) {
   }
 
   auto renderer =
-      cutline::engine::FrameRenderer::create(*device, project.canvas_w, project.canvas_h);
+      cutline::engine::FrameRenderer::create(*device, project.sequence().canvas_w, project.sequence().canvas_h);
   if (!renderer) {
     std::println(stderr, "cannot create the renderer: {}", renderer.error());
     return 1;
@@ -200,7 +200,7 @@ int main(int argc, char** argv) {
   const int asked = argc > 4 ? std::atoi(argv[4]) : 1;
   const int frames = std::max(1, std::abs(asked));
   const double direction = asked < 0 ? -1.0 : 1.0;
-  const double step = (project.fps > 0.0 ? 1.0 / project.fps : 1.0 / 30.0) * direction;
+  const double step = (project.sequence().fps > 0.0 ? 1.0 / project.sequence().fps : 1.0 / 30.0) * direction;
 
   // The first frame is not like the others: it opens the file, builds the
   // decoder and warms every cache there is. Timing it with the rest would

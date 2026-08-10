@@ -37,7 +37,7 @@ std::vector<PlannedLayer> plan_frame(
 
   // Video tracks are stored top-first, so the bottom one is drawn first.
   std::vector<const core::Track*> video_tracks;
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     if (track.kind == core::TrackKind::Video) video_tracks.push_back(&track);
   }
   std::reverse(video_tracks.begin(), video_tracks.end());
@@ -85,7 +85,7 @@ std::vector<PlannedLayer> plan_frame(
     core::Size measured;
     if (media != nullptr && media->is_text && measure_text) measured = measure_text(*media);
     layer.box =
-        core::segment_box(seg, media, project.canvas_w, project.canvas_h, t, measured);
+        core::segment_box(seg, media, project.sequence().canvas_w, project.sequence().canvas_h, t, measured);
     layer.alpha = core::segment_alpha(seg, t);
     layer.blend = clip.blend;
     layer.anti_flicker = std::clamp(clip.transform.anti_flicker, 0.0, 1.0);

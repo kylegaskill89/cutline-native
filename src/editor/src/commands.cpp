@@ -19,7 +19,7 @@ namespace {
 /// zero-length piece, which is not a cut.
 [[nodiscard]] std::vector<std::string> clips_under(const core::Project& project, double time) {
   std::vector<std::string> ids;
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     for (const core::Clip& clip : track.clips) {
       if (time > clip.start && time < core::clip_end(clip)) ids.push_back(clip.id);
     }
@@ -59,9 +59,9 @@ namespace {
   const core::Project& project = session.project();
   const double at = session.playhead();
   const bool any_targeted =
-      std::ranges::any_of(project.tracks, [](const core::Track& t) { return t.targeted; });
+      std::ranges::any_of(project.sequence().tracks, [](const core::Track& t) { return t.targeted; });
 
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     if (any_targeted && !track.targeted) continue;
     for (const core::Clip& clip : track.clips) {
       if (at > clip.start && at < core::clip_end(clip)) return clip.id;
@@ -90,7 +90,7 @@ namespace {
 /// The track a clip is on, or null.
 [[nodiscard]] const core::Track* track_of(const core::Project& project,
                                           std::string_view clip_id) {
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     if (std::ranges::any_of(track.clips, [&](const core::Clip& c) { return c.id == clip_id; })) {
       return &track;
     }
@@ -138,7 +138,7 @@ namespace {
 
 [[nodiscard]] std::vector<std::string> every_clip(const core::Project& project) {
   std::vector<std::string> ids;
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     for (const core::Clip& clip : track.clips) ids.push_back(clip.id);
   }
   return ids;
@@ -155,10 +155,10 @@ namespace {
 /// targeted answers with the first of those instead, which is how a source with
 /// no picture is aimed.
 [[nodiscard]] std::string edit_target(const core::Project& project) {
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     if (track.targeted && track.kind == core::TrackKind::Video) return track.id;
   }
-  for (const core::Track& track : project.tracks) {
+  for (const core::Track& track : project.sequence().tracks) {
     if (track.targeted) return track.id;
   }
   return {};
@@ -227,9 +227,9 @@ bool can_run(const Session& session, Command command) {
       return !session.clipboard().empty();
 
     case Command::MarkIn:
-      return can_mark(session.project(), session.project().in_point);
+      return can_mark(session.project(), session.project().sequence().in_point);
     case Command::MarkOut:
-      return can_mark(session.project(), session.project().out_point);
+      return can_mark(session.project(), session.project().sequence().out_point);
 
     case Command::Insert:
     case Command::Overwrite:
@@ -250,9 +250,9 @@ bool can_run(const Session& session, Command command) {
       // The same rule as the in and out points: something to mark, or a marker
       // to take away — dropping one where one already sits removes it.
       return core::timeline_duration(session.project()) > 0.0 ||
-             !session.project().markers.empty();
+             !session.project().sequence().markers.empty();
     case Command::ClearMarkers:
-      return !session.project().markers.empty();
+      return !session.project().sequence().markers.empty();
     case Command::NextMarker:
       return core::next_marker(session.project(), session.playhead()) != nullptr;
     case Command::PreviousMarker:
@@ -294,7 +294,7 @@ bool can_run(const Session& session, Command command) {
 
 bool run(Session& session, Command command) {
   const core::Project& project = session.project();
-  const double frame = core::frame_duration(project.fps);
+  const double frame = core::frame_duration(project.sequence().fps);
 
   switch (command) {
     case Command::Split: {
@@ -365,16 +365,16 @@ bool run(Session& session, Command command) {
     }
 
     case Command::MarkIn: {
-      if (!can_mark(project, project.in_point)) return false;
+      if (!can_mark(project, project.sequence().in_point)) return false;
       // Already there, so this takes it away.
-      const bool here = mark_is_here(project.in_point, session.playhead(), frame);
+      const bool here = mark_is_here(project.sequence().in_point, session.playhead(), frame);
       return session.apply(core::set_in_point(
           project, here ? std::nullopt : std::optional<double>(session.playhead())));
     }
 
     case Command::MarkOut: {
-      if (!can_mark(project, project.out_point)) return false;
-      const bool here = mark_is_here(project.out_point, session.playhead(), frame);
+      if (!can_mark(project, project.sequence().out_point)) return false;
+      const bool here = mark_is_here(project.sequence().out_point, session.playhead(), frame);
       return session.apply(core::set_out_point(
           project, here ? std::nullopt : std::optional<double>(session.playhead())));
     }
@@ -417,7 +417,7 @@ bool run(Session& session, Command command) {
       return session.apply(core::clear_marks(project));
 
     case Command::AddMarker: {
-      if (core::timeline_duration(project) <= 0.0 && project.markers.empty()) return false;
+      if (core::timeline_duration(project) <= 0.0 && project.sequence().markers.empty()) return false;
       // Within half a frame, like the in and out points: both times came from
       // frame-snapped values, so they agree to within rounding and nothing else.
       if (const core::Marker* here =
@@ -429,7 +429,7 @@ bool run(Session& session, Command command) {
     }
 
     case Command::ClearMarkers:
-      if (project.markers.empty()) return false;
+      if (project.sequence().markers.empty()) return false;
       return session.apply(core::clear_markers(project));
 
     case Command::NextMarker: {

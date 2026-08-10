@@ -87,8 +87,8 @@ Track video_track(std::string id, std::vector<Clip> clips) {
 
 Project canvas_project() {
   Project p;
-  p.canvas_w = kWidth;
-  p.canvas_h = kHeight;
+  p.sequence().canvas_w = kWidth;
+  p.sequence().canvas_h = kHeight;
   return p;
 }
 
@@ -133,8 +133,8 @@ TEST_F(FrameRendererTest, AnEmptyProjectRendersNothing) {
 
 TEST_F(FrameRendererTest, TheCanvasSizeComesFromTheProject) {
   Project p = canvas_project();
-  p.canvas_w = 32;
-  p.canvas_h = 16;
+  p.sequence().canvas_w = 32;
+  p.sequence().canvas_h = 16;
 
   const gpu::Image image = render(p, 0.0);
   EXPECT_EQ(image.width, 32);
@@ -144,7 +144,7 @@ TEST_F(FrameRendererTest, TheCanvasSizeComesFromTheProject) {
 TEST_F(FrameRendererTest, AColourMatteFillsTheFrame) {
   Project p = canvas_project();
   p.media = {matte("m", "#ff0000")};
-  p.tracks = {video_track("v1", {clip("c", "m", 0.0, 5.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("c", "m", 0.0, 5.0)})};
 
   const Rgba centre = pixel_at(render(p, 2.0), kWidth / 2, kHeight / 2);
   EXPECT_GT(centre.r, 250);
@@ -155,7 +155,7 @@ TEST_F(FrameRendererTest, AColourMatteFillsTheFrame) {
 TEST_F(FrameRendererTest, NothingDrawsOutsideTheClipsSpan) {
   Project p = canvas_project();
   p.media = {matte("m", "#ff0000")};
-  p.tracks = {video_track("v1", {clip("c", "m", 0.0, 5.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("c", "m", 0.0, 5.0)})};
 
   EXPECT_EQ(pixel_at(render(p, 6.0), kWidth / 2, kHeight / 2).a, 0);
 }
@@ -163,7 +163,7 @@ TEST_F(FrameRendererTest, NothingDrawsOutsideTheClipsSpan) {
 TEST_F(FrameRendererTest, AMalformedColourFallsBackRatherThanVanishing) {
   Project p = canvas_project();
   p.media = {matte("m", "not a colour")};
-  p.tracks = {video_track("v1", {clip("c", "m", 0.0, 5.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("c", "m", 0.0, 5.0)})};
 
   EXPECT_EQ(pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2).a, 255);
 }
@@ -220,7 +220,7 @@ class TitleRendererTest : public FrameRendererTest {
 TEST_F(TitleRendererTest, ATitleDrawsItsText) {
   Project p = canvas_project();
   p.media = {titled("t", big_text())};
-  p.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
 
   const gpu::Image image = render(p, 1.0);
   ASSERT_FALSE(image.empty());
@@ -237,7 +237,7 @@ TEST_F(TitleRendererTest, ATitleIsTransparentAroundItsGlyphs) {
   // A single narrow letter in the middle: the corners of the canvas cannot be
   // part of it.
   p.media = {titled("t", big_text("l"))};
-  p.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
 
   const gpu::Image image = render(p, 1.0);
   EXPECT_EQ(pixel_at(image, 1, 1).a, 0);
@@ -250,7 +250,7 @@ TEST_F(TitleRendererTest, ATitleWithABackgroundCoversItsBox) {
 
   Project p = canvas_project();
   p.media = {titled("t", spec)};
-  p.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
 
   const gpu::Image image = render(p, 1.0);
   const Rgba centre = pixel_at(image, kWidth / 2, kHeight / 2);
@@ -263,11 +263,11 @@ TEST_F(TitleRendererTest, ATitleIsSizedToItsTextRatherThanToTheCanvas) {
   // would simply be stretched and the coverage would match.
   Project narrow = canvas_project();
   narrow.media = {titled("t", big_text("l"))};
-  narrow.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+  narrow.sequence().tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
 
   Project wide = canvas_project();
   wide.media = {titled("t", big_text("MMMM"))};
-  wide.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+  wide.sequence().tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
 
   const int thin = covered(render(narrow, 1.0));
   const int fat = covered(render(wide, 1.0));
@@ -277,7 +277,7 @@ TEST_F(TitleRendererTest, ATitleIsSizedToItsTextRatherThanToTheCanvas) {
 TEST_F(TitleRendererTest, AnEditedTitleIsRedrawnRatherThanCached) {
   Project p = canvas_project();
   p.media = {titled("t", big_text("l"))};
-  p.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
   const int before = covered(render(p, 1.0));
 
   // Same media id, different text: a cache keyed on the id alone would show
@@ -296,7 +296,7 @@ TEST_F(TitleRendererTest, ATitleTakesTheEffectsOnItsClip) {
 
   Clip c = clip("c", "t", 0.0, 5.0);
   c.effects = {core::ClipEffect{.type = "grayscale", .params = {{"amount", 100.0}}}};
-  p.tracks = {video_track("v1", {c})};
+  p.sequence().tracks = {video_track("v1", {c})};
 
   const Rgba centre = pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2);
   EXPECT_EQ(centre.r, centre.g) << "a title should be as effectable as a video clip";
@@ -307,7 +307,7 @@ TEST_F(TitleRendererTest, ATitleTakesTheEffectsOnItsClip) {
 TEST_F(FrameRendererTest, ATitleWithNoTextIsSkippedRatherThanFailingTheFrame) {
   Project p = canvas_project();
   p.media = {titled("t", big_text(""))};
-  p.tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("c", "t", 0.0, 5.0)})};
 
   const gpu::Image image = render(p, 1.0);
   ASSERT_FALSE(image.empty());
@@ -320,7 +320,7 @@ TEST_F(FrameRendererTest, TheTopTrackDrawsOverTheBottomOne) {
   Project p = canvas_project();
   p.media = {matte("red", "#ff0000"), matte("green", "#00ff00")};
   // Stored top-first.
-  p.tracks = {video_track("v2", {clip("top", "green", 0.0, 5.0)}),
+  p.sequence().tracks = {video_track("v2", {clip("top", "green", 0.0, 5.0)}),
               video_track("v1", {clip("bottom", "red", 0.0, 5.0)})};
 
   const Rgba centre = pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2);
@@ -331,9 +331,9 @@ TEST_F(FrameRendererTest, TheTopTrackDrawsOverTheBottomOne) {
 TEST_F(FrameRendererTest, AHiddenTrackDoesNotRender) {
   Project p = canvas_project();
   p.media = {matte("red", "#ff0000"), matte("green", "#00ff00")};
-  p.tracks = {video_track("v2", {clip("top", "green", 0.0, 5.0)}),
+  p.sequence().tracks = {video_track("v2", {clip("top", "green", 0.0, 5.0)}),
               video_track("v1", {clip("bottom", "red", 0.0, 5.0)})};
-  p.tracks[0].hidden = true;
+  p.sequence().tracks[0].hidden = true;
 
   const Rgba centre = pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2);
   EXPECT_GT(centre.r, 250) << "the red beneath should show through";
@@ -348,7 +348,7 @@ TEST_F(FrameRendererTest, TheTransformPlacesTheClipOnTheCanvas) {
   Clip c = clip("c", "m", 0.0, 5.0);
   // A quarter-size square in the top-left quadrant.
   c.transform = core::Transform{.x = 0.25, .y = 0.25, .scale_x = 0.5, .scale_y = 0.5};
-  p.tracks = {video_track("v1", {c})};
+  p.sequence().tracks = {video_track("v1", {c})};
 
   const gpu::Image image = render(p, 1.0);
   EXPECT_EQ(pixel_at(image, kWidth / 4, kHeight / 4).a, 255);
@@ -360,13 +360,13 @@ TEST_F(FrameRendererTest, ASmallerCanvasIsTheSamePictureSmaller) {
   // is a fraction of the canvas rather than a pixel count, so a smaller canvas
   // scales the composition instead of cropping it.
   Project p = canvas_project();
-  p.canvas_w = kWidth / 2;
-  p.canvas_h = kHeight / 2;
+  p.sequence().canvas_w = kWidth / 2;
+  p.sequence().canvas_h = kHeight / 2;
   p.media = {matte("m", "#ffffff")};
 
   Clip c = clip("c", "m", 0.0, 5.0);
   c.transform = core::Transform{.x = 0.25, .y = 0.25, .scale_x = 0.5, .scale_y = 0.5};
-  p.tracks = {video_track("v1", {c})};
+  p.sequence().tracks = {video_track("v1", {c})};
 
   const gpu::Image image = render(p, 1.0);
   ASSERT_EQ(image.width, kWidth / 2);
@@ -382,7 +382,7 @@ TEST_F(FrameRendererTest, OpacityCarriesThroughToThePixels) {
 
   Clip top = clip("top", "white", 0.0, 5.0);
   top.opacity = 0.5;
-  p.tracks = {video_track("v2", {top}),
+  p.sequence().tracks = {video_track("v2", {top}),
               video_track("v1", {clip("bottom", "red", 0.0, 5.0)})};
 
   const Rgba centre = pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2);
@@ -398,7 +398,7 @@ TEST_F(FrameRendererTest, AClipsEffectStackReachesTheShader) {
 
   Clip c = clip("c", "m", 0.0, 5.0);
   c.effects = {core::ClipEffect{.type = "invert", .enabled = true, .params = {{"on", 1.0}}}};
-  p.tracks = {video_track("v1", {c})};
+  p.sequence().tracks = {video_track("v1", {c})};
 
   const Rgba centre = pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2);
   EXPECT_LT(centre.r, 5) << "an inverted white matte should be black";
@@ -426,7 +426,7 @@ TEST_F(FrameRendererTest, AFreeDrawnMaskKeepsTheEffectInsideIt) {
 
   Clip c = clip("c", "m", 0.0, 5.0);
   c.effects = {invert};
-  p.tracks = {video_track("v1", {c})};
+  p.sequence().tracks = {video_track("v1", {c})};
 
   const gpu::Image image = render(p, 1.0);
   ASSERT_FALSE(image.empty());
@@ -459,7 +459,7 @@ TEST_F(FrameRendererTest, BendingAPathsEdgesChangesWhatItCovers) {
 
     Clip c = clip("c", "m", 0.0, 5.0);
     c.effects = {invert};
-    p.tracks = {video_track("v1", {c})};
+    p.sequence().tracks = {video_track("v1", {c})};
 
     const gpu::Image image = render(p, 1.0);
     int inside = 0;
@@ -488,7 +488,7 @@ TEST_F(FrameRendererTest, EffectKeyframesResolveAtTheRenderedTime) {
   core::ClipEffect brightness{.type = "brightness", .enabled = true, .params = {{"amount", 0.0}}};
   brightness.keyframes["amount"] = {{.t = 0.0, .v = -100.0}, {.t = 4.0, .v = 100.0}};
   c.effects = {brightness};
-  p.tracks = {video_track("v1", {c})};
+  p.sequence().tracks = {video_track("v1", {c})};
 
   // Sampled just inside the clip's end: the span is half-open, so at exactly
   // 4.0 there is nothing to render.
@@ -508,7 +508,7 @@ TEST_F(FrameRendererTest, AnAdjustmentLayerAffectsTheTracksBelow) {
   Clip layer = clip("adj", "adj", 0.0, 5.0);
   layer.effects = {core::ClipEffect{.type = "invert", .enabled = true, .params = {{"on", 1.0}}}};
 
-  p.tracks = {video_track("v2", {layer}),
+  p.sequence().tracks = {video_track("v2", {layer}),
               video_track("v1", {clip("base", "white", 0.0, 5.0)})};
 
   const Rgba centre = pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2);
@@ -524,7 +524,7 @@ TEST_F(FrameRendererTest, ADissolveMixesTheTwoClips) {
   Clip a = clip("a", "red", 0.0, 4.0);
   a.transition_out = core::Transition{.kind = core::TransitionKind::Dissolve, .duration = 2.0};
   Clip b = clip("b", "blue", 4.0, 4.0);
-  p.tracks = {video_track("v1", {a, b})};
+  p.sequence().tracks = {video_track("v1", {a, b})};
 
   // The incoming clip has no head handle -- its source_in is zero -- so the
   // overlap is borrowed entirely from the outgoing clip's tail and runs
@@ -540,7 +540,7 @@ TEST_F(FrameRendererTest, ADissolveMixesTheTwoClips) {
 TEST_F(FrameRendererTest, AClipWithNoMediaIsReportedRatherThanFailingTheFrame) {
   Project p = canvas_project();
   p.media = {matte("red", "#ff0000")};
-  p.tracks = {video_track("v2", {clip("orphan", "gone", 0.0, 5.0)}),
+  p.sequence().tracks = {video_track("v2", {clip("orphan", "gone", 0.0, 5.0)}),
               video_track("v1", {clip("base", "red", 0.0, 5.0)})};
 
   const gpu::Image image = render(p, 1.0);
@@ -559,7 +559,7 @@ TEST_F(FrameRendererTest, AnUnreadableFileIsReportedRatherThanFailingTheFrame) {
   broken.duration = 10.0;
 
   p.media = {matte("red", "#ff0000"), broken};
-  p.tracks = {video_track("v2", {clip("bad", "broken", 0.0, 5.0)}),
+  p.sequence().tracks = {video_track("v2", {clip("bad", "broken", 0.0, 5.0)}),
               video_track("v1", {clip("base", "red", 0.0, 5.0)})};
 
   const gpu::Image image = render(p, 1.0);
@@ -570,10 +570,10 @@ TEST_F(FrameRendererTest, AnUnreadableFileIsReportedRatherThanFailingTheFrame) {
 TEST_F(FrameRendererTest, MissingMediaIsClearedBetweenFrames) {
   Project good = canvas_project();
   good.media = {matte("red", "#ff0000")};
-  good.tracks = {video_track("v1", {clip("base", "red", 0.0, 5.0)})};
+  good.sequence().tracks = {video_track("v1", {clip("base", "red", 0.0, 5.0)})};
 
   Project bad = good;
-  bad.tracks.insert(bad.tracks.begin(), video_track("v2", {clip("orphan", "gone", 0.0, 5.0)}));
+  bad.sequence().tracks.insert(bad.sequence().tracks.begin(), video_track("v2", {clip("orphan", "gone", 0.0, 5.0)}));
 
   render_only(bad, 1.0);
   EXPECT_FALSE(renderer_->missing_media().empty());
@@ -617,7 +617,7 @@ class FootageTest : public FrameRendererTest {
     m.height = 2160;
 
     p.media = {m};
-    p.tracks = {video_track("v1", {clip("c", "v", 0.0, 10.0)})};
+    p.sequence().tracks = {video_track("v1", {clip("c", "v", 0.0, 10.0)})};
     return p;
   }
 
@@ -730,7 +730,7 @@ TEST_F(FootageTest, AnEffectAppliesToRealFootage) {
   Project plain = with_video();
 
   Project inverted = plain;
-  inverted.tracks[0].clips[0].effects = {
+  inverted.sequence().tracks[0].clips[0].effects = {
       core::ClipEffect{.type = "invert", .enabled = true, .params = {{"on", 1.0}}}};
 
   const gpu::Image before = render(plain, 1.0);
@@ -821,7 +821,7 @@ class CoarseTimestampTest : public FrameRendererTest {
     m.height = kSourceHeight;
 
     p.media = {m};
-    p.tracks = {video_track("v1", {clip("c", "v", 0.0, kFrames / kFps)})};
+    p.sequence().tracks = {video_track("v1", {clip("c", "v", 0.0, kFrames / kFps)})};
     return p;
   }
 

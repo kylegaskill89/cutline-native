@@ -33,14 +33,14 @@ void sort_track(Track& track) {
 }
 
 void sort_all_tracks(Project& p) {
-  for (Track& t : p.tracks) sort_track(t);
+  for (Track& t : p.sequence().tracks) sort_track(t);
 }
 
 [[nodiscard]] std::unordered_set<std::string> id_set(std::span<const std::string> ids) {
   return {ids.begin(), ids.end()};
 }
 
-/// Indices into `p.tracks` of every track of the given kind, in storage order.
+/// Indices into `p.sequence().tracks` of every track of the given kind, in storage order.
 /// The tracks of a kind that can hold clips, in project order.
 ///
 /// A submix is skipped. It is an audio track by every other measure — fader,
@@ -51,9 +51,9 @@ void sort_all_tracks(Project& p) {
 /// lane that is supposed to have no source of its own.
 [[nodiscard]] std::vector<std::size_t> track_indices_of_kind(const Project& p, TrackKind kind) {
   std::vector<std::size_t> out;
-  for (std::size_t i = 0; i < p.tracks.size(); ++i) {
-    if (p.tracks[i].kind != kind) continue;
-    if (p.tracks[i].submix) continue;
+  for (std::size_t i = 0; i < p.sequence().tracks.size(); ++i) {
+    if (p.sequence().tracks[i].kind != kind) continue;
+    if (p.sequence().tracks[i].submix) continue;
     out.push_back(i);
   }
   return out;
@@ -153,8 +153,8 @@ EditPoints edit_points(const Project& p, std::string_view media_id, double playh
   if (it == p.media.end()) return points;
   const Media& media = *it;
 
-  const std::optional<double> in = p.in_point;
-  const std::optional<double> out = p.out_point;
+  const std::optional<double> in = p.sequence().in_point;
+  const std::optional<double> out = p.sequence().out_point;
   if (!in.has_value() && !out.has_value()) return points;
 
   // How long the source would run as it stands, which is what a back-time is
@@ -231,8 +231,8 @@ struct PlacementLanes {
   // and the only way an audio-only source can be aimed anywhere but A1.
   std::optional<std::size_t> audio_target;
   if (!track_id.empty()) {
-    for (std::size_t i = 0; i < p.tracks.size(); ++i) {
-      if (p.tracks[i].id == track_id && p.tracks[i].kind == TrackKind::Audio) {
+    for (std::size_t i = 0; i < p.sequence().tracks.size(); ++i) {
+      if (p.sequence().tracks[i].id == track_id && p.sequence().tracks[i].kind == TrackKind::Audio) {
         audio_target = i;
         break;
       }
@@ -244,7 +244,7 @@ struct PlacementLanes {
     std::size_t target = video_tracks.front();
     if (!track_id.empty()) {
       for (const std::size_t i : video_tracks) {
-        if (p.tracks[i].id == track_id) {
+        if (p.sequence().tracks[i].id == track_id) {
           target = i;
           break;
         }
@@ -278,8 +278,8 @@ struct PlacementLanes {
       Track fresh;
       fresh.id = new_id("track");
       fresh.kind = TrackKind::Audio;
-      p.tracks.push_back(std::move(fresh));
-      audio_tracks.push_back(p.tracks.size() - 1);
+      p.sequence().tracks.push_back(std::move(fresh));
+      audio_tracks.push_back(p.sequence().tracks.size() - 1);
     }
     lanes.audio.push_back(audio_tracks[lane]);
   }
@@ -315,8 +315,8 @@ Project place_media(Project p, std::string_view media_id, double start,
     // Copied rather than looked up through the media. Relabelling a source
     // should not repaint a cut somebody has already coloured by hand.
     clip.label_color = media.label_color;
-    p.tracks[*lanes.video].clips.push_back(std::move(clip));
-    sort_track(p.tracks[*lanes.video]);
+    p.sequence().tracks[*lanes.video].clips.push_back(std::move(clip));
+    sort_track(p.sequence().tracks[*lanes.video]);
   }
 
   // Each audio stream on the lane that matches the video's, and the ones below
@@ -335,8 +335,8 @@ Project place_media(Project p, std::string_view media_id, double start,
     clip.start = start;
     clip.group_id = group_id;
     clip.label_color = media.label_color;
-    p.tracks[lanes.audio[stream]].clips.push_back(std::move(clip));
-    sort_track(p.tracks[lanes.audio[stream]]);
+    p.sequence().tracks[lanes.audio[stream]].clips.push_back(std::move(clip));
+    sort_track(p.sequence().tracks[lanes.audio[stream]]);
   }
 
   return p;
@@ -348,7 +348,7 @@ Project split_at(Project p, double time, std::span<const std::string> clip_ids) 
   const std::unordered_set<std::string> ids = id_set(clip_ids);
   const std::string right_group_id = new_id("grp");
 
-  for (Track& track : p.tracks) {
+  for (Track& track : p.sequence().tracks) {
     std::vector<Clip> added;
     const std::size_t original_count = track.clips.size();
     for (std::size_t i = 0; i < original_count; ++i) {
@@ -394,7 +394,7 @@ Project move_clips(Project p, std::span<const std::string> clip_ids, double delt
 
   // The whole set shifts together, clamped so nothing starts before zero.
   double min_start = kInfinity;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     for (const Clip& c : t.clips) {
       if (ids.contains(c.id)) min_start = std::min(min_start, c.start);
     }
@@ -416,8 +416,8 @@ Project move_clips(Project p, std::span<const std::string> clip_ids, double delt
       track_indices_of_kind(p, TrackKind::Audio),
   };
 
-  for (std::size_t ti = 0; ti < p.tracks.size(); ++ti) {
-    for (Clip& c : p.tracks[ti].clips) {
+  for (std::size_t ti = 0; ti < p.sequence().tracks.size(); ++ti) {
+    for (Clip& c : p.sequence().tracks[ti].clips) {
       if (!ids.contains(c.id)) continue;
       c.start += clamped_delta;
 
@@ -441,8 +441,8 @@ Project move_clips(Project p, std::span<const std::string> clip_ids, double delt
   }
 
   for (const Relocation& r : relocations) {
-    if (std::optional<Clip> taken = extract_clip(p.tracks[r.from_track], r.clip_id)) {
-      p.tracks[r.to_track].clips.push_back(*std::move(taken));
+    if (std::optional<Clip> taken = extract_clip(p.sequence().tracks[r.from_track], r.clip_id)) {
+      p.sequence().tracks[r.to_track].clips.push_back(*std::move(taken));
     }
   }
 
@@ -472,7 +472,7 @@ struct EdgeRoom {
                                  ClipEdge edge, bool neighbours) {
   EdgeRoom room;
 
-  for (const Track& track : p.tracks) {
+  for (const Track& track : p.sequence().tracks) {
     // Neighbours are determined in timeline order, which is how the track is
     // stored, but sorting here keeps this correct even mid-edit.
     std::vector<const Clip*> sorted;
@@ -519,7 +519,7 @@ struct EdgeRoom {
 /// allowed.
 void move_edge(Project& p, const std::unordered_set<std::string>& members, ClipEdge edge,
                double delta) {
-  for (Track& track : p.tracks) {
+  for (Track& track : p.sequence().tracks) {
     for (Clip& c : track.clips) {
       if (!members.contains(c.id)) continue;
       const double speed = clip_speed(c);
@@ -587,7 +587,7 @@ Project ripple_trim_edge(Project p, std::string_view clip_id, ClipEdge edge,
   // gap never opens. Without that a ripple on the head would leave a hole in
   // front of the very clip that was trimmed.
   const double shift = edge == ClipEdge::In ? -delta : delta;
-  for (Track& track : p.tracks) {
+  for (Track& track : p.sequence().tracks) {
     // Pinned tracks hold, except for the group being trimmed: that clip is
     // what the gesture is *on*, and refusing to move it would mean the trim
     // silently did half of itself.
@@ -615,7 +615,7 @@ Project roll_edit(Project p, std::string_view clip_id, ClipEdge edge, double tim
   // a gap or the end of the track beyond it.
   const double at = edge == ClipEdge::In ? target->start : clip_end(*target);
   const Clip* other = nullptr;
-  for (const Track& track : p.tracks) {
+  for (const Track& track : p.sequence().tracks) {
     for (const Clip& c : track.clips) {
       if (c.id == target->id) continue;
       const double meets = edge == ClipEdge::In ? clip_end(c) : c.start;
@@ -655,7 +655,7 @@ namespace {
 /// not on one.
 [[nodiscard]] long long video_lane_of(const Project& p, std::string_view clip_id) noexcept {
   long long lane = 0;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     if (t.kind != TrackKind::Video) continue;
     if (std::ranges::any_of(t.clips, [&](const Clip& c) { return c.id == clip_id; })) return lane;
     ++lane;
@@ -682,7 +682,7 @@ Project move_clips_layered(Project p, std::span<const std::string> clip_ids, dou
   const std::unordered_set<std::string> ids = id_set(clip_ids);
   std::vector<std::string> moved_audio;
   std::optional<std::string> group_id;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     if (t.kind != TrackKind::Audio) continue;
     for (const Clip& c : t.clips) {
       if (!ids.contains(c.id)) continue;
@@ -707,7 +707,7 @@ Project move_clips_layered(Project p, std::span<const std::string> clip_ids, dou
   for (const std::string& clip_id : moved_audio) {
     std::optional<std::size_t> current;
     for (const std::size_t i : audio_tracks) {
-      if (std::ranges::any_of(p.tracks[i].clips,
+      if (std::ranges::any_of(p.sequence().tracks[i].clips,
                               [&](const Clip& c) { return c.id == clip_id; })) {
         current = i;
         break;
@@ -715,12 +715,12 @@ Project move_clips_layered(Project p, std::span<const std::string> clip_ids, dou
     }
 
     std::optional<std::size_t> destination;
-    if (current.has_value() && !claimed.contains(p.tracks[*current].id) &&
-        dedicated_to_group(p.tracks[*current])) {
+    if (current.has_value() && !claimed.contains(p.sequence().tracks[*current].id) &&
+        dedicated_to_group(p.sequence().tracks[*current])) {
       destination = current;  // already on a lane of its own
     } else {
       for (const std::size_t i : audio_tracks) {
-        if (!claimed.contains(p.tracks[i].id) && dedicated_to_group(p.tracks[i])) {
+        if (!claimed.contains(p.sequence().tracks[i].id) && dedicated_to_group(p.sequence().tracks[i])) {
           destination = i;
           break;
         }
@@ -731,17 +731,17 @@ Project move_clips_layered(Project p, std::span<const std::string> clip_ids, dou
       Track lane;
       lane.id = new_id("track");
       lane.kind = TrackKind::Audio;
-      p.tracks.push_back(std::move(lane));
-      destination = p.tracks.size() - 1;
+      p.sequence().tracks.push_back(std::move(lane));
+      destination = p.sequence().tracks.size() - 1;
       audio_tracks.push_back(*destination);
     }
 
     if (current.has_value() && *current != *destination) {
-      if (std::optional<Clip> taken = extract_clip(p.tracks[*current], clip_id)) {
-        p.tracks[*destination].clips.push_back(*std::move(taken));
+      if (std::optional<Clip> taken = extract_clip(p.sequence().tracks[*current], clip_id)) {
+        p.sequence().tracks[*destination].clips.push_back(*std::move(taken));
       }
     }
-    claimed.insert(p.tracks[*destination].id);
+    claimed.insert(p.sequence().tracks[*destination].id);
   }
 
   sort_all_tracks(p);
@@ -756,7 +756,7 @@ Project duplicate_clips(Project p, std::span<const std::string> clip_ids, double
   std::unordered_map<std::string, std::string> groups;
   std::vector<std::string> fresh;
 
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     // Built to one side and appended after, because appending while walking a
     // track would have the copies copied in their turn.
     std::vector<Clip> copies;
@@ -787,14 +787,14 @@ Project duplicate_clips(Project p, std::span<const std::string> clip_ids, double
 
 Project ripple_insert(Project p, double at_time, double amount) {
   std::vector<std::string> spanning;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     for (const Clip& c : t.clips) {
       if (at_time > c.start && at_time < clip_end(c)) spanning.push_back(c.id);
     }
   }
   p = split_at(std::move(p), at_time, spanning);
 
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     // A track that is not sync locked stays where it is. That is the whole of
     // what sync lock means: an edit elsewhere opens the sequence up, and this
     // one is pinned — a music bed, a title at a fixed time, a bar of tone.
@@ -883,13 +883,13 @@ Project overwrite_media_at(Project p, std::string_view media_id, double at_time,
   // placement choose its own, which carved holes in one place and put the sound
   // in another the moment the two disagreed.
   const PlacementLanes lanes = reserve_lanes(p, media, track_id);
-  if (lanes.video.has_value()) clear_range(p.tracks[*lanes.video], at_time, end);
-  for (const std::size_t lane : lanes.audio) clear_range(p.tracks[lane], at_time, end);
+  if (lanes.video.has_value()) clear_range(p.sequence().tracks[*lanes.video], at_time, end);
+  for (const std::size_t lane : lanes.audio) clear_range(p.sequence().tracks[lane], at_time, end);
 
   // By id rather than index: `clear_range` sorts, and nothing here adds tracks
   // after the reservation, but naming the track is what makes that irrelevant.
   const std::string resolved =
-      lanes.video.has_value() ? p.tracks[*lanes.video].id : std::string(track_id);
+      lanes.video.has_value() ? p.sequence().tracks[*lanes.video].id : std::string(track_id);
   return place_media(std::move(p), media_id, at_time, resolved, range);
 }
 
@@ -952,7 +952,7 @@ Project fit_media_to(Project p, std::string_view media_id, double at, double dur
   // `set_clip_speed` retimes all of it together, which is what keeps a
   // picture and its sound at the same rate.
   std::string placed;
-  for (const Track& track : p.tracks) {
+  for (const Track& track : p.sequence().tracks) {
     const auto found = std::ranges::find_if(track.clips, [&](const Clip& c) {
       return c.media_id == media_id && std::abs(c.start - at) < 1e-9;
     });
@@ -972,7 +972,7 @@ std::vector<ClipCopy> copy_clips(const Project& p, std::span<const std::string> 
   const std::unordered_set<std::string> ids = id_set(clip_ids);
 
   std::vector<ClipCopy> copies;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     for (const Clip& c : t.clips) {
       if (ids.contains(c.id)) copies.push_back(ClipCopy{.clip = c, .track_id = t.id});
     }
@@ -991,8 +991,8 @@ namespace {
 /// otherwise — which is what happens when a clip is copied out of one project
 /// and pasted into another, or after the track it lived on has been removed.
 [[nodiscard]] std::optional<std::size_t> paste_track(const Project& p, const ClipCopy& copy) {
-  for (std::size_t i = 0; i < p.tracks.size(); ++i) {
-    if (p.tracks[i].id == copy.track_id && p.tracks[i].kind == copy.clip.kind) return i;
+  for (std::size_t i = 0; i < p.sequence().tracks.size(); ++i) {
+    if (p.sequence().tracks[i].id == copy.track_id && p.sequence().tracks[i].kind == copy.clip.kind) return i;
   }
   const std::vector<std::size_t> same = track_indices_of_kind(p, copy.clip.kind);
   if (same.empty()) return std::nullopt;
@@ -1023,7 +1023,7 @@ Project paste_clips(Project p, std::span<const ClipCopy> clips, double at_time,
   // second clip of a paste cut a hole in the first one.
   for (const auto& [track, copy] : landing) {
     const double start = at_time + (copy->clip.start - origin);
-    clear_range(p.tracks[track], start, start + clip_duration(copy->clip));
+    clear_range(p.sequence().tracks[track], start, start + clip_duration(copy->clip));
   }
 
   // Groups are remapped rather than kept: a pasted pair stays linked to each
@@ -1040,9 +1040,9 @@ Project paste_clips(Project p, std::span<const ClipCopy> clips, double at_time,
       clip.group_id = entry->second;
     }
     if (pasted != nullptr) pasted->push_back(clip.id);
-    p.tracks[track].clips.push_back(std::move(clip));
+    p.sequence().tracks[track].clips.push_back(std::move(clip));
   }
-  for (const auto& [track, copy] : landing) sort_track(p.tracks[track]);
+  for (const auto& [track, copy] : landing) sort_track(p.sequence().tracks[track]);
 
   return p;
 }
@@ -1070,7 +1070,7 @@ Project rate_stretch_edge(Project p, std::string_view clip_id, ClipEdge edge, do
       kMinClip, edge == ClipEdge::Out ? new_time - target->start : clip_end(*target) - new_time);
 
   const std::unordered_set<std::string> members = id_set(group_members(p, clip_id));
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     for (Clip& c : t.clips) {
       if (!members.contains(c.id)) continue;
       const double old_end = clip_end(c);
@@ -1089,7 +1089,7 @@ Project slip_clip(Project p, std::string_view clip_id, double delta_source) {
   // Intersect the allowable shift across every member that has real source.
   double lo = -kInfinity;
   double hi = kInfinity;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     for (const Clip& c : t.clips) {
       if (!members.contains(c.id)) continue;
       const auto m = std::ranges::find(p.media, c.media_id, &Media::id);
@@ -1102,7 +1102,7 @@ Project slip_clip(Project p, std::string_view clip_id, double delta_source) {
   if (!std::isfinite(hi)) hi = 0.0;
   const double delta = std::clamp(delta_source, lo, hi);
 
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     for (Clip& c : t.clips) {
       if (!members.contains(c.id)) continue;
       const auto m = std::ranges::find(p.media, c.media_id, &Media::id);
@@ -1171,7 +1171,7 @@ Project slide_clip(Project p, std::string_view clip_id, double delta_time) {
 
 Project remove_clips(Project p, std::span<const std::string> clip_ids) {
   const std::unordered_set<std::string> ids = id_set(clip_ids);
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     std::erase_if(t.clips, [&](const Clip& c) { return ids.contains(c.id); });
   }
   return p;
@@ -1185,7 +1185,7 @@ Project ripple_delete(Project p, std::span<const std::string> clip_ids) {
 
   double min_start = kInfinity;
   double max_end = -kInfinity;
-  for (const Track& t : p.tracks) {
+  for (const Track& t : p.sequence().tracks) {
     for (const Clip& c : t.clips) {
       if (!ids.contains(c.id)) continue;
       min_start = std::min(min_start, c.start);
@@ -1195,7 +1195,7 @@ Project ripple_delete(Project p, std::span<const std::string> clip_ids) {
   if (!std::isfinite(min_start)) return p;
 
   const double ripple = max_end - min_start;
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     // The clips named are removed wherever they are — deleting something is
     // not an edit *elsewhere*, and a pinned track's own clip still goes. What
     // sync lock decides is only whether the rest of the track closes up.
@@ -1215,7 +1215,7 @@ Project link_clips(Project p, std::span<const std::string> clip_ids) {
   if (clip_ids.size() < 2) return p;
   const std::unordered_set<std::string> ids = id_set(clip_ids);
   const std::string group_id = new_id("grp");
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     for (Clip& c : t.clips) {
       if (ids.contains(c.id)) c.group_id = group_id;
     }
@@ -1225,7 +1225,7 @@ Project link_clips(Project p, std::span<const std::string> clip_ids) {
 
 Project unlink_clips(Project p, std::span<const std::string> clip_ids) {
   const std::unordered_set<std::string> ids = id_set(clip_ids);
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     for (Clip& c : t.clips) {
       if (ids.contains(c.id)) c.group_id.reset();
     }
@@ -1238,7 +1238,7 @@ Project unlink_group(Project p, std::string_view clip_id) {
   if (clip == nullptr || !clip->group_id.has_value()) return p;
 
   const std::string group_id = *clip->group_id;
-  for (Track& t : p.tracks) {
+  for (Track& t : p.sequence().tracks) {
     for (Clip& c : t.clips) {
       if (c.group_id == group_id) c.group_id.reset();
     }

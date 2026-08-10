@@ -355,8 +355,8 @@ namespace {
 /// operation below is a no-op on a name that is not there — the same contract
 /// the clip versions keep.
 [[nodiscard]] Track* find_audio_track(Project& p, std::string_view track_id) noexcept {
-  const auto found = std::ranges::find(p.tracks, track_id, &Track::id);
-  return found == p.tracks.end() ? nullptr : &*found;
+  const auto found = std::ranges::find(p.sequence().tracks, track_id, &Track::id);
+  return found == p.sequence().tracks.end() ? nullptr : &*found;
 }
 
 [[nodiscard]] AudioClipEffect* find_track_audio_effect(Project& p, std::string_view track_id,
@@ -420,7 +420,7 @@ Project clear_track_audio_effects(Project p, std::string_view track_id) {
 
 Project add_master_audio_effect(Project p, std::string type,
                                 std::map<std::string, double> params) {
-  p.master_effects.push_back(AudioClipEffect{
+  p.sequence().master_effects.push_back(AudioClipEffect{
       .type = std::move(type),
       .params = std::move(params),
   });
@@ -428,34 +428,34 @@ Project add_master_audio_effect(Project p, std::string type,
 }
 
 Project remove_master_audio_effect(Project p, std::size_t index) {
-  if (index >= p.master_effects.size()) return p;
-  p.master_effects.erase(p.master_effects.begin() + static_cast<std::ptrdiff_t>(index));
+  if (index >= p.sequence().master_effects.size()) return p;
+  p.sequence().master_effects.erase(p.sequence().master_effects.begin() + static_cast<std::ptrdiff_t>(index));
   return p;
 }
 
 Project toggle_master_audio_effect(Project p, std::size_t index) {
-  if (index >= p.master_effects.size()) return p;
-  p.master_effects[index].enabled = !p.master_effects[index].enabled;
+  if (index >= p.sequence().master_effects.size()) return p;
+  p.sequence().master_effects[index].enabled = !p.sequence().master_effects[index].enabled;
   return p;
 }
 
 Project move_master_audio_effect(Project p, std::size_t index, int direction) {
-  if (index >= p.master_effects.size()) return p;
+  if (index >= p.sequence().master_effects.size()) return p;
   const auto to = static_cast<std::ptrdiff_t>(index) + direction;
-  if (to < 0 || static_cast<std::size_t>(to) >= p.master_effects.size()) return p;
-  std::swap(p.master_effects[index], p.master_effects[static_cast<std::size_t>(to)]);
+  if (to < 0 || static_cast<std::size_t>(to) >= p.sequence().master_effects.size()) return p;
+  std::swap(p.sequence().master_effects[index], p.sequence().master_effects[static_cast<std::size_t>(to)]);
   return p;
 }
 
 Project set_master_audio_effect_param(Project p, std::size_t index, std::string key,
                                       double value) {
-  if (index >= p.master_effects.size()) return p;
-  p.master_effects[index].params[std::move(key)] = value;
+  if (index >= p.sequence().master_effects.size()) return p;
+  p.sequence().master_effects[index].params[std::move(key)] = value;
   return p;
 }
 
 Project clear_master_audio_effects(Project p) {
-  p.master_effects.clear();
+  p.sequence().master_effects.clear();
   return p;
 }
 
