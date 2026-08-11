@@ -31,6 +31,17 @@ constexpr double kDragThreshold = 3.0;
 /// How close, in pixels, a dragged edge has to come before it sticks.
 constexpr double kSnapDistance = 10.0;
 
+/// How near the start of the sequence a drop has to be to land exactly on it.
+///
+/// Much wider than an ordinary snap, and deliberately. Zero is the one point on
+/// a timeline with nothing to its left to be mistaken for, so a generous catch
+/// there cannot steal a drop meant for something else — where the ordinary
+/// distance exists to pick one edge out of several sitting close together. And
+/// nearly every sequence begins with something at zero: "right at the start" is
+/// a thing people mean exactly, and a clip landing three frames short of it
+/// leaves a gap that has to be noticed and closed later.
+constexpr double kStartSnapDistance = 48.0;
+
 /// The square grabbed to pull a fade. Small, because it sits on the top edge
 /// over the clip's own body and a large one would swallow the trim handle it
 /// shares a corner with.
@@ -830,16 +841,34 @@ std::optional<BlockRef> TimelineView::block_at(double x, double y) const {
 }
 
 std::optional<DropPoint> TimelineView::drop_at(double x, double y) const {
+  const Rect tracks = tracks_area();
+  // The rows and the headers beside them. `tracks_area` is the time side only,
+  // and a drop is now allowed over the headers — see below — so the band this
+  // gesture may land in is that area widened back to the panel's own edge.
+  const Rect landable{bounds().x, tracks.y, tracks.right() - bounds().x, tracks.height};
+  if (!landable.contains(x, y)) return std::nullopt;
   const Rect time = time_area();
-  // The header column sits alongside the tracks but is not part of them: a drop
-  // there has no time, and letting it round to zero would quietly put the clip
-  // at the start of the sequence instead of refusing.
-  if (!tracks_area().contains(x, y) || x < time.x) return std::nullopt;
 
   for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
     const Rect row = track_rect(track);
     if (row.empty() || y < row.y || y >= row.bottom()) continue;
-    return DropPoint{.track = track, .time = std::max(0.0, scale_.to_time(x - time.x))};
+
+    // Left of the time area is the header column, and the pointer having gone
+    // that far left means the start of the sequence. It used to be refused, on
+    // the grounds that a drop over the headers has no time and rounding it to
+    // zero would *quietly* put the clip at the start — but the drop ghost says
+    // where it will land before the button comes up, so it is not quiet any
+    // more, and "further left than the beginning" has one sensible reading.
+    //
+    // Clamped rather than sent straight to zero, so a view scrolled into the
+    // middle of a sequence lands at the earliest time it is showing instead of
+    // jumping to a start that is nowhere on screen.
+    const double at = std::max(0.0, scale_.to_time(std::max(x, time.x) - time.x));
+
+    // And the start gets a catch of its own, wider than any other — see
+    // `kStartSnapDistance`. Off with snapping off, like every other snap.
+    const bool near_start = snapping_ && scale_.width_of(at) <= kStartSnapDistance;
+    return DropPoint{.track = track, .time = near_start ? 0.0 : at};
   }
   return std::nullopt;
 }

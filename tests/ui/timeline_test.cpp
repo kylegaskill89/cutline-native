@@ -1442,13 +1442,65 @@ TEST(Timeline, TheGhostIsDrawnAndThenTakenAway) {
   EXPECT_EQ(drawn(), plain);
 }
 
-TEST(Timeline, ADropOverTheHeadersIsRefused) {
-  // Not clamped to zero: a drop that has no time is not a drop at the start of
-  // the sequence, and quietly turning one into the other puts clips where
-  // nobody asked for them.
+TEST(Timeline, ADropLeftOfTheStartLandsAtTheStart) {
+  // This used to be refused, and the reasoning was that a drop over the headers
+  // has no time, so turning one into a drop at zero would quietly put clips
+  // where nobody asked for them. The ghost is what settles it: it draws where
+  // the clip will land before the button comes up, so nothing is quiet — and
+  // dragging further left than the beginning has one sensible reading, which is
+  // the beginning.
   const Fixture fixture;
   const Rect row = fixture.view->track_rect(1);
-  EXPECT_FALSE(fixture.view->drop_at(10.0, row.y + 5.0).has_value());
+
+  const auto where = fixture.view->drop_at(10.0, row.y + 5.0);
+  ASSERT_TRUE(where.has_value());
+  EXPECT_EQ(where->track, 1u);
+  EXPECT_DOUBLE_EQ(where->time, 0.0);
+}
+
+TEST(Timeline, ADropNearTheStartLandsExactlyOnIt) {
+  // The start's own catch, and it is a wide one. Nearly every sequence begins
+  // with something at zero, and landing three frames short of it leaves a gap
+  // that has to be noticed later.
+  const Fixture fixture;  // 100 px/s
+  const Rect row = fixture.view->track_rect(0);
+
+  const auto where = fixture.view->drop_at(fixture.view->time_area().x + 30.0, row.y + 5.0);
+  ASSERT_TRUE(where.has_value());
+  EXPECT_DOUBLE_EQ(where->time, 0.0);
+}
+
+TEST(Timeline, ADropWellPastTheStartIsLeftWhereItIs) {
+  // The catch is wide, not unbounded: past it, a drop means where it was put.
+  const Fixture fixture;
+  const Rect row = fixture.view->track_rect(0);
+
+  const auto where = fixture.view->drop_at(fixture.view->time_area().x + 200.0, row.y + 5.0);
+  ASSERT_TRUE(where.has_value());
+  EXPECT_DOUBLE_EQ(where->time, 2.0);
+}
+
+TEST(Timeline, WithSnappingOffTheStartHasNoPullOfItsOwn) {
+  Fixture fixture;
+  fixture.view->set_snapping(false);
+  const Rect row = fixture.view->track_rect(0);
+
+  const auto where = fixture.view->drop_at(fixture.view->time_area().x + 30.0, row.y + 5.0);
+  ASSERT_TRUE(where.has_value());
+  EXPECT_DOUBLE_EQ(where->time, 0.3);
+}
+
+TEST(Timeline, AViewScrolledPastTheStartDoesNotJumpBackToIt) {
+  // Clamped to the earliest time on show rather than sent to zero. Somebody
+  // working in the middle of a sequence who drags off the left edge means the
+  // left edge, not a start that is nowhere on screen.
+  Fixture fixture;
+  fixture.view->set_scale(TimeScale{.pixels_per_second = 100.0, .start = 4.0});
+  const Rect row = fixture.view->track_rect(0);
+
+  const auto where = fixture.view->drop_at(10.0, row.y + 5.0);
+  ASSERT_TRUE(where.has_value());
+  EXPECT_DOUBLE_EQ(where->time, 4.0);
 }
 
 TEST(Timeline, ADropOverTheRulerOrPastTheLastTrackIsRefused) {
