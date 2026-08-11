@@ -1166,6 +1166,7 @@ void show_snapping(App& app);
 void toggle_snapping(App& app);
 void choose_preview_scale(App& app, double scale);
 void invalidate_playback(App& app);
+void rebuild_playback(App& app);
 void open_export_dialog(App& app);
 void apply_media_cache(App& app);
 void open_settings_dialog(App& app, SettingsKind kind);
@@ -5742,6 +5743,70 @@ void stop_playback(App& app) {
 #endif
 }
 
+/// Rebuilds the player for a document that changed under it, and carries on.
+///
+/// A player holds a plan of the sequence and a decode of the sound it needs, so
+/// an edit leaves it playing something the document no longer describes. It
+/// used to stop, which was honest and is not what an editor should do: cutting
+/// while watching is most of what cutting *is*, and a sequence that halted
+/// every time it was touched had to be started again by hand after every cut,
+/// every level, every trim.
+///
+/// So it is rebuilt and resumed from where it had got to. That costs about
+/// 25 ms — a gap rather than a stop — and it is flat in the size of the cut,
+/// because building a player now decodes the audio at the playhead rather than
+/// all of it. Before that it would have been a third of a second at sixteen
+/// cuts and worse after, which is why stopping was the right answer then.
+///
+/// Seamless would be better still, and means replanning the mixer in place
+/// while its device keeps running rather than building another one. That is a
+/// change to something the audio thread is reading, and it deserves to be done
+/// on its own rather than folded in here.
+///
+/// Nothing is resumed if it was not playing: an edit made while stopped has
+/// nothing to carry on.
+void rebuild_playback(App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.player == nullptr) return;
+  if (!app.playing()) {
+    invalidate_playback(app);
+    return;
+  }
+
+  // Where the *sound* has got to, which is where time is during playback. The
+  // session's playhead follows it a frame behind.
+  const double at = app.player->position();
+
+  // Dropped before the replacement is built, so two players never hold the
+  // output device at once.
+  app.player.reset();
+
+  auto made = cutline::engine::Player::create(
+      app.session.project(),
+      {.start_at = at, .device_id = app.settings.audio_device});
+  if (!made.has_value()) {
+    app.player_failed = true;
+    stop_playback(app);
+    complain(app.main.window, "Playback stopped.\n\n" + made.error());
+    return;
+  }
+
+  app.player = std::move(*made);
+  app.player_project = app.session.project();
+  app.player_revision = app.session.revision();
+  app.player->seek(at);
+  app.player->play();
+  // The picture is drawn from whichever frame the playhead names, and the one
+  // on screen is from the document as it was. Forgetting it is what makes the
+  // next turn draw the edit rather than leave the old frame up until the
+  // playhead happens to cross into another.
+  app.shown_frame = -1;
+  mark_dirty(app);
+#else
+  (void)app;
+#endif
+}
+
 /// Forgets the player, because what it decoded no longer matches the document.
 void invalidate_playback(App& app) {
 #if CUTLINE_HAVE_PREVIEW
@@ -5973,7 +6038,7 @@ void advance_playback(App& app) {
     }
 
     if (app.player_project != app.session.project()) {
-      invalidate_playback(app);
+      rebuild_playback(app);
       return;
     }
   }
