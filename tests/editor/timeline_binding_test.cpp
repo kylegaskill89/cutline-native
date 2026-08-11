@@ -13,6 +13,8 @@
 
 #include "cutline/editor/timeline_binding.hpp"
 
+#include "cutline/editor/transitions.hpp"
+
 #include "cutline/core/animate.hpp"
 #include "cutline/core/edit.hpp"
 #include "cutline/core/effects.hpp"
@@ -420,6 +422,54 @@ TEST(Binding, ARateStretchCanMakeAClipLongerThanItsFootage) {
 
   EXPECT_DOUBLE_EQ(core::clip_end(*clip), 20.0);
   EXPECT_LT(core::clip_speed(*clip), 1.0) << "slowed down to fill the extra length";
+}
+
+TEST(Binding, DraggingATransitionsEdgeChangesHowLongItRuns) {
+  Project before = sample_project();
+  before = set_transition(std::move(before), "c1", core::TransitionKind::Dissolve, 1.0);
+  ASSERT_TRUE(clip_transition(before, "c1").present);
+
+  const Project after = apply_timeline_edit(
+      before, "c1",
+      ui::TimelineEdit{.mode = ui::DragMode::TransitionLength,
+                       .result = ui::TimelineBlock{.transition = {.duration = 2.0}}});
+
+  const TransitionRow row = clip_transition(after, "c1");
+  EXPECT_TRUE(row.present);
+  EXPECT_DOUBLE_EQ(row.duration, 2.0);
+  // The kind is the panel's business. Turning a dissolve into something else by
+  // pulling its edge would be a second meaning nobody asked this gesture for.
+  EXPECT_EQ(row.kind, core::TransitionKind::Dissolve);
+}
+
+TEST(Binding, ATransitionDragIsClampedToWhatTheJoinCanManage) {
+  // Half of one sits either side of the cut and neither half may swallow its
+  // clip or run past the source there is to borrow. Stopping at the longest
+  // that works is what a trim does at the end of its footage.
+  Project before = sample_project();
+  before = set_transition(std::move(before), "c1", core::TransitionKind::Dissolve, 1.0);
+  const double longest = longest_transition(before, "c1", core::TransitionKind::Dissolve);
+  ASSERT_GT(longest, 0.0);
+
+  const Project after = apply_timeline_edit(
+      before, "c1",
+      ui::TimelineEdit{.mode = ui::DragMode::TransitionLength,
+                       .result = ui::TimelineBlock{.transition = {.duration = longest * 10.0}}});
+
+  EXPECT_DOUBLE_EQ(clip_transition(after, "c1").duration, longest);
+}
+
+TEST(Binding, DraggingAnEdgeWhereThereIsNoTransitionChangesNothing) {
+  // The gesture cannot be started without one, but the edit is a value that can
+  // arrive after the join has been changed underneath it.
+  const Project before = sample_project();
+  ASSERT_FALSE(clip_transition(before, "c1").present);
+
+  EXPECT_EQ(apply_timeline_edit(
+                before, "c1",
+                ui::TimelineEdit{.mode = ui::DragMode::TransitionLength,
+                                 .result = ui::TimelineBlock{.transition = {.duration = 2.0}}}),
+            before);
 }
 
 TEST(Binding, ASlipMovesTheSourceAndLeavesTheClipWhereItIs) {

@@ -2071,6 +2071,112 @@ TEST(Transitions, StraddleTheCutTheySitOn) {
   EXPECT_DOUBLE_EQ(box.height, outgoing.height);
 }
 
+/// A fixture whose second track has a two-second dissolve on its first cut.
+[[nodiscard]] Fixture with_transition() {
+  Fixture fixture;
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].transition = BlockTransition{.duration = 2.0, .label = "Dissolve"};
+  fixture.view->set_model(std::move(model));
+  return fixture;
+}
+
+TEST(Transitions, APressOnOneTakesItRatherThanTheClipsUnderneath) {
+  // It straddles the join, so it covers the out-edge of the clip before and the
+  // in-edge of the clip after — both trim handles. Answering with one of those
+  // would make a transition impossible to take hold of at all.
+  const Fixture fixture = with_transition();
+  const Rect box = fixture.view->transition_rect(1, 0);
+  ASSERT_FALSE(box.empty());
+
+  EXPECT_EQ(fixture.view->zone_at(box.x + 4.0, box.y + 5.0, Modifiers{}),
+            DragMode::TransitionLength);
+  EXPECT_EQ(fixture.view->zone_at(box.right() - 4.0, box.y + 5.0, Modifiers{}),
+            DragMode::TransitionLength);
+}
+
+TEST(Transitions, PullingTheOuterEdgeMakesOneLonger) {
+  Fixture fixture = with_transition();
+  const Rect box = fixture.view->transition_rect(1, 0);
+  const Rect outgoing = fixture.view->block_rect(1, 0);
+
+  // Held by its right edge and pulled half a second further out. Half either
+  // side, so the whole thing grows by a second.
+  fixture.host->mouse_down(press(box.right() - 2.0, box.y + 5.0));
+  fixture.host->mouse_move(press(outgoing.right() + 150.0, box.y + 5.0));
+
+  EXPECT_DOUBLE_EQ(fixture.view->model().tracks[1].blocks[0].transition.duration, 3.0);
+}
+
+TEST(Transitions, PullingTheInnerEdgeMakesOneShorter) {
+  Fixture fixture = with_transition();
+  const Rect box = fixture.view->transition_rect(1, 0);
+  const Rect outgoing = fixture.view->block_rect(1, 0);
+
+  // The left edge, brought in to a quarter of a second before the cut.
+  fixture.host->mouse_down(press(box.x + 2.0, box.y + 5.0));
+  fixture.host->mouse_move(press(outgoing.right() - 25.0, box.y + 5.0));
+
+  EXPECT_DOUBLE_EQ(fixture.view->model().tracks[1].blocks[0].transition.duration, 0.5);
+}
+
+TEST(Transitions, PullingAnEdgeThroughTheCutStopsAtNothing) {
+  // A duration centred on a point is the same either side of it, so without
+  // the side being read at the press this would shrink to nothing and then
+  // grow again backwards as the hand kept going.
+  Fixture fixture = with_transition();
+  const Rect box = fixture.view->transition_rect(1, 0);
+  const Rect outgoing = fixture.view->block_rect(1, 0);
+
+  fixture.host->mouse_down(press(box.right() - 2.0, box.y + 5.0));
+  fixture.host->mouse_move(press(outgoing.right() - 200.0, box.y + 5.0));
+
+  EXPECT_DOUBLE_EQ(fixture.view->model().tracks[1].blocks[0].transition.duration, 0.0);
+}
+
+TEST(Transitions, DraggingOneReportsTheEditWhenItIsLetGo) {
+  Fixture fixture = with_transition();
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect box = fixture.view->transition_rect(1, 0);
+  const Rect outgoing = fixture.view->block_rect(1, 0);
+  fixture.host->mouse_down(press(box.right() - 2.0, box.y + 5.0));
+  fixture.host->mouse_move(press(outgoing.right() + 150.0, box.y + 5.0));
+  fixture.host->mouse_up(press(outgoing.right() + 150.0, box.y + 5.0));
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::TransitionLength);
+  EXPECT_EQ(last->block.track, 1u);
+  EXPECT_EQ(last->block.block, 0u);
+  EXPECT_DOUBLE_EQ(last->result.transition.duration, 3.0);
+}
+
+TEST(Transitions, TakingHoldOfOneLeavesTheSelectionAlone) {
+  // Pulling a transition longer is not a statement about which clips are being
+  // worked on, and throwing away a selection to do it would be a surprise.
+  Fixture fixture = with_transition();
+  std::optional<std::vector<BlockRef>> chosen;
+  fixture.view->set_on_select([&](std::span<const BlockRef> refs) {
+    chosen = std::vector<BlockRef>(refs.begin(), refs.end());
+  });
+
+  const Rect box = fixture.view->transition_rect(1, 0);
+  fixture.host->mouse_down(press(box.x + box.width * 0.5, box.y + 5.0));
+
+  EXPECT_FALSE(chosen.has_value()) << "the press changed the selection";
+}
+
+TEST(Transitions, AnotherToolStillMeansWhatItMeans) {
+  // The selection tool only. Every other tool says something specific about a
+  // clip, and none of them says anything about a transition.
+  Fixture fixture = with_transition();
+  fixture.view->set_tool(Tool::Razor);
+
+  const Rect box = fixture.view->transition_rect(1, 0);
+  EXPECT_EQ(fixture.view->zone_at(box.x + box.width * 0.5, box.y + 5.0, Modifiers{}),
+            DragMode::Razor);
+}
+
 TEST(Transitions, AreDrawnOverBothClipsTheyJoin) {
   // Drawn after every block on the track, so the incoming half is not painted
   // over by the clip it reaches into.

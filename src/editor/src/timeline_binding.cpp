@@ -304,6 +304,21 @@ core::Project apply_timeline_edit(core::Project project, std::string_view clip_i
     case ui::DragMode::Slide:
       return core::slide_clip(std::move(project), clip_id, edit.result.start - clip->start);
 
+    case ui::DragMode::TransitionLength: {
+      // The kind it already is. This gesture changes how long a transition
+      // runs and nothing else — which one it is belongs to the panel, and
+      // turning a push into a dissolve by dragging its edge would be a second
+      // meaning nobody asked this gesture for.
+      const TransitionRow row = clip_transition(project, clip_id);
+      if (!row.present) return project;
+      // Clamped by `set_transition` against what the join can actually manage:
+      // half of one sits either side of the cut and neither half may swallow
+      // its clip or run past the source there is to borrow. Stopping at the
+      // longest that works is what a trim does at the end of its footage.
+      return set_transition(std::move(project), clip_id, row.kind,
+                            edit.result.transition.duration);
+    }
+
     case ui::DragMode::Razor: {
       if (!edit.all_tracks) {
         // Whatever is linked to it, not only the clip under the blade.

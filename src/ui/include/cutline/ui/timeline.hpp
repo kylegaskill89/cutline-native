@@ -469,6 +469,15 @@ enum class DragMode {
   /// would have opened in front of it.
   RippleStart,
   RippleEnd,
+  /// Pulling a transition longer or shorter by one of its edges.
+  ///
+  /// It stays centred on the cut, because that is the only place the model
+  /// can put one: a transition is a duration on a clip's out-edge with half
+  /// either side, and there is no field saying otherwise. Premiere also lets
+  /// one sit wholly before or after the cut, which is an alignment this has
+  /// no way to record — so the far edge mirrors the one being dragged rather
+  /// than staying where it was.
+  TransitionLength,
   /// Moving a join. Two edges travel together and everything else stays put.
   RollStart,
   RollEnd,
@@ -865,6 +874,13 @@ class TimelineView : public Widget {
   /// side. Empty when it has none.
   [[nodiscard]] Rect transition_rect(std::size_t track, std::size_t block) const;
 
+  /// The transition a point is over, or nothing. Tested before the clips
+  /// underneath it, since one straddles the join and so covers the out-edge of
+  /// the clip before it and the in-edge of the clip after — both of which are
+  /// trim handles, and neither of which can be what a press on a transition
+  /// meant.
+  [[nodiscard]] std::optional<BlockRef> transition_at(double x, double y) const;
+
   /// The rectangle being swept, or empty when nothing is. Between the press and
   /// wherever the pointer has got to, in either direction — a marquee dragged
   /// up and to the left is the same marquee.
@@ -1204,6 +1220,15 @@ class TimelineView : public Widget {
   /// gesture is while it is being made, and the picture would already have been
   /// showing the other one.
   bool duplicating_ = false;
+
+  /// Which side of the cut a transition was taken hold of.
+  ///
+  /// Read at the press and not again. Without it, pulling the right edge back
+  /// through the cut would shrink the transition to nothing and then grow it
+  /// again out the other side, because a duration centred on a point is the
+  /// same either way — the side is the only thing that says which edge the
+  /// hand is holding.
+  bool transition_from_end_ = true;
 
   /// Where a clip dragged in from outside would land, while it is in the air.
   std::optional<DropGhost> drop_ghost_;

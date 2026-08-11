@@ -896,6 +896,14 @@ double TimelineView::trim_handle_width(std::size_t track, std::size_t block) con
 }
 
 DragMode TimelineView::zone_at(double x, double y, Modifiers modifiers) const {
+  // A transition first, and with the selection tool only. It sits over the join
+  // and so over two trim handles; answering with one of those would both give
+  // the wrong cursor and make a transition impossible to grab. The other tools
+  // each mean something specific about a clip, and none of them mean this.
+  if (tool_ == Tool::Selection && transition_at(x, y).has_value()) {
+    return DragMode::TransitionLength;
+  }
+
   const std::optional<BlockRef> hit = block_at(x, y);
   if (!hit.has_value()) return DragMode::None;
 
@@ -976,6 +984,17 @@ DragMode TimelineView::zone_at(double x, double y, Modifiers modifiers) const {
   if (at_start) return DragMode::TrimStart;
   if (at_end) return DragMode::TrimEnd;
   return DragMode::Move;
+}
+
+std::optional<BlockRef> TimelineView::transition_at(double x, double y) const {
+  for (std::size_t track = 0; track < model_.tracks.size(); ++track) {
+    const std::vector<TimelineBlock>& blocks = model_.tracks[track].blocks;
+    for (std::size_t block = 0; block < blocks.size(); ++block) {
+      const Rect box = transition_rect(track, block);
+      if (!box.empty() && box.contains(x, y)) return BlockRef{.track = track, .block = block};
+    }
+  }
+  return std::nullopt;
 }
 
 Rect TimelineView::marquee() const {
@@ -2184,6 +2203,21 @@ void TimelineView::drag_to(double x, double y) {
       return;
     }
 
+    case DragMode::TransitionLength: {
+      // Half either side of the cut, so the pointer's distance from the join is
+      // half the duration. Measured from the cut rather than accumulated from
+      // the press, like every other drag here: a long one must not gather a
+      // rounding error, and the edge should sit under the hand exactly.
+      const double cut = origin_.end;
+      const double where = scale_.to_time(x - time_area().x);
+      const double half = transition_from_end_ ? where - cut : cut - where;
+      // Pulled through the cut and out the other side is a transition of no
+      // length, rather than one growing again backwards.
+      blocks[drag_->block].transition.duration =
+          std::max(0.0, core::snap_to_frame(half * 2.0, model_.fps));
+      return;
+    }
+
     case DragMode::Slip:
       // Nothing moves. The clip stays exactly where it is — that is what a slip
       // means — and the distance dragged is reported at the end. There is
@@ -2242,6 +2276,10 @@ Cursor TimelineView::cursor_at(double x, double y) const {
     case DragMode::GainPointDrag: return Cursor::ResizeNS;
     case DragMode::FadeIn:
     case DragMode::FadeOut: return Cursor::ResizeWE;
+
+    // The same as a trim's, and for the same reason: what it has to say is that
+    // this pixel takes hold of an edge rather than of what is under it.
+    case DragMode::TransitionLength: return Cursor::ResizeWE;
 
     // The ends of the scroll thumb zoom, which is a horizontal resize of what
     // is on screen; the thumb itself is picked up and moved.
@@ -2475,6 +2513,38 @@ bool TimelineView::on_mouse_down(const MouseEvent& event) {
     select(marquee_from_);
     if (on_select_) on_select_(marquee_from_);
     return true;
+  }
+
+  // A transition, before the clips it straddles. It covers the out-edge of the
+  // clip before the cut and the in-edge of the one after — both trim handles —
+  // so testing the clips first would make a transition impossible to take hold
+  // of at all.
+  //
+  // The selection is left exactly as it was: pulling a transition longer is not
+  // a statement about which clips are being worked on, and throwing away a
+  // selection to do it would be a surprise.
+  //
+  // Asked of `zone_at` rather than tested again here, so the cursor and the
+  // press cannot disagree about what a pixel does. They were two tests to begin
+  // with, and breaking one of them on purpose showed the other still working —
+  // which is the shape of a hover that says one thing and a press that does
+  // another.
+  if (zone_at(event.x, event.y, event.modifiers) == DragMode::TransitionLength) {
+    if (const std::optional<BlockRef> over = transition_at(event.x, event.y);
+        over.has_value()) {
+      mode_ = DragMode::TransitionLength;
+      drag_ = over;
+      origin_ = model_.tracks[over->track].blocks[over->block];
+      press_model_ = model_;
+      press_track_ = over->track;
+      press_x_ = event.x;
+      press_y_ = event.y;
+      moved_ = false;
+      // Which edge is being held, read once. See `transition_from_end_`.
+      const Rect box = transition_rect(over->track, over->block);
+      transition_from_end_ = event.x >= box.x + box.width * 0.5;
+      return true;
+    }
   }
 
   // A press on a clip that is *already* selected leaves the selection alone.
