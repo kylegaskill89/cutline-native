@@ -8613,6 +8613,10 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
 void show_library_drop(App& app, const std::string& id, double x, double y) {
   if (app.timeline == nullptr) return;
 
+  // Cleared up front and set again at the end, so none of the several ways out
+  // of this function can leave one drawn over a cut nothing is being held over.
+  app.timeline->set_transition_ghost(std::nullopt);
+
   // Back inside the library, over a bin: the drop gathers rather than applies,
   // so the bin is outlined and nothing on the timeline is.
   const std::string bin = id.empty() ? std::string{} : library_bin_at(app, x, y);
@@ -8647,9 +8651,35 @@ void show_library_drop(App& app, const std::string& id, double x, double y) {
   const std::optional<std::string> clip_id = library_drop_target(app, id, x, y);
   if (!clip_id.has_value()) {
     app.timeline->set_drop_target(std::nullopt);
+    app.timeline->set_transition_ghost(std::nullopt);
     return;
   }
   app.timeline->set_drop_target(app.timeline->block_at(x, y));
+
+  // A transition lands on the *join*, not on the clip, so an outline round the
+  // clip says nothing about the thing anybody actually wants to know before
+  // letting go: how much of the cut it will cover. Drawn at the length it would
+  // be given, which is the same length the drop will ask for.
+  std::optional<cutline::ui::TransitionGhost> ghost;
+  if (const std::optional<cutline::core::TransitionKind> kind =
+          cutline::editor::transition_from_id(id);
+      kind.has_value()) {
+    const cutline::editor::TransitionRow row =
+        cutline::editor::clip_transition(app.session.project(), *clip_id);
+    const std::optional<cutline::ui::BlockRef> block = app.timeline->block_at(x, y);
+    if (row.joins && block.has_value()) {
+      const double length = cutline::editor::default_transition_length(
+          app.session.project(), *clip_id, *kind, app.settings.transition_length);
+      if (length > 0.0) {
+        ghost = cutline::ui::TransitionGhost{
+            .track = block->track,
+            .block = block->block,
+            .duration = length,
+            .label = std::string(cutline::editor::transition_name(*kind))};
+      }
+    }
+  }
+  app.timeline->set_transition_ghost(std::move(ghost));
 }
 
 /// The bin a point in the library would drop into, or empty.

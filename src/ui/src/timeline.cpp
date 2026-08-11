@@ -552,12 +552,11 @@ Rect TimelineView::block_rect(std::size_t track, std::size_t block) const {
   return Rect{x, area.y, width, area.height};
 }
 
-Rect TimelineView::transition_rect(std::size_t track, std::size_t block) const {
+Rect TimelineView::transition_span(std::size_t track, std::size_t block,
+                                   double duration) const {
   if (track >= model_.tracks.size()) return {};
   const std::vector<TimelineBlock>& blocks = model_.tracks[track].blocks;
   if (block >= blocks.size()) return {};
-
-  const double duration = blocks[block].transition.duration;
   if (duration <= 0.0) return {};
 
   const Rect row = track_rect(track);
@@ -568,6 +567,25 @@ Rect TimelineView::transition_rect(std::size_t track, std::size_t block) const {
   const double centre = row.x + scale_.to_x(blocks[block].end);
   const double half = scale_.width_of(duration) * 0.5;
   return Rect{centre - half, row.y, half * 2.0, row.height};
+}
+
+Rect TimelineView::transition_rect(std::size_t track, std::size_t block) const {
+  if (track >= model_.tracks.size()) return {};
+  const std::vector<TimelineBlock>& blocks = model_.tracks[track].blocks;
+  if (block >= blocks.size()) return {};
+  return transition_span(track, block, blocks[block].transition.duration);
+}
+
+void TimelineView::set_transition_ghost(std::optional<TransitionGhost> ghost) {
+  if (transition_ghost_ == ghost) return;
+  transition_ghost_ = std::move(ghost);
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
+Rect TimelineView::transition_ghost_rect() const {
+  if (!transition_ghost_.has_value()) return {};
+  return transition_span(transition_ghost_->track, transition_ghost_->block,
+                         transition_ghost_->duration);
 }
 
 Rect TimelineView::fade_handle_rect(std::size_t track, std::size_t block,
@@ -1413,6 +1431,29 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
               box.width - 4.0) {
         painter.text(text_run(box, clip.transition.label, style, metrics_.small_font_size,
                               TextAlign::Center, false));
+      }
+    }
+
+    // And the one being held over a cut, drawn where it would land and at the
+    // length it would be. Outlined rather than filled, and after the real ones,
+    // so it reads as a promise rather than as something already there.
+    if (transition_ghost_.has_value() && transition_ghost_->track == track) {
+      const Rect box = transition_ghost_rect();
+      if (!box.empty() && box.right() >= tracks.x && box.x <= tracks.right()) {
+        const SurfaceStyle& style = theme.style(Part::Clip, State::Selected);
+        const Color ink = fade(style.text, 0.85f);
+        painter.fill(box.inset(1.0), style.corner_radius,
+                     Fill::solid(fade(style.fill.color, 0.35f)));
+        painter.line(box.x + 1.0, box.bottom() - 1.0, box.right() - 1.0, box.y + 1.0, ink,
+                     1.0);
+        painter.stroke(box.inset(1.0), style.corner_radius, ink, 1.0);
+
+        if (!transition_ghost_->label.empty() &&
+            painter.measure(transition_ghost_->label, metrics_.small_font_size, false) <=
+                box.width - 4.0) {
+          painter.text(text_run(box, transition_ghost_->label, style,
+                                metrics_.small_font_size, TextAlign::Center, false));
+        }
       }
     }
   }

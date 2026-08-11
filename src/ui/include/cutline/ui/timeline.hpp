@@ -420,6 +420,21 @@ struct DropGhost {
   friend bool operator==(const DropGhost&, const DropGhost&) = default;
 };
 
+/// A transition being held over a cut, and how long it would be.
+///
+/// Its own thing rather than a `DropGhost`, which describes a clip landing on a
+/// track. A transition lands on a *join*, sits centred on it, and is drawn as
+/// the shape it will become rather than as a block — and what somebody holding
+/// one over a cut is actually asking is how much of it the dissolve will cover.
+struct TransitionGhost {
+  std::size_t track = 0;
+  std::size_t block = 0;
+  double duration = 0.0;
+  std::string label;
+
+  friend bool operator==(const TransitionGhost&, const TransitionGhost&) = default;
+};
+
 /// What a press on a clip means. Premiere's tool palette.
 ///
 /// The tool is state rather than a held modifier, because that is what makes
@@ -873,6 +888,10 @@ class TimelineView : public Widget {
   /// Where a block's transition is drawn: centred on its out-edge, half either
   /// side. Empty when it has none.
   [[nodiscard]] Rect transition_rect(std::size_t track, std::size_t block) const;
+  /// The same, for a duration a block does not carry — what a ghost is drawn
+  /// at, and what keeps the two from describing the cut differently.
+  [[nodiscard]] Rect transition_span(std::size_t track, std::size_t block,
+                                     double duration) const;
 
   /// The transition a point is over, or nothing. Tested before the clips
   /// underneath it, since one straddles the join and so covers the out-edge of
@@ -880,6 +899,15 @@ class TimelineView : public Widget {
   /// trim handles, and neither of which can be what a press on a transition
   /// meant.
   [[nodiscard]] std::optional<BlockRef> transition_at(double x, double y) const;
+
+  /// The transition being held over a cut, drawn where it would land.
+  void set_transition_ghost(std::optional<TransitionGhost> ghost);
+  [[nodiscard]] const std::optional<TransitionGhost>& transition_ghost() const noexcept {
+    return transition_ghost_;
+  }
+  /// Where that would be drawn. Empty when there is none, or when the join it
+  /// names is no longer there.
+  [[nodiscard]] Rect transition_ghost_rect() const;
 
   /// The rectangle being swept, or empty when nothing is. Between the press and
   /// wherever the pointer has got to, in either direction — a marquee dragged
@@ -1229,6 +1257,9 @@ class TimelineView : public Widget {
   /// same either way — the side is the only thing that says which edge the
   /// hand is holding.
   bool transition_from_end_ = true;
+
+  /// The transition being held over a cut, if one is.
+  std::optional<TransitionGhost> transition_ghost_;
 
   /// Where a clip dragged in from outside would land, while it is in the air.
   std::optional<DropGhost> drop_ghost_;

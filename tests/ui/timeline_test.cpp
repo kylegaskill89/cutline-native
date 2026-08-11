@@ -2080,6 +2080,61 @@ TEST(Transitions, StraddleTheCutTheySitOn) {
   return fixture;
 }
 
+TEST(Transitions, AGhostIsDrawnWhereOneWouldLand) {
+  // A transition lands on the join, not on the clip, so an outline round the
+  // clip says nothing about the length it will cover — which is the thing
+  // somebody holding one over a cut is actually asking.
+  Fixture fixture;
+  const Rect outgoing = fixture.view->block_rect(1, 0);
+
+  fixture.view->set_transition_ghost(
+      TransitionGhost{.track = 1, .block = 0, .duration = 2.0, .label = "Dissolve"});
+
+  const Rect box = fixture.view->transition_ghost_rect();
+  ASSERT_FALSE(box.empty());
+  EXPECT_DOUBLE_EQ(box.x, outgoing.right() - 100.0) << "one second before the cut";
+  EXPECT_DOUBLE_EQ(box.right(), outgoing.right() + 100.0) << "and one after";
+}
+
+TEST(Transitions, AGhostSitsExactlyWhereTheRealOneWill) {
+  // The two are drawn from one function. A ghost promising a span and the
+  // transition landing on another would be worse than no ghost.
+  Fixture fixture;
+  fixture.view->set_transition_ghost(
+      TransitionGhost{.track = 1, .block = 0, .duration = 1.5});
+  const Rect promised = fixture.view->transition_ghost_rect();
+
+  TimelineModel model = sample_model();
+  model.tracks[1].blocks[0].transition = BlockTransition{.duration = 1.5};
+  fixture.view->set_model(std::move(model));
+
+  EXPECT_EQ(fixture.view->transition_rect(1, 0), promised);
+}
+
+TEST(Transitions, AGhostIsDrawnAndTakenAwayAgain) {
+  Fixture fixture;
+  const auto painted = [&] {
+    RecordingPainter painter;
+    fixture.view->paint(painter, default_theme());
+    return painter.calls().size();
+  };
+  const std::size_t plain = painted();
+
+  fixture.view->set_transition_ghost(
+      TransitionGhost{.track = 1, .block = 0, .duration = 2.0, .label = "Dissolve"});
+  EXPECT_GT(painted(), plain) << "nothing was drawn for it";
+
+  fixture.view->set_transition_ghost(std::nullopt);
+  EXPECT_EQ(painted(), plain) << "it was left behind";
+}
+
+TEST(Transitions, AGhostOnAJoinThatIsNoLongerThereDrawsNothing) {
+  Fixture fixture;
+  fixture.view->set_transition_ghost(
+      TransitionGhost{.track = 9, .block = 9, .duration = 2.0});
+  EXPECT_TRUE(fixture.view->transition_ghost_rect().empty());
+}
+
 TEST(Transitions, APressOnOneTakesItRatherThanTheClipsUnderneath) {
   // It straddles the join, so it covers the out-edge of the clip before and the
   // in-edge of the clip after — both trim handles. Answering with one of those
