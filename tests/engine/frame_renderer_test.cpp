@@ -8,6 +8,8 @@
 #include "cutline/engine/frame_renderer.hpp"
 
 #include "cutline/core/interpret.hpp"
+#include "cutline/core/nesting.hpp"
+#include "cutline/core/sequences.hpp"
 #include "cutline/core/model.hpp"
 #include "cutline/media/encoder.hpp"
 
@@ -167,6 +169,112 @@ TEST_F(FrameRendererTest, AMalformedColourFallsBackRatherThanVanishing) {
   p.sequence().tracks = {video_track("v1", {clip("c", "m", 0.0, 5.0)})};
 
   EXPECT_EQ(pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2).a, 255);
+}
+
+// ------------------------------------------------------------------- nests --
+//
+// A nest is a compositing boundary: its clips are composited together and the
+// result is what the outer clip's effects run on. Nothing but pixels can say
+// whether that happened — the arithmetic is right in every layer while the
+// picture is still wrong if the boundary is not there.
+
+TEST_F(FrameRendererTest, ANestDrawsTheSequenceInsideIt) {
+  Project p = canvas_project();
+  p.media = {matte("red", "#ff0000")};
+
+  // A second sequence holding the matte, and a pool entry standing for it.
+  p = core::add_sequence(std::move(p), "Inner");
+  p.sequences[1].canvas_w = kWidth;
+  p.sequences[1].canvas_h = kHeight;
+  p.sequences[1].tracks[0].clips = {clip("inner", "red", 0.0, 5.0)};
+
+  core::Media entry;
+  entry.id = "nest";
+  entry.sequence_id = p.sequences[1].id;
+  p.media.push_back(entry);
+  p = core::sync_nested_media(std::move(p));
+
+  p.sequence().tracks = {video_track("v1", {clip("outer", "nest", 0.0, 5.0)})};
+
+  const Rgba centre = pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2);
+  EXPECT_GT(centre.r, 250) << "the sequence inside the nest never composited";
+  EXPECT_LT(centre.g, 5);
+  EXPECT_EQ(centre.a, 255);
+}
+
+TEST_F(FrameRendererTest, ANestsEffectAppliesToTheWholePictureAtOnce) {
+  // The reason nesting exists. Two clips side by side under one invert: nested,
+  // the invert runs on what they composited to. Splicing the inner layers into
+  // the outer list would invert each of them separately — which for two mattes
+  // happens to look the same, so the test is that the *nest* inverted at all.
+  Project p = canvas_project();
+  p.media = {matte("red", "#ff0000")};
+
+  p = core::add_sequence(std::move(p), "Inner");
+  p.sequences[1].canvas_w = kWidth;
+  p.sequences[1].canvas_h = kHeight;
+  p.sequences[1].tracks[0].clips = {clip("inner", "red", 0.0, 5.0)};
+
+  core::Media entry;
+  entry.id = "nest";
+  entry.sequence_id = p.sequences[1].id;
+  p.media.push_back(entry);
+  p = core::sync_nested_media(std::move(p));
+
+  Clip outer = clip("outer", "nest", 0.0, 5.0);
+  outer.effects.push_back(
+      core::ClipEffect{.type = "invert", .enabled = true, .params = {{"on", 1.0}}});
+  p.sequence().tracks = {video_track("v1", {outer})};
+
+  const Rgba centre = pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2);
+  // Red inverted is cyan.
+  EXPECT_LT(centre.r, 40) << "the effect never reached the nested picture";
+  EXPECT_GT(centre.g, 200);
+  EXPECT_GT(centre.b, 200);
+}
+
+TEST_F(FrameRendererTest, ANestOfANestStillDraws) {
+  Project p = canvas_project();
+  p.media = {matte("red", "#ff0000")};
+
+  p = core::add_sequence(std::move(p), "Deep");
+  p.sequences[1].canvas_w = kWidth;
+  p.sequences[1].canvas_h = kHeight;
+  p.sequences[1].tracks[0].clips = {clip("deep", "red", 0.0, 5.0)};
+  core::Media inner_entry;
+  inner_entry.id = "nest1";
+  inner_entry.sequence_id = p.sequences[1].id;
+  p.media.push_back(inner_entry);
+
+  p = core::add_sequence(std::move(p), "Middle");
+  p.sequences[2].canvas_w = kWidth;
+  p.sequences[2].canvas_h = kHeight;
+  p.sequences[2].tracks[0].clips = {clip("mid", "nest1", 0.0, 5.0)};
+  core::Media outer_entry;
+  outer_entry.id = "nest2";
+  outer_entry.sequence_id = p.sequences[2].id;
+  p.media.push_back(outer_entry);
+
+  p = core::sync_nested_media(std::move(p));
+  p.sequence().tracks = {video_track("v1", {clip("outer", "nest2", 0.0, 5.0)})};
+
+  const Rgba centre = pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2);
+  EXPECT_GT(centre.r, 250) << "a nest two deep drew nothing";
+}
+
+TEST_F(FrameRendererTest, ANestPointingAtNothingDrawsNothingRatherThanFailing) {
+  Project p = canvas_project();
+  core::Media entry;
+  entry.id = "nest";
+  entry.sequence_id = "no-such-sequence";
+  entry.has_video = true;
+  entry.duration = 5.0;
+  p.media = {entry};
+  p.sequence().tracks = {video_track("v1", {clip("outer", "nest", 0.0, 5.0)})};
+
+  const gpu::Image image = render(p, 1.0);
+  ASSERT_FALSE(image.empty());
+  EXPECT_EQ(pixel_at(image, kWidth / 2, kHeight / 2).a, 0);
 }
 
 // ------------------------------------------------------------------ titles --

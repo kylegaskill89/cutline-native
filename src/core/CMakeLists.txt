@@ -9,6 +9,7 @@
   src/keyframe.cpp
   src/layout.cpp
   src/mask_path.cpp
+  src/nesting.cpp
   src/sequences.cpp
   src/pool.cpp
   src/properties.cpp

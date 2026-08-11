@@ -88,6 +88,11 @@ constexpr int kCodedLayout = 2;
     case PixelLayout::Rgba8:
       // 2 is `kCodedLayout`, a scratch target, which means something else.
       return 3;
+    case PixelLayout::Scene:
+      // And a nested sequence is exactly that: coded R'G'B' with straight
+      // alpha, which is what a scratch target holds and what the shader's
+      // coded path already samples without touching.
+      return kCodedLayout;
   }
   return 1;
 }
@@ -382,6 +387,24 @@ std::expected<void, std::string> Compositor::Impl::view_decoded(const FrameView&
   const D3D12_RESOURCE_DESC desc = resource->GetDesc();
   const bool array = desc.DepthOrArraySize > 1;
   const auto slice = static_cast<UINT>(std::max(0, frame.texture.subresource));
+
+  // A composited scene is one plane of colour, not a decoder's two. It comes
+  // from a compositor on this same device, already in the state a sampler
+  // wants, so there is nothing to convert and nothing to wait for beyond what
+  // producing it already waited for.
+  if (frame.layout == PixelLayout::Scene) {
+    D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+    view.Format = desc.Format;
+    view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    view.Texture2D.MipLevels = 1;
+    gpu().device->CreateShaderResourceView(resource, &view, srv_cpu(layer * kSlotsPerLayer));
+    // The other two keep null descriptors rather than a stale view of some
+    // previous frame's plane.
+    write_null_srv(srv_cpu(layer * kSlotsPerLayer + 1));
+    write_null_srv(srv_cpu(layer * kSlotsPerLayer + 2));
+    return {};
+  }
 
   // NV12 is luma in plane 0 and interleaved chroma at half resolution in plane
   // 1 â€” the same two textures the uploading path creates, so everything after

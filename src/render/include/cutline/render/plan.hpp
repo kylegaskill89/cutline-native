@@ -28,6 +28,13 @@ enum class LayerContent {
   Text,        ///< a title, laid out from the media's text spec
   Color,       ///< a colour matte, possibly a gradient
   Adjustment,  ///< draws nothing; its effects apply to everything beneath it
+  /// A sequence composited on its own and drawn as one picture.
+  ///
+  /// The layer's effects run on the *result* of that, which is the whole point
+  /// of a nest and the reason it cannot be flattened into the layers around it:
+  /// splicing the inner ones in would apply the nest's effects to each of them
+  /// separately.
+  Nested,
 };
 
 /// One entry in the draw order, resolved at a single instant.

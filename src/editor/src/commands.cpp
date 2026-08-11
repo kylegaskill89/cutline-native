@@ -1,6 +1,7 @@
 #include "cutline/editor/commands.hpp"
 
 #include "cutline/core/edit.hpp"
+#include "cutline/core/nesting.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/core/time.hpp"
@@ -189,6 +190,7 @@ std::string_view to_string(Command command) noexcept {
     case Command::Paste: return "paste";
     case Command::PasteInsert: return "paste_insert";
     case Command::PasteAttributes: return "paste_attributes";
+    case Command::Nest: return "nest";
     case Command::MarkIn: return "mark_in";
     case Command::MarkOut: return "mark_out";
     case Command::ClearMarks: return "clear_marks";
@@ -242,6 +244,11 @@ bool can_run(const Session& session, Command command) {
     // something selected to put them on.
     case Command::PasteAttributes:
       return !session.clipboard().empty() && !session.selection().empty();
+
+    // Something to gather. One clip is a legitimate nest — it is how a single
+    // shot gets an effect applied after its own transform rather than before.
+    case Command::Nest:
+      return !session.selection().empty();
 
     case Command::MarkIn:
       return can_mark(session.project(), session.project().sequence().in_point);
@@ -397,6 +404,17 @@ bool run(Session& session, Command command) {
     // question calls it.
     case Command::PasteAttributes:
       return false;
+
+    case Command::Nest: {
+      const std::vector<std::string> chosen = session.selected_group();
+      if (chosen.empty()) return false;
+      std::string made;
+      if (!session.apply(core::nest_clips(project, chosen, {}, &made))) return false;
+      // The nest becomes the selection, so the effect that is usually the whole
+      // reason for making one lands on it rather than on nothing.
+      if (!made.empty()) session.select_one(made);
+      return true;
+    }
 
     case Command::MarkIn: {
       if (!can_mark(project, project.sequence().in_point)) return false;

@@ -8288,6 +8288,7 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
         Entry{"Ripple Delete", Command::RippleDelete},
         Entry{"Split at Playhead", Command::Split},
         Entry{"Split All Tracks", Command::SplitAllTracks},
+        Entry{"Nest...", Command::Nest},
         Entry{"Link", Command::LinkClips},
         Entry{"Unlink", Command::UnlinkClips},
         Entry{"Add Video Track", Command::AddVideoTrack},
@@ -10571,6 +10572,7 @@ void refresh_dock(App& app) {
       {"Paste Attributes...", [app] {
          if (app != nullptr) run_command(*app, cutline::editor::Command::PasteAttributes);
        }},
+      {"Nest...", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Nest); }},
       // Premiere keeps these on the Clip menu, which this has no equivalent of;
       // the timeline's right-click is where a clip's own commands live, and
       // these act on the *source* rather than on a clip.

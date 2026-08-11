@@ -1,6 +1,7 @@
 #include "cutline/editor/session.hpp"
 
 #include "cutline/core/query.hpp"
+#include "cutline/core/nesting.hpp"
 #include "cutline/core/sequences.hpp"
 #include "cutline/core/time.hpp"
 
@@ -28,6 +29,12 @@ bool Session::apply(core::Project next) {
   // Every core operation returns the project unchanged when it cannot apply,
   // so this comparison is what tells a rejected drag from an accepted one. It
   // is also what keeps the undo stack free of entries that undo nothing.
+  // A nest's pool entry mirrors the sequence inside it — the name, the length,
+  // the canvas — and every one of those changes when somebody edits in there.
+  // Reconciled here rather than at each place that could: this is the one door
+  // every edit goes through, and the alternative is a list of callers that has
+  // to stay complete for ever.
+  next = core::sync_nested_media(std::move(next));
   if (next == project_) return false;
 
   history_.push(project_);

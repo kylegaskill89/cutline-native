@@ -74,7 +74,21 @@ struct AudioMixSettings {
   /// Ignored when `realtime` is off: an export decodes what it needs where it
   /// needs it and must not depend on a thread having got there.
   double start_at = 0.0;
+
+  /// How many sequences deep this mixer already is.
+  ///
+  /// A nest is mixed by a mixer of its own, so a nested nest is a mixer inside
+  /// a mixer. Cycles are refused when a nest is *made*, so this is not what
+  /// prevents one — it is the floor under a project that already holds one,
+  /// written by hand or by a build that did not check. Past the limit a nest is
+  /// silent, which is something somebody can notice rather than a stack that
+  /// runs out.
+  int depth = 0;
 };
+
+/// How deep a nest may go before it stops being mixed. Far past anything
+/// anybody nests on purpose; see `AudioMixSettings::depth`.
+inline constexpr int kMaxNestDepth = 8;
 
 class AudioMixer {
  public:

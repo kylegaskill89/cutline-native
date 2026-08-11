@@ -22,6 +22,19 @@ enum class PixelLayout {
   /// the alpha back out before the effects, since those are defined on plain
   /// coded values.
   Rgba8,
+  /// A composited scene, already on the card: sRGB-coded R'G'B' with
+  /// **straight** alpha, in a plain UNORM target.
+  ///
+  /// What a nested sequence arrives as. Straight rather than premultiplied is
+  /// the whole difference from `Rgba8` and the reason it is its own layout: the
+  /// present pass encodes the colour and carries alpha through untouched, so
+  /// dividing alpha back out — which `Rgba8` does, because a rasteriser
+  /// premultiplies — would wash out everything a nest leaves transparent.
+  ///
+  /// Only ever texture-resident. There is no upload path for it, because the
+  /// thing it describes was produced by a compositor on this same device and
+  /// there would be nothing to gain by bringing it down and putting it back.
+  Scene,
 };
 
 /// Which luma coefficients the encoder used.

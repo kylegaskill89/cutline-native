@@ -13,6 +13,9 @@
 #include "cutline/core/routing.hpp"
 #include "cutline/media/encoder.hpp"
 
+#include "cutline/core/nesting.hpp"
+#include "cutline/core/sequences.hpp"
+
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -1246,6 +1249,67 @@ class WithLongTone : public ::testing::Test {
 
   Media media_;
 };
+
+// ------------------------------------------------------------------ nests --
+
+TEST_F(WithLongTone, ANestIsHeard) {
+  // A nest has no file behind it, so everything that decides what to decode
+  // passes over it. Without a mixer of its own it is simply silent, and a
+  // silent nest is the kind of fault somebody finds after exporting.
+  Project p;
+  p.media = {media_};
+  p.sequence().tracks = {audio_track("a1", {audio_clip("c", "long", 0.0, 4.0)})};
+
+  p = core::add_sequence(std::move(p), "Inner");
+  p.sequences[1].tracks = p.sequences[0].tracks;
+  p.sequences[0].tracks = {audio_track("a1", {})};
+
+  core::Media entry;
+  entry.id = "nest";
+  entry.sequence_id = p.sequences[1].id;
+  p.media.push_back(entry);
+  p = core::sync_nested_media(std::move(p));
+
+  Clip outer = audio_clip("outer", "nest", 0.0, 4.0);
+  outer.kind = core::TrackKind::Video;
+  p.sequences[0].tracks = {audio_track("a1", {outer})};
+
+  auto mixer = AudioMixer::create(p, {.sample_rate = kRate, .channels = kChannels});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+  EXPECT_GT(rms_of(mix_span(**mixer, 1.0, 0.2)), 0.01) << "the nest was silent";
+}
+
+TEST_F(WithLongTone, ANestIsHeardFromTheRightPartOfItself) {
+  // Trimmed to start two seconds in, so what is heard has to be the tone at
+  // two seconds rather than at zero. The long tone changes level as it goes,
+  // which is what makes the two tellable apart.
+  Project p;
+  p.media = {media_};
+  p.sequence().tracks = {audio_track("a1", {})};
+
+  p = core::add_sequence(std::move(p), "Inner");
+  p.sequences[1].tracks = {
+      audio_track("a1", {audio_clip("c", "long", 0.0, kLongToneSeconds)})};
+
+  core::Media entry;
+  entry.id = "nest";
+  entry.sequence_id = p.sequences[1].id;
+  p.media.push_back(entry);
+  p = core::sync_nested_media(std::move(p));
+
+  // The nest, showing the source from 60 seconds in.
+  Clip outer = audio_clip("outer", "nest", 0.0, 6.0, 60.0);
+  p.sequences[0].tracks = {audio_track("a1", {outer})};
+
+  auto mixer = AudioMixer::create(p, {.sample_rate = kRate, .channels = kChannels});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+
+  const float measured = level_at(**mixer, 1.0);
+  const auto expected = static_cast<float>(long_tone_level(61.0));
+  ASSERT_GE(measured, 0.0f);
+  EXPECT_NEAR(measured, expected, expected * 0.4f)
+      << "the nest was read from somewhere else in itself";
+}
 
 // ------------------------------------------------- what is read, and when --
 //

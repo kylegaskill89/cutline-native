@@ -1436,7 +1436,7 @@ that, but present cost specifically may not be representative.
 Everything is committed and green. Nothing is half-finished, no branch is open,
 and there is no work in progress to reconstruct.
 
-- 3163 tests pass under the `ui` preset, 2710 under `release`. Set
+- 3184 tests pass under the `ui` preset, 2743 under `release`. Set
   `CUTLINE_TEST_MEDIA_DIR` or about fifty decode tests skip while the run still
   says everything passed.
 - **The suite is stable under `-j`, and this has now been fixed twice.** The
@@ -1450,7 +1450,7 @@ and there is no work in progress to reconstruct.
   **Every fixture that writes to the temp directory now has `_getpid()` in the
   name.** If you add one, do the same — and note that a counter, an address and a
   test name all look unique and are not.
-- `--check` reports 2899 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
+- `--check` reports 2903 widgets, 0 empty, 0 outside, 0 clipped, 0 squeezed, in
   all four themes — run it with something *in* the media cache as well as with
   it empty, since the Delete button only exists when there is something to
   delete.

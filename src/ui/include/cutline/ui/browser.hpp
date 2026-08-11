@@ -34,13 +34,15 @@ enum class MediaKind {
   Title,
   Color,
   Adjustment,
+  /// A sequence, which is a source like any other once it is in the pool.
+  Sequence,
 };
 
 /// How many kinds there are, for anything that keeps one entry per kind. A
 /// count rather than a sentinel enumerator: a `Count` in the enumeration is a
 /// value every switch has to remember not to handle.
-inline constexpr std::size_t kMediaKindCount = 6;
-static_assert(static_cast<std::size_t>(MediaKind::Adjustment) + 1 == kMediaKindCount,
+inline constexpr std::size_t kMediaKindCount = 7;
+static_assert(static_cast<std::size_t>(MediaKind::Sequence) + 1 == kMediaKindCount,
               "a kind was added without the count following it");
 
 [[nodiscard]] std::string_view to_string(MediaKind kind) noexcept;

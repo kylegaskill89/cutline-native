@@ -21,6 +21,15 @@ namespace cutline::core {
 /// True when a media has no real timeline source — a still, GIF, or generated.
 [[nodiscard]] bool is_still_like(const Media& m) noexcept;
 
+/// Whether this pool entry stands for a sequence rather than for a file.
+///
+/// Deliberately *not* generated media and *not* still-like. A nest has a real
+/// length that runs out, real frames at real times, and handles bounded by what
+/// the sequence inside it holds — everything those two predicates exist to say
+/// is untrue of it. It has no file behind it either, which is the one thing it
+/// shares with a title, and the reason every reader of `path` has to ask.
+[[nodiscard]] bool is_nested_sequence(const Media& m) noexcept;
+
 /// Which file to read this source from: the proxy when one exists and proxies
 /// are wanted, and the original otherwise.
 ///

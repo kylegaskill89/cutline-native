@@ -1,5 +1,8 @@
 #include "cutline/engine/audio_mixer.hpp"
 
+#include "cutline/core/nesting.hpp"
+#include "cutline/core/sequences.hpp"
+
 #include "cutline/audio/chain.hpp"
 #include "cutline/audio/limiter.hpp"
 #include "cutline/audio/loudness.hpp"
@@ -534,6 +537,49 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
     voice.chain = audio::EffectChain::build(entry.clip->audio_effects,
                                             static_cast<double>(settings.sample_rate),
                                             settings.channels, 0.0);
+
+    // A nest is heard by mixing the sequence inside it and holding the result,
+    // the same way a retimed clip holds its stretch — which is why it goes down
+    // that path rather than a new one: the buffer is indexed from the clip's
+    // start on the timeline either way.
+    //
+    // The whole of it, up front. That is the one cost this feature carries: a
+    // long nest is decoded before playback begins, which is exactly what the
+    // rest of `create` stopped doing. A nest is deliberate and usually short,
+    // and mixing one on demand means a mixer inside the mixing thread — where
+    // nothing may touch a file at all.
+    if (entry.media != nullptr && core::is_nested_sequence(*entry.media) &&
+        settings.depth < kMaxNestDepth) {
+      core::Project within = project;
+      within.open = core::sequence_index(project, entry.media->sequence_id);
+
+      const double span = std::max(0.0, entry.source_out - entry.source_in);
+      const auto frames = static_cast<std::size_t>(span * settings.sample_rate);
+      if (within.open != std::string::npos && frames > 0) {
+        // Offline whatever this mixer is: it produces a buffer once, here, and
+        // there is nothing for a reader thread to be ahead of.
+        auto inner = AudioMixer::create(within, {.sample_rate = settings.sample_rate,
+                                                 .channels = settings.channels,
+                                                 .depth = settings.depth + 1});
+        if (inner.has_value()) {
+          media::AudioBuffer sound;
+          sound.sample_rate = settings.sample_rate;
+          sound.channels = settings.channels;
+          sound.start_time = entry.source_in;
+          sound.samples.assign(frames * static_cast<std::size_t>(settings.channels), 0.0f);
+          if ((*inner)->mix(entry.source_in, sound.samples).has_value()) {
+            voice.retimed = needs_retiming(entry)
+                                ? render_retimed(sound, entry, settings.sample_rate,
+                                                 settings.channels)
+                                : std::move(sound);
+            voice.timeline_indexed = true;
+          }
+          for (const std::string& lost : (*inner)->missing_media()) missing.insert(lost);
+        }
+      }
+      impl->voices.push_back(std::move(voice));
+      continue;
+    }
 
     if (entry.media != nullptr && !entry.media->path.empty()) {
       // Only the clip's own trim, not the whole file.

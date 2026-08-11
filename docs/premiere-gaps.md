@@ -812,8 +812,54 @@ for one keystroke.
 | Enable / disable a clip | yes | **done** — on the clip menu, ticked, and a switched-off clip is drawn as one | — |
 | Speed / duration dialogue | a box with both and a ripple option | **done** — speed, duration, reverse and a ripple, from the clip menu | — |
 | Right-click a clip | the menu most edits are actually reached from | **done** — and it offers only what would do something | — |
-| Nesting | a sequence inside a sequence | none | machinery |
+| ~~Nesting~~ | a sequence inside a sequence | **done** — Nest on the clip menu, and a sequence is a source in the pool | — |
 | Multi-camera | a multicam source sequence, switched live while it plays | none | machinery |
+
+**Nesting is a compositing boundary, and that is the whole of why it exists.**
+Six shots with one grade over all of them is one adjustment on a nest and six
+identical stacks without one — and the second is not even the same picture,
+since each clip would be graded before it was composited rather than after. It
+follows that a nest cannot be flattened at plan time: splicing the inner layers
+into the outer list applies the nest's effects to each of them separately, which
+is precisely the thing being avoided.
+
+**A sequence is a source in the pool**, which is Premiere's arrangement and the
+reason it is worth copying: a nest is then an ordinary clip of an ordinary
+source, so trimming, effects, a transform, a transition and a label all work on
+one without anything being told nests exist. The alternative — a clip naming a
+sequence directly — would have meant every reader of `media_id` growing a second
+path, and a sequence that could not be dragged in from the pool at all.
+
+**The pool entry mirrors the sequence, and is reconciled on every edit.** Its
+name, length and canvas all change when somebody cuts inside the nest, and
+`Session::apply` is the one door every edit goes through — the alternative is a
+list of callers that has to stay complete for ever.
+
+**Rendering is a renderer per nest rather than recursion into one.** A
+compositor holds one scene target and a nest has to be composited whole before
+the frame it sits in is; two renderers means two targets, two sets of decoders,
+and no state to unwind between them. The picture crosses back as a texture that
+never leaves the card — and it needed no shader work at all, because the display
+target is already coded R'G'B' with straight alpha, which is exactly what the
+shader's `LAYOUT_CODED` path samples untouched. Feeding it as `Rgba8` would have
+been wrong in a way only a partly transparent nest would show: that layout is
+premultiplied, and the shader divides the alpha back out.
+
+**Sound is a mixer per nest, and it is rendered up front.** That is the one cost
+this carries: a long nest is decoded before playback begins, which is exactly
+what `AudioMixSettings::start_at` stopped doing for everything else. Mixing one
+on demand means running a mixer inside the mixing thread, where nothing may
+touch a file at all. A nest is deliberate and usually short, and this is the
+place to start if that stops being true.
+
+**Cycles are refused when a nest is made, not detected later.** There is no
+sensible behaviour for one: rendering recurses until the stack runs out, and any
+depth limit turns a wrong project into a differently wrong project.
+`sequence_contains` walks the whole graph, because the case that matters is not
+A inside A — it is A inside B inside A, which no check at the moment of nesting
+would catch. Both the renderer and the mixer still carry a depth limit, and that
+is for a project which already holds a cycle: one written by hand, or by a build
+that did not check. Past it the nest is a visible hole rather than a crash.
 
 **Alt-drag is a move that reports itself differently.** The timeline knows
 nothing about duplicating: the gesture is captured, clamped, snapped and

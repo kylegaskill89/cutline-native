@@ -68,6 +68,14 @@ enum class Command {
   /// the menu entry.
   PasteAttributes,
 
+  /// Puts the selection into a sequence of its own and leaves one clip of it
+  /// behind. Premiere's Nest.
+  ///
+  /// What it is for is an effect applied to several clips *as one picture*
+  /// rather than to each of them — which is not the same picture, since each
+  /// would otherwise be graded before it was composited rather than after.
+  Nest,
+
   // -- three-point editing
   /// Puts the source at the playhead, rippling everything after it along to
   /// make room. Premiere's comma.

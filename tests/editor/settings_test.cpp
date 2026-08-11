@@ -61,7 +61,12 @@ class TempSettings {
   settings.transition_length = 0.5;
   settings.autosave_seconds = 120;
   settings.label_names = {"Interview", "", "", "", "", "", "", "B-roll"};
-  settings.label_defaults = {"#8f7bb8", "", "", "", "", "#c07a92"};
+  // Sized to the build rather than written out, because the reader pads to
+  // however many kinds there are — so a list of six here and seven there is a
+  // round trip that fails for a reason that has nothing to do with settings.
+  settings.label_defaults.assign(ui::kMediaKindCount, "");
+  settings.label_defaults.front() = "#8f7bb8";
+  settings.label_defaults[static_cast<std::size_t>(ui::MediaKind::Adjustment)] = "#c07a92";
   settings.proxy_height = 720;
   settings.proxy_folder = "E:/Fast/Proxies";
   settings.autosave_versions = 12;

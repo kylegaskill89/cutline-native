@@ -233,6 +233,7 @@ json write(const Media& m) {
   put_if_set(j, "file_duration", m.file_duration);
   put_if_set(j, "in_point", m.in_point);
   put_if_set(j, "out_point", m.out_point);
+  if (!m.sequence_id.empty()) j["sequence_id"] = m.sequence_id;
   if (!m.proxy_path.empty()) j["proxy_path"] = m.proxy_path;
   if (!m.bin.empty()) j["bin"] = m.bin;
   if (!m.label_color.empty()) j["label_color"] = m.label_color;
@@ -576,6 +577,7 @@ Media read_media(const json& j) {
   m.file_duration = read_optional<double>(j, "file_duration");
   m.in_point = read_optional<double>(j, "in_point");
   m.out_point = read_optional<double>(j, "out_point");
+  m.sequence_id = read_or(j, "sequence_id", std::string{});
   m.proxy_path = read_or(j, "proxy_path", std::string{});
   m.bin = read_or(j, "bin", std::string{});
   m.label_color = read_or(j, "label_color", std::string{});

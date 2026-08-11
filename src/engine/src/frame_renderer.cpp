@@ -1,6 +1,8 @@
 #include "cutline/engine/frame_renderer.hpp"
 
 #include "cutline/core/interpret.hpp"
+#include "cutline/core/nesting.hpp"
+#include "cutline/core/sequences.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/media/av_headers.hpp"
 #include "cutline/media/decoder.hpp"
@@ -85,6 +87,18 @@ constexpr double kCutLookahead = 0.5;
 /// of a second at 60 fps, which is long enough for that to happen unnoticed
 /// and short enough that the surfaces it borrows are not missed.
 constexpr std::size_t kJumpRunFrames = 16;
+
+/// How many sequences deep a nest may go before it stops being drawn.
+///
+/// Not what prevents a cycle — that is refused when the nest is made, by
+/// `core::sequence_contains`, because there is no sensible behaviour for one.
+/// This is the floor under a project that already holds one: a file written by
+/// hand, or by a build that did not check. Past it the nest draws nothing,
+/// which is a hole somebody can see rather than a stack that runs out.
+///
+/// Eight, which is far past anything anybody nests on purpose and far short of
+/// anything that costs.
+constexpr int kMaxNestDepth = 8;
 
 /// How far a cut's target may drift and still be the same cut.
 ///
@@ -538,6 +552,26 @@ struct FrameRenderer::Impl {
   /// which never asks — cannot write the small copy by forgetting something.
   bool use_proxies = false;
 
+  /// A renderer of its own per nested sequence, keyed by sequence id.
+  ///
+  /// Its own rather than this one recursing into itself, and that is not a
+  /// convenience: a compositor holds one scene target, and a nest has to be
+  /// composited whole *before* the frame it sits in is. Two renderers means two
+  /// targets, two sets of decoders, and no state to unwind between them.
+  ///
+  /// Kept between frames for the same reason the decoders are: a nest that had
+  /// to be rebuilt every frame would reopen every file inside it.
+  std::map<std::string, std::unique_ptr<FrameRenderer>> nested;
+
+  /// How deep the nesting being rendered is, counted from the outermost.
+  ///
+  /// A cycle is refused when it is *made* — see `core::sequence_contains` — so
+  /// this is not what stops one. It is what stops a project that already holds
+  /// one, written by hand or by an older build, from taking the process down
+  /// with it: past the limit the nest simply draws nothing, which is a visible
+  /// hole rather than a stack overflow.
+  int depth = 0;
+
   std::vector<std::string> missing;
 
   /// Frame views must outlive the compose call that reads them, and they point
@@ -578,6 +612,11 @@ struct FrameRenderer::Impl {
   /// `budgeted` false runs it to completion, for the case where the playhead
   /// has already arrived and waiting for the rest is cheaper than starting over.
   void decode_ahead(Source& source, bool budgeted = true);
+
+  /// Composites a nested sequence and hands back the picture, still on the
+  /// card. Empty when there is nothing to draw, or the nesting is too deep.
+  [[nodiscard]] gpu::SceneTexture nested_picture(const core::Project& project,
+                                                 const core::Media& media, double at);
 
   /// Decodes a run at `target`, somewhere else in the source, because the
   /// sequence cuts to it shortly.
@@ -938,6 +977,41 @@ void FrameRenderer::Impl::prefetch_cuts(const core::Project& project, double t,
   }
 }
 
+gpu::SceneTexture FrameRenderer::Impl::nested_picture(const core::Project& project,
+                                                      const core::Media& media, double at) {
+  if (depth >= kMaxNestDepth) return {};
+
+  const core::Sequence* inner = core::find_sequence(project, media.sequence_id);
+  if (inner == nullptr || inner->canvas_w <= 0 || inner->canvas_h <= 0) return {};
+
+  auto found = nested.find(media.sequence_id);
+  if (found == nested.end()) {
+    auto made = FrameRenderer::create(device, inner->canvas_w, inner->canvas_h);
+    if (!made.has_value()) return {};
+    (*made)->impl_->depth = depth + 1;
+    (*made)->set_use_proxies(use_proxies);
+    found = nested.emplace(media.sequence_id, std::move(*made)).first;
+  }
+  FrameRenderer& renderer = *found->second;
+
+  // The same project with that sequence open. A renderer draws whichever
+  // sequence a project says is open, so a nest is the outer document read from
+  // one step further in — which is also what keeps a nest of a nest working
+  // without anything here knowing how deep it is.
+  core::Project within = project;
+  within.open = core::sequence_index(project, media.sequence_id);
+  if (within.open == std::string::npos) return {};
+
+  if (!renderer.render(within, at).has_value()) return {};
+
+  // Whatever the nest could not find is missing from the frame just as surely
+  // as if it had been named out here.
+  for (const std::string& lost : renderer.missing_media()) missing.push_back(lost);
+
+  const auto picture = renderer.compositor().display_texture();
+  return picture.has_value() ? *picture : gpu::SceneTexture{};
+}
+
 const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double time,
                                             const media::VideoDecoder** from) {
   const std::string& wanted = core::source_path(media, use_proxies);
@@ -1253,6 +1327,26 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
     layer.passes = stacks.back();
 
     switch (source.content) {
+      case render::LayerContent::Nested: {
+        if (source.media == nullptr) continue;
+        const gpu::SceneTexture picture = d.nested_picture(project, *source.media,
+                                                           source.source_time);
+        if (picture.empty()) continue;
+
+        gpu::FrameView view;
+        view.width = picture.width;
+        view.height = picture.height;
+        // Coded R'G'B' with straight alpha, which is what a composited scene
+        // is and what the shader's coded path samples untouched.
+        view.layout = gpu::PixelLayout::Scene;
+        view.full_range = true;
+        view.texture = gpu::SourceTexture{.resource = picture.resource};
+
+        d.views.push_back(view);
+        layer.frame = &d.views.back();
+        break;
+      }
+
       case render::LayerContent::Adjustment:
         layer.adjustment = true;
         break;

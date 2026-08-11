@@ -13,6 +13,8 @@ bool is_generated_media(const Media& m) noexcept {
   return m.is_text || m.is_color || m.is_adjustment;
 }
 
+bool is_nested_sequence(const Media& m) noexcept { return !m.sequence_id.empty(); }
+
 bool is_still_like(const Media& m) noexcept {
   return m.is_image || m.is_text || m.is_color || m.is_adjustment;
 }

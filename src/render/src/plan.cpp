@@ -12,6 +12,9 @@ using core::Media;
 
 [[nodiscard]] LayerContent content_of(const Media* media) noexcept {
   if (media == nullptr) return LayerContent::Video;
+  // Before the rest: a nest has no file and no flags, so every other test here
+  // would fall through it to `Video` and send it to a decoder.
+  if (core::is_nested_sequence(*media)) return LayerContent::Nested;
   if (media->is_text) return LayerContent::Text;
   if (media->is_color) return LayerContent::Color;
   if (media->is_adjustment) return LayerContent::Adjustment;
@@ -115,6 +118,8 @@ std::vector<PlannedLayer> plan_frame(const core::Project& project, double t,
           // handles are unlimited and a transition can borrow as much as it
           // likes.
           if (core::is_still_like(media)) return std::numeric_limits<double>::infinity();
+          // A nest included: its length is what the sequence inside it runs to,
+          // which `duration` already mirrors.
           return media.duration;
         }
         return 0.0;

@@ -1,4 +1,5 @@
 #include "cutline/editor/browser_binding.hpp"
+#include "cutline/core/query.hpp"
 
 #include "cutline/core/pool.hpp"
 #include "cutline/core/time.hpp"
@@ -32,6 +33,10 @@ ui::MediaKind media_kind(const core::Media& media) noexcept {
   // Ordered from most specific: a title is a generated still, and an adjustment
   // layer has neither video nor audio, so testing the flags in the other order
   // would call both of them something else.
+  // A nest first of all. It has video, a length and a rate, so every test below
+  // would call it a piece of footage — and then the pool would offer to relink
+  // it to a file that does not exist.
+  if (core::is_nested_sequence(media)) return ui::MediaKind::Sequence;
   if (media.is_adjustment) return ui::MediaKind::Adjustment;
   if (media.is_text) return ui::MediaKind::Title;
   if (media.is_color) return ui::MediaKind::Color;
@@ -42,6 +47,7 @@ ui::MediaKind media_kind(const core::Media& media) noexcept {
 
 std::string media_detail(const core::Media& media, double fps, bool drop_frame) {
   switch (media_kind(media)) {
+    case ui::MediaKind::Sequence: return "sequence";
     case ui::MediaKind::Adjustment: return "adjustment";
     case ui::MediaKind::Title: return "title";
     case ui::MediaKind::Color: return "color";

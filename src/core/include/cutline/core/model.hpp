@@ -157,6 +157,20 @@ struct Media {
   /// applies to everything composited on the tracks below within its span.
   bool is_adjustment = false;
 
+  /// The sequence this stands for, when it stands for one. Empty otherwise.
+  ///
+  /// Premiere's arrangement, and the reason it is worth copying: a sequence
+  /// appears in the project panel beside the footage, and a nest is an ordinary
+  /// clip of it. Everything that already works on a clip — trimming, effects,
+  /// a transform, a transition, a label, dragging it out of the pool — works on
+  /// a nest without being told nests exist.
+  ///
+  /// A media rather than a field on `Clip`, for that reason exactly. The
+  /// alternative was a clip that names a sequence directly, which would have
+  /// meant every reader that resolves `media_id` growing a second path, and a
+  /// sequence that could not be dragged in from the pool at all.
+  std::string sequence_id;
+
   std::optional<TextSpec> text;
   std::string color;
   std::optional<MatteGradient> gradient;
