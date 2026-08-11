@@ -830,6 +830,17 @@ struct App {
   double preview_scale = 1.0;
   Dropdown* preview_scale_choice = nullptr;
 
+  /// The playhead as the playback loop last wrote it, or below zero when it is
+  /// not playing.
+  ///
+  /// What tells "the sound has moved on" apart from "somebody moved the
+  /// playhead". The loop reads the position off the sound card and writes it to
+  /// the session every frame, so anything else setting the playhead mid-play
+  /// was overwritten on the very next turn unless it also seeked the player.
+  /// Three paths could move it and only two remembered to — which is why
+  /// dragging the playhead worked while the transport keys did nothing.
+  double playhead_from_playback = -1.0;
+
   /// How far each monitor is zoomed in, and the control that says so.
   ///
   /// One per monitor, because they are answering different questions: the
@@ -5719,6 +5730,7 @@ void stop_playback(App& app) {
   // Cleared before the early return, so a player that has gone away cannot
   // leave the application believing playback is still wanted.
   app.playback_wanted = false;
+  app.playhead_from_playback = -1.0;
   if (app.player == nullptr) return;
   if (app.player->playing()) {
     app.player->pause();
@@ -5796,6 +5808,7 @@ void rebuild_playback(App& app) {
   app.player_revision = app.session.revision();
   app.player->seek(at);
   app.player->play();
+  app.playhead_from_playback = app.session.playhead();
   // The picture is drawn from whichever frame the playhead names, and the one
   // on screen is from the document as it was. Forgetting it is what makes the
   // next turn draw the edit rather than leave the old frame up until the
@@ -5981,6 +5994,9 @@ void toggle_playback(App& app) {
   app.player->seek(app.session.playhead());
   app.player->play();
   app.playback_wanted = true;
+  // Armed here, so the first turn compares against where playback was asked to
+  // begin rather than against whatever the last run left behind.
+  app.playhead_from_playback = app.session.playhead();
   // Pressing play is a statement about what is being watched, so the view goes
   // back to following the playhead even if it was scrolled somewhere else while
   // the last run was going.
@@ -6054,6 +6070,23 @@ void advance_playback(App& app) {
   // new picture to be decoded.
   record_automation(app);
 
+  // Something else moved the playhead since the last turn: a transport key, a
+  // jump to a marker, the timecode field. Take the sound to it rather than
+  // dragging the playhead back to wherever the sound happens to be.
+  //
+  // Noticed here rather than by seeking at each place that can move the
+  // playhead. There are several, more get added, and the ones that forget fail
+  // silently — the playhead moves for one frame and is pulled back, which is
+  // indistinguishable from the key not being bound.
+  if (app.playhead_from_playback >= 0.0 &&
+      app.session.playhead() != app.playhead_from_playback) {
+    app.player->seek(app.session.playhead());
+    app.playhead_from_playback = app.session.playhead();
+    // The picture is drawn once per frame of the sequence and only when that
+    // frame changes; without this the jump waits for the next one.
+    app.shown_frame = -1;
+  }
+
   const double at = app.player->position();
   if (app.player->finished()) {
     // Round again from the start of whatever is marked, rather than stopping.
@@ -6113,6 +6146,10 @@ void advance_playback(App& app) {
   app.shown_frame = frame;
 
   app.session.set_playhead(at);
+  // Read back rather than stored from `at`: the setter snaps to the frame grid,
+  // and comparing next turn against a value that was never written would make
+  // every turn look like somebody had moved the playhead.
+  app.playhead_from_playback = app.session.playhead();
   show_playhead(app);
   follow_playhead(app);
   refresh_timeline(app);
@@ -6925,6 +6962,10 @@ void go_to_time(App& app, double at) {
   // worse than either.
   if (app.playing()) {
     app.player->seek(app.session.playhead());
+    // Recorded, so the playback loop sees the playhead and the sound already
+    // agreeing and does not seek a second time — every seek stops and resets
+    // the output device, and doing it twice per jump is heard.
+    app.playhead_from_playback = app.session.playhead();
     app.shown_frame = -1;
   }
 #endif
@@ -8149,6 +8190,8 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
     // somewhere else, which is worse than either.
     if (app->playing()) {
       app->player->seek(at);
+      // As in `go_to_time`: the loop must not seek again behind this one.
+      app->playhead_from_playback = app->session.playhead();
       app->shown_frame = -1;
     }
 #endif
