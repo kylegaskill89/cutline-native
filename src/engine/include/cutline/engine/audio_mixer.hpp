@@ -84,6 +84,16 @@ struct AudioMixSettings {
   /// silent, which is something somebody can notice rather than a stack that
   /// runs out.
   int depth = 0;
+  /// Read nothing in `create`, and each source the first time a mix needs it,
+  /// on the thread that is mixing. Only when `realtime` is off.
+  ///
+  /// What a nest's own mixer is made with. It is mixed a piece at a time,
+  /// wherever the outer mix has got to, so reading everything inside it up
+  /// front would decode every clip of a nest of a hundred cuts before the
+  /// first piece of it could be heard. A file that is not there is still
+  /// reported by `missing_media`; one that is there and will not decode is
+  /// found out when it is reached, and is silent.
+  bool read_as_mixed = false;
 };
 
 /// How deep a nest may go before it stops being mixed. Far past anything
@@ -113,11 +123,12 @@ class AudioMixer {
   /// generous either side precisely so that ordinary scrubbing stays inside it
   /// and never waits for anything.
   ///
-  /// **A retimed clip is still decoded whole**, however long it is: reversing
-  /// it and stretching it are done once, up front, over the clip's whole span,
-  /// and a window cannot be handed to a process that reads its input end to
-  /// end. Speed and reverse are the exception rather than the rule, and this is
-  /// where to start if they stop being.
+  /// A nest, and a clip that is reversed, retimed or conformed, is **made**
+  /// rather than read: mixed by a mixer of its own, or stretched, ten seconds
+  /// of timeline at a time around wherever the mix has reached, with a short
+  /// crossfade where two pieces meet. Only the piece under `start_at` is made
+  /// before this returns. Made whole, as it used to be, a 140-second clip at
+  /// half speed cost 8 s before Play could start.
   ///
   /// A source that cannot be read is not an error: it is recorded in
   /// `missing_media` and mixed as silence, so an export completes with a hole

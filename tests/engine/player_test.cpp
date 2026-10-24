@@ -16,6 +16,7 @@
 #include <cmath>
 #include <filesystem>
 #include <numbers>
+#include <process.h>
 #include <string>
 #include <thread>
 #include <vector>
@@ -33,10 +34,15 @@ constexpr int kRate = 48000;
 constexpr int kChannels = 2;
 
 /// A twelve-second tone file, shared by the tests here.
+///
+/// Named for the process, because ctest runs each test as a process of its own
+/// and several at once. A fixed name meant one of them reading the file while
+/// another was writing it over, and a project that came out silent.
 [[nodiscard]] const std::string& tone_path() {
   static const std::string path = [] {
-    const std::string target =
-        (std::filesystem::temp_directory_path() / "cutline_player_tone.mp4").string();
+    const std::string target = (std::filesystem::temp_directory_path() /
+                                ("cutline_player_tone_" + std::to_string(_getpid()) + ".mp4"))
+                                   .string();
 
     media::VideoEncodeSettings video;
     video.width = 64;
@@ -160,21 +166,39 @@ TEST_F(PlayerTest, TheClockMovesSmoothlyRatherThanInSteps) {
   player_->play();
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  double lowest = 1e9;
-  double highest = -1e9;
-  const auto began = std::chrono::steady_clock::now();
-  while (std::chrono::steady_clock::now() - began < std::chrono::milliseconds(600)) {
-    const double at = player_->position();
-    const double wall =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
-    lowest = std::min(lowest, at - wall);
-    highest = std::max(highest, at - wall);
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-  }
+  // How far the playhead strays from the wall clock over a stretch of 400 ms.
+  const auto spread = [&] {
+    double lowest = 1e9;
+    double highest = -1e9;
+    int counted = 0;
+    const auto began = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - began < std::chrono::milliseconds(400)) {
+      // The playhead read between two looks at the wall clock. When the two
+      // are far apart this thread was put aside in between, and the reading
+      // says nothing about the clock.
+      const auto before = std::chrono::steady_clock::now();
+      const double at = player_->position();
+      const auto after = std::chrono::steady_clock::now();
+      if (after - before < std::chrono::microseconds(500)) {
+        const double wall = std::chrono::duration<double>(before - began).count();
+        lowest = std::min(lowest, at - wall);
+        highest = std::max(highest, at - wall);
+        ++counted;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return counted < 10 ? 1.0 : highest - lowest;
+  };
+
+  // The best of three. A clock that steps does it every time; the whole suite
+  // running at once on every core can hold up the audio thread now and then,
+  // and measured once that read as a 10 ms spread on a clock that is smooth.
+  double best = 1.0;
+  for (int attempt = 0; attempt < 3 && best >= 0.006; ++attempt) best = std::min(best, spread());
 
   ASSERT_TRUE(player_->error().empty()) << player_->error();
   // A third of a 60 fps frame. Steps from a coarse anchor are a whole one.
-  EXPECT_LT(highest - lowest, 0.006);
+  EXPECT_LT(best, 0.006);
 }
 
 TEST_F(PlayerTest, PauseStopsTheClock) {

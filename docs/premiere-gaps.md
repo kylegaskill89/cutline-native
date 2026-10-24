@@ -1830,7 +1830,7 @@ the work happens and what waits for it.
 | Precision on the way out | 10-bit and float paths to the encoder | **half** — the card converts from the float scene straight to P010 as well as NV12, tested to a code; the writer still takes 8 bits only, which is the 10-bit encoder §8 needs | wiring |
 | A large pool is cheap until looked at | yes | **yes** — forty 4K sources: 231 MB in the list, 307 MB in icons once the strips are in. The 1.36 GB was not there to find; what was, was 200 MB the driver kept per decoding device after decoding, now given back when a device goes quiet; see §7.3 | done |
 | Filmstrips for a folder of rushes | seconds | **yes** — 0.74 s a source, flat across forty, from 11.6 s rising to 14: every tile frame went back to the same keyframe and decoded the same pictures again, in software. Now on the card, seeking only forward; see §7.3 | done |
-| Nested and retimed audio | streamed | **decoded whole, up front** — a nest's mix and any retimed clip are rendered before playback begins | wiring |
+| Nested and retimed audio | streamed | **yes** — made ten seconds of timeline at a time around the playhead, with a 50 ms crossfade where pieces meet; Play on a 140-second clip at half speed went from 8.1 s to 0.28 s; see §7.4 | done |
 | Undo in a long session | cheap per step | each step is a full deep copy of the project; harmless now, and unmeasured at size | audit |
 | Crossing a cut | the next clip is read ahead | **done** — the far side of a cut is read on a thread of its own, on its own decoding device; see below | — |
 | Reverse and J/K/L at 1× | smooth on intra and short-GOP media; long-GOP reverse is costly in Premiere too | **yes** — nothing over 50 ms within one clip or across fifty one-second cuts of a 4.17 s-GOP capture, which was 34 pictures a second and a worst gap of 364 ms; a third decoder per source, at the owner's choice; see §7.1 | done |
@@ -2079,6 +2079,38 @@ an empty project. What was found instead:
 While a strip is being taken the process is at about 600 MB, which is one
 open 4K hardware decoder. That is the cost of decoding, not of the pool, and
 it goes when the decoding does.
+
+### 7.4 Nested and retimed audio
+
+A nest's sound was its sequence mixed end to end, and a retimed clip's was
+its whole span reversed and stretched, both before the mixer came back — so
+before Play could start. Measured with a 140-second tone, `create` as playback
+calls it:
+
+| | before | now |
+|---|---|---|
+| Clip at half speed | 8,062 ms | **279 ms** |
+| Nest | 309 ms | **72 ms** |
+| Reversed clip | 126 ms | **15 ms** |
+
+The stretch is what costs: about 30 ms for each second it makes, so a
+ten-minute capture at half speed would have waited over half a minute.
+
+Both are now made the way a long source is read: in pieces of ten seconds of
+timeline, the one under the playhead before `create` returns and the rest by
+the reader thread, ahead of the playhead before behind it and each published
+as soon as it is made. An export makes them as it reaches them. Each piece is
+started half a second early so the stretch and a nest's own effects have
+settled, and two pieces meet in a 50 ms crossfade at the end of the earlier
+one, because two stretches of the same audio started in different places do
+not line up to the sample — a test that fails without the fade checks the
+join is not a step. A clip of ten seconds or less is one piece, made exactly
+as before. A nest's own mixer now reads as it mixes rather than decoding
+every clip inside it first, and still reports a missing file.
+
+On the reference capture at half speed through a playback mixer: 0.26 s to
+start at the beginning and 0.44 s ten minutes in, and played through three
+joins with sound wherever the capture has it.
 
 ## 8. Colour pipeline: 10-bit and HDR
 

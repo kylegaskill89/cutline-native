@@ -730,11 +730,9 @@ things about this codebase.
   from system memory unless decoding fell back to software. The large wins left
   in the preview are in premiere-gaps §7 instead: rendering off the interface
   thread, and frames in flight on the card.
-- **Retimed audio is still decoded whole.** A clip with a speed or a reverse on
-  it is stretched once, up front, across its whole span — a window cannot be
-  handed to something that reads its input end to end. Every other clip is
-  windowed now (see §8's note on `AudioMixer`), so this is the one case left
-  where a long source costs its whole length in memory.
+- **Retimed and nested audio are made in pieces now (2026-10).** Ten seconds
+  of timeline at a time around the playhead, crossfaded where they meet;
+  premiere-gaps §7.4.
 - **The large pool, taken apart (2026-10).** Neither the 1.36 GB nor the
   slowdown were what they looked like. Holding forty sources costs nothing
   until they are looked at; the memory was the driver keeping about 200 MB per

@@ -1464,6 +1464,166 @@ TEST_F(WithLongTone, TheBlockSizeDoesNotChangeTheSamples) {
 }
 
 
+// ------------------------------------------------------- made a piece at a time --
+//
+// A nest and a retimed clip are made rather than read, ten seconds of timeline
+// at a time around wherever the mix has reached. Made whole, a 140-second clip
+// at half speed cost 8 s before Play could start.
+
+[[nodiscard]] Project at_half_speed(Project p) {
+  p.sequence().tracks[0].clips[0].speed = 0.5;
+  return p;
+}
+
+[[nodiscard]] Project nest_of(const Media& media, double length, std::string inner_path = {}) {
+  Project p;
+  p.media = {media};
+  if (!inner_path.empty()) p.media[0].path = std::move(inner_path);
+  p.sequence().tracks = {audio_track("a1", {})};
+  p = core::add_sequence(std::move(p), "Inner");
+  p.sequences[1].tracks = {audio_track("a1", {audio_clip("c", media.id, 0.0, length)})};
+
+  core::Media entry;
+  entry.id = "nest";
+  entry.sequence_id = p.sequences[1].id;
+  p.media.push_back(entry);
+  p = core::sync_nested_media(std::move(p));
+  p.sequences[0].tracks = {audio_track("a1", {audio_clip("outer", "nest", 0.0, length)})};
+  return p;
+}
+
+// Half speed doubles the clip to 280 seconds, so every one of these is in a
+// different piece, and the last is far past anything made at the start.
+TEST_F(WithLongTone, ALongClipAtHalfSpeedIsHeardFromTheRightPartOfItself) {
+  auto mixer = AudioMixer::create(at_half_speed(whole_source_project()),
+                                  {.sample_rate = kRate, .channels = kChannels});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+
+  for (const double at : {5.0, 125.0, 265.0}) {
+    const float measured = level_at(**mixer, at);
+    const auto expected = static_cast<float>(long_tone_level(at * 0.5));
+    ASSERT_GE(measured, 0.0f) << "mixing failed at " << at;
+    EXPECT_NEAR(measured, expected, expected * 0.35f)
+        << "at " << at << " s the clip was heard from somewhere else in itself";
+  }
+}
+
+TEST_F(WithLongTone, ALongReversedClipIsHeardBackwards) {
+  Project p = whole_source_project();
+  p.sequence().tracks[0].clips[0].reverse = true;
+  auto mixer = AudioMixer::create(p, {.sample_rate = kRate, .channels = kChannels});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+
+  for (const double at : {5.0, 75.0, 135.0}) {
+    const float measured = level_at(**mixer, at);
+    // The half of the second that `level_at` measures, read backwards.
+    const auto expected = static_cast<float>(long_tone_level(kLongToneSeconds - at - 0.75));
+    ASSERT_GE(measured, 0.0f) << "mixing failed at " << at;
+    EXPECT_NEAR(measured, expected, expected * 0.35f) << "at " << at << " s";
+  }
+}
+
+TEST_F(WithLongTone, ALongNestIsHeardFromTheRightPartOfItself) {
+  auto mixer = AudioMixer::create(nest_of(media_, kLongToneSeconds),
+                                  {.sample_rate = kRate, .channels = kChannels});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+
+  for (const double at : {5.0, 105.0}) {
+    const float measured = level_at(**mixer, at);
+    const auto expected = static_cast<float>(long_tone_level(at));
+    ASSERT_GE(measured, 0.0f) << "mixing failed at " << at;
+    EXPECT_NEAR(measured, expected, expected * 0.35f) << "at " << at << " s";
+  }
+}
+
+// Two stretches of the same audio started in different places line up to
+// within a fraction of a window but not to the sample. Without the crossfade
+// the join is a step in the waveform, and a step is a click: the biggest jump
+// from one sample to the next is what shows it.
+TEST_F(WithLongTone, WherePiecesMeetThereIsNoClick) {
+  auto mixer = AudioMixer::create(at_half_speed(whole_source_project()),
+                                  {.sample_rate = kRate, .channels = kChannels});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+
+  // Thirty seconds into the clip is a join, and fifteen into the source, so
+  // the tone is steady either side of it.
+  const auto biggest_step = [&](double from) {
+    (*mixer)->reset();
+    const std::vector<float> out = mix_span(**mixer, from, 0.2);
+    float step = 0.0f;
+    for (std::size_t i = kChannels; i < out.size(); i += kChannels) {
+      step = std::max(step, std::abs(out[i] - out[i - kChannels]));
+    }
+    return step;
+  };
+  const float across = biggest_step(29.9);
+  const float within = biggest_step(28.5);
+  ASSERT_GT(within, 0.0f);
+  EXPECT_LT(across, within * 1.5f) << "the join between two pieces is a step";
+}
+
+// Mixing for the sound card, only the piece being heard is made before the
+// mixer comes back; the rest has to arrive without anybody asking for it on
+// the mixing thread, or a long clip would fall silent ten seconds in.
+TEST_F(WithLongTone, WhatPlaybackHasNotReachedIsMadeForIt) {
+  auto mixer = AudioMixer::create(
+      at_half_speed(whole_source_project()),
+      {.sample_rate = kRate, .channels = kChannels, .realtime = true, .start_at = 0.0});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+
+  // Heard at once: the piece under the playhead was made before `create`
+  // returned.
+  EXPECT_GT(rms_of(mix_span(**mixer, 1.0, 0.05)), 0.01) << "the start was not ready";
+
+  // A jump far ahead. Silent at first, since nothing there was made, and then
+  // made by the reader because the mix asked to be there.
+  double level = 0.0;
+  for (int attempt = 0; attempt < 200 && level <= 0.01; ++attempt) {
+    level = rms_of(mix_span(**mixer, 200.5, 0.05));
+    if (level <= 0.01) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  EXPECT_GT(level, 0.01) << "the reader never made the piece being played";
+}
+
+TEST_F(WithLongTone, AMadeClipDoesNotDependOnTheBlockSize) {
+  auto whole = AudioMixer::create(at_half_speed(whole_source_project()),
+                                  {.sample_rate = kRate, .channels = kChannels});
+  auto split = AudioMixer::create(at_half_speed(whole_source_project()),
+                                  {.sample_rate = kRate, .channels = kChannels});
+  ASSERT_TRUE(whole.has_value());
+  ASSERT_TRUE(split.has_value());
+
+  // Across the join at thirty seconds.
+  constexpr double kFrom = 28.0;
+  const std::size_t frames = static_cast<std::size_t>(kRate) * 4;
+
+  std::vector<float> one(frames * kChannels, 0.0f);
+  ASSERT_TRUE((*whole)->mix(kFrom, one));
+
+  std::vector<float> many(frames * kChannels, 0.0f);
+  constexpr std::size_t kChunk = 4096;
+  for (std::size_t at = 0; at < frames; at += kChunk) {
+    const std::size_t take = std::min(kChunk, frames - at);
+    ASSERT_TRUE((*split)->mix(kFrom + static_cast<double>(at) / kRate,
+                              std::span(many).subspan(at * kChannels, take * kChannels)));
+  }
+
+  for (std::size_t i = 0; i < one.size(); ++i) {
+    ASSERT_FLOAT_EQ(many[i], one[i]) << "sample " << i << " depends on the block size";
+  }
+}
+
+// A nest's own mixer reads nothing until a piece of it is made, so a missing
+// file inside it has to be noticed some other way, or the export's list of
+// what was missing would leave it out.
+TEST_F(WithLongTone, AFileMissingInsideANestIsStillReported) {
+  auto mixer = AudioMixer::create(
+      nest_of(media_, 20.0, "Z:/definitely/not/here.mp4"),
+      {.sample_rate = kRate, .channels = kChannels});
+  ASSERT_TRUE(mixer.has_value()) << mixer.error();
+  EXPECT_EQ((*mixer)->missing_media(), std::vector<std::string>{"long"});
+}
+
 // ------------------------------------------------------- submixes and sends --
 
 /// One lane of tone, poured into a bus rather than straight at the master.

@@ -15,6 +15,9 @@
 #include "cutline/render/mix.hpp"
 
 #include <algorithm>
+#include <optional>
+#include <ranges>
+#include <filesystem>
 #include <atomic>
 #include <memory>
 #include <chrono>
@@ -211,18 +214,91 @@ void run_chain_over(audio::EffectChain& chain, std::span<float> block,
   }
 }
 
+/// How much of the timeline one rendered piece covers.
+///
+/// A nest's mix and a retimed clip's stretch used to be made whole when the
+/// mixer was built: 8 s before a 140-second clip at half speed could play, and
+/// a nest mixed end to end before a note of it was heard. Made a piece at a
+/// time instead, around wherever the mix has reached, the way a long source is
+/// read. Ten seconds, because the piece under the playhead is made before Play
+/// can start, and a stretch costs about 30 ms a second of what it makes. A
+/// clip no longer than one piece is made in one, exactly as it was.
+constexpr double kPieceSeconds = 10.0;
+
+/// How much is made before a piece's start and thrown away.
+///
+/// A stretch and a nest's own effects both carry a memory of what came before,
+/// and a piece made from cold starts without one. Starting it a little early
+/// lets that settle before anything is heard.
+constexpr double kPieceLeadIn = 0.5;
+
+/// How long two neighbouring pieces are crossfaded over, at the end of the
+/// earlier one.
+///
+/// Two stretches of the same audio, started in different places, line up to
+/// within a fraction of a window but not to the sample. A short crossfade is
+/// what makes the join inaudible rather than a click. At the end of a piece
+/// rather than the start, because playback starting where a piece starts is
+/// common -- and with the fade there it needed the piece before as well, two
+/// pieces made before Play instead of one.
+constexpr double kPieceCrossfade = 0.05;
+
+/// How many pieces are kept behind and ahead of the one being heard.
+constexpr int kPiecesBehind = 1;
+constexpr int kPiecesAhead = 3;
+
+/// One piece of a rendered clip, in timeline time.
+struct Piece {
+  /// Seconds into the clip that the first sample is at.
+  double from = 0.0;
+  media::AudioBuffer audio;
+};
+
+using Pieces = std::map<int, std::shared_ptr<const Piece>>;
+
+/// A clip whose audio is made rather than read: a nest, mixed by a mixer of
+/// its own, or a clip that is reversed, retimed or conformed. Its own, never
+/// shared, because what is made depends on the clip's speed and direction.
+struct RenderedSource {
+  render::PlannedAudioClip planned;
+  int sample_rate = 48000;
+  int channels = 2;
+  /// How long the clip lasts on the timeline, and so how many pieces it has.
+  double length = 0.0;
+  int count = 0;
+
+  /// The file, for a clip; empty for a nest.
+  std::string path;
+  int stream = 0;
+  /// The mixer for what is inside a nest. Used by one thread at a time: the
+  /// reader during playback, the mixing thread during an export.
+  std::unique_ptr<AudioMixer> inner;
+
+  /// The pieces made so far. Published whole, like a source's window, so the
+  /// mixing thread can read through them while the reader makes the next.
+  std::atomic<std::shared_ptr<const Pieces>> resident;
+  /// Seconds into the clip that the mix last needed. Written by the mixing
+  /// thread, read by the reader.
+  std::atomic<double> wanted{0.0};
+  std::atomic<bool> failed{false};
+  /// When the clip is first heard, in timeline seconds, for the reader's order.
+  double needed_at = 0.0;
+
+  [[nodiscard]] int piece_at(double offset) const noexcept {
+    const int k = static_cast<int>(std::floor(std::max(0.0, offset) / kPieceSeconds));
+    return std::clamp(k, 0, std::max(0, count - 1));
+  }
+};
+
 /// One planned clip, with the samples and DSP it needs.
 struct Voice {
   render::PlannedAudioClip planned;
-  /// The shared source this reads from, or null when it is retimed — which
-  /// reads its own baked buffer — or when the media could not be read at all,
-  /// in which case the voice contributes silence.
+  /// The shared source this reads from, or null when its audio is rendered or
+  /// when the media could not be read at all, in which case the voice
+  /// contributes silence.
   StreamedSource* stream = nullptr;
-  /// Owned when retiming applies: the clip's own audio, already stretched and
-  /// reversed, laid out in *timeline* time so reading it is a plain sequential
-  /// walk. Empty otherwise, since the shared source serves directly.
-  media::AudioBuffer retimed;
-  bool timeline_indexed = false;
+  /// Where its audio is made, when it is a nest or retimed. Owned by the mixer.
+  RenderedSource* rendered = nullptr;
   audio::EffectChain chain;
 };
 
@@ -311,6 +387,111 @@ constexpr double kEagerAhead = 2.0;
   return out;
 }
 
+/// Makes the piece of a rendered clip between `from` and `to`, in seconds into
+/// the clip.
+///
+/// The part of the file or the nest those seconds come from is read, a little
+/// either side, and put through the same reversal, conform and stretch as the
+/// whole clip used to be; a nest that is not retimed comes through unchanged.
+[[nodiscard]] std::optional<media::AudioBuffer> make_piece(RenderedSource& source, double from,
+                                                          double to) {
+  const render::PlannedAudioClip& planned = source.planned;
+  const double rate = planned.speed * planned.conform;
+  double file_from = planned.reverse ? planned.source_out - to * rate : planned.source_in + from * rate;
+  double file_to = planned.reverse ? planned.source_out - from * rate : planned.source_in + to * rate;
+  file_from = std::clamp(file_from, planned.source_in, planned.source_out);
+  file_to = std::clamp(file_to, planned.source_in, planned.source_out);
+  if (!(file_to > file_from)) return std::nullopt;
+
+  media::AudioBuffer raw;
+  if (source.inner != nullptr) {
+    const auto frames = static_cast<std::size_t>((file_to - file_from) * source.sample_rate);
+    if (frames == 0) return std::nullopt;
+    raw.sample_rate = source.sample_rate;
+    raw.channels = source.channels;
+    raw.start_time = file_from;
+    raw.samples.assign(frames * static_cast<std::size_t>(source.channels), 0.0f);
+    // From cold each time: the lead-in is what settles the nest's own effects,
+    // and a piece must not depend on which one was made before it.
+    source.inner->reset();
+    if (!source.inner->mix(file_from, raw.samples)) return std::nullopt;
+  } else {
+    const double start = std::max(0.0, file_from - kDecodeMargin);
+    auto decoded = media::decode_audio(source.path, source.stream,
+                                       {.sample_rate = source.sample_rate,
+                                        .channels = source.channels,
+                                        .start = start,
+                                        .duration = file_to + kDecodeMargin - start});
+    if (!decoded) return std::nullopt;
+    raw = std::move(*decoded);
+  }
+
+  // The same treatment as the whole clip, over just these seconds of it.
+  render::PlannedAudioClip span = planned;
+  span.source_in = file_from;
+  span.source_out = file_to;
+  return render_retimed(raw, span, source.sample_rate, source.channels);
+}
+
+/// Which pieces should be held when the mix is `offset` seconds into the clip.
+[[nodiscard]] std::pair<int, int> pieces_wanted(const RenderedSource& source,
+                                                double offset) noexcept {
+  const int k = source.piece_at(offset);
+  return {std::max(0, k - kPiecesBehind), std::min(source.count - 1, k + kPiecesAhead)};
+}
+
+/// Makes whatever of `first` to `last` is not already held, and keeps nothing
+/// else, publishing each piece as soon as it is made.
+///
+/// Outwards from `centre`, ahead before behind: the piece being heard first,
+/// then the ones playback is heading into, and the one behind last. Made in
+/// order from the first and published only once all were there, a piece a
+/// second on a long capture meant the next one was four seconds coming.
+void fill_pieces(RenderedSource& source, int first, int last, int centre) {
+  std::shared_ptr<const Pieces> have = source.resident.load();
+
+  // What is no longer wanted goes first, so the memory is not held for the
+  // length of the making.
+  if (have != nullptr && std::ranges::any_of(*have, [&](const auto& entry) {
+        return entry.first < first || entry.first > last;
+      })) {
+    auto kept = std::make_shared<Pieces>();
+    for (const auto& [k, piece] : *have) {
+      if (k >= first && k <= last) kept->emplace(k, piece);
+    }
+    have = kept;
+    source.resident.store(kept);
+  }
+
+  centre = std::clamp(centre, first, last);
+  std::vector<int> order;
+  for (int k = centre; k <= last; ++k) order.push_back(k);
+  for (int k = centre - 1; k >= first; --k) order.push_back(k);
+
+  for (const int k : order) {
+    if (have != nullptr && have->contains(k)) continue;
+    // Started early, for the reason `kPieceLeadIn` gives, which also covers
+    // the end of the piece before as it fades out.
+    const double begin = k * kPieceSeconds;
+    const double from = k == 0 ? 0.0 : begin - kPieceLeadIn;
+    const double to = std::min(source.length, begin + kPieceSeconds);
+    auto made = make_piece(source, from, to);
+    if (!made) {
+      source.failed.store(true, std::memory_order_relaxed);
+      return;
+    }
+    auto piece = std::make_shared<Piece>();
+    piece->from = from;
+    piece->audio = std::move(*made);
+
+    // Beside what is being read rather than over it, as a window is.
+    auto grown = have != nullptr ? std::make_shared<Pieces>(*have) : std::make_shared<Pieces>();
+    grown->emplace(k, std::move(piece));
+    have = grown;
+    source.resident.store(std::move(grown));
+  }
+}
+
 /// One frame of a decoded source at a fractional position, linearly
 /// interpolated.
 ///
@@ -368,7 +549,11 @@ struct AudioMixer::Impl {
   /// The same sources, in the order their audio is going to be wanted. What the
   /// reader walks, so a backlog is cleared in play order.
   std::vector<StreamedSource*> pending;
+  /// Nests and retimed clips, a source each, in the order they are first heard.
+  std::vector<std::unique_ptr<RenderedSource>> rendered;
   std::vector<Voice> voices;
+  /// Scratch for a frame from the piece being faded into at a join.
+  std::vector<float> join_next;
   std::vector<std::string> missing;
 
   /// Reads ahead of the mix, for real-time playback only. Nothing offline has
@@ -538,43 +723,69 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
                                             static_cast<double>(settings.sample_rate),
                                             settings.channels, 0.0);
 
-    // A nest is heard by mixing the sequence inside it and holding the result,
-    // the same way a retimed clip holds its stretch — which is why it goes down
-    // that path rather than a new one: the buffer is indexed from the clip's
-    // start on the timeline either way.
-    //
-    // The whole of it, up front. That is the one cost this feature carries: a
-    // long nest is decoded before playback begins, which is exactly what the
-    // rest of `create` stopped doing. A nest is deliberate and usually short,
-    // and mixing one on demand means a mixer inside the mixing thread — where
-    // nothing may touch a file at all.
-    if (entry.media != nullptr && core::is_nested_sequence(*entry.media) &&
-        settings.depth < kMaxNestDepth) {
-      core::Project within = project;
-      within.open = core::sequence_index(project, entry.media->sequence_id);
+    const bool nest = entry.media != nullptr && core::is_nested_sequence(*entry.media);
+    if (nest || (needs_retiming(entry) && entry.media != nullptr && !entry.media->path.empty())) {
+      // Made rather than read: a nest is heard by mixing the sequence inside
+      // it, and a retimed clip by reversing and stretching what the file has.
+      // Either way it is made a piece at a time, in timeline time.
+      auto source = std::make_unique<RenderedSource>();
+      source->planned = entry;
+      source->sample_rate = settings.sample_rate;
+      source->channels = settings.channels;
+      source->length = std::max(0.0, entry.end - entry.start);
+      source->count = std::max(1, static_cast<int>(std::ceil(source->length / kPieceSeconds - 1e-9)));
+      source->needed_at = entry.start;
 
-      const double span = std::max(0.0, entry.source_out - entry.source_in);
-      const auto frames = static_cast<std::size_t>(span * settings.sample_rate);
-      if (within.open != std::string::npos && frames > 0) {
-        // Offline whatever this mixer is: it produces a buffer once, here, and
-        // there is nothing for a reader thread to be ahead of.
-        auto inner = AudioMixer::create(within, {.sample_rate = settings.sample_rate,
-                                                 .channels = settings.channels,
-                                                 .depth = settings.depth + 1});
-        if (inner.has_value()) {
-          media::AudioBuffer sound;
-          sound.sample_rate = settings.sample_rate;
-          sound.channels = settings.channels;
-          sound.start_time = entry.source_in;
-          sound.samples.assign(frames * static_cast<std::size_t>(settings.channels), 0.0f);
-          if ((*inner)->mix(entry.source_in, sound.samples).has_value()) {
-            voice.retimed = needs_retiming(entry)
-                                ? render_retimed(sound, entry, settings.sample_rate,
-                                                 settings.channels)
-                                : std::move(sound);
-            voice.timeline_indexed = true;
+      bool usable = source->length > 0.0;
+      if (nest) {
+        core::Project within = project;
+        within.open = core::sequence_index(project, entry.media->sequence_id);
+        usable = usable && settings.depth < kMaxNestDepth && within.open != std::string::npos;
+        if (usable) {
+          // Reading as it mixes rather than everything up front: a nest of a
+          // hundred cuts would otherwise decode a hundred clips before the
+          // first piece of it could be made.
+          auto inner = AudioMixer::create(within, {.sample_rate = settings.sample_rate,
+                                                   .channels = settings.channels,
+                                                   .depth = settings.depth + 1,
+                                                   .read_as_mixed = true});
+          if (inner.has_value()) {
+            for (const std::string& lost : (*inner)->missing_media()) missing.insert(lost);
+            source->inner = std::move(*inner);
+          } else {
+            usable = false;
           }
-          for (const std::string& lost : (*inner)->missing_media()) missing.insert(lost);
+        }
+      } else {
+        source->path = entry.media->path;
+        source->stream = entry.audio_stream;
+      }
+
+      if (usable) {
+        // Made here only when it is about to be heard, or for an export, which
+        // starts at the start and finds out now whether the file is there.
+        // The rest is made by the reader, or by an export as it gets there.
+        const bool now = settings.realtime ? heard_within(entry, settings.start_at)
+                                           : !settings.read_as_mixed;
+        const double offset =
+            settings.realtime ? std::max(0.0, settings.start_at - entry.start) : 0.0;
+        source->wanted.store(offset, std::memory_order_relaxed);
+        if (now) {
+          // Only the piece being heard, and the one before it when that is
+          // still fading out. The rest is the reader's, or the export's.
+          const int k = source->piece_at(offset);
+          const bool joining =
+              k + 1 < source->count && (k + 1) * kPieceSeconds - offset <= kPieceCrossfade;
+          fill_pieces(*source, k, joining ? k + 1 : k, k);
+        } else if (!nest && !std::filesystem::exists(source->path)) {
+          source->failed.store(true, std::memory_order_relaxed);
+        }
+        if (source->failed.load(std::memory_order_relaxed)) {
+          // Recorded and mixed as silence, as a file that will not read is.
+          if (!nest) missing.insert(entry.media->id);
+        } else {
+          voice.rendered = source.get();
+          impl->rendered.push_back(std::move(source));
         }
       }
       impl->voices.push_back(std::move(voice));
@@ -593,10 +804,8 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
         source->key = key;
         source->sample_rate = settings.sample_rate;
         source->channels = settings.channels;
-        // Short enough to hold, or wanted end to end by a retime that reads it
-        // that way. Either forces the whole range resident, and a retimed clip
-        // is why this is decided per source rather than per length alone.
-        source->whole = (to - from) <= kWholeSourceSeconds || needs_retiming(entry);
+        // Short enough to hold.
+        source->whole = (to - from) <= kWholeSourceSeconds;
         source->wanted.store(from, std::memory_order_relaxed);
 
         source->needed_at = entry.start;
@@ -616,16 +825,14 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
       // cut and got slower every time somebody cut again.
       //
       // Offline is unconditional: an export must not depend on a thread having
-      // got somewhere. So is a retimed clip, whose stretched buffer is built
-      // once, below, out of the whole window and never again.
-      //
+      // got somewhere. Except inside a nest, which reads as it mixes.      //
       // Asked **per voice** rather than when the source is made, because two
       // clips can share one: the same trim used twice is one decode, and
       // deciding at creation let the first of them answer for both. A clip
       // under the playhead then went silent because another clip elsewhere in
       // the sequence happened to name the same range first.
-      const bool now = !settings.realtime || needs_retiming(entry) ||
-                       heard_within(entry, settings.start_at);
+      const bool now = settings.realtime ? heard_within(entry, settings.start_at)
+                                         : !settings.read_as_mixed;
       if (now && source.resident.load() == nullptr &&
           !source.failed.load(std::memory_order_relaxed)) {
         auto window = read_window(source, source.key.source_in);
@@ -638,44 +845,23 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
         source.resident.store(std::move(window));
       }
 
+      if (!now && settings.read_as_mixed && source.resident.load() == nullptr &&
+          !std::filesystem::exists(source.key.path)) {
+        // Nothing is read until a nest's piece wants it, so a file that is not
+        // there would otherwise be found out only as silence.
+        missing.insert(entry.media->id);
+        source.failed.store(true, std::memory_order_relaxed);
+      }
       if (!source.failed.load(std::memory_order_relaxed)) {
-        if (needs_retiming(entry)) {
-          // Whole by construction, so this is the entire clip's audio.
-          const std::shared_ptr<const Window> window = source.resident.load();
-          if (window != nullptr) {
-            voice.retimed =
-                render_retimed(window->audio, entry, settings.sample_rate, settings.channels);
-          }
-          voice.timeline_indexed = true;
-        } else {
-          // Safe to hold: the map owns the source through a unique pointer, so
-          // its address survives every later insertion.
-          voice.stream = &source;
-        }
+        // Safe to hold: the map owns the source through a unique pointer, so
+        // its address survives every later insertion.
+        voice.stream = &source;
       }
     } else {
       missing.insert(entry.clip->media_id);
     }
 
     impl->voices.push_back(std::move(voice));
-  }
-
-  // A retimed voice whose stretch produced nothing has no audio to read, and
-  // saying so here is what keeps the mixing loop from checking every block.
-  for (Voice& voice : impl->voices) {
-    if (voice.timeline_indexed && voice.retimed.frame_count() == 0) {
-      voice.timeline_indexed = false;
-      voice.stream = nullptr;
-    }
-  }
-
-  // Whatever the retimes left behind. A source read only to be stretched is a
-  // whole clip's audio held twice over — once raw and once retimed — and only
-  // one of them is ever read again.
-  for (auto& [key, source] : impl->sources) {
-    const bool wanted_raw = std::ranges::any_of(
-        impl->voices, [&](const Voice& voice) { return voice.stream == source.get(); });
-    if (!wanted_raw) source->resident.store(nullptr);
   }
 
   impl->missing.assign(missing.begin(), missing.end());
@@ -767,9 +953,13 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
   // Something to run out of, or something not read yet. The second is the
   // ordinary case now: a cut sequence is all short sources, every one of which
   // is held whole and only the first few are read before playback starts.
-  const bool anything_to_do = std::ranges::any_of(impl->sources, [](const auto& entry) {
-    return !entry.second->whole || entry.second->resident.load() == nullptr;
-  });
+  const bool anything_to_do =
+      std::ranges::any_of(impl->sources,
+                          [](const auto& entry) {
+                            return !entry.second->whole || entry.second->resident.load() == nullptr;
+                          }) ||
+      !impl->rendered.empty();
+  std::ranges::sort(impl->rendered, {}, &RenderedSource::needed_at);
   if (settings.realtime && anything_to_do) {
     Impl* raw = impl.get();
     raw->reader = std::thread([raw] {
@@ -801,6 +991,13 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
           } else {
             source->failed.store(true, std::memory_order_relaxed);
           }
+        }
+
+        for (const std::unique_ptr<RenderedSource>& source : raw->rendered) {
+          if (source->failed.load(std::memory_order_relaxed)) continue;
+          const double at = source->wanted.load(std::memory_order_relaxed);
+          const auto [first, last] = pieces_wanted(*source, at);
+          fill_pieces(*source, first, last, source->piece_at(at));
         }
       }
     });
@@ -837,7 +1034,7 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
   const double block_end = static_cast<double>(base + static_cast<std::int64_t>(frames)) / rate;
 
   for (Voice& voice : impl_->voices) {
-    if (voice.stream == nullptr && !voice.timeline_indexed) continue;
+    if (voice.stream == nullptr && voice.rendered == nullptr) continue;
     if (block_end <= voice.planned.start || begin >= voice.planned.end) continue;
 
     // Resolved once for the block rather than per frame. A retimed voice reads
@@ -845,9 +1042,30 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
     // holding the pointer for the whole block is what makes it safe to read
     // while a reader thread builds the next one.
     std::shared_ptr<const Window> window;
+    std::shared_ptr<const Pieces> pieces;
     const media::AudioBuffer* audio = nullptr;
-    if (voice.timeline_indexed) {
-      audio = &voice.retimed;
+    if (voice.rendered != nullptr) {
+      RenderedSource& source = *voice.rendered;
+      const double from = std::max(begin, voice.planned.start) - voice.planned.start;
+      const double to = std::min(block_end, voice.planned.end) - voice.planned.start;
+      source.wanted.store(from, std::memory_order_relaxed);
+      pieces = source.resident.load();
+      if (!impl_->settings.realtime && !source.failed.load(std::memory_order_relaxed)) {
+        // Made here and now, for the same reason a window is read here offline.
+        // From the block's first frame to the piece after its last, which a
+        // join at the end of the block fades into.
+        const int first = source.piece_at(from);
+        const int last = std::min(source.count - 1, source.piece_at(to) + 1);
+        const bool held = pieces != nullptr && std::ranges::all_of(
+            std::views::iota(first, last + 1), [&](int k) { return pieces->contains(k); });
+        if (!held) {
+          const auto [keep_first, keep_last] = pieces_wanted(source, from);
+          fill_pieces(source, std::min(first, keep_first), std::max(last, keep_last),
+                      source.piece_at(from));
+          pieces = source.resident.load();
+        }
+      }
+      if (pieces == nullptr || pieces->empty()) continue;  // not made yet: silent
     } else {
       const double at =
           render::audio_source_time_at(voice.planned, std::max(begin, voice.planned.start));
@@ -866,7 +1084,7 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
       if (window == nullptr) continue;  // not read yet: this voice is silent
       audio = &window->audio;
     }
-    if (audio == nullptr || audio->frame_count() == 0) continue;
+    if (pieces == nullptr && (audio == nullptr || audio->frame_count() == 0)) continue;
 
     // The sub-range of this block the clip actually covers. Feeding the effect
     // chain only these frames keeps it contiguous in the clip's own time, which
@@ -885,16 +1103,40 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
       const double now =
           static_cast<double>(base + static_cast<std::int64_t>(first + i)) / rate;
 
-      // A retimed voice was rendered into timeline time already, so its read
-      // position is just how far into the clip we are; anything else is read
-      // from the shared source at the source time the plan asks for.
-      const double position =
-          voice.timeline_indexed
-              ? (now - voice.planned.start) * rate
-              : (render::audio_source_time_at(voice.planned, now) - audio->start_time) * rate;
-
-      sample_into(*audio, position, channels, voice.planned.channel_map,
-                  std::span(impl_->voice_block).subspan(i * channels, channels));
+      const std::span<float> frame = std::span(impl_->voice_block).subspan(i * channels, channels);
+      if (pieces != nullptr) {
+        // Made in timeline time already, so the read position is how far into
+        // the clip this is -- and across the last moments of a piece, a fade
+        // into the next.
+        const double offset = now - voice.planned.start;
+        const int k = voice.rendered->piece_at(offset);
+        const auto here = pieces->find(k);
+        const double left = (k + 1) * kPieceSeconds - offset;
+        const auto next = k + 1 < voice.rendered->count && left < kPieceCrossfade
+                              ? pieces->find(k + 1)
+                              : pieces->end();
+        if (here != pieces->end()) {
+          sample_into(here->second->audio, (offset - here->second->from) * rate, channels,
+                      voice.planned.channel_map, frame);
+        }
+        if (next != pieces->end()) {
+          impl_->join_next.assign(channels, 0.0f);
+          sample_into(next->second->audio, (offset - next->second->from) * rate, channels,
+                      voice.planned.channel_map, impl_->join_next);
+          const auto towards =
+              here != pieces->end()
+                  ? static_cast<float>(std::clamp(1.0 - left / kPieceCrossfade, 0.0, 1.0))
+                  : 1.0f;
+          for (std::size_t c = 0; c < channels; ++c) {
+            frame[c] = frame[c] * (1.0f - towards) + impl_->join_next[c] * towards;
+          }
+        }
+      } else {
+        // Read from the shared source at the source time the plan asks for.
+        const double position =
+            (render::audio_source_time_at(voice.planned, now) - audio->start_time) * rate;
+        sample_into(*audio, position, channels, voice.planned.channel_map, frame);
+      }
 
       // Gain and fades before the effects, matching the reference's chain.
       // The clip's own, and only the clip's: the track's fader is applied to
@@ -1147,7 +1389,7 @@ void AudioMixer::reset() {
 
 bool AudioMixer::silent() const noexcept {
   return std::ranges::none_of(impl_->voices, [](const Voice& v) {
-    return v.stream != nullptr || v.timeline_indexed;
+    return v.stream != nullptr || v.rendered != nullptr;
   });
 }
 
