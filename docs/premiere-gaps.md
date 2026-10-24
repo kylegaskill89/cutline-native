@@ -1831,7 +1831,7 @@ the work happens and what waits for it.
 | A large pool is cheap until looked at | yes | **yes** — forty 4K sources: 231 MB in the list, 307 MB in icons once the strips are in. The 1.36 GB was not there to find; what was, was 200 MB the driver kept per decoding device after decoding, now given back when a device goes quiet; see §7.3 | done |
 | Filmstrips for a folder of rushes | seconds | **yes** — 0.74 s a source, flat across forty, from 11.6 s rising to 14: every tile frame went back to the same keyframe and decoded the same pictures again, in software. Now on the card, seeking only forward; see §7.3 | done |
 | Nested and retimed audio | streamed | **yes** — made ten seconds of timeline at a time around the playhead, with a 50 ms crossfade where pieces meet; Play on a 140-second clip at half speed went from 8.1 s to 0.28 s; see §7.4 | done |
-| Undo in a long session | cheap per step | each step is a full deep copy of the project; harmless now, and unmeasured at size | audit |
+| Undo in a long session | cheap per step | **yes** — measured, it was not harmless: a hundred steps of a ten-thousand-clip project held 1.5 GB. Each snapshot now shares every track that did not change with the one beside it: 76 MB, and an edit 3.1 ms rather than 8.6; see §7.5 | done |
 | Crossing a cut | the next clip is read ahead | **done** — the far side of a cut is read on a thread of its own, on its own decoding device; see below | — |
 | Reverse and J/K/L at 1× | smooth on intra and short-GOP media; long-GOP reverse is costly in Premiere too | **yes** — nothing over 50 ms within one clip or across fifty one-second cuts of a 4.17 s-GOP capture, which was 34 pictures a second and a worst gap of 364 ms; a third decoder per source, at the owner's choice; see §7.1 | done |
 | Painting a long timeline | full rate | **yes** — it was never the painting: 0.3 ms to refresh and 3.5–7 ms to paint at 4K (`--benchmark <project>`). Playback set the playhead to the *nearest* frame while deciding a frame was new by truncating, so one frame in four was drawn twice and the next never; see §7.1 | done |
@@ -2111,6 +2111,35 @@ every clip inside it first, and still reports a missing file.
 On the reference capture at half speed through a playback mixer: 0.26 s to
 start at the beginning and 0.44 s ten minutes in, and played through three
 joins with sound wherever the capture has it.
+
+### 7.5 Undo at size
+
+Measured on a synthetic long-form project — three sequences of sixteen tracks,
+forty sources, an effect with keyframes on every picture clip and a volume
+curve on every sound clip — at a hundred undo steps, each edit moving one clip:
+
+| | 1,008 clips | 10,080 clips |
+|---|---|---|
+| History held, before | 158 MB | 1,506 MB |
+| History held, now | **12 MB** | **76 MB** |
+| An edit, before | 0.64 ms | 8.6 ms |
+| An edit, now | 0.18 ms | 3.1 ms |
+| Undo or redo, now | 0.37 ms | 5.4 ms |
+
+Every snapshot was a whole copy, though an edit nearly always changes one or
+two tracks of dozens. A snapshot now keeps its tracks apart from the rest of
+the project and shares each one that is the same as in the snapshot beside it,
+matched by sequence and track id so an inserted or reordered track does not
+stop the rest being found; a test walks a run of edits that add, swap and
+remove tracks and sequences back and forth and checks every state comes back
+exactly. The session also moves the outgoing project into the history rather
+than copying it, which is most of the edit's saving. Undo is slower than it
+was — the project is put back together from shared tracks rather than handed
+back — and at 5 ms on the largest project is still a third of a frame.
+
+Copy-on-write tracks in the model itself would also make the edit's own copy
+cheap, but every operation in the core writes through plain references, and
+at 3 ms an edit on ten thousand clips there is nothing yet for it to buy.
 
 ## 8. Colour pipeline: 10-bit and HDR
 

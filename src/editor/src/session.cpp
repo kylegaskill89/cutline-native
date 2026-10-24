@@ -37,7 +37,9 @@ bool Session::apply(core::Project next) {
   next = core::sync_nested_media(std::move(next));
   if (next == project_) return false;
 
-  history_.push(project_);
+  // Moved rather than copied: the history keeps the tracks it is handed, and
+  // a copy of a ten-thousand-clip project is four milliseconds an edit.
+  history_.push(std::move(project_));
   project_ = std::move(next);
   prune_selection();
   refresh_modified();
@@ -66,7 +68,8 @@ void Session::reset(core::Project project, std::filesystem::path path) {
 }
 
 bool Session::undo() {
-  std::optional<core::Project> previous = history_.undo(project_);
+  if (!history_.can_undo()) return false;
+  std::optional<core::Project> previous = history_.undo(std::move(project_));
   if (!previous.has_value()) return false;
   project_ = std::move(*previous);
   // A clip that was undone back out of existence must not stay selected.
@@ -80,7 +83,8 @@ bool Session::undo() {
 }
 
 bool Session::redo() {
-  std::optional<core::Project> next = history_.redo(project_);
+  if (!history_.can_redo()) return false;
+  std::optional<core::Project> next = history_.redo(std::move(project_));
   if (!next.has_value()) return false;
   project_ = std::move(*next);
   prune_selection();

@@ -486,6 +486,52 @@ TEST(History, LoweringTheLimitLeavesRedoAlone) {
   EXPECT_EQ(history.redo_depth(), 3u);
 }
 
+// A snapshot shares each track that is the same in the one beside it, matched
+// by sequence and track id. Matched wrongly, an undo puts back somebody else's
+// track; so every kind of change that moves tracks about is made here, and
+// every state has to come back exactly, in both directions.
+TEST(History, EveryStateComesBackWhateverMovedTheTracks) {
+  std::vector<Project> states;
+  Project p = empty_project(2, 2);
+  p.sequences.push_back(empty_project(1, 1).sequences[0]);
+  p.sequences.back().id = "second";
+  states.push_back(p);
+
+  const auto edit = [&](auto change) {
+    change(p);
+    states.push_back(p);
+  };
+  edit([](Project& q) { q.sequences[0].tracks[0].label = "picture"; });
+  edit([](Project& q) {
+    Track inserted;
+    inserted.id = "inserted";
+    inserted.label = "new";
+    q.sequences[0].tracks.insert(q.sequences[0].tracks.begin(), inserted);
+  });
+  edit([](Project& q) { std::swap(q.sequences[0].tracks[1], q.sequences[0].tracks[2]); });
+  edit([](Project& q) { q.sequences[1].tracks[0].muted = true; });
+  edit([](Project& q) { q.sequences[0].tracks.pop_back(); });
+  edit([](Project& q) { std::swap(q.sequences[0], q.sequences[1]); });
+  edit([](Project& q) { q.sequences[1].tracks[0].label = "again"; });
+
+  History history;
+  for (std::size_t i = 0; i + 1 < states.size(); ++i) history.push(states[i]);
+
+  Project current = states.back();
+  for (std::size_t i = states.size() - 1; i-- > 0;) {
+    auto back = history.undo(current);
+    ASSERT_TRUE(back.has_value());
+    ASSERT_EQ(*back, states[i]) << "undoing to state " << i;
+    current = *back;
+  }
+  for (std::size_t i = 1; i < states.size(); ++i) {
+    auto forward = history.redo(current);
+    ASSERT_TRUE(forward.has_value());
+    ASSERT_EQ(*forward, states[i]) << "redoing to state " << i;
+    current = *forward;
+  }
+}
+
 // Opening a project used to leave the id counter at zero, so the next split
 // handed out a name the file already used — and every lookup by id then found
 // two clips where it meant one.
