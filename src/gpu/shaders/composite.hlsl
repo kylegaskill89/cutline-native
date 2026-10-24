@@ -60,6 +60,11 @@
 #define PRIMARIES_709  0
 #define PRIMARIES_2020 1
 
+// A present into scRGB for an HDR display: linear, Rec.709 primaries (and
+// beyond them, as negative values), 1.0 at 80 nits. `passA.x` says how many of
+// those a unit of the scene is.
+#define OUTPUT_SCRGB 3
+
 // Blend modes. Normal and Add are handled by fixed-function blending and never
 // reach the shader's blend path; the rest need to read what is underneath.
 #define BLEND_NORMAL     0
@@ -1140,6 +1145,12 @@ float4 PSPresent(VSOutput input) : SV_Target {
     // reads back exactly as stored, and the encoding happens here. It costs a
     // handful of instructions once per frame.
     const float4 scene = texture0.Sample(linearSampler, input.uv);
+
+    if (params.output == OUTPUT_SCRGB) {
+        return float4(convertPrimaries(scene.rgb, primariesOf(params.working), PRIMARIES_709) *
+                          params.passA.x,
+                      scene.a);
+    }
 
     // Out to some other space than the sequence's: an HDR sequence on an SDR
     // display, tone mapped and brought into Rec.709.

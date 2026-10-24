@@ -42,7 +42,11 @@ constexpr UINT kDisplayRtv = 1;
 constexpr UINT kScratchRtv = 2;  // and 3, one per blur ping-pong buffer
 constexpr UINT kLumaRtv = 4;
 constexpr UINT kChromaRtv = 5;
-constexpr UINT kRtvCount = 6;
+constexpr UINT kHdrDisplayRtv = 6;
+constexpr UINT kRtvCount = 7;
+
+/// scRGB for an HDR display: linear and able to go past 1.0 and below 0.
+constexpr DXGI_FORMAT kHdrDisplayFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 /// The encoder's planes, a byte a sample or sixteen bits.
 [[nodiscard]] DXGI_FORMAT luma_format(YuvLayout layout) noexcept {
@@ -248,6 +252,7 @@ std::expected<void, std::string> Compositor::Impl::create_targets() {
   scene.Reset();
   backdrop.Reset();
   display.Reset();
+  hdr_display.Reset();
   // Canvas-sized, so a resize invalidates them. They are rebuilt lazily, only
   // if a layer asks for a blur again.
   scratch[0].Reset();
@@ -795,6 +800,11 @@ std::expected<std::unique_ptr<Compositor>, std::string> Compositor::create(
       !ok) {
     return std::unexpected(ok.error());
   }
+  if (auto ok = make_pipeline(*fullscreen_vs, *present_ps, kHdrDisplayFormat, D3D12_BLEND_ONE,
+                              D3D12_BLEND_ZERO, false, impl->pipeline_present_hdr);
+      !ok) {
+    return std::unexpected(ok.error());
+  }
   using EncodePipeline =
       std::tuple<const std::vector<std::byte>*, DXGI_FORMAT, ComPtr<ID3D12PipelineState>*>;
   for (const auto& [ps, format, out] : {
@@ -1251,6 +1261,52 @@ std::expected<SceneTexture, std::string> Compositor::display_texture() {
                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
   commands->ResourceBarrier(1, &to_resource);
 
+  // And the HDR display's copy, when there is an HDR display to show it on.
+  const bool hdr = d.hdr_sdr_white.has_value();
+  if (hdr) {
+    if (d.hdr_display == nullptr) {
+      const D3D12_HEAP_PROPERTIES heap = heap_of(D3D12_HEAP_TYPE_DEFAULT);
+      D3D12_RESOURCE_DESC desc = d.display->GetDesc();
+      desc.Format = kHdrDisplayFormat;
+      D3D12_CLEAR_VALUE clear{};
+      clear.Format = kHdrDisplayFormat;
+      if (HRESULT hr = d.gpu().device->CreateCommittedResource(
+              &heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+              &clear, IID_PPV_ARGS(&d.hdr_display));
+          FAILED(hr)) {
+        return std::unexpected(std::format("cannot create the HDR display target: {}",
+                                           hresult_string(hr)));
+      }
+      d.gpu().device->CreateRenderTargetView(d.hdr_display.Get(), nullptr, d.rtv(kHdrDisplayRtv));
+    }
+
+    auto hdr_to_target = transition(d.hdr_display.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                    D3D12_RESOURCE_STATE_RENDER_TARGET);
+    commands->ResourceBarrier(1, &hdr_to_target);
+    const D3D12_CPU_DESCRIPTOR_HANDLE hdr_rtv = d.rtv(kHdrDisplayRtv);
+    commands->OMSetRenderTargets(1, &hdr_rtv, FALSE, nullptr);
+
+    ShaderParams params{};
+    params.canvas[0] = static_cast<float>(d.width);
+    params.canvas[1] = static_cast<float>(d.height);
+    d.colour_params(params, WorkingColour::Rec709);
+    params.output = 3;  // OUTPUT_SCRGB
+    // An SDR sequence at the desktop's SDR white, so it matches the interface
+    // around it; an HDR one at its real brightness, graphics white in nits.
+    const float white = d.colour.working == WorkingColour::Rec709
+                            ? *d.hdr_sdr_white
+                            : std::max(d.colour.graphics_white_nits, 1.0f);
+    params.pass_a[0] = white / 80.0f;
+    commands->SetPipelineState(d.pipeline_present_hdr.Get());
+    commands->SetGraphicsRootDescriptorTable(0, d.srv_gpu(d.present_slot()));
+    commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &params, 0);
+    commands->DrawInstanced(3, 1, 0, 0);
+
+    auto hdr_to_resource = transition(d.hdr_display.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    commands->ResourceBarrier(1, &hdr_to_resource);
+  }
+
   if (auto ok = d.recorder.submit(); !ok) return std::unexpected(ok.error());
   d.recorder.finish();
 
@@ -1259,7 +1315,99 @@ std::expected<SceneTexture, std::string> Compositor::display_texture() {
                       .height = d.height,
                       .format = static_cast<unsigned>(kDisplayFormat),
                       .state = static_cast<unsigned>(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
-                      .generation = d.generation};
+                      .generation = d.generation,
+                      .hdr_resource = hdr ? d.hdr_display.Get() : nullptr,
+                      .hdr_format = hdr ? static_cast<unsigned>(kHdrDisplayFormat) : 0u};
+}
+
+void Compositor::set_hdr_display(std::optional<float> sdr_white_nits) noexcept {
+  impl_->hdr_sdr_white = sdr_white_nits;
+}
+
+std::expected<std::vector<float>, std::string> Compositor::read_back_hdr() {
+  Impl& d = *impl_;
+  if (!d.hdr_sdr_white.has_value()) return std::unexpected("no HDR display was asked for");
+  if (auto shown = display_texture(); !shown) return std::unexpected(shown.error());
+
+  const UINT row_bytes = static_cast<UINT>(d.width) * 8;
+  const UINT pitch = aligned_pitch(row_bytes);
+  const std::size_t needed = static_cast<std::size_t>(pitch) * d.height;
+
+  ComPtr<ID3D12Resource> buffer;
+  const D3D12_HEAP_PROPERTIES heap = heap_of(D3D12_HEAP_TYPE_READBACK);
+  D3D12_RESOURCE_DESC desc{};
+  desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  desc.Width = needed;
+  desc.Height = 1;
+  desc.DepthOrArraySize = 1;
+  desc.MipLevels = 1;
+  desc.Format = DXGI_FORMAT_UNKNOWN;
+  desc.SampleDesc.Count = 1;
+  desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+  if (HRESULT hr = d.gpu().device->CreateCommittedResource(
+          &heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+          IID_PPV_ARGS(&buffer));
+      FAILED(hr)) {
+    return std::unexpected(std::format("cannot create a readback buffer: {}", hresult_string(hr)));
+  }
+
+  const auto opened = d.recorder.begin();
+  if (!opened) return std::unexpected(opened.error());
+  ID3D12GraphicsCommandList* commands = *opened;
+
+  auto to_source = transition(d.hdr_display.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                              D3D12_RESOURCE_STATE_COPY_SOURCE);
+  commands->ResourceBarrier(1, &to_source);
+  D3D12_TEXTURE_COPY_LOCATION source{};
+  source.pResource = d.hdr_display.Get();
+  source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+  D3D12_TEXTURE_COPY_LOCATION destination{};
+  destination.pResource = buffer.Get();
+  destination.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+  destination.PlacedFootprint.Footprint.Format = kHdrDisplayFormat;
+  destination.PlacedFootprint.Footprint.Width = static_cast<UINT>(d.width);
+  destination.PlacedFootprint.Footprint.Height = static_cast<UINT>(d.height);
+  destination.PlacedFootprint.Footprint.Depth = 1;
+  destination.PlacedFootprint.Footprint.RowPitch = pitch;
+  commands->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
+  auto to_resource = transition(d.hdr_display.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+  commands->ResourceBarrier(1, &to_resource);
+
+  if (auto ok = d.recorder.submit(); !ok) return std::unexpected(ok.error());
+  d.recorder.finish();
+
+  std::byte* mapped = nullptr;
+  D3D12_RANGE everything{0, needed};
+  if (HRESULT hr = buffer->Map(0, &everything, reinterpret_cast<void**>(&mapped)); FAILED(hr)) {
+    return std::unexpected(std::format("cannot map the readback buffer: {}", hresult_string(hr)));
+  }
+  // Half floats to floats, by hand: one place, and not worth a library.
+  const auto widen = [](std::uint16_t h) {
+    const std::uint32_t sign = (h & 0x8000u) << 16;
+    const std::uint32_t exponent = (h >> 10) & 0x1Fu;
+    const std::uint32_t mantissa = h & 0x3FFu;
+    std::uint32_t bits = 0;
+    if (exponent == 0) {
+      const float tiny = static_cast<float>(mantissa) / 1024.0f / 16384.0f;
+      return sign != 0 ? -tiny : tiny;
+    }
+    bits = exponent == 31 ? (sign | 0x7F800000u | (mantissa << 13))
+                          : (sign | ((exponent + 112) << 23) | (mantissa << 13));
+    float out = 0.0f;
+    std::memcpy(&out, &bits, sizeof out);
+    return out;
+  };
+  std::vector<float> pixels(static_cast<std::size_t>(d.width) * d.height * 4);
+  for (int y = 0; y < d.height; ++y) {
+    const auto* row = reinterpret_cast<const std::uint16_t*>(mapped + static_cast<std::size_t>(y) * pitch);
+    for (int x = 0; x < d.width * 4; ++x) {
+      pixels[static_cast<std::size_t>(y) * d.width * 4 + x] = widen(row[x]);
+    }
+  }
+  D3D12_RANGE nothing{0, 0};
+  buffer->Unmap(0, &nothing);
+  return pixels;
 }
 
 // ---------------------------------------------------------------- readback --

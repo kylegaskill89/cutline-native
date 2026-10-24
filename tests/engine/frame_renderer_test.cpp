@@ -1314,5 +1314,46 @@ TEST_F(DeepRendererTest, AnHdrSequenceCanBeWrittenOutAsSdr) {
   EXPECT_LT(low, high - 30);
 }
 
+
+// ------------------------------------------------------------- HDR display --
+//
+// What an HDR display is sent: scRGB, where 1.0 is 80 nits.
+
+[[nodiscard]] float scrgb_green_at(const std::vector<float>& pixels, int x, int y) {
+  return pixels[(static_cast<std::size_t>(y) * 64 + x) * 4 + 1];
+}
+
+// An HDR sequence goes to an HDR display at its real brightness: 203 nits is
+// 203 nits, and 1,000 is 1,000, whatever the desktop's SDR white is.
+TEST_F(DeepRendererTest, AnHdrDisplayIsSentAPqSequenceAtItsRealBrightness) {
+  renderer_->compositor().set_hdr_display(240.0f);
+  ASSERT_TRUE(renderer_->render(in_colour(showing("pq.mkv"), core::WorkingColour::Rec2100Pq), 0.05)
+                  .has_value());
+  const auto pixels = renderer_->compositor().read_back_hdr();
+  ASSERT_TRUE(pixels.has_value()) << pixels.error();
+  EXPECT_NEAR(scrgb_green_at(*pixels, 10, 16), 203.0f / 80.0f, 0.05f);
+  EXPECT_NEAR(scrgb_green_at(*pixels, 54, 16), 1000.0f / 80.0f, 0.2f);
+}
+
+// An SDR sequence goes at the desktop's SDR white, so its white matches the
+// white of the interface around the monitor.
+TEST_F(DeepRendererTest, AnSdrSequenceOnAnHdrDisplaySitsAtTheDesktopsWhite) {
+  renderer_->compositor().set_hdr_display(240.0f);
+  ASSERT_TRUE(renderer_->render(showing("grey10.mkv"), 0.05).has_value());
+  const auto pixels = renderer_->compositor().read_back_hdr();
+  ASSERT_TRUE(pixels.has_value()) << pixels.error();
+  const double coded = (514.0 - 64.0) / 876.0;
+  const double linear = std::pow((coded + 0.055) / 1.055, 2.4);
+  EXPECT_NEAR(scrgb_green_at(*pixels, 32, 16), linear * 240.0 / 80.0, 0.01);
+}
+
+TEST_F(DeepRendererTest, NoHdrDisplayIsMadeUnlessAskedFor) {
+  ASSERT_TRUE(renderer_->render(showing("grey10.mkv"), 0.05).has_value());
+  const auto shown = renderer_->compositor().display_texture();
+  ASSERT_TRUE(shown.has_value()) << shown.error();
+  EXPECT_EQ(shown->hdr_resource, nullptr);
+  EXPECT_FALSE(renderer_->compositor().read_back_hdr().has_value());
+}
+
 }  // namespace
 }  // namespace cutline::engine

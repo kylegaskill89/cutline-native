@@ -55,6 +55,7 @@ struct Compositor::Impl {
   /// one pipeline for all of them.
   ComPtr<ID3D12PipelineState> pipeline_effect;
   ComPtr<ID3D12PipelineState> pipeline_present;
+  ComPtr<ID3D12PipelineState> pipeline_present_hdr;
   /// The two halves of the encoder's conversion, at each depth: luma into a
   /// one-channel target, colour differences into a two-channel one.
   ComPtr<ID3D12PipelineState> pipeline_luma8;
@@ -74,6 +75,9 @@ struct Compositor::Impl {
   /// actually has an effect on it, because they are canvas-sized.
   ComPtr<ID3D12Resource> scratch[2];
   ComPtr<ID3D12Resource> display;
+  /// The scRGB copy for an HDR display, made the first time one is asked for.
+  ComPtr<ID3D12Resource> hdr_display;
+  std::optional<float> hdr_sdr_white;
   ComPtr<ID3D12Resource> readback;
   std::size_t readback_capacity = 0;
 

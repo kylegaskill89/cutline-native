@@ -29,6 +29,7 @@
 #include <expected>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -227,6 +228,12 @@ struct SceneTexture {
   /// Comparing the handle would say nothing had changed.
   unsigned generation = 0;
 
+  /// The same picture for an HDR display, when one was asked for: scRGB in a
+  /// sixteen-bit float target, at its real brightness. Null otherwise. Left in
+  /// the same state as `resource`.
+  void* hdr_resource = nullptr;  ///< ID3D12Resource*
+  unsigned hdr_format = 0;       ///< DXGI_FORMAT
+
   [[nodiscard]] bool empty() const noexcept {
     return resource == nullptr || width <= 0 || height <= 0;
   }
@@ -300,6 +307,12 @@ class Compositor {
   /// should look like rather than stale pixels.
   [[nodiscard]] std::expected<void, std::string> compose(std::span<const Layer> layers);
 
+  /// Whether `display_texture` also renders the picture for an HDR display,
+  /// and where SDR white sits on it in nits -- the Windows SDR brightness, so
+  /// an SDR sequence matches the interface around it. An HDR sequence is shown
+  /// at its real brightness whatever this says. Nothing means not.
+  void set_hdr_display(std::optional<float> sdr_white_nits) noexcept;
+
   /// How what is composed from here on is colour managed. Rec.709 until set.
   void set_colour(const ColourSettings& colour) noexcept;
   [[nodiscard]] const ColourSettings& colour() const noexcept;
@@ -308,6 +321,11 @@ class Compositor {
   /// Slow by nature — this stalls on the GPU — and meant for tests and stills,
   /// not for every frame of an export.
   [[nodiscard]] std::expected<Image, std::string> read_back();
+
+  /// The HDR display's copy, as RGBA floats in scRGB -- 1.0 is 80 nits. For
+  /// tests: it is the one way to check what an HDR display is sent. Fails when
+  /// `set_hdr_display` has not asked for one.
+  [[nodiscard]] std::expected<std::vector<float>, std::string> read_back_hdr();
 
   /// Converts the frame just composited for an encoder, on the card, and
   /// starts copying it back, without waiting for either. Returns which slot it
