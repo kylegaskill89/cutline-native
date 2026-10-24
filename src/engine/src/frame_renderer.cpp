@@ -181,8 +181,10 @@ constexpr int kMaxPooledFrames = 40;
   const auto width = static_cast<std::size_t>(std::max(1, media.width.value_or(1920)));
   const auto height = static_cast<std::size_t>(std::max(1, media.height.value_or(1080)));
   // A byte and a half a pixel: NV12 and its relatives are a full luma plane and
-  // a quarter-resolution pair of chroma planes.
-  const std::size_t per_frame = width * height * 3 / 2;
+  // a quarter-resolution pair of chroma planes. Twice that past eight bits,
+  // where a sample takes sixteen -- a 10-bit 4K pool sized for eight would
+  // hold twice the memory the budget says.
+  const std::size_t per_frame = width * height * 3 / 2 * (media.bit_depth.value_or(8) > 8 ? 2 : 1);
   if (per_frame == 0) return kMinKeptFrames;
 
   const auto afford = static_cast<int>(kRememberedBytes / per_frame);
@@ -1929,6 +1931,15 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
         if (!describe(frame, from, view)) {
           d.missing.push_back(source.media->id);
           continue;
+        }
+        // Read as somebody said, whatever the file is tagged.
+        if (const auto colour = source.media->colour_override; colour.has_value()) {
+          const bool hdr = *colour != core::WorkingColour::Rec709;
+          view.space = hdr ? gpu::ColorSpace::Bt2020 : gpu::ColorSpace::Bt709;
+          view.primaries = hdr ? gpu::ColourPrimaries::Bt2020 : gpu::ColourPrimaries::Bt709;
+          view.transfer = *colour == core::WorkingColour::Rec2100Pq    ? gpu::TransferFunction::Smpte2084
+                          : *colour == core::WorkingColour::Rec2100Hlg ? gpu::TransferFunction::AribStdB67
+                                                                       : gpu::TransferFunction::Bt709;
         }
 
         d.views.push_back(view);

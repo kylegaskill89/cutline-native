@@ -41,6 +41,8 @@ struct MediaSource {
   std::optional<int> width;
   std::optional<int> height;
   std::optional<double> fps;
+  std::optional<int> bit_depth;
+  std::optional<core::WorkingColour> colour_space;
 
   friend bool operator==(const MediaSource&, const MediaSource&) = default;
 };

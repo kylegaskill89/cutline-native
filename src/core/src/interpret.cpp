@@ -124,4 +124,12 @@ Project interpret_media(Project p, std::string_view media_id,
   return ripple_after(std::move(p), std::move(shifts), stretched);
 }
 
+Project set_colour_override(Project p, std::string_view media_id,
+                            std::optional<WorkingColour> colour) {
+  for (Media& media : p.media) {
+    if (media.id == media_id) media.colour_override = colour;
+  }
+  return p;
+}
+
 }  // namespace cutline::core

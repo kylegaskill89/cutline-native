@@ -135,6 +135,15 @@ struct TextSpec {
 };
 
 /// A source asset: a file, a still, or a generated source.
+/// A colour space: a sequence's working one -- what it composites in and,
+/// unless an export says otherwise, what it is written out as -- or what a
+/// piece of footage is. Premiere's three.
+enum class WorkingColour {
+  Rec709,     ///< SDR
+  Rec2100Pq,  ///< HDR10
+  Rec2100Hlg,
+};
+
 struct Media {
   std::string id;
   std::string path;  ///< absolute; empty for generated media
@@ -203,6 +212,18 @@ struct Media {
   /// exactly the length it started at rather than to whatever a second
   /// division arrives at.
   std::optional<double> file_duration;
+
+  /// Bits per sample and the colour space the file is tagged with, as probed:
+  /// what decides how much a decoded frame weighs and how its values are read
+  /// as light.
+  std::optional<int> bit_depth;
+  std::optional<WorkingColour> colour_space;
+
+  /// Premiere's Color Space Override, in Interpret Footage: how this source's
+  /// values are read, whatever the file says. For footage tagged wrongly or not
+  /// at all -- an HLG phone clip that claims to be Rec.709 is the usual one.
+  /// Belongs to the source, so every clip cut from it is read the same way.
+  std::optional<WorkingColour> colour_override;
 
   /// A small copy of the same footage, to edit against.
   ///
@@ -787,14 +808,6 @@ struct Marker {
 /// list kept in step by hand. The bins went the other way for the same reason,
 /// and the note on them says why: the arrangement where two containers can
 /// disagree is the one that eventually does.
-/// A sequence's working colour space: what it composites in and, unless an
-/// export says otherwise, what it is written out as. Premiere's three.
-enum class WorkingColour {
-  Rec709,     ///< SDR
-  Rec2100Pq,  ///< HDR10
-  Rec2100Hlg,
-};
-
 /// Where SDR white sits in an HDR sequence, as Premiere's sequence settings
 /// put it. BT.2408's 203 nits is the default; 100 is how Premiere used to do
 /// it, and 300 is offered for brighter graphics.

@@ -7695,6 +7695,18 @@ void open_interpret_dialog(App& app, const std::string& media_id) {
   auto& length = panel->emplace<Label>("");
   length.set_small(true);
 
+  // Premiere's Color Space Override, in the same box.
+  constexpr std::array<const char*, 3> kSpaces{"Rec. 709", "Rec. 2100 PQ", "Rec. 2100 HLG"};
+  const auto tagged = static_cast<std::size_t>(
+      media.colour_space.value_or(cutline::core::WorkingColour::Rec709));
+  auto& colour_row = panel->emplace<Box>(Axis::Horizontal);
+  colour_row.emplace<Label>("Colour space").set_small(true);
+  colour_row.emplace<Spacer>();
+  auto& colour = colour_row.emplace<Dropdown>(
+      std::vector<std::string>{std::format("As tagged: {}", kSpaces[std::min<std::size_t>(tagged, 2)]),
+                               kSpaces[0], kSpaces[1], kSpaces[2]},
+      media.colour_override.has_value() ? static_cast<std::size_t>(*media.colour_override) + 1 : 0u);
+
   // Kept in step from one place, so the radio and the field cannot disagree
   // about which length is on show.
   const auto show_length = [&length, &choice, &rate, file_rate, file_length, drop_frame] {
@@ -7715,7 +7727,8 @@ void open_interpret_dialog(App& app, const std::string& media_id) {
   rate.set_on_finish([show_length] { show_length(); });
 
   auto& buttons = panel->emplace<Box>(Axis::Horizontal);
-  buttons.emplace<Button>("OK", [&app, media_id, choice = &choice, rate = &rate] {
+  buttons.emplace<Button>("OK", [&app, media_id, choice = &choice, rate = &rate,
+                                 colour = &colour] {
     std::optional<double> assumed;
     if (choice->selected() == 1) {
       double typed = 0.0;
@@ -7732,8 +7745,14 @@ void open_interpret_dialog(App& app, const std::string& media_id) {
     }
 
     if (app.main.host != nullptr) app.main.host->close_popup();
-    app.session.apply(
-        cutline::core::interpret_media(app.session.project(), media_id, assumed));
+    const std::size_t space = colour->selected();
+    const std::optional<cutline::core::WorkingColour> override =
+        space == 0 ? std::nullopt
+                   : std::optional(static_cast<cutline::core::WorkingColour>(std::min<std::size_t>(space - 1, 2)));
+    // One edit, so one undo takes back both.
+    app.session.apply(cutline::core::set_colour_override(
+        cutline::core::interpret_media(app.session.project(), media_id, assumed), media_id,
+        override));
     // Everything: the pool's duration column, the clips that changed length,
     // the picture, and the sound, which is now being read at another rate.
     refresh_all(app);

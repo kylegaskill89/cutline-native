@@ -162,6 +162,24 @@ TEST(Serialize, ASequenceKeepsItsColourManagement) {
 
 // An SDR sequence at the defaults is written exactly as before there was colour
 // management, so a project file does not change for anybody not using it.
+TEST(Serialize, ASourceKeepsItsColourAndItsOverride) {
+  Project original = empty_project();
+  Media m;
+  m.id = "m";
+  m.path = "D:/rushes/phone.mov";
+  m.bit_depth = 10;
+  m.colour_space = WorkingColour::Rec709;
+  m.colour_override = WorkingColour::Rec2100Hlg;
+  original.media.push_back(m);
+
+  const auto loaded = from_json(to_json(original));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  ASSERT_EQ(loaded->project.media.size(), 1u);
+  EXPECT_EQ(loaded->project.media[0].bit_depth, 10);
+  EXPECT_EQ(loaded->project.media[0].colour_space, WorkingColour::Rec709);
+  EXPECT_EQ(loaded->project.media[0].colour_override, WorkingColour::Rec2100Hlg);
+}
+
 TEST(Serialize, AnSdrSequenceWritesNothingAboutColour) {
   const std::string text = to_json(empty_project());
   EXPECT_EQ(text.find("colour"), std::string::npos);

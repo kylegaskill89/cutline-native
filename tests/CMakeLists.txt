@@ -175,6 +175,8 @@ if(CUTLINE_WITH_GPU)
       GTest::gtest
       GTest::gtest_main)
     cutline_gpu_shaders(cutline_app_tests)
+    target_compile_definitions(cutline_app_tests PRIVATE
+      CUTLINE_MEDIA_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/media/fixtures")
     gtest_discover_tests(cutline_app_tests)
   endif()
 endif()

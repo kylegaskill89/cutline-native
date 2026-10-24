@@ -55,6 +55,21 @@ TEST_F(WithFootage, ProbingDescribesTheFile) {
   EXPECT_GT(*source->fps, 0.0);
 }
 
+// What decides how a source's values are read and how much a frame of it
+// weighs, so it has to be known from the moment it is imported.
+TEST(Probing, AnHdrSourceIsKnownForWhatItIs) {
+  const auto pq = probe_source(
+      (std::filesystem::path(CUTLINE_MEDIA_FIXTURES) / "pq.mkv").string());
+  ASSERT_TRUE(pq.has_value()) << pq.error();
+  EXPECT_EQ(pq->bit_depth, 10);
+  EXPECT_EQ(pq->colour_space, core::WorkingColour::Rec2100Pq);
+
+  const auto hlg = probe_source(
+      (std::filesystem::path(CUTLINE_MEDIA_FIXTURES) / "hlg.mkv").string());
+  ASSERT_TRUE(hlg.has_value()) << hlg.error();
+  EXPECT_EQ(hlg->colour_space, core::WorkingColour::Rec2100Hlg);
+}
+
 TEST(Probing, AFileThatIsNotThereSaysSo) {
   const auto source = probe_source("D:/definitely/not/here.mp4");
   ASSERT_FALSE(source.has_value());

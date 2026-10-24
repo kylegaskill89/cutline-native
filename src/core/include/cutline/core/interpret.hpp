@@ -74,4 +74,9 @@ namespace cutline::core {
 [[nodiscard]] Project interpret_media(Project p, std::string_view media_id,
                                       std::optional<double> assumed_fps);
 
+/// How a source's values are read as colour, whatever the file says, or
+/// nothing to read them as tagged. Nothing about the cut changes.
+[[nodiscard]] Project set_colour_override(Project p, std::string_view media_id,
+                                          std::optional<WorkingColour> colour);
+
 }  // namespace cutline::core

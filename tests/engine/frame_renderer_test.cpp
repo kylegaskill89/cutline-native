@@ -1355,5 +1355,21 @@ TEST_F(DeepRendererTest, NoHdrDisplayIsMadeUnlessAskedFor) {
   EXPECT_FALSE(renderer_->compositor().read_back_hdr().has_value());
 }
 
+
+// Premiere's Color Space Override. The grey clip is tagged SDR; read as PQ in a
+// PQ sequence its code is the light it means and comes back as itself, where
+// read as tagged it is mapped from SDR white and comes back as something else.
+TEST_F(DeepRendererTest, AnOverrideReadsTheValuesAsItSays) {
+  Project p = in_colour(showing("grey10.mkv"), core::WorkingColour::Rec2100Pq);
+  ASSERT_TRUE(renderer_->render(p, 0.05).has_value());
+  const int as_tagged = luma_code_in(*renderer_, gpu::WorkingColour::Rec2100Pq, 32, 16);
+
+  p.media[0].colour_override = core::WorkingColour::Rec2100Pq;
+  ASSERT_TRUE(renderer_->render(p, 0.05).has_value());
+  const int overridden = luma_code_in(*renderer_, gpu::WorkingColour::Rec2100Pq, 32, 16);
+
+  EXPECT_NEAR(overridden, 514, 1);
+  EXPECT_GT(std::abs(as_tagged - 514), 20) << "the override made no difference";
+}
 }  // namespace
 }  // namespace cutline::engine

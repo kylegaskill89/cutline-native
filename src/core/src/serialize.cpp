@@ -236,6 +236,9 @@ json write(const Media& m) {
   // before Interpret Footage existed gains a field and nothing written now
   // troubles a build that predates it.
   put_if_set(j, "assumed_fps", m.assumed_fps);
+  put_if_set(j, "bit_depth", m.bit_depth);
+  if (m.colour_space.has_value()) j["colour_space"] = *m.colour_space;
+  if (m.colour_override.has_value()) j["colour_override"] = *m.colour_override;
   put_if_set(j, "file_duration", m.file_duration);
   put_if_set(j, "in_point", m.in_point);
   put_if_set(j, "out_point", m.out_point);
@@ -585,6 +588,13 @@ Media read_media(const json& j) {
   m.height = read_optional<int>(j, "height");
   m.fps = read_optional<double>(j, "fps");
   m.assumed_fps = read_optional<double>(j, "assumed_fps");
+  m.bit_depth = read_optional<int>(j, "bit_depth");
+  if (const auto found = j.find("colour_space"); found != j.end()) {
+    m.colour_space = found->get<WorkingColour>();
+  }
+  if (const auto found = j.find("colour_override"); found != j.end()) {
+    m.colour_override = found->get<WorkingColour>();
+  }
   m.file_duration = read_optional<double>(j, "file_duration");
   m.in_point = read_optional<double>(j, "in_point");
   m.out_point = read_optional<double>(j, "out_point");

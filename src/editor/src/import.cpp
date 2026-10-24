@@ -91,6 +91,8 @@ core::Project import_media(core::Project project, const MediaSource& source, std
   media.width = source.width;
   media.height = source.height;
   media.fps = source.fps;
+  media.bit_depth = source.bit_depth;
+  media.colour_space = source.colour_space;
 
   if (id != nullptr) *id = media.id;
   return core::add_media(std::move(project), std::move(media));

@@ -41,6 +41,12 @@ std::expected<editor::MediaSource, std::string> probe_source(std::string_view pa
     source.width = video->width;
     source.height = video->height;
     if (video->fps > 0.0) source.fps = video->fps;
+    source.bit_depth = video->color.bits_per_component;
+    source.colour_space = video->color.transfer == media::TransferCharacteristic::Smpte2084
+                              ? core::WorkingColour::Rec2100Pq
+                          : video->color.transfer == media::TransferCharacteristic::AribStdB67
+                              ? core::WorkingColour::Rec2100Hlg
+                              : core::WorkingColour::Rec709;
   }
   return source;
 }
