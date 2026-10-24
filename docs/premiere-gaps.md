@@ -2157,7 +2157,7 @@ float — so this is new curves, a tone mapper and plumbing, not a restructure.
 | A sequence colour space | Rec.709, Rec.2100 PQ, Rec.2100 HLG | **yes** — the three, with HDR graphics white (100, 203, 300 nits) and Auto Tone Map Media, in Project Settings and in the file; see §8.1 | done |
 | HDR preview | on an HDR display, tone-mapped otherwise | **none** — an SDR swapchain | machinery |
 | Scopes in nits | HDR ranges on the waveform | **none** | control |
-| HDR10 export | HEVC Main10 with mastering and light-level metadata | **half** — the writer takes P010 and tags BT.2100 PQ or HLG with the metadata in the container, through NVENC; the exporter does not yet ask it to. This build's x265 is 8-bit, so ten bits needs a hardware encoder | wiring |
+| HDR10 export | HEVC Main10 with mastering and light-level metadata | **yes** — an HDR sequence writes HEVC Main 10, BT.2100 PQ or HLG, with the mastering display and light levels in the container and the bitstream; 4K60 at **2.35× realtime**. Any sequence can be written in any of the three spaces from the Export dialog. This build's x265 is 8-bit, so ten bits needs a hardware encoder; see §8.2 | done |
 
 The fixtures will have to be generated rather than captured: every file the
 owner has is still SDR, and a test that waits for one would wait for ever.
@@ -2194,6 +2194,34 @@ clip. On screen, a PQ sequence on this SDR display shows the two patches as
 
 A nest is still rendered to SDR, so an HDR sequence nested in another loses
 its highlights; that waits for HDR preview, which needs the same thing.
+
+### 8.2 HDR export
+
+An export is written in the sequence's own space unless the Export dialog says
+otherwise, so an HDR sequence makes an HDR file without being asked: HEVC
+Main 10, Rec.2020, PQ or HLG, studio range, and for PQ a P3 mastering display
+at 1,000 nits with MaxCLL 1,000 and MaxFALL 400 -- Premiere's defaults are the
+same shape, and the light levels cannot be measured before the header is
+written without a second pass. An HDR sequence written as Rec.709 is tone
+mapped as the preview is; an SDR one written as HDR has its white at
+graphics white. HDR is HEVC only, as in Premiere; the dialog switches to it
+and says so rather than failing.
+
+Boiler, 4K60, in a PQ sequence, through NVENC:
+
+| | |
+|---|---|
+| Split across both encoders | 3.78× realtime, metadata in the container only |
+| **Unsplit, as shipped** | **2.35× realtime**, metadata in the container and the bitstream |
+
+Split-frame encoding drops the mastering display and light-level SEI from the
+bitstream, which is where most televisions read them, so a file carrying
+HDR10 metadata is encoded unsplit. Found by stripping the container from an
+export and probing the raw stream; the same NVENC writes them unsplit, and the
+stock ffmpeg's does too. 2.35× still clears the 2× target for HDR.
+
+The x265 in this build is 8-bit, so a machine without a 10-bit hardware HEVC
+encoder is told it cannot write ten bits rather than given eight.
 
 ## 9. Interface and themes
 

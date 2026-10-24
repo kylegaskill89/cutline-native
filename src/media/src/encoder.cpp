@@ -78,10 +78,11 @@ using detail::av_error_string;
 }
 
 /// Writes the mastering display and light levels into the encoder's side data,
-/// where the encoders that put them in the bitstream look, and into the
-/// stream's, where the container looks.
+/// into the stream's, where the container looks, and onto the frame every
+/// picture is sent in, which is where NVENC looks to put them in the bitstream
+/// -- a player reading only the stream would otherwise never see them.
 [[nodiscard]] bool attach_hdr_metadata(AVCodecContext* context, AVCodecParameters* stream,
-                                       const HdrMetadata& hdr) {
+                                       const HdrMetadata& hdr, AVFrame* frame = nullptr) {
   const auto ratio = [](double value, int denominator) {
     return AVRational{static_cast<int>(std::lround(value * denominator)), denominator};
   };
@@ -110,6 +111,14 @@ using detail::av_error_string;
     AVFrameSideData* b = av_frame_side_data_new(
         &context->decoded_side_data, &context->nb_decoded_side_data,
         AV_FRAME_DATA_CONTENT_LIGHT_LEVEL, sizeof light, 0);
+    if (a == nullptr || b == nullptr) return false;
+    std::memcpy(a->data, &mastering, sizeof mastering);
+    std::memcpy(b->data, &light, sizeof light);
+  }
+  if (frame != nullptr) {
+    AVFrameSideData* a =
+        av_frame_new_side_data(frame, AV_FRAME_DATA_MASTERING_DISPLAY_METADATA, sizeof mastering);
+    AVFrameSideData* b = av_frame_new_side_data(frame, AV_FRAME_DATA_CONTENT_LIGHT_LEVEL, sizeof light);
     if (a == nullptr || b == nullptr) return false;
     std::memcpy(a->data, &mastering, sizeof mastering);
     std::memcpy(b->data, &light, sizeof light);
@@ -451,7 +460,12 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
     // 3.5% larger and 0.03 dB lower in PSNR against the source. HEVC only, as
     // the encoder offers it, and at 4K and up, which is where NVIDIA's own
     // automatic choice draws the line.
-    const bool splittable = std::string_view(name).ends_with("nvenc") &&
+    //
+    // Not when the file carries HDR10 metadata: split, NVENC leaves the
+    // mastering display and light levels out of the bitstream, and a display
+    // that reads them there -- most televisions -- would never see them.
+    const bool hdr10 = settings.colour == VideoColour::Bt2100Pq && settings.hdr.has_value();
+    const bool splittable = std::string_view(name).ends_with("nvenc") && !hdr10 &&
                             settings.codec == VideoCodec::Hevc &&
                             static_cast<std::int64_t>(impl->width) * impl->height >=
                                 std::int64_t{3840} * 2160;
@@ -585,6 +599,10 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
   impl->frame->color_range = impl->encoder->color_range;
   if (int rc = av_frame_get_buffer(impl->frame.get(), 0); rc < 0) {
     return std::unexpected(std::format("cannot allocate a frame: {}", av_error_string(rc)));
+  }
+  if (settings.colour == VideoColour::Bt2100Pq && settings.hdr.has_value() &&
+      !attach_hdr_metadata(nullptr, nullptr, *settings.hdr, impl->frame.get())) {
+    return std::unexpected("out of memory");
   }
 
   // RGBA in, the encoder's format out. BT.709 to match how the frames were

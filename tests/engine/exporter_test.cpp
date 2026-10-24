@@ -19,12 +19,10 @@
 
 #include <gtest/gtest.h>
 
-extern "C" {
-#include <libavutil/frame.h>
-#include <libavutil/pixfmt.h>
-}
+#include "cutline/media/av_headers.hpp"
 
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <process.h>
@@ -461,6 +459,118 @@ TEST_F(ExportAudioTest, AudioTurnedOffLeavesNoStream) {
   const auto info = write(audible_project(), {.audio = false}, file);
   ASSERT_TRUE(info.has_value()) << info.error();
   EXPECT_TRUE(info->audio.empty());
+}
+
+
+// --------------------------------------------------------------------- HDR --
+
+/// The committed PQ patches, 203 nits on the left and 1,000 on the right,
+/// filling a canvas big enough for a hardware encoder.
+[[nodiscard]] Project pq_patches(core::WorkingColour colour) {
+  Project p;
+  p.sequence().canvas_w = 256;
+  p.sequence().canvas_h = 128;
+  p.sequence().fps = 24.0;
+  p.sequence().colour = colour;
+  Media m;
+  m.id = "pq";
+  m.path = (std::filesystem::path(CUTLINE_MEDIA_FIXTURES) / "pq.mkv").generic_string();
+  m.has_video = true;
+  m.duration = 0.25;
+  m.width = 64;
+  m.height = 32;
+  p.media = {m};
+  Track t;
+  t.id = "v1";
+  t.kind = TrackKind::Video;
+  Clip c;
+  c.id = "c";
+  c.media_id = "pq";
+  c.source_out = 0.25;
+  t.clips = {c};
+  p.sequence().tracks = {t};
+  return p;
+}
+
+/// The luma code at a point of the first frame of a 10-bit file.
+[[nodiscard]] int first_frame_luma_10(const std::string& path, int x, int y) {
+  auto decoder = media::VideoDecoder::open(path, {.preferred = media::Acceleration::Software});
+  if (!decoder) return -1;
+  const auto got = (*decoder)->next_frame();
+  if (!got || !*got) return -1;
+  const AVFrame* frame = (*decoder)->frame();
+  std::uint16_t value = 0;
+  std::memcpy(&value, frame->data[0] + static_cast<std::size_t>(y) * frame->linesize[0] + x * 2, 2);
+  return frame->format == AV_PIX_FMT_P010LE ? value >> 6 : value;
+}
+
+// An HDR sequence exports as HDR without being asked: ten bits, tagged PQ in
+// Rec.2020, the mastering display in the container, and the light the
+// sequence held still in the file.
+TEST_F(ExportTest, APqSequenceWritesAnHdr10File) {
+  const TempFile file(".mp4");
+  ExportSettings settings;
+  settings.audio = false;
+  settings.path = file.string();
+  settings.codec = media::VideoCodec::Hevc;
+  settings.quality = 0;
+  auto exported = export_project(device_, pq_patches(core::WorkingColour::Rec2100Pq), settings);
+  if (!exported && exported.error().find("no 10-bit") != std::string::npos) {
+    GTEST_SKIP() << "no 10-bit HEVC encoder on this machine";
+  }
+  ASSERT_TRUE(exported.has_value()) << exported.error();
+
+  const auto info = media::probe(file.string());
+  ASSERT_TRUE(info.has_value()) << info.error();
+  ASSERT_FALSE(info->video.empty());
+  EXPECT_EQ(info->video[0].color.bits_per_component, 10);
+  EXPECT_EQ(info->video[0].color.transfer, media::TransferCharacteristic::Smpte2084);
+  EXPECT_EQ(info->video[0].color.primaries, media::ColorPrimaries::Bt2020);
+
+  // 203 nits is PQ code 573, and it is still 573.
+  EXPECT_NEAR(first_frame_luma_10(file.string(), 40, 64), 573, 3);
+  EXPECT_NEAR(first_frame_luma_10(file.string(), 216, 64), 723, 3);
+
+  AVFormatContext* raw = nullptr;
+  ASSERT_EQ(avformat_open_input(&raw, file.string().c_str(), nullptr, nullptr), 0);
+  ASSERT_GE(avformat_find_stream_info(raw, nullptr), 0);
+  const AVCodecParameters* stream = raw->streams[0]->codecpar;
+  EXPECT_NE(av_packet_side_data_get(stream->coded_side_data, stream->nb_coded_side_data,
+                                    AV_PKT_DATA_MASTERING_DISPLAY_METADATA),
+            nullptr);
+  avformat_close_input(&raw);
+}
+
+// The same sequence written to an SDR file: tone mapped, eight bits, BT.709,
+// with 1,000 nits at white and 203 nits kept below it.
+TEST_F(ExportTest, AnHdrSequenceCanBeWrittenToAnSdrFile) {
+  const TempFile file(".mp4");
+  ExportSettings settings;
+  settings.audio = false;
+  settings.path = file.string();
+  settings.quality = 0;
+  settings.colour = core::WorkingColour::Rec709;
+  auto exported = export_project(device_, pq_patches(core::WorkingColour::Rec2100Pq), settings);
+  ASSERT_TRUE(exported.has_value()) << exported.error();
+
+  auto decoder = media::VideoDecoder::open(file.string(), {.preferred = media::Acceleration::Software});
+  ASSERT_TRUE(decoder.has_value()) << decoder.error();
+  ASSERT_TRUE((*decoder)->next_frame().value_or(false));
+  const AVFrame* frame = (*decoder)->frame();
+  const int low = frame->data[0][static_cast<std::size_t>(64) * frame->linesize[0] + 40];
+  const int high = frame->data[0][static_cast<std::size_t>(64) * frame->linesize[0] + 216];
+  EXPECT_NEAR(high, 235, 3);
+  EXPECT_LT(low, high - 8);
+}
+
+TEST_F(ExportTest, HdrIsNotWrittenAsH264) {
+  const TempFile file(".mp4");
+  ExportSettings settings;
+  settings.audio = false;
+  settings.path = file.string();
+  settings.codec = media::VideoCodec::H264;
+  EXPECT_FALSE(export_project(device_, pq_patches(core::WorkingColour::Rec2100Pq), settings)
+                   .has_value());
 }
 
 }  // namespace

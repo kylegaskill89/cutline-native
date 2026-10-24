@@ -187,6 +187,15 @@ std::expected<ExportResult, std::string> export_project(
   auto renderer = FrameRenderer::create(device, width, height);
   if (!renderer) return std::unexpected(renderer.error());
 
+  // What the file is written in, which is the sequence's unless the export
+  // says otherwise.
+  const core::WorkingColour colour = settings.colour.value_or(project.sequence().colour);
+  const bool hdr = colour != core::WorkingColour::Rec709;
+  if (hdr && settings.codec != media::VideoCodec::Hevc) {
+    return std::unexpected("HDR is written as HEVC; H.264 has no HDR here, as in Premiere");
+  }
+  const int bit_depth = settings.bit_depth != 0 ? settings.bit_depth : (hdr ? 10 : 8);
+
   media::VideoEncodeSettings encode;
   encode.width = width;
   encode.height = height;
@@ -195,6 +204,15 @@ std::expected<ExportResult, std::string> export_project(
   encode.preference = settings.preference;
   encode.bitrate = settings.bitrate;
   encode.quality = settings.quality;
+  encode.bit_depth = bit_depth;
+  encode.colour = colour == core::WorkingColour::Rec2100Pq    ? media::VideoColour::Bt2100Pq
+                  : colour == core::WorkingColour::Rec2100Hlg ? media::VideoColour::Bt2100Hlg
+                                                              : media::VideoColour::Bt709;
+  if (colour == core::WorkingColour::Rec2100Pq) {
+    encode.hdr = settings.hdr.value_or(media::HdrMetadata{});
+  }
+  const gpu::YuvLayout layout = bit_depth > 8 ? gpu::YuvLayout::P010 : gpu::YuvLayout::Nv12;
+  const auto output = static_cast<gpu::WorkingColour>(colour);
 
   // Built before the writer, because whether the file gets an audio stream at
   // all depends on whether anything is audible — and a container records its
@@ -299,7 +317,7 @@ std::expected<ExportResult, std::string> export_project(
     }
     for (const std::string& id : (*renderer)->missing_media()) missing.insert(id);
 
-    const auto slot = (*renderer)->compositor().begin_yuv_read_back(gpu::YuvLayout::Nv12);
+    const auto slot = (*renderer)->compositor().begin_yuv_read_back(layout, output);
     if (!slot) return std::unexpected(std::format("frame {}: {}", frame, slot.error()));
 
     Delivery delivery{.slot = *slot};

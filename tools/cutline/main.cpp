@@ -1083,6 +1083,8 @@ struct App {
     std::size_t rate = 0;
     std::size_t resolution = 0;
     std::size_t mixdown = 0;
+    /// 0 matches the sequence; after that, the working spaces in order.
+    std::size_t colour = 0;
     bool audio = true;
     /// Render only what is marked in and out. Ignored, and unpressable, when
     /// nothing is marked — there is no such thing as "the marked range" then,
@@ -10953,6 +10955,17 @@ void start_export(App& app) {
   settings.path = app.export_setup.path.string();
   settings.codec = app.export_setup.codec == 1 ? cutline::media::VideoCodec::Hevc
                                                : cutline::media::VideoCodec::H264;
+  if (app.export_setup.colour > 0) {
+    settings.colour =
+        static_cast<cutline::core::WorkingColour>(std::min<std::size_t>(app.export_setup.colour - 1, 2));
+  }
+  // HDR is HEVC only, as in Premiere. Chosen here rather than refused, and said
+  // so below, because an HDR sequence matched by default would otherwise fail
+  // for anybody who left the format at H.264.
+  const bool hdr = settings.colour.value_or(project.sequence().colour) !=
+                   cutline::core::WorkingColour::Rec709;
+  const bool switched = hdr && settings.codec != cutline::media::VideoCodec::Hevc;
+  if (switched) settings.codec = cutline::media::VideoCodec::Hevc;
   settings.quality = kExportQualities[app.export_setup.quality].quality;
   settings.fps = kExportRates[app.export_setup.rate].fps;
   const auto [width, height] = export_size(app, app.export_setup.resolution);
@@ -10975,7 +10988,9 @@ void start_export(App& app) {
   job.outcome.clear();
   job.running = true;
 
-  if (app.export_status != nullptr) app.export_status->set_text("Exporting...");
+  if (app.export_status != nullptr) {
+    app.export_status->set_text(switched ? "Exporting as HEVC, for HDR..." : "Exporting...");
+  }
 
   // Captured by value: the worker outlives this call, and reaching into the
   // application's settings from another thread to ask again would be reading a
@@ -11087,6 +11102,15 @@ void settle_export(App& app) {
         app != nullptr ? app->export_setup.codec : 0);
     choice.set_on_change([app](std::size_t index) {
       if (app != nullptr) app->export_setup.codec = index;
+    });
+  }
+  {
+    auto& line = row("Colour");
+    auto& choice = line.emplace<Dropdown>(
+        std::vector<std::string>{"Match sequence", "Rec. 709", "Rec. 2100 PQ", "Rec. 2100 HLG"},
+        app != nullptr ? app->export_setup.colour : 0);
+    choice.set_on_change([app](std::size_t index) {
+      if (app != nullptr) app->export_setup.colour = index;
     });
   }
   {

@@ -21,6 +21,7 @@
 #include <expected>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace cutline::engine {
@@ -32,6 +33,20 @@ struct ExportSettings {
   media::EncoderPreference preference = media::EncoderPreference::Auto;
   std::int64_t bitrate = 0;
   int quality = 20;
+
+  /// The colour space the file is written in. Unset is the sequence's own,
+  /// which is what exporting normally means: an HDR sequence writes an HDR
+  /// file. An HDR sequence written as Rec.709 is tone mapped on the way, and
+  /// an SDR one written as HDR has its white at graphics white.
+  ///
+  /// HDR is HEVC only, as it is in Premiere.
+  std::optional<core::WorkingColour> colour;
+  /// 8 or 10, or 0 for ten when the file is HDR and eight otherwise.
+  int bit_depth = 0;
+  /// The mastering display and light levels an HDR10 file carries. Unset is a
+  /// P3 display at 1,000 nits, which is what nearly every HDR grade is
+  /// mastered on. Only a PQ file carries them.
+  std::optional<media::HdrMetadata> hdr;
 
   /// Output frame rate. Zero takes the project's.
   double fps = 0.0;
