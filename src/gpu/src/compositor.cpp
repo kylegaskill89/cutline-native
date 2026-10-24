@@ -146,6 +146,8 @@ constexpr int kCodedLayout = 2;
       return 1;
     case TransferFunction::AribStdB67:
       return 2;
+    case TransferFunction::ScRgb:
+      return 3;
     default:
       return 0;
   }

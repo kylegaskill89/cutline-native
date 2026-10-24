@@ -1383,5 +1383,43 @@ TEST_F(DeepRendererTest, AnHdrSequencesSignalIsItsOwnCodeValues) {
   EXPECT_NEAR(pixel_at(*signal, 10, 16).g, pq_of(203.0) * 255.0, 2.0);
   EXPECT_NEAR(pixel_at(*signal, 54, 16).g, pq_of(1000.0) * 255.0, 2.0);
 }
+
+/// The PQ patches inside a PQ sequence, nested whole in an outer sequence of
+/// `outer` colour.
+[[nodiscard]] Project pq_nested_in(core::WorkingColour outer) {
+  Project p = in_colour(showing("pq.mkv"), outer);
+  p = core::add_sequence(std::move(p), "Inner");
+  core::Sequence& inner = p.sequences.back();
+  inner.canvas_w = 64;
+  inner.canvas_h = 32;
+  inner.colour = core::WorkingColour::Rec2100Pq;
+  inner.tracks = p.sequences[0].tracks;
+
+  core::Media entry;
+  entry.id = "nest";
+  entry.sequence_id = inner.id;
+  p.media.push_back(entry);
+  p = core::sync_nested_media(std::move(p));
+  p.sequences[0].tracks = {video_track("v1", {clip("outer", "nest", 0.0, 0.25)})};
+  return p;
+}
+
+// A nest used to be rendered to eight bits of SDR whatever was in it, so an
+// HDR sequence nested in another lost everything above SDR white.
+TEST_F(DeepRendererTest, AnHdrNestKeepsItsHighlights) {
+  ASSERT_TRUE(renderer_->render(pq_nested_in(core::WorkingColour::Rec2100Pq), 0.05).has_value());
+  EXPECT_NEAR(luma_code_in(*renderer_, gpu::WorkingColour::Rec2100Pq, 10, 16), 573, 2);
+  EXPECT_NEAR(luma_code_in(*renderer_, gpu::WorkingColour::Rec2100Pq, 54, 16), 723, 2);
+}
+
+// And in an SDR sequence it is tone mapped as any HDR source is, rather than
+// clipped: 1,000 nits at white, 203 below it.
+TEST_F(DeepRendererTest, AnHdrNestInAnSdrSequenceIsToneMapped) {
+  ASSERT_TRUE(renderer_->render(pq_nested_in(core::WorkingColour::Rec709), 0.05).has_value());
+  const auto image = renderer_->read_back();
+  ASSERT_TRUE(image.has_value()) << image.error();
+  EXPECT_GE(pixel_at(*image, 54, 16).g, 252);
+  EXPECT_LT(pixel_at(*image, 10, 16).g, pixel_at(*image, 54, 16).g - 8);
+}
 }  // namespace
 }  // namespace cutline::engine

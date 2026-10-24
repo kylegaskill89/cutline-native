@@ -2192,8 +2192,8 @@ white while 203 nits sits below it, unless tone mapping is off, when both
 clip. On screen, a PQ sequence on this SDR display shows the two patches as
 241 and 255, and a Rec.709 one with tone mapping off as 255 and 255.
 
-A nest is still rendered to SDR, so an HDR sequence nested in another loses
-its highlights; that waits for HDR preview, which needs the same thing.
+A nest is an SDR source when its sequence is SDR; an HDR one keeps its
+highlights, see §8.3.
 
 ### 8.2 HDR export
 
@@ -2253,7 +2253,12 @@ is the desktop's SDR white of 238 nits over 80 and is what puts it at the same
 brightness as every other window on the display itself. The scRGB values the
 monitors are sent are tested against arithmetic.
 
-Still to come: an HDR nest, which is rendered to SDR.
+An HDR sequence nested in another keeps its highlights: it is taken out of
+its renderer from the float scRGB copy rather than the 8-bit one, and the
+outer sequence brings it into its own space as it would any HDR source --
+kept in an HDR sequence, tone mapped in an SDR one. Tested both ways with the
+PQ patches nested: 573 and 723 come through, and in SDR 1,000 nits is white
+with 203 below it.
 
 A source can also be told what it is. Interpret Footage has Premiere's Color
 Space Override -- Rec. 709, Rec. 2100 PQ or HLG -- for footage tagged wrongly

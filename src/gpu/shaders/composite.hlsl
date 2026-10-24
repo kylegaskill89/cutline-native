@@ -50,6 +50,7 @@
 #define TRANSFER_BT709     0  // SDR; the sRGB curve stands in for BT.1886
 #define TRANSFER_SMPTE2084 1  // PQ, HDR10
 #define TRANSFER_ARIB_B67  2  // HLG
+#define TRANSFER_SCRGB     3  // linear, 1.0 at 80 nits: an HDR nest's picture
 
 // A sequence's working colour space, numbered so that each one's transfer is
 // the TRANSFER_ of the same number: a source already in it needs no work.
@@ -344,6 +345,7 @@ float3 nitsToHlgScene(float3 nits) {
 // Coded to linear light relative to graphics white, in whatever primaries the
 // values were coded in.
 float3 toRelative(float3 coded, int transfer) {
+    if (transfer == TRANSFER_SCRGB) return coded * (80.0 / params.whiteNits);
     if (transfer == TRANSFER_SMPTE2084) return linearizePq(coded) * (10000.0 / params.whiteNits);
     if (transfer == TRANSFER_ARIB_B67) return hlgSceneToNits(linearizeHlg(coded)) / params.whiteNits;
     return linearizeSrgb(coded);

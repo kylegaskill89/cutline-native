@@ -1454,6 +1454,10 @@ gpu::SceneTexture FrameRenderer::Impl::nested_picture(const core::Project& proje
   within.open = core::sequence_index(project, media.sequence_id);
   if (within.open == std::string::npos) return {};
 
+  // An HDR sequence is taken out at its real brightness, from the float copy
+  // its compositor makes beside the 8-bit one; an SDR one as it always was.
+  const bool hdr = inner->colour != core::WorkingColour::Rec709;
+  renderer.compositor().set_hdr_display(hdr ? std::optional<float>(80.0f) : std::nullopt);
   if (!renderer.render(within, at).has_value()) return {};
 
   // Whatever the nest could not find is missing from the frame just as surely
@@ -1866,6 +1870,13 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
         view.layout = gpu::PixelLayout::Scene;
         view.full_range = true;
         view.texture = gpu::SourceTexture{.resource = picture.resource};
+        // An HDR nest in scRGB instead, which this sequence brings into its
+        // own space as it would any HDR source: kept, or tone mapped.
+        if (picture.hdr_resource != nullptr) {
+          view.texture = gpu::SourceTexture{.resource = picture.hdr_resource};
+          view.transfer = gpu::TransferFunction::ScRgb;
+          view.primaries = gpu::ColourPrimaries::Bt709;
+        }
 
         d.views.push_back(view);
         layer.frame = &d.views.back();

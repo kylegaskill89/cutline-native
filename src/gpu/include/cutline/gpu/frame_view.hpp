@@ -62,6 +62,9 @@ enum class TransferFunction {
   Bt709,      ///< SDR
   Smpte2084,  ///< PQ, HDR10
   AribStdB67, ///< HLG
+  /// Linear light in Rec.709 primaries with 1.0 at 80 nits: what an HDR
+  /// sequence nested in another arrives as, so its highlights survive.
+  ScRgb,
 };
 
 struct PlaneView {
