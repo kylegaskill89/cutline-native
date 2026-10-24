@@ -556,6 +556,9 @@ struct Source {
 
 struct FrameRenderer::Impl {
   std::shared_ptr<gpu::Device> device;
+  /// The queue every compositor here records onto, its nests' included. Null
+  /// for the device's own.
+  std::shared_ptr<gpu::Queue> queue;
   std::unique_ptr<gpu::Compositor> compositor;
 
   /// Keyed by media id. Decoders are expensive to open and expensive to seek,
@@ -1000,7 +1003,7 @@ gpu::SceneTexture FrameRenderer::Impl::nested_picture(const core::Project& proje
 
   auto found = nested.find(media.sequence_id);
   if (found == nested.end()) {
-    auto made = FrameRenderer::create(device, inner->canvas_w, inner->canvas_h);
+    auto made = FrameRenderer::create(device, inner->canvas_w, inner->canvas_h, queue);
     if (!made.has_value()) return {};
     (*made)->impl_->depth = depth + 1;
     (*made)->set_use_proxies(use_proxies);
@@ -1275,13 +1278,16 @@ void FrameRenderer::set_use_proxies(bool use_proxies) { impl_->use_proxies = use
 bool FrameRenderer::use_proxies() const noexcept { return impl_->use_proxies; }
 
 std::expected<std::unique_ptr<FrameRenderer>, std::string> FrameRenderer::create(
-    std::shared_ptr<gpu::Device> device, int canvas_width, int canvas_height) {
+    std::shared_ptr<gpu::Device> device, int canvas_width, int canvas_height,
+    std::shared_ptr<gpu::Queue> queue) {
   if (!device) return std::unexpected("a frame renderer needs a device");
 
   auto impl = std::make_unique<Impl>();
   impl->device = std::move(device);
+  impl->queue = queue;
 
-  auto compositor = gpu::Compositor::create(impl->device, canvas_width, canvas_height);
+  auto compositor =
+      gpu::Compositor::create(impl->device, canvas_width, canvas_height, std::move(queue));
   if (!compositor) return std::unexpected(compositor.error());
   impl->compositor = std::move(*compositor);
 

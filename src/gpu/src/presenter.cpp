@@ -90,7 +90,7 @@ std::expected<std::unique_ptr<Presenter>, std::string> Presenter::create(
   swap_desc.SampleDesc.Count = 1;
 
   ComPtr<IDXGISwapChain1> swapchain1;
-  if (HRESULT hr = gpu.factory->CreateSwapChainForHwnd(gpu.queue.Get(), static_cast<HWND>(hwnd),
+  if (HRESULT hr = gpu.factory->CreateSwapChainForHwnd(gpu.direct->queue.Get(), static_cast<HWND>(hwnd),
                                                        &swap_desc, nullptr, nullptr, &swapchain1);
       FAILED(hr)) {
     return std::unexpected(std::format("cannot create a swapchain: {}", hresult_string(hr)));
@@ -194,7 +194,7 @@ std::expected<void, std::string> Presenter::present(Compositor& scene) {
   d.gpu().device->CreateShaderResourceView(scene.internals().scene.Get(), nullptr,
                                            d.srv_heap->GetCPUDescriptorHandleForHeapStart());
 
-  const auto opened = d.recorder.begin(d.gpu());
+  const auto opened = d.recorder.begin();
   if (!opened) return std::unexpected(opened.error());
   ID3D12GraphicsCommandList* commands = *opened;
 
@@ -238,7 +238,7 @@ std::expected<void, std::string> Presenter::present(Compositor& scene) {
                                D3D12_RESOURCE_STATE_PRESENT);
   commands->ResourceBarrier(1, &to_present);
 
-  if (auto ok = d.recorder.submit(d.gpu()); !ok) return std::unexpected(ok.error());
+  if (auto ok = d.recorder.submit(); !ok) return std::unexpected(ok.error());
 
   if (HRESULT hr = d.swapchain->Present(1, 0); FAILED(hr)) {
     return std::unexpected(std::format("present failed: {}", hresult_string(hr)));
@@ -246,7 +246,7 @@ std::expected<void, std::string> Presenter::present(Compositor& scene) {
 
   // One frame in flight, fully synchronised. Overlapping frames is a
   // throughput optimisation to make once there is something to measure.
-  d.recorder.finish(d.gpu());
+  d.recorder.finish();
   return {};
 }
 

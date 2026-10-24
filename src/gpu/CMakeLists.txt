@@ -1,6 +1,7 @@
 add_library(cutline_gpu
   src/compositor.cpp
   src/device.cpp
+  src/frame_ring.cpp
   src/presenter.cpp)
 add_library(cutline::gpu ALIAS cutline_gpu)
 

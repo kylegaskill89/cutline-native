@@ -233,8 +233,11 @@ struct SceneTexture {
 
 class Compositor {
  public:
+  /// `queue` is where its work goes; the device's own when null. A render
+  /// thread passes one of its own -- see `Device::make_queue`.
   [[nodiscard]] static std::expected<std::unique_ptr<Compositor>, std::string> create(
-      std::shared_ptr<Device> device, int canvas_width, int canvas_height);
+      std::shared_ptr<Device> device, int canvas_width, int canvas_height,
+      std::shared_ptr<Queue> queue = nullptr);
 
   Compositor(const Compositor&) = delete;
   Compositor& operator=(const Compositor&) = delete;

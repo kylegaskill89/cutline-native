@@ -24,6 +24,12 @@ struct PlaneDescription {
   }
 };
 
+/// A generation no texture in the process has had before. Shared by everything
+/// that hands a texture to a painter — every compositor, and the frame ring —
+/// because a painter's cache is keyed by address, and an address freed by one
+/// and reused by another with an old number is the stale handle it guards.
+[[nodiscard]] unsigned next_generation();
+
 struct Compositor::Impl {
   std::shared_ptr<Device> owner;
 

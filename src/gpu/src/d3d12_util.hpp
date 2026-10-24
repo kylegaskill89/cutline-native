@@ -154,6 +154,39 @@ inline constexpr UINT kSlotsPerLayer = 5;
 /// command list belongs to whoever records into it (`Recorder`, below), and
 /// what is shared is only what has to be: the queue, which Direct3D makes safe
 /// to submit to from any thread, and the fence that orders it.
+/// A command queue and the fence that counts its work.
+///
+/// One fence per queue, never one shared between queues: a fence holds the
+/// last value *completed*, and two queues finishing in a different order from
+/// the one they were numbered in would set it backwards.
+struct Queue {
+  ComPtr<ID3D12CommandQueue> queue;
+  ComPtr<ID3D12Fence> fence;
+
+  /// Signals the fence on the queue with a new value and returns it: the value
+  /// the fence will reach once everything submitted so far has finished.
+  ///
+  /// Under a lock, because the increment and the signal have to happen as one.
+  /// Two threads each taking a number and then signalling in the other order
+  /// would set the fence *backwards* -- Direct3D allows it -- and everything
+  /// waiting on the higher value would be released early.
+  [[nodiscard]] UINT64 signal();
+
+  /// Blocks until the fence reaches `value`. Safe from any thread: it waits on
+  /// an event of its own rather than one shared event two threads could arm at
+  /// once.
+  void wait_for(UINT64 value);
+
+  /// Everything submitted to this queue, finished.
+  void wait_for_idle() { wait_for(signal()); }
+
+  [[nodiscard]] static std::expected<std::shared_ptr<Queue>, std::string> create(
+      ID3D12Device* device, D3D12_COMMAND_QUEUE_PRIORITY priority);
+
+  std::mutex lock;
+  UINT64 value = 0;
+};
+
 struct Device::Impl {
   ComPtr<IDXGIFactory6> factory;
   /// Kept rather than dropped after the device is made, because Skia wants the
@@ -163,33 +196,25 @@ struct Device::Impl {
   /// happens to work.
   ComPtr<IDXGIAdapter1> adapter_object;
   ComPtr<ID3D12Device> device;
-  ComPtr<ID3D12CommandQueue> queue;
 
-  ComPtr<ID3D12Fence> fence;
+  /// The interface's queue: the windows draw on it, Skia submits to it, and
+  /// anything not given a queue of its own records onto it.
+  std::shared_ptr<Queue> direct;
+
+  /// Queues made for render threads, so that `wait_for_idle` can mean
+  /// everything. Weak, because a queue belongs to whoever asked for it.
+  std::mutex queues_lock;
+  std::vector<std::weak_ptr<Queue>> others;
 
   std::string adapter;
   bool software = false;
 
-  /// Signals the fence on the queue with a new value and returns it: the value
-  /// the fence will reach once everything submitted so far has finished.
-  ///
-  /// Under a lock, because the increment and the signal have to happen as one.
-  /// Two threads each taking a number and then signalling in the other order
-  /// would set the fence *backwards* — Direct3D allows it — and everything
-  /// waiting on the higher value would be released early.
-  [[nodiscard]] UINT64 signal();
+  [[nodiscard]] UINT64 signal() { return direct->signal(); }
+  void wait_for(UINT64 value) { direct->wait_for(value); }
 
-  /// Blocks until the fence reaches `value`. Safe from any thread: it waits on
-  /// an event of its own rather than one shared event two threads could arm at
-  /// once.
-  void wait_for(UINT64 value);
-
-  /// Everything submitted by anybody, finished. For the moments something
-  /// shared is about to be freed — a target another thread may be drawing from.
+  /// Everything submitted by anybody, on every queue, finished. For the moments
+  /// something shared is about to be freed.
   void wait_for_idle();
-
-  std::mutex signal_lock;
-  UINT64 fence_value = 0;
 };
 
 /// One command list and the allocator behind it, owned by whoever records.
@@ -203,19 +228,22 @@ struct Device::Impl {
 struct Recorder {
   ComPtr<ID3D12CommandAllocator> allocator;
   ComPtr<ID3D12GraphicsCommandList> list;
+  /// Where this records to. The device's own queue unless it was given another.
+  std::shared_ptr<Queue> target;
   /// The fence value the last submission will have reached once it is done.
   UINT64 submitted = 0;
 
-  [[nodiscard]] std::expected<void, std::string> create(Device::Impl& gpu);
+  [[nodiscard]] std::expected<void, std::string> create(Device::Impl& gpu,
+                                                        std::shared_ptr<Queue> on = nullptr);
 
   /// Waits for the last submission, then opens the list for recording.
-  [[nodiscard]] std::expected<ID3D12GraphicsCommandList*, std::string> begin(Device::Impl& gpu);
+  [[nodiscard]] std::expected<ID3D12GraphicsCommandList*, std::string> begin();
 
   /// Closes the list and submits it, without waiting.
-  [[nodiscard]] std::expected<void, std::string> submit(Device::Impl& gpu);
+  [[nodiscard]] std::expected<void, std::string> submit();
 
   /// Waits for what `submit` sent.
-  void finish(Device::Impl& gpu) { gpu.wait_for(submitted); }
+  void finish() { target->wait_for(submitted); }
 
   /// Closes a list that is being abandoned part-way, so the next `begin` can
   /// reset it. Nothing is submitted.

@@ -99,32 +99,57 @@ std::expected<ComPtr<ID3D12RootSignature>, std::string> create_root_signature(
 
 // ------------------------------------------------------------------ Device --
 
-UINT64 Device::Impl::signal() {
-  const std::lock_guard<std::mutex> held(signal_lock);
-  const UINT64 value = ++fence_value;
-  // A failed signal leaves the fence short of `value`, and a wait for it would
+UINT64 Queue::signal() {
+  const std::lock_guard<std::mutex> held(lock);
+  const UINT64 next = ++value;
+  // A failed signal leaves the fence short of `next`, and a wait for it would
   // never return. Reporting the last value instead makes such a wait a wait
   // for what was already submitted, which is the most this can still promise.
-  if (FAILED(queue->Signal(fence.Get(), value))) return value - 1;
-  return value;
+  if (FAILED(queue->Signal(fence.Get(), next))) return next - 1;
+  return next;
 }
 
-void Device::Impl::wait_for(UINT64 value) {
-  if (!fence || fence->GetCompletedValue() >= value) return;
+void Queue::wait_for(UINT64 target) {
+  if (!fence || fence->GetCompletedValue() >= target) return;
   // A null event makes the call block until the fence arrives. Each waiter
   // therefore has its own wait, where one event shared by every thread could be
   // armed by two of them for different values and released for the wrong one.
-  fence->SetEventOnCompletion(value, nullptr);
+  fence->SetEventOnCompletion(target, nullptr);
+}
+
+std::expected<std::shared_ptr<Queue>, std::string> Queue::create(
+    ID3D12Device* device, D3D12_COMMAND_QUEUE_PRIORITY priority) {
+  auto made = std::make_shared<Queue>();
+  D3D12_COMMAND_QUEUE_DESC desc{};
+  desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+  desc.Priority = priority;
+  if (HRESULT hr = device->CreateCommandQueue(&desc, IID_PPV_ARGS(&made->queue)); FAILED(hr)) {
+    return std::unexpected(std::format("cannot create a command queue: {}", hresult_string(hr)));
+  }
+  if (HRESULT hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&made->fence));
+      FAILED(hr)) {
+    return std::unexpected(std::format("cannot create a fence: {}", hresult_string(hr)));
+  }
+  return made;
 }
 
 void Device::Impl::wait_for_idle() {
-  if (!queue || !fence) return;
-  wait_for(signal());
+  if (direct) direct->wait_for_idle();
+  std::vector<std::shared_ptr<Queue>> alive;
+  {
+    const std::lock_guard<std::mutex> held(queues_lock);
+    std::erase_if(others, [](const std::weak_ptr<Queue>& q) { return q.expired(); });
+    for (const std::weak_ptr<Queue>& q : others) {
+      if (auto live = q.lock()) alive.push_back(std::move(live));
+    }
+  }
+  for (const std::shared_ptr<Queue>& q : alive) q->wait_for_idle();
 }
 
 // ---------------------------------------------------------------- Recorder --
 
-std::expected<void, std::string> Recorder::create(Device::Impl& gpu) {
+std::expected<void, std::string> Recorder::create(Device::Impl& gpu, std::shared_ptr<Queue> on) {
+  target = on != nullptr ? std::move(on) : gpu.direct;
   if (HRESULT hr = gpu.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
                                                       IID_PPV_ARGS(&allocator));
       FAILED(hr)) {
@@ -140,11 +165,11 @@ std::expected<void, std::string> Recorder::create(Device::Impl& gpu) {
   return {};
 }
 
-std::expected<ID3D12GraphicsCommandList*, std::string> Recorder::begin(Device::Impl& gpu) {
+std::expected<ID3D12GraphicsCommandList*, std::string> Recorder::begin() {
   // Resetting an allocator whose commands are still executing is undefined, and
   // in practice a removed device. Normally already finished, since `finish`
   // follows every submit; this is what makes it safe when somebody forgot.
-  gpu.wait_for(submitted);
+  target->wait_for(submitted);
   if (HRESULT hr = allocator->Reset(); FAILED(hr)) {
     return std::unexpected(std::format("cannot reset the allocator: {}", hresult_string(hr)));
   }
@@ -154,13 +179,13 @@ std::expected<ID3D12GraphicsCommandList*, std::string> Recorder::begin(Device::I
   return list.Get();
 }
 
-std::expected<void, std::string> Recorder::submit(Device::Impl& gpu) {
+std::expected<void, std::string> Recorder::submit() {
   if (HRESULT hr = list->Close(); FAILED(hr)) {
     return std::unexpected(std::format("cannot close the command list: {}", hresult_string(hr)));
   }
   ID3D12CommandList* lists[] = {list.Get()};
-  gpu.queue->ExecuteCommandLists(1, lists);
-  submitted = gpu.signal();
+  target->queue->ExecuteCommandLists(1, lists);
+  submitted = target->signal();
   return {};
 }
 
@@ -174,7 +199,15 @@ const std::string& Device::adapter_name() const noexcept { return impl_->adapter
 bool Device::is_software() const noexcept { return impl_->software; }
 void* Device::native_device() const noexcept { return impl_->device.Get(); }
 void* Device::native_adapter() const noexcept { return impl_->adapter_object.Get(); }
-void* Device::native_queue() const noexcept { return impl_->queue.Get(); }
+void* Device::native_queue() const noexcept { return impl_->direct->queue.Get(); }
+
+std::expected<std::shared_ptr<Queue>, std::string> Device::make_queue() {
+  auto made = Queue::create(impl_->device.Get(), D3D12_COMMAND_QUEUE_PRIORITY_NORMAL);
+  if (!made) return std::unexpected(made.error());
+  const std::lock_guard<std::mutex> held(impl_->queues_lock);
+  impl_->others.push_back(*made);
+  return *made;
+}
 void Device::wait_for_idle() { impl_->wait_for_idle(); }
 
 std::expected<std::shared_ptr<Device>, std::string> Device::create(DeviceOptions options) {
@@ -230,18 +263,14 @@ std::expected<std::shared_ptr<Device>, std::string> Device::create(DeviceOptions
 
   if (!impl->device) return std::unexpected("no Direct3D 12 capable adapter found");
 
-  D3D12_COMMAND_QUEUE_DESC queue_desc{};
-  queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-  if (HRESULT hr = impl->device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&impl->queue));
-      FAILED(hr)) {
-    return std::unexpected(std::format("cannot create a command queue: {}", hresult_string(hr)));
-  }
-
-  if (HRESULT hr =
-          impl->device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&impl->fence));
-      FAILED(hr)) {
-    return std::unexpected(std::format("cannot create a fence: {}", hresult_string(hr)));
-  }
+  // High, so that the interface's drawing is scheduled ahead of a render
+  // thread's compositing when both are waiting for the card. A window that
+  // answers late because a heavy frame is being drawn behind it is exactly
+  // what a render thread exists to prevent, and the thread alone cannot stop
+  // the card being busy.
+  auto direct = Queue::create(impl->device.Get(), D3D12_COMMAND_QUEUE_PRIORITY_HIGH);
+  if (!direct) return std::unexpected(direct.error());
+  impl->direct = std::move(*direct);
 
   return std::shared_ptr<Device>(new Device(std::move(impl)));
 }

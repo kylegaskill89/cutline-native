@@ -8,6 +8,7 @@
 # testability for the sake of two functions.
 add_library(cutline_app
   src/preview.cpp
+  src/preview_engine.cpp
   src/proxies.cpp
   src/thumbnails.cpp
   src/updater.cpp

@@ -73,6 +73,7 @@
 
 #if CUTLINE_HAVE_PREVIEW
 #include "cutline/app/preview.hpp"
+#include "cutline/app/preview_engine.hpp"
 #include "cutline/app/updater.hpp"
 #include "cutline/app/media_cache.hpp"
 #include "cutline/app/proxies.hpp"
@@ -413,6 +414,13 @@ constexpr UINT kUpdateChanged = WM_APP + 2;
 /// is not a rebuild: a finished proxy changes the *project*, and folding that
 /// into the media rebuild would mean a filmstrip arriving could apply one.
 constexpr UINT kProxyChanged = WM_APP + 3;
+
+/// Posted by a monitor's render thread when a picture is ready to be taken.
+///
+/// A message rather than a flag for the reason `kMediaReady` gives: the loop
+/// sleeps in `GetMessage` while nothing is playing, and a scrub's picture that
+/// waited for the next mouse move would arrive one move late, every time.
+constexpr UINT kPreviewReady = WM_APP + 4;
 
 /// Which settings window: the person's, or the cut's.
 enum class SettingsKind {
@@ -903,10 +911,15 @@ struct App {
   /// at one would seek the other's decoder away and cost a group of pictures to
   /// get back. Two decoders on one file is the cheaper of the two by a wide
   /// margin, and this is the case they exist for.
-  std::unique_ptr<cutline::app::ProjectPreview> source_preview;
-  /// Which media the renderer was built for, so it is rebuilt when that changes
-  /// rather than showing the last one at the new one's size.
-  std::string source_built_for;
+  std::unique_ptr<cutline::app::PreviewEngine> source_preview;
+  /// The one-clip sequence the source monitor shows, held so that asking for a
+  /// later moment of the same source is the same project to the engine. Built
+  /// afresh per refresh, it would be a new project every frame of playback and
+  /// nothing could ever be rendered ahead.
+  std::shared_ptr<const cutline::core::Project> source_snapshot;
+  /// What the source monitor shows when the windows cannot share the card and
+  /// the picture has to come back through memory.
+  cutline::gpu::Image source_pixels;
   double source_playhead = 0.0;
   bool source_failed = false;
 
@@ -970,8 +983,22 @@ struct App {
   /// preview to copying frames through system memory.
   bool device_failed = false;
 
-  std::unique_ptr<cutline::app::ProjectPreview> preview;
+  /// The program monitor's picture, rendered on a thread of its own so that a
+  /// seek, a cut or a heavy stack never stops the window. See `PreviewEngine`.
+  std::unique_ptr<cutline::app::PreviewEngine> preview;
   bool preview_failed = false;
+  /// What the preview was last asked for, and what it was made from. The same
+  /// document at the same scale is the same pointer, which is what lets the
+  /// engine keep the frames it has rendered ahead; and the scaled copy is made
+  /// once per change rather than once per frame, which is what it used to cost.
+  std::shared_ptr<const cutline::core::Project> preview_snapshot;
+  std::uint64_t preview_snapshot_revision = 0;
+  double preview_snapshot_scale = 0.0;
+  /// The pixels, when the windows cannot share the card.
+  cutline::gpu::Image preview_pixels;
+  /// The sources the renderer last reported missing, so the pool's offline
+  /// marks are redrawn when that changes rather than on the next edit.
+  std::vector<std::string> preview_missing;
   /// Set when the picture no longer matches the playhead or the project.
   bool preview_stale = true;
 
@@ -1161,6 +1188,8 @@ void refresh_float_titles(App& app);
 void refresh_all(App& app);
 void refresh_audio_panel(App& app);
 void invalidate_preview(App& app);
+void poll_preview(App& app);
+void poll_source(App& app);
 void invalidate_scopes(App& app);
 void refresh_scopes(App& app);
 void choose_scope(App& app, cutline::ui::ScopeKind kind);
@@ -4140,37 +4169,77 @@ void toggle_use_proxies([[maybe_unused]] App& app) {
 #endif
 }
 
-/// Lets the monitor go of anything it is holding when the next render is about
-/// to change the canvas size under it.
+/// Makes a monitor's render thread on first use, on the windows' own device so
+/// its pictures can be handed over without leaving the card.
 ///
-/// A texture handed over by `texture_at` belongs to the preview's compositor,
-/// and a canvas of a different size means a whole new compositor: the old one
-/// is destroyed and the texture with it. Whatever the monitor kept is then a
-/// pointer into freed memory, and the next paint reads it.
-///
-/// Called at every point that renders, because there is more than one and they
-/// do not agree about size — the picture is rendered at the preview scale and a
-/// snapshot at the sequence's own. The one that resizes is not always the one
-/// that will hand the monitor a replacement.
-void release_stale_picture(App& app, const cutline::core::Project& about_to_render) {
+/// Null when it cannot be made, and then `failed` is set so it is not tried on
+/// every frame. A machine with no device will not acquire one.
+[[nodiscard]] cutline::app::PreviewEngine* engine_for(
+    App& app, std::unique_ptr<cutline::app::PreviewEngine>& engine, bool& failed,
+    const char* what) {
 #if CUTLINE_HAVE_PREVIEW
-  if (app.preview == nullptr || app.monitor == nullptr) return;
-  if (app.preview->width() == about_to_render.sequence().canvas_w &&
-      app.preview->height() == about_to_render.sequence().canvas_h) {
-    return;
+  if (engine != nullptr) return engine.get();
+  if (failed) return nullptr;
+
+  std::shared_ptr<cutline::gpu::Device> device = app.device;
+  if (device == nullptr) {
+    auto made = cutline::gpu::Device::create({.allow_software = true});
+    if (!made.has_value()) {
+      failed = true;
+      complain(app.main.window, std::string(what) + " is unavailable.\n\n" + made.error());
+      return nullptr;
+    }
+    device = std::move(*made);
   }
-  app.monitor->clear_frame();
+
+  HWND window = app.main.window;
+  auto made = cutline::app::PreviewEngine::create(
+      std::move(device), {.on_ready = [window] { PostMessageW(window, kPreviewReady, 0, 0); }});
+  if (!made.has_value()) {
+    failed = true;
+    complain(app.main.window, std::string(what) + " is unavailable.\n\n" + made.error());
+    return nullptr;
+  }
+  engine = std::move(*made);
+  return engine.get();
 #else
   (void)app;
-  (void)about_to_render;
+  (void)engine;
+  (void)failed;
+  (void)what;
+  return nullptr;
 #endif
 }
 
-/// Renders the frame under the playhead into the monitor.
+/// The project the program monitor shows, as one held pointer.
 ///
-/// Deferred and coalesced like everything else: scrubbing produces a mouse
-/// move per pixel, and a read-back stalls the GPU, so rendering on each one
-/// would make the drag itself the slow part.
+/// The same document at the same preview scale is the same pointer, which is
+/// what lets the engine keep the frames it rendered ahead of the playhead. A
+/// gesture in flight is a new project on every move, because it is one.
+[[nodiscard]] std::shared_ptr<const cutline::core::Project> preview_project(App& app) {
+  const bool gesture = app.live_project.has_value();
+  if (!gesture && app.preview_snapshot != nullptr &&
+      app.preview_snapshot_revision == app.session.document_revision() &&
+      app.preview_snapshot_scale == app.preview_scale) {
+    return app.preview_snapshot;
+  }
+  const cutline::core::Project& document = app.showing();
+  app.preview_snapshot = std::make_shared<const cutline::core::Project>(
+      app.preview_scale == 1.0 ? document
+                               : cutline::render::scaled_canvas(document, app.preview_scale));
+  // A gesture's project is never reused, so it must not be mistaken for the
+  // document's at this revision once the gesture ends.
+  app.preview_snapshot_revision = gesture ? ~std::uint64_t{0} : app.session.document_revision();
+  app.preview_snapshot_scale = app.preview_scale;
+  return app.preview_snapshot;
+}
+
+/// Asks for the frame under the playhead.
+///
+/// Asks, and returns: the picture is rendered on the program monitor's own
+/// thread and arrives through `poll_preview`. It used to be rendered here, in
+/// the paint, and every seek and every cut held the window still for as long
+/// as the decode took.
 void refresh_preview(App& app) {
 #if CUTLINE_HAVE_PREVIEW
   if (app.monitor == nullptr || app.preview_failed) return;
@@ -4184,61 +4253,64 @@ void refresh_preview(App& app) {
   }
   if (!has_media) return;
 
-  // The gesture's project while one is in flight, so a transform being dragged
-  // on the picture shows in the picture without being written down. Then at
-  // whatever resolution the preview is set to, which is a copy — but only when
-  // it is set to something, and the copy costs a fraction of the render it
-  // saves.
-  const cutline::core::Project& document = app.showing();
-  const cutline::core::Project reduced =
-      app.preview_scale == 1.0 ? cutline::core::Project{}
-                               : cutline::render::scaled_canvas(document, app.preview_scale);
-  const cutline::core::Project& project = app.preview_scale == 1.0 ? document : reduced;
-  if (app.preview == nullptr) {
-    // The same device the windows draw on, when there is one. That is what
-    // lets the finished frame be handed over rather than copied.
-    auto made =
-        cutline::app::ProjectPreview::create(project.sequence().canvas_w, project.sequence().canvas_h, app.device);
-    if (!made.has_value()) {
-      // Once, and then never again: a machine with no usable device will not
-      // acquire one, and complaining on every scrub would be unbearable.
-      app.preview_failed = true;
-      complain(app.main.window, "Preview is unavailable.\n\n" + made.error());
-      return;
-    }
-    app.preview = std::move(*made);
-  }
+  cutline::app::PreviewEngine* engine =
+      engine_for(app, app.preview, app.preview_failed, "Preview");
+  if (engine == nullptr) return;
 
-  // Changing the preview quality changes the canvas, which throws the
-  // compositor away — including the texture the monitor is still showing.
-  release_stale_picture(app, project);
+  const std::shared_ptr<const cutline::core::Project> project = preview_project(app);
+  app.monitor->set_canvas_size(project->sequence().canvas_w, project->sequence().canvas_h);
 
   // Two ways to the same picture. Sharing a device means the frame is already
   // in memory the window can draw from, so it is handed over as a texture;
-  // without one the two have nothing in common and it has to go down to the
-  // CPU and back up again.
+  // without one the two have nothing in common and it has to come back through
+  // memory, which waits — that machine was always going to be the slow one.
   if (app.shares_device() && std::getenv("CUTLINE_CPU_PREVIEW") == nullptr) {
-    const auto frame = app.preview->texture_at(project, app.session.playhead());
-    if (!frame.has_value()) {
-      app.preview_failed = true;
-      complain(app.main.window, "Could not render the preview.\n\n" + frame.error());
-      return;
-    }
-    app.monitor->set_texture(*frame);
-  } else {
-    const auto frame = app.preview->frame_at(project, app.session.playhead());
-    if (!frame.has_value()) {
-      app.preview_failed = true;
-      complain(app.main.window, "Could not render the preview.\n\n" + frame.error());
-      return;
-    }
-    app.monitor->set_frame(*frame);
+    engine->want(project, app.session.playhead(), app.playing());
+    poll_preview(app);
+    return;
   }
 
-  app.monitor->set_canvas_size(project.sequence().canvas_w, project.sequence().canvas_h);
+  auto frame = engine->capture(project, app.session.playhead());
+  if (!frame.has_value()) {
+    app.preview_failed = true;
+    complain(app.main.window, "Could not render the preview.\n\n" + frame.error());
+    return;
+  }
+  app.preview_pixels = std::move(*frame);
+  app.monitor->set_frame(cutline::ui::ImageView{.pixels = app.preview_pixels.pixels.data(),
+                                                .width = app.preview_pixels.width,
+                                                .height = app.preview_pixels.height});
   mark_dirty(app);
 #else
   (void)app;
+#endif
+}
+
+/// Puts up whatever the program monitor's thread has finished that is better
+/// than what is showing. Cheap when there is nothing: one lock and a look.
+void poll_preview([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.preview == nullptr || app.monitor == nullptr || app.preview_failed) return;
+
+  auto taken = app.preview->take(app.session.playhead());
+  if (!taken.has_value()) {
+    app.preview_failed = true;
+    complain(app.main.window, "Could not render the preview.\n\n" + taken.error());
+    return;
+  }
+  if (taken->has_value()) {
+    app.monitor->set_texture(**taken);
+    mark_dirty(app);
+  }
+
+  // A source that will not open is only known once the renderer has tried,
+  // and that happens on the other thread now. The pool's offline marks follow
+  // it here rather than waiting for the next edit to redraw them.
+  std::vector<std::string> missing = app.preview->missing_media();
+  if (missing != app.preview_missing) {
+    app.preview_missing = std::move(missing);
+    refresh_browser(app);
+  }
 #endif
 }
 
@@ -4492,7 +4564,7 @@ void refresh_source([[maybe_unused]] App& app) {
       app.source_scrub->set_marks(std::nullopt, std::nullopt);
     }
     refresh_source_list(app);
-    app.source_built_for.clear();
+    app.source_snapshot.reset();
     return;
   }
 
@@ -4523,54 +4595,60 @@ void refresh_source([[maybe_unused]] App& app) {
     return;
   }
 
-  if (app.source_failed) return;
+  cutline::app::PreviewEngine* engine =
+      engine_for(app, app.source_preview, app.source_failed, "The source monitor");
+  if (engine == nullptr) return;
 
-  const cutline::core::Project project = source_project(*media);
-  // Rebuilt when the source changes, because the renderer is made at one canvas
-  // size and sources are not all the same shape.
-  if (app.source_preview == nullptr || app.source_built_for != media->id) {
-    auto made =
-        cutline::app::ProjectPreview::create(project.sequence().canvas_w, project.sequence().canvas_h, app.device);
-    if (!made.has_value()) {
-      app.source_failed = true;
-      complain(app.main.window, "The source monitor is unavailable.\n\n" + made.error());
-      return;
-    }
-    // Before the old preview is dropped. What this monitor is showing is that
-    // preview's texture, and replacing the preview frees it — see
-    // `release_stale_picture`, which is the same hazard reached the other way.
-    app.source_monitor->clear_frame();
-    app.source_preview = std::move(*made);
-    app.source_built_for = media->id;
+  // The same one-clip sequence for as long as the source is the same, so the
+  // engine can render ahead of a playing source rather than starting over at
+  // every frame. Compared by value, since the media itself can change — a
+  // relink, a conform — and that is a different picture.
+  cutline::core::Project wanted = source_project(*media);
+  if (app.source_snapshot == nullptr || *app.source_snapshot != wanted) {
+    app.source_snapshot = std::make_shared<const cutline::core::Project>(std::move(wanted));
   }
-  // And when the same preview is asked for a differently shaped sequence, which
-  // rebuilds its compositor in place.
-  if (app.source_preview->width() != project.sequence().canvas_w ||
-      app.source_preview->height() != project.sequence().canvas_h) {
-    app.source_monitor->clear_frame();
-  }
+  const cutline::core::Project& project = *app.source_snapshot;
+  app.source_monitor->set_canvas_size(project.sequence().canvas_w, project.sequence().canvas_h);
 
   const double at = std::clamp(app.source_playhead, 0.0, std::max(0.0, media->duration));
   if (app.shares_device()) {
-    const auto frame = app.source_preview->texture_at(project, at);
-    if (!frame.has_value()) {
-      app.source_failed = true;
-      complain(app.main.window, "Could not render the source.\n\n" + frame.error());
-      return;
-    }
-    app.source_monitor->set_texture(*frame);
-  } else {
-    const auto frame = app.source_preview->frame_at(project, at);
-    if (!frame.has_value()) {
-      app.source_failed = true;
-      complain(app.main.window, "Could not render the source.\n\n" + frame.error());
-      return;
-    }
-    app.source_monitor->set_frame(*frame);
+    engine->want(app.source_snapshot, at, app.source_playing());
+    poll_source(app);
+    return;
   }
 
-  app.source_monitor->set_canvas_size(project.sequence().canvas_w, project.sequence().canvas_h);
+  auto frame = engine->capture(app.source_snapshot, at);
+  if (!frame.has_value()) {
+    app.source_failed = true;
+    complain(app.main.window, "Could not render the source.\n\n" + frame.error());
+    return;
+  }
+  app.source_pixels = std::move(*frame);
+  app.source_monitor->set_frame(cutline::ui::ImageView{.pixels = app.source_pixels.pixels.data(),
+                                                       .width = app.source_pixels.width,
+                                                       .height = app.source_pixels.height});
   mark_dirty(app);
+#endif
+}
+
+/// The source monitor's `poll_preview`.
+void poll_source([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.source_preview == nullptr || app.source_monitor == nullptr || app.source_failed) return;
+  const cutline::core::Media* media = source_media_of(app);
+  if (media == nullptr || !media->has_video) return;
+
+  const double at = std::clamp(app.source_playhead, 0.0, std::max(0.0, media->duration));
+  auto taken = app.source_preview->take(at);
+  if (!taken.has_value()) {
+    app.source_failed = true;
+    complain(app.main.window, "Could not render the source.\n\n" + taken.error());
+    return;
+  }
+  if (taken->has_value()) {
+    app.source_monitor->set_texture(**taken);
+    mark_dirty(app);
+  }
 #endif
 }
 
@@ -4588,11 +4666,12 @@ void take_snapshot([[maybe_unused]] App& app) {
   }
 
   // The sequence's own size, whatever the preview is set to — a snapshot is a
-  // frame of the cut, not of the proxy of it that is being scrubbed. That
-  // means resizing the preview away from what the monitor is showing, so the
-  // monitor lets go first and the picture is rebuilt afterwards.
-  release_stale_picture(app, app.session.project());
-  const auto frame = app.preview->frame_at(app.session.project(), app.session.playhead());
+  // frame of the cut, not of the proxy of it that is being scrubbed. The
+  // monitor no longer has to let go of anything first: what it shows is a
+  // copy the render thread cannot touch, whatever size it renders at next.
+  const auto frame = app.preview->capture(
+      std::make_shared<const cutline::core::Project>(app.session.project()),
+      app.session.playhead());
   invalidate_preview(app);
   if (!frame.has_value()) {
     complain(app.main.window, "Could not render the frame.\n\n" + frame.error());
@@ -4613,7 +4692,7 @@ void take_snapshot([[maybe_unused]] App& app) {
   // use, and a 4K snapshot stored raw is thirty megabytes.
   const SkImageInfo info = SkImageInfo::Make(frame->width, frame->height,
                                              kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
-  const SkPixmap pixels(info, frame->pixels, static_cast<std::size_t>(frame->row_bytes()));
+  const SkPixmap pixels(info, frame->pixels.data(), static_cast<std::size_t>(frame->width) * 4);
 
   SkDynamicMemoryWStream out;
   if (!SkPngEncoder::Encode(&out, pixels, SkPngEncoder::Options{})) {
@@ -5631,14 +5710,7 @@ void refresh_scopes([[maybe_unused]] App& app) {
   // the compositor, then rebuild it again for the next picture. The rebuild
   // freed the texture the monitor was showing, which is a crash rather than a
   // slow scope.
-  const cutline::core::Project& document = app.showing();
-  const cutline::core::Project reduced =
-      app.preview_scale == 1.0 ? cutline::core::Project{}
-                               : cutline::render::scaled_canvas(document, app.preview_scale);
-  const cutline::core::Project& project = app.preview_scale == 1.0 ? document : reduced;
-
-  release_stale_picture(app, project);
-  const auto frame = app.preview->frame_at(project, app.session.playhead());
+  const auto frame = app.preview->capture(preview_project(app), app.session.playhead());
   if (!frame.has_value() || frame->empty()) return;
 
   const int step = std::max(1, frame->width / kScopeWidth);
@@ -5649,8 +5721,8 @@ void refresh_scopes([[maybe_unused]] App& app) {
   // `char`, and the error it produces names neither.
   std::vector<std::uint8_t> sampled(static_cast<std::size_t>(width) * height * 4);
   for (int y = 0; y < height; ++y) {
-    const std::uint8_t* row =
-        frame->pixels + static_cast<std::ptrdiff_t>(y) * step * frame->row_bytes();
+    const std::uint8_t* row = frame->pixels.data() +
+                              static_cast<std::ptrdiff_t>(y) * step * frame->width * 4;
     for (int x = 0; x < width; ++x) {
       const std::uint8_t* pixel = row + static_cast<std::ptrdiff_t>(x) * step * 4;
       const std::size_t at = (static_cast<std::size_t>(y) * width + x) * 4;
@@ -12045,6 +12117,14 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       return 0;
     }
 
+    case kPreviewReady:
+      // A monitor's thread has a picture. Taken now rather than at the next
+      // paint, because nothing may be due to paint: a scrub that has stopped
+      // moving is exactly when its last picture arrives.
+      poll_preview(*app);
+      poll_source(*app);
+      return 0;
+
     case kProxyChanged:
       // Both, and in this order: the ones that finished are attached first, so
       // the line in the corner is redrawn from what is actually left.
@@ -13140,6 +13220,12 @@ int main(int argc, char** argv) {
   // still reading things that are being torn down.
   invalidate_playback(app);
   settle_export(app);
+#if CUTLINE_HAVE_PREVIEW
+  // Both render threads, while the windows they post to and the device they
+  // draw on are certainly still there.
+  app.preview.reset();
+  app.source_preview.reset();
+#endif
 
   // Where the panels were left, so the next session opens the same way. On the
   // way out rather than on every drag: a rearrangement is a dozen small moves

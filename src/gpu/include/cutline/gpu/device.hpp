@@ -15,6 +15,10 @@
 
 namespace cutline::gpu {
 
+/// A command queue of its own, for a thread that renders. Opaque outside this
+/// library; it is handed to whatever should record onto it.
+struct Queue;
+
 struct DeviceOptions {
   /// Permit Microsoft's software rasteriser when no hardware adapter is usable.
   /// CI runners have no GPU, and a slow correct device is what lets the
@@ -87,6 +91,16 @@ class Device {
   /// signalling fences this device also uses, would break assumptions made
   /// here. There is one borrower — Skia — and it does neither.
   [[nodiscard]] void* native_queue() const noexcept;
+
+  /// A second queue on this device, for a render thread.
+  ///
+  /// Everything the interface draws goes through the device's own queue, and
+  /// the card takes work from a queue in order. A render thread submitting a
+  /// heavy frame to that same queue therefore holds the window's next paint
+  /// behind it: the interface is free on the processor and still waits on the
+  /// card. On a queue of its own the card can take the two side by side, and
+  /// the interface's queue is the higher priority.
+  [[nodiscard]] std::expected<std::shared_ptr<Queue>, std::string> make_queue();
 
   /// The Direct3D objects. Defined in an internal header: callers outside this
   /// library have no use for them, and keeping the type opaque is what stops

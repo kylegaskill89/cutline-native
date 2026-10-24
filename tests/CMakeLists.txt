@@ -129,7 +129,7 @@ if(CUTLINE_WITH_MEDIA)
 endif()
 
 if(CUTLINE_WITH_GPU)
-  add_executable(cutline_gpu_tests gpu/compositor_test.cpp)
+  add_executable(cutline_gpu_tests gpu/compositor_test.cpp gpu/frame_ring_test.cpp)
   target_link_libraries(cutline_gpu_tests PRIVATE
     cutline::gpu
     GTest::gtest
@@ -161,6 +161,7 @@ if(CUTLINE_WITH_GPU)
     # checked against a real one, so it skips unless the footage is present.
     add_executable(cutline_app_tests
       app/media_cache_test.cpp
+      app/preview_engine_test.cpp
       app/preview_test.cpp
       app/proxies_test.cpp
       app/thumbnails_test.cpp

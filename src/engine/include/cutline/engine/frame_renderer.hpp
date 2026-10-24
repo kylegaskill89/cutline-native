@@ -53,8 +53,11 @@ class FrameRenderer {
   /// Creates a renderer for a canvas of the given size. The compositor is
   /// owned here rather than passed in, because its size and the project's have
   /// to agree and there is no useful state to share with anything else.
+  /// `queue` is where the compositing goes, nests included; the device's own
+  /// when null.
   [[nodiscard]] static std::expected<std::unique_ptr<FrameRenderer>, std::string> create(
-      std::shared_ptr<gpu::Device> device, int canvas_width, int canvas_height);
+      std::shared_ptr<gpu::Device> device, int canvas_width, int canvas_height,
+      std::shared_ptr<gpu::Queue> queue = nullptr);
 
   FrameRenderer(const FrameRenderer&) = delete;
   FrameRenderer& operator=(const FrameRenderer&) = delete;

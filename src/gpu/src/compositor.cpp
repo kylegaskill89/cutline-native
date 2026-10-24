@@ -191,8 +191,6 @@ std::expected<void, std::string> Compositor::Impl::ensure_capacity(UINT layers) 
   return {};
 }
 
-namespace {
-
 /// Handed out to every compositor in the process, never restarted.
 ///
 /// A count kept per compositor is unique only while there is one of them, and
@@ -211,7 +209,6 @@ unsigned next_generation() {
   return ++counter;
 }
 
-}  // namespace
 
 std::expected<void, std::string> Compositor::Impl::create_targets() {
   // The whole queue, unlike everywhere else in here. The display target is
@@ -623,7 +620,8 @@ int Compositor::width() const noexcept { return impl_->width; }
 int Compositor::height() const noexcept { return impl_->height; }
 
 std::expected<std::unique_ptr<Compositor>, std::string> Compositor::create(
-    std::shared_ptr<Device> device, int canvas_width, int canvas_height) {
+    std::shared_ptr<Device> device, int canvas_width, int canvas_height,
+    std::shared_ptr<Queue> queue) {
   if (!device) return std::unexpected("a compositor needs a device");
 
   auto impl = std::make_unique<Impl>();
@@ -647,7 +645,9 @@ std::expected<std::unique_ptr<Compositor>, std::string> Compositor::create(
   if (!signature) return std::unexpected(signature.error());
   impl->root_signature = std::move(*signature);
 
-  if (auto ok = impl->recorder.create(impl->gpu()); !ok) return std::unexpected(ok.error());
+  if (auto ok = impl->recorder.create(impl->gpu(), std::move(queue)); !ok) {
+    return std::unexpected(ok.error());
+  }
 
   // ------------------------------------------------------------ pipelines --
 
@@ -825,7 +825,7 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     std::memcpy(mapped, corners.data(), corners.size() * sizeof(corners[0]));
     d.mask_points->Unmap(0, nullptr);
   }
-  const auto opened = d.recorder.begin(d.gpu());
+  const auto opened = d.recorder.begin();
   if (!opened) return std::unexpected(opened.error());
 
   // Uploads go in before any render target is bound, keeping the copies out of
@@ -1104,17 +1104,17 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
   // costs the CPU nothing — it is the GPU that stalls, and only until the
   // decoder has finished the picture it is about to read.
   for (const Impl::DecodedWait& wait : d.decoded_waits) {
-    if (wait.fence != nullptr) d.gpu().queue->Wait(wait.fence, wait.value);
+    if (wait.fence != nullptr) d.recorder.target->queue->Wait(wait.fence, wait.value);
   }
 
-  if (auto ok = d.recorder.submit(d.gpu()); !ok) return std::unexpected(ok.error());
+  if (auto ok = d.recorder.submit(); !ok) return std::unexpected(ok.error());
   // Waited on before returning, and not for tidiness. A hardware frame reaches
   // this through a texture its decoder shares and will overwrite with the next
   // frame, and the only thing ordering that copy after this read is that the
   // read is over by the time anybody asks for another frame. Its own fence,
   // though, not the whole queue: the interface's drawing is none of its
   // business.
-  d.recorder.finish(d.gpu());
+  d.recorder.finish();
   return {};
 }
 
@@ -1164,7 +1164,7 @@ std::expected<SceneTexture, std::string> Compositor::display_texture() {
   Impl& d = *impl_;
   if (d.display == nullptr) return std::unexpected("nothing has been composited yet");
 
-  const auto opened = d.recorder.begin(d.gpu());
+  const auto opened = d.recorder.begin();
   if (!opened) return std::unexpected(opened.error());
   ID3D12GraphicsCommandList* commands = *opened;
 
@@ -1176,8 +1176,8 @@ std::expected<SceneTexture, std::string> Compositor::display_texture() {
                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
   commands->ResourceBarrier(1, &to_resource);
 
-  if (auto ok = d.recorder.submit(d.gpu()); !ok) return std::unexpected(ok.error());
-  d.recorder.finish(d.gpu());
+  if (auto ok = d.recorder.submit(); !ok) return std::unexpected(ok.error());
+  d.recorder.finish();
 
   return SceneTexture{.resource = d.display.Get(),
                       .width = d.width,
@@ -1220,7 +1220,7 @@ std::expected<Image, std::string> Compositor::read_back() {
     d.readback_capacity = needed;
   }
 
-  const auto opened = d.recorder.begin(d.gpu());
+  const auto opened = d.recorder.begin();
   if (!opened) return std::unexpected(opened.error());
   ID3D12GraphicsCommandList* commands = *opened;
 
@@ -1251,8 +1251,8 @@ std::expected<Image, std::string> Compositor::read_back() {
                                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
   commands->ResourceBarrier(1, &display_to_resource);
 
-  if (auto ok = d.recorder.submit(d.gpu()); !ok) return std::unexpected(ok.error());
-  d.recorder.finish(d.gpu());
+  if (auto ok = d.recorder.submit(); !ok) return std::unexpected(ok.error());
+  d.recorder.finish();
 
   std::byte* mapped = nullptr;
   D3D12_RANGE everything{0, needed};
