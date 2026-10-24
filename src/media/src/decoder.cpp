@@ -23,6 +23,7 @@ extern "C" {
 #pragma warning(pop)
 #endif
 
+#include <algorithm>
 #include <format>
 #include <mutex>
 #include <utility>
@@ -113,11 +114,14 @@ AVPixelFormat pick_hardware_format(AVCodecContext* ctx, const AVPixelFormat* for
 /// A failure is not cached. It is rare, it is not much cheaper than a success,
 /// and remembering it would make one bad moment permanent for the run.
 ///
-/// Two of them, chosen by `Options::d3d11_device`, for the reason given there.
+/// Three of them, chosen by `Options::d3d11_device`, for the reason given
+/// there: a source can have three decoders at work at once.
+constexpr int kSharedDecodingDevices = 3;
+
 [[nodiscard]] AVBufferRef* shared_d3d11_device(int which) {
   static std::mutex lock;
-  static AVBufferRef* shared[2] = {nullptr, nullptr};
-  const std::size_t slot = which == 1 ? 1 : 0;
+  static AVBufferRef* shared[kSharedDecodingDevices] = {};
+  const auto slot = static_cast<std::size_t>(std::clamp(which, 0, kSharedDecodingDevices - 1));
 
   const std::lock_guard<std::mutex> held(lock);
   if (shared[slot] == nullptr) {
@@ -137,7 +141,7 @@ AVPixelFormat pick_hardware_format(AVCodecContext* ctx, const AVPixelFormat* for
 void warm_hardware_decoding() noexcept {
   // The reference handed back is the caller's; the static keeps its own, which
   // is the one that makes the next call cheap.
-  for (const int which : {0, 1}) {
+  for (int which = 0; which < kSharedDecodingDevices; ++which) {
     if (AVBufferRef* ref = shared_d3d11_device(which); ref != nullptr) av_buffer_unref(&ref);
   }
 }

@@ -111,8 +111,9 @@ class VideoDecoder {
     /// a group of pictures ahead of a cut queued two hundred frames of work in
     /// front of the serving decoder's one copy, and the frame being shown
     /// waited about thirty milliseconds for it, every frame, until the read was
-    /// done. Two decoders that must not wait for each other ask for different
-    /// devices.
+    /// done. Decoders that must not wait for each other ask for different
+    /// devices. There are three, from 0 to 2: a source's serving decoder, the
+    /// one reading the run before it, and the one reading the far side of a cut.
     int d3d11_device = 0;
   };
 
