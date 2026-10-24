@@ -23,6 +23,7 @@
 #include <print>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -218,8 +219,18 @@ int main(int argc, char** argv) {
     // the cost that was not in question.
     std::vector<double> each;
     each.reserve(static_cast<std::size_t>(frames));
+    // Paced, when asked, to the project's own rate. Flat out, the timeline goes
+    // by several times faster than it plays, and anything that works ahead of
+    // the playhead -- a cut's run decoded early -- gets a fraction of the time it
+    // has in real playback, so the stalls measured are not the ones anybody sees.
+    const bool paced = std::getenv("CUTLINE_REALTIME") != nullptr;
     const auto started = std::chrono::steady_clock::now();
     for (int i = 1; i < frames; ++i) {
+      if (paced) {
+        std::this_thread::sleep_until(
+            started + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                          std::chrono::duration<double>(std::abs(step) * (i - 1))));
+      }
       const auto began = std::chrono::steady_clock::now();
       if (auto ok = (*renderer)->render(project, time + step * i); !ok) {
         std::println(stderr, "render failed at frame {}: {}", i, ok.error());
@@ -242,6 +253,13 @@ int main(int argc, char** argv) {
     std::println("{} frames in {:.2f}s   {:.1f} fps   {:.2f} ms/frame", timed, seconds,
                  seconds > 0.0 ? timed / seconds : 0.0,
                  timed > 0 ? seconds * 1000.0 / timed : 0.0);
+
+    // Every frame's cost, in order, when asked: where the slow ones fall says
+    // more than how many there are.
+    if (const char* log = std::getenv("CUTLINE_FRAME_LOG"); log != nullptr) {
+      std::ofstream out(log);
+      for (std::size_t i = 0; i < each.size(); ++i) out << (i + 1) << ' ' << each[i] << "\n";
+    }
 
     // The spread, because an average cannot tell thirty even frames from
     // twenty-nine and a stall, and the stall is what anybody watching sees.

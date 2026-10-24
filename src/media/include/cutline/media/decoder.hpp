@@ -102,6 +102,18 @@ class VideoDecoder {
     /// one, D3D12VA creates its own and the frames would need copying across
     /// before anything could draw them.
     void* d3d12_device = nullptr;
+
+    /// Which of the shared Direct3D 11 decoding devices to use, for D3D11VA.
+    ///
+    /// A device is made once and lent to every decoder that asks for the same
+    /// one, because making one costs a sixth of a second. But a device has one
+    /// immediate context, and everything on it runs in order: a decoder reading
+    /// a group of pictures ahead of a cut queued two hundred frames of work in
+    /// front of the serving decoder's one copy, and the frame being shown
+    /// waited about thirty milliseconds for it, every frame, until the read was
+    /// done. Two decoders that must not wait for each other ask for different
+    /// devices.
+    int d3d11_device = 0;
   };
 
   /// Opens the file's primary video stream.

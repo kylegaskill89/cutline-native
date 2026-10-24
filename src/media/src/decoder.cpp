@@ -112,20 +112,24 @@ AVPixelFormat pick_hardware_format(AVCodecContext* ctx, const AVPixelFormat* for
 ///
 /// A failure is not cached. It is rare, it is not much cheaper than a success,
 /// and remembering it would make one bad moment permanent for the run.
-[[nodiscard]] AVBufferRef* shared_d3d11_device() {
+///
+/// Two of them, chosen by `Options::d3d11_device`, for the reason given there.
+[[nodiscard]] AVBufferRef* shared_d3d11_device(int which) {
   static std::mutex lock;
-  static AVBufferRef* shared = nullptr;
+  static AVBufferRef* shared[2] = {nullptr, nullptr};
+  const std::size_t slot = which == 1 ? 1 : 0;
 
   const std::lock_guard<std::mutex> held(lock);
-  if (shared == nullptr) {
-    if (av_hwdevice_ctx_create(&shared, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) < 0) {
-      shared = nullptr;
+  if (shared[slot] == nullptr) {
+    if (av_hwdevice_ctx_create(&shared[slot], AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) <
+        0) {
+      shared[slot] = nullptr;
       return nullptr;
     }
   }
   // A reference of the caller's own, so its codec context can own one end of
   // the lifetime the way it does with a context it made itself.
-  return av_buffer_ref(shared);
+  return av_buffer_ref(shared[slot]);
 }
 
 }  // namespace
@@ -133,7 +137,9 @@ AVPixelFormat pick_hardware_format(AVCodecContext* ctx, const AVPixelFormat* for
 void warm_hardware_decoding() noexcept {
   // The reference handed back is the caller's; the static keeps its own, which
   // is the one that makes the next call cheap.
-  if (AVBufferRef* ref = shared_d3d11_device(); ref != nullptr) av_buffer_unref(&ref);
+  for (const int which : {0, 1}) {
+    if (AVBufferRef* ref = shared_d3d11_device(which); ref != nullptr) av_buffer_unref(&ref);
+  }
 }
 
 std::string_view to_string(Acceleration acceleration) noexcept {
@@ -285,7 +291,7 @@ std::expected<std::unique_ptr<VideoDecoder>, std::string> VideoDecoder::open_wit
     if (device != nullptr) {
       impl->hw_device = d3d12_context_for(device);
     } else if (type == AV_HWDEVICE_TYPE_D3D11VA) {
-      impl->hw_device = shared_d3d11_device();
+      impl->hw_device = shared_d3d11_device(options.d3d11_device);
     } else if (av_hwdevice_ctx_create(&impl->hw_device, type, nullptr, nullptr, 0) < 0) {
       impl->hw_device = nullptr;
     }

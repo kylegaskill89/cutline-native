@@ -18,7 +18,12 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <atomic>
+#include <condition_variable>
 #include <deque>
+#include <functional>
+#include <mutex>
+#include <thread>
 #include <map>
 #include <span>
 #include <vector>
@@ -374,6 +379,23 @@ struct Source {
   Ahead ahead_for = Ahead::None;
   /// Where a `Jump` run begins, in source seconds. Below zero for the others.
   double jump_from = -1.0;
+  /// What the reader thread and this thread share about the run being built.
+  ///
+  /// The reader decodes the far side of a cut on a thread of its own, so the
+  /// second decoder, `pending` and everything describing them belong to
+  /// whichever of the two holds `lock`. Behind a pointer because a source is
+  /// moved into the map, and neither a mutex nor an atomic can be.
+  struct Shared {
+    std::mutex lock;
+    /// The cut the reader is working toward, in source seconds. Read without
+    /// the lock, which is the point: the serving path asks on every frame
+    /// whether it has to wait, and must not wait to find out.
+    std::atomic<double> target{-1.0};
+    /// A job for this source is queued or running. Under `lock`.
+    bool posted = false;
+  };
+  std::unique_ptr<Shared> shared = std::make_unique<Shared>();
+
   /// Turned off when the second decoder cannot be opened or stops working.
   /// Losing it is the stall coming back, not the picture: the run in hand still
   /// serves every frame it holds and the ordinary path still fetches the rest.
@@ -596,6 +618,14 @@ struct FrameRenderer::Impl {
   std::vector<gpu::FrameView> views;
 
   DecodeStats stats;
+  /// The time last rendered, so the direction of play can be told apart from
+  /// the direction a cut jumps in the source. Below zero before the first.
+  double last_time = -1.0;
+  /// Whether this frame is earlier on the timeline than the last. Decided once
+  /// per frame, before any source is asked for anything.
+  bool playing_backwards = false;
+  /// Frames the second decoder has produced. Counted from two threads.
+  std::atomic<std::uint64_t> decoded_ahead{0};
 
 #if CUTLINE_HAVE_TEXT
   /// Rasterised titles, keyed by media id.
@@ -655,11 +685,81 @@ struct FrameRenderer::Impl {
                      std::span<const render::PlannedLayer> now);
 
   /// Opens one decoder for a file, sized to lend `keeping` frames.
+  ///
+  /// `second` puts it on the other shared decoding device. A source's two
+  /// decoders are always on different ones, so that one reading ahead never
+  /// queues its work in front of the other's.
   [[nodiscard]] std::expected<std::unique_ptr<media::VideoDecoder>, std::string> open_decoder(
-      const std::string& path, int keeping);
+      const std::string& path, int keeping, bool second = false);
 
   [[nodiscard]] const AVFrame* frame_at(const core::Media& media, double time,
                                         const media::VideoDecoder** from = nullptr);
+
+  /// Decodes the far side of a cut on a thread of its own.
+  ///
+  /// A cut into the middle of a long group of pictures costs a seek and up to
+  /// the whole group: on the reference capture a keyframe every 4.17 s, so as
+  /// many as 250 frames, two to four hundred milliseconds of decoding. Done in
+  /// twelve-millisecond slices of the render thread's turns it did not fit in
+  /// the half second before a cut, and a montage of one-second clips stalled
+  /// at every one of them -- fourteen gaps over 50 ms in fifteen seconds, the
+  /// worst 842. On a thread of its own it runs at the decoder's full speed
+  /// alongside the frames still being shown.
+  ///
+  /// Declared last so it is destroyed first: it holds references to sources,
+  /// and stops before they go.
+  struct Reader {
+    std::mutex lock;
+    std::condition_variable wake;
+    std::deque<std::function<void()>> jobs;
+    bool busy = false;
+    bool stopping = false;
+    std::thread thread;
+
+    Reader() {
+      thread = std::thread([this] {
+        while (true) {
+          std::function<void()> job;
+          {
+            std::unique_lock<std::mutex> held(lock);
+            wake.wait(held, [this] { return stopping || !jobs.empty(); });
+            if (stopping) return;
+            job = std::move(jobs.front());
+            jobs.pop_front();
+            busy = true;
+          }
+          job();
+          {
+            const std::lock_guard<std::mutex> held(lock);
+            busy = false;
+          }
+          wake.notify_all();
+        }
+      });
+    }
+    ~Reader() {
+      {
+        const std::lock_guard<std::mutex> held(lock);
+        stopping = true;
+        jobs.clear();
+      }
+      wake.notify_all();
+      if (thread.joinable()) thread.join();
+    }
+    void post(std::function<void()> job) {
+      {
+        const std::lock_guard<std::mutex> held(lock);
+        jobs.push_back(std::move(job));
+      }
+      wake.notify_all();
+    }
+    /// Everything queued, finished. Called before any source is let go of.
+    void drain() {
+      std::unique_lock<std::mutex> held(lock);
+      wake.wait(held, [this] { return jobs.empty() && !busy; });
+    }
+  };
+  Reader reader;
 };
 
 #if CUTLINE_HAVE_TEXT
@@ -722,7 +822,7 @@ core::Size FrameRenderer::Impl::measure(const core::Media&) { return {}; }
 /// Software is still the floor, and `open` falls to it on its own when neither
 /// works.
 std::expected<std::unique_ptr<VideoDecoder>, std::string> FrameRenderer::Impl::open_decoder(
-    const std::string& path, int keeping) {
+    const std::string& path, int keeping, bool second) {
   return VideoDecoder::open(
       path, {.preferred = media::Acceleration::D3D11Va,
              // Surfaces for the run this decoder is asked to keep. Without them
@@ -734,7 +834,8 @@ std::expected<std::unique_ptr<VideoDecoder>, std::string> FrameRenderer::Impl::o
              // beside it sit the held last frame and whatever the decoder has
              // in flight; sized at exactly a run the pool empties again.
              .extra_frames = keeping + 6,
-             .d3d12_device = device != nullptr ? device->native_device() : nullptr});
+             .d3d12_device = device != nullptr ? device->native_device() : nullptr,
+             .d3d11_device = second ? 1 : 0});
 }
 
 /// Decodes a little of the run *before* the one in hand, so that run is ready
@@ -769,7 +870,7 @@ void FrameRenderer::Impl::decode_ahead(Source& source, bool budgeted) {
   // The reading decoder, opened the first time one is wanted. A project that is
   // never played backwards never pays for it.
   if (source.ahead == nullptr) {
-    auto opened = open_decoder(source.path, static_cast<int>(source.keep));
+    auto opened = open_decoder(source.path, static_cast<int>(source.keep), true);
     if (!opened.has_value()) {
       // Not fatal. Without a second decoder the run in hand still serves every
       // frame it holds, and the ordinary path still fetches the rest — it is
@@ -840,7 +941,7 @@ void FrameRenderer::Impl::decode_ahead(Source& source, bool budgeted) {
       if (copy && av_frame_ref(copy.get(), source.ahead->frame()) >= 0) {
         source.pending.push_back(
             Source::Recent{.at = source.ahead_position, .frame = std::move(copy)});
-        ++stats.frames_decoded_ahead;
+        ++decoded_ahead;
         source.trim();
       }
       continue;
@@ -863,7 +964,7 @@ void FrameRenderer::Impl::prefetch_jump(Source& source, double target, bool budg
   if (same_cut && !source.extending) return;
 
   if (source.ahead == nullptr) {
-    auto opened = open_decoder(source.path, static_cast<int>(source.keep));
+    auto opened = open_decoder(source.path, static_cast<int>(source.keep), true);
     if (!opened.has_value()) {
       source.keep_ahead = false;
       return;
@@ -933,7 +1034,7 @@ void FrameRenderer::Impl::prefetch_jump(Source& source, double target, bool budg
     if (copy && av_frame_ref(copy.get(), source.ahead->frame()) >= 0) {
       source.pending.push_back(
           Source::Recent{.at = source.ahead_position, .frame = std::move(copy)});
-      ++stats.frames_decoded_ahead;
+      ++decoded_ahead;
     }
     if (source.pending.size() >= wanted) source.extending = false;
   }
@@ -978,7 +1079,10 @@ void FrameRenderer::Impl::prefetch_cuts(const core::Project& project, double t,
       // else — and it is a *seek* only when it is further than decoding
       // forwards would have covered anyway.
       const double travelled = wanted - showing->source_time * core::conform_speed(*layer.media);
-      if (travelled <= kCutLookahead + kDecodeForwardWindow) continue;
+      // A range, not a ceiling: a cut back into the same source travels a
+      // negative distance, and "no further than ordinary progress" let every
+      // one of those through as if nothing were happening.
+      if (travelled >= -kFrameEpsilon && travelled <= kCutLookahead + kDecodeForwardWindow) continue;
     } else if (source.position >= 0.0) {
       // Not on screen, so its decoder is parked wherever it was left.
       if (wanted > source.position - kFrameEpsilon &&
@@ -987,10 +1091,28 @@ void FrameRenderer::Impl::prefetch_cuts(const core::Project& project, double t,
       }
     }
 
-    // Backwards is the reverse prefetch's business, and it has its own run.
-    if (source.position >= 0.0 && wanted < source.position) continue;
+    // Not skipped when it is *earlier* in the source, which it used to be on the
+    // reasoning that backwards is the reverse prefetch's business. Backwards in
+    // the *timeline* is; backwards in the source is just a cut. A montage cut
+    // from one long capture jumps back into it about as often as forwards, and
+    // every one of those went to the ordinary path and paid its whole seek on
+    // the frame of the cut: eight of fifteen cuts, measured. The direction of
+    // play is checked where this is called.
 
-    prefetch_jump(source, wanted);
+    // To the reader, unless it already has this source in hand: the reader is
+    // the one holding the lock while it works, and waiting here would put the
+    // decode straight back on this thread.
+    std::unique_lock<std::mutex> held(source.shared->lock, std::try_to_lock);
+    if (!held.owns_lock() || source.shared->posted) continue;
+    source.shared->posted = true;
+    source.shared->target.store(wanted);
+    held.unlock();
+    Source* raw = &source;
+    reader.post([this, raw, wanted] {
+      const std::lock_guard<std::mutex> working(raw->shared->lock);
+      raw->shared->posted = false;
+      prefetch_jump(*raw, wanted, false);
+    });
   }
 }
 
@@ -1052,6 +1174,7 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // right one — and left to the caller it would be a rule somebody has to
   // remember, which is the same rule that would be forgotten.
   if (found != sources.end() && found->second.path != wanted) {
+    reader.drain();
     sources.erase(found);
     found = sources.end();
   }
@@ -1117,9 +1240,15 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
 
   // Which way we are travelling, read off the requests themselves. Only reverse
   // wants a prefetch: playing forwards never leaves the run behind it.
+  //
+  // The *timeline's* direction, not the source's. A cut back into the same
+  // capture moves the source time backwards while the sequence plays forwards,
+  // and reading direction off the source sent every such cut into the reverse
+  // prefetch: thirty-six milliseconds decoding a run before a moment nobody was
+  // going backwards from, on the frame of the cut.
   const double previous = source.last_request;
   source.last_request = time;
-  const bool reversing = previous >= 0.0 && time < previous - kFrameEpsilon;
+  const bool reversing = playing_backwards && previous >= 0.0 && time < previous - kFrameEpsilon;
 
   // The playhead has left the run in hand. If a prefetch was on its way to
   // exactly this frame, finish it rather than throwing it away — the work is
@@ -1127,7 +1256,21 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // very same group of pictures a second time. That was the whole of why an
   // early version measured *worse* than no prefetch: 556 frames decoded ahead,
   // two runs of it ever used, and every abandoned one paid for twice.
-  if (source.remembered(time) == nullptr && source.extending) {
+  // The second decoder and its run are the reader's while it works on them.
+  // Taken without waiting, except in the one case waiting is right: the cut it
+  // is building has arrived, and finishing the run beats starting over.
+  std::unique_lock<std::mutex> held(source.shared->lock, std::try_to_lock);
+  //
+  // "Arrived" means inside the run being built, not merely past its start: the
+  // times are the source's, and a cut back into the same capture has a target
+  // *behind* where this decoder is reading. Testing only the start made every
+  // frame after posting such a cut wait for the reader's whole job.
+  if (!held.owns_lock() && source.remembered(time) == nullptr) {
+    const double cut = source.shared->target.load();
+    if (cut >= 0.0 && time >= cut - kFrameEpsilon && time < cut + kSameCut) held.lock();
+  }
+
+  if (held.owns_lock() && source.remembered(time) == nullptr && source.extending) {
     if (source.ahead_for == Source::Ahead::Jump) {
       // The cut arrived before the run behind it was ready. Finishing it
       // unbudgeted still beats abandoning it: the seek is already paid for and
@@ -1142,7 +1285,7 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // The run decoded ahead of need has caught up with the playhead. Taking it
   // whole rather than merging: the two were decoded to meet exactly, and this
   // is the moment the stall used to happen.
-  if (source.remembered(time) == nullptr && source.pending_covers(time)) {
+  if (held.owns_lock() && source.remembered(time) == nullptr && source.pending_covers(time)) {
     source.recent = std::move(source.pending);
     // And the decoders change places with the runs, because a frame belongs to
     // the pool it was lent from: these were decoded by the reading decoder, and
@@ -1162,7 +1305,7 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // nothing where decoding it again costs a seek and a whole GOP.
   if (const AVFrame* known = source.remembered(time); known != nullptr) {
     ++stats.frames_remembered;
-    if (reversing) decode_ahead(source);
+    if (reversing && held.owns_lock()) decode_ahead(source);
     if (from != nullptr) *from = source.decoder.get();
     return known;
   }
@@ -1176,7 +1319,7 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // that clip comes through here. Dropping it on each one would mean it never
   // survived to be used — which is what the reverse prefetch's own history says
   // happens when a part-built run is abandoned and paid for twice.
-  if (source.ahead_for != Source::Ahead::Jump) source.forget_pending();
+  if (held.owns_lock() && source.ahead_for != Source::Ahead::Jump) source.forget_pending();
 
   // Decoding stops at the first frame whose timestamp reaches the request, so
   // the decoder usually sits a little *ahead* of where it was asked for — up to
@@ -1270,9 +1413,16 @@ const std::vector<std::string>& FrameRenderer::missing_media() const noexcept {
   return impl_->missing;
 }
 
-FrameRenderer::DecodeStats FrameRenderer::decode_stats() const noexcept { return impl_->stats; }
+FrameRenderer::DecodeStats FrameRenderer::decode_stats() const noexcept {
+  DecodeStats out = impl_->stats;
+  out.frames_decoded_ahead = impl_->decoded_ahead.load();
+  return out;
+}
 
-void FrameRenderer::release_sources() { impl_->sources.clear(); }
+void FrameRenderer::release_sources() {
+  impl_->reader.drain();
+  impl_->sources.clear();
+}
 
 void FrameRenderer::set_use_proxies(bool use_proxies) { impl_->use_proxies = use_proxies; }
 bool FrameRenderer::use_proxies() const noexcept { return impl_->use_proxies; }
@@ -1305,6 +1455,8 @@ std::expected<gpu::Image, std::string> FrameRenderer::read_back() {
 std::expected<void, std::string> FrameRenderer::render(const core::Project& project, double t) {
   Impl& d = *impl_;
   d.missing.clear();
+  d.playing_backwards = d.last_time >= 0.0 && t < d.last_time - kFrameEpsilon;
+  d.last_time = t;
 
   if (auto ok = d.compositor->resize(project.sequence().canvas_w, project.sequence().canvas_h); !ok) {
     return std::unexpected(ok.error());
@@ -1447,7 +1599,10 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
   //
   // After compositing rather than before, so a frame that is due is never
   // waiting behind work for a frame that is not.
-  d.prefetch_cuts(project, t, planned);
+  //
+  // Only while the timeline is going forwards. Backwards has its own run, and a
+  // cut "ahead" of a playhead going the other way is one it will never reach.
+  if (!d.playing_backwards) d.prefetch_cuts(project, t, planned);
 
   return composed;
 }
