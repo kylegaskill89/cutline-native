@@ -949,6 +949,7 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
         static_cast<float>(layer.quad.rotation_deg * std::numbers::pi / 180.0);
 
     ShaderParams params{};
+    d.colour_params(params, d.colour.working);
     params.canvas[0] = static_cast<float>(d.width);
     params.canvas[1] = static_cast<float>(d.height);
     params.center[0] = layer.quad.center_x;
@@ -980,6 +981,7 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     if (layer.frame != nullptr) {
       params.color_space = shader_space(layer.frame->space);
       params.transfer = shader_transfer(layer.frame->transfer);
+      params.source_primaries = layer.frame->primaries == ColourPrimaries::Bt2020 ? 1 : 0;
       params.full_range = layer.frame->full_range ? 1 : 0;
       params.bits = static_cast<float>(std::clamp(layer.frame->bits, 8, 16));
       switch (layer.frame->layout) {
@@ -1148,7 +1150,10 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
 
       // The scratch holds coded values with straight alpha, and the composite
       // draw is what applies the transfer function and positions the quad.
+      // Already in the sequence's own space, so nothing converts it again.
       params.layout = kCodedLayout;
+      params.transfer = static_cast<int>(d.colour.working);
+      params.source_primaries = d.colour.working == WorkingColour::Rec709 ? 0 : 1;
     }
 
     ID3D12PipelineState* pipeline =
@@ -1220,6 +1225,8 @@ void record_display_pass(Compositor::Impl& d, ID3D12GraphicsCommandList* command
   ShaderParams params{};
   params.canvas[0] = static_cast<float>(d.width);
   params.canvas[1] = static_cast<float>(d.height);
+  // The display is SDR for now: an HDR sequence is tone mapped onto it.
+  d.colour_params(params, WorkingColour::Rec709);
   commands->SetPipelineState(d.pipeline_present.Get());
   commands->SetGraphicsRootDescriptorTable(0, d.srv_gpu(d.present_slot()));
   commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &params, 0);
@@ -1384,7 +1391,12 @@ std::expected<void, std::string> Compositor::Impl::ensure_yuv_targets(YuvLayout 
   return {};
 }
 
-std::expected<std::size_t, std::string> Compositor::begin_yuv_read_back(YuvLayout layout) {
+void Compositor::set_colour(const ColourSettings& colour) noexcept { impl_->colour = colour; }
+
+const ColourSettings& Compositor::colour() const noexcept { return impl_->colour; }
+
+std::expected<std::size_t, std::string> Compositor::begin_yuv_read_back(YuvLayout layout,
+                                                                          WorkingColour output) {
   Impl& d = *impl_;
   // Both planes subsample by two, so an odd edge has no chroma to go with it.
   if (d.width % 2 != 0 || d.height % 2 != 0) {
@@ -1460,6 +1472,7 @@ std::expected<std::size_t, std::string> Compositor::begin_yuv_read_back(YuvLayou
   params.canvas[0] = static_cast<float>(d.width);
   params.canvas[1] = static_cast<float>(d.height);
   params.layout = layout == YuvLayout::P010 ? 10 : 8;
+  d.colour_params(params, output);
   commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &params, 0);
 
   const bool deep = layout == YuvLayout::P010;

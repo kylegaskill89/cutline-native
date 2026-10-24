@@ -147,6 +147,28 @@ TEST(Serialize, RoundTripsAnEmptyProject) {
   EXPECT_EQ(loaded->project, original);
 }
 
+TEST(Serialize, ASequenceKeepsItsColourManagement) {
+  Project original = empty_project();
+  original.sequence().colour = WorkingColour::Rec2100Hlg;
+  original.sequence().graphics_white = 300.0;
+  original.sequence().tone_map = false;
+
+  const auto loaded = from_json(to_json(original));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_EQ(loaded->project.sequence().colour, WorkingColour::Rec2100Hlg);
+  EXPECT_EQ(loaded->project.sequence().graphics_white, 300.0);
+  EXPECT_FALSE(loaded->project.sequence().tone_map);
+}
+
+// An SDR sequence at the defaults is written exactly as before there was colour
+// management, so a project file does not change for anybody not using it.
+TEST(Serialize, AnSdrSequenceWritesNothingAboutColour) {
+  const std::string text = to_json(empty_project());
+  EXPECT_EQ(text.find("colour"), std::string::npos);
+  EXPECT_EQ(text.find("graphics_white"), std::string::npos);
+  EXPECT_EQ(text.find("tone_map"), std::string::npos);
+}
+
 TEST(Serialize, WritesTheSchemaVersion) {
   const std::string text = to_json(empty_project());
   EXPECT_NE(text.find("\"version\""), std::string::npos);

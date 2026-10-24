@@ -140,6 +140,13 @@ inline constexpr double kMaxFps = 240.0;
 /// to number its frames the same way there.
 [[nodiscard]] Project set_drop_frame(Project p, bool drop_frame);
 
+/// The sequence's colour management: its working space, where graphics white
+/// sits in an HDR one, clamped to what a display could mean by it, and whether
+/// HDR footage in an SDR one is tone mapped.
+[[nodiscard]] Project set_working_colour(Project p, WorkingColour colour);
+[[nodiscard]] Project set_graphics_white(Project p, double nits);
+[[nodiscard]] Project set_tone_map(Project p, bool tone_map);
+
 /// Makes an **empty** sequence take its shape and rate from a media.
 ///
 /// A sequence starts 1080p at 30, because it has to start as something. Drop

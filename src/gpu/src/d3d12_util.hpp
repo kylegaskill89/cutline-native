@@ -103,16 +103,21 @@ struct alignas(16) ShaderParams {
   float anti_flicker = 0.0f;
   /// How many bits a code has, which decides what studio range means.
   float bits = 8.0f;
-  /// The fourth slot of the last row, declared rather than left to the
-  /// compiler.
+  /// The source's primaries: 0 Rec.709, 1 Rec.2020.
+  int source_primaries = 0;
+
+  /// Colour management. The sequence's working space (0 Rec.709, 1 PQ, 2 HLG,
+  /// numbered as `transfer` is), its graphics white in nits, whether HDR
+  /// footage is tone mapped into an SDR sequence, and the space a present or
+  /// an encode writes out to.
   ///
-  /// Without it this struct is fifty-one floats and `alignas(16)` quietly pads
-  /// it to fifty-two — so the assert below passed by describing something the
-  /// compiler decided rather than something anybody wrote, and the two sides of
-  /// the root signature agreed by coincidence. MSVC says so as C4324, which is
-  /// how this was found. Named, it is fifty-two floats on both sides and no
-  /// padding is inserted anywhere.
-  float row_pad = 0.0f;
+  /// Every row is full, which matters: a struct whose last row is short is
+  /// padded by `alignas(16)`, and the assert below would then describe what the
+  /// compiler decided rather than what anybody wrote. MSVC says so as C4324.
+  int working = 0;
+  float white_nits = 203.0f;
+  float tone_map = 1.0f;
+  int output = 0;
 };
 
 /// The most of the scratch a margin may take, per side.
@@ -122,7 +127,7 @@ struct alignas(16) ShaderParams {
 /// each side leaves the layer three fifths of the scratch, which is the point
 /// where the softness it buys stops being worth the sharpness it costs.
 inline constexpr float kMaxScratchMargin = 0.2f;
-static_assert(sizeof(ShaderParams) == 52 * sizeof(float),
+static_assert(sizeof(ShaderParams) == 56 * sizeof(float),
               "root constants must match the shader's cbuffer exactly");
 
 inline constexpr UINT kShaderParamCount = sizeof(ShaderParams) / sizeof(float);

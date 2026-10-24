@@ -540,6 +540,21 @@ Project set_drop_frame(Project p, bool drop_frame) {
   return p;
 }
 
+Project set_working_colour(Project p, WorkingColour colour) {
+  p.sequence().colour = colour;
+  return p;
+}
+
+Project set_graphics_white(Project p, double nits) {
+  p.sequence().graphics_white = std::clamp(nits, 1.0, 10000.0);
+  return p;
+}
+
+Project set_tone_map(Project p, bool tone_map) {
+  p.sequence().tone_map = tone_map;
+  return p;
+}
+
 Project set_media_label(Project p, std::string_view media_id, std::string color) {
   if (Media* media = find_media(p, media_id); media != nullptr) {
     media->label_color = std::move(color);

@@ -51,6 +51,12 @@ enum class ColorSpace {
   Bt2020,
 };
 
+/// Which red, green and blue the values are amounts of.
+enum class ColourPrimaries {
+  Bt709,  ///< also standing in for BT.601's, which differ from it by little
+  Bt2020,
+};
+
 /// How coded values map to light.
 enum class TransferFunction {
   Bt709,      ///< SDR
@@ -97,6 +103,7 @@ struct FrameView {
   PixelLayout layout = PixelLayout::Nv12;
   ColorSpace space = ColorSpace::Bt709;
   TransferFunction transfer = TransferFunction::Bt709;
+  ColourPrimaries primaries = ColourPrimaries::Bt709;
   /// Studio-range video leaves headroom and footroom; expanding it is what
   /// keeps blacks from crushing and highlights from clipping.
   bool full_range = false;

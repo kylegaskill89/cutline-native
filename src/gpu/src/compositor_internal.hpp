@@ -83,6 +83,15 @@ struct Compositor::Impl {
   ComPtr<ID3D12Resource> yuv_chroma;
   YuvLayout yuv_layout = YuvLayout::Nv12;
 
+  ColourSettings colour;
+  /// The colour fields every draw carries, from `colour`.
+  void colour_params(ShaderParams& params, WorkingColour output) const noexcept {
+    params.working = static_cast<int>(colour.working);
+    params.white_nits = std::max(colour.graphics_white_nits, 1.0f);
+    params.tone_map = colour.tone_map ? 1.0f : 0.0f;
+    params.output = static_cast<int>(output);
+  }
+
   /// Where converted frames come back to, one buffer per frame in flight.
   struct YuvSlot {
     ComPtr<ID3D12Resource> buffer;

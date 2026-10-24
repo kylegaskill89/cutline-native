@@ -4970,6 +4970,48 @@ void build_sequence_page(App& app, Box& into) {
     // thing anybody needs told is that no footage is harmed by this.
     into.emplace<Label>("Skips numbers, never frames.").set_small(true);
   }
+
+  // Premiere's sequence colour management, the same three settings.
+  into.emplace<Label>("Colour").set_bold(true);
+  const cutline::core::Sequence& sequence = app.session.project().sequence();
+
+  auto& space = into.emplace<Box>(Axis::Horizontal);
+  space.emplace<Label>("Working space").set_small(true);
+  space.emplace<Spacer>();
+  auto& working = space.emplace<Dropdown>(
+      std::vector<std::string>{"Rec. 709", "Rec. 2100 PQ", "Rec. 2100 HLG"},
+      static_cast<std::size_t>(sequence.colour));
+  working.set_on_change([&app](std::size_t index) {
+    app.session.apply(cutline::core::set_working_colour(
+        app.session.project(), static_cast<cutline::core::WorkingColour>(std::min<std::size_t>(index, 2))));
+    refresh_all(app);
+  });
+
+  // The three Premiere offers. Anything else a project file holds is shown as
+  // itself rather than snapped to the nearest.
+  constexpr std::array<double, 3> kWhites{100.0, cutline::core::kDefaultGraphicsWhite, 300.0};
+  std::vector<std::string> whites;
+  std::size_t chosen_white = kWhites.size();
+  for (std::size_t i = 0; i < kWhites.size(); ++i) {
+    whites.push_back(std::format("{:.0f} nits", kWhites[i]));
+    if (std::abs(sequence.graphics_white - kWhites[i]) < 0.5) chosen_white = i;
+  }
+  if (chosen_white == kWhites.size()) whites.push_back(std::format("{:.0f} nits", sequence.graphics_white));
+  auto& white_row = into.emplace<Box>(Axis::Horizontal);
+  white_row.emplace<Label>("HDR graphics white").set_small(true);
+  white_row.emplace<Spacer>();
+  auto& white = white_row.emplace<Dropdown>(std::move(whites), chosen_white);
+  white.set_on_change([&app, kWhites](std::size_t index) {
+    if (index >= kWhites.size()) return;
+    app.session.apply(cutline::core::set_graphics_white(app.session.project(), kWhites[index]));
+    refresh_all(app);
+  });
+
+  auto& tone = into.emplace<Checkbox>("Auto tone map media", sequence.tone_map);
+  tone.set_on_change([&app](bool on) {
+    app.session.apply(cutline::core::set_tone_map(app.session.project(), on));
+    refresh_all(app);
+  });
 }
 
 /// The theme. Premiere's Preferences ▸ Appearance.

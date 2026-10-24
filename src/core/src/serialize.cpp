@@ -35,6 +35,12 @@ NLOHMANN_JSON_SERIALIZE_ENUM(AutomationMode, {
 // None first, so a role written by something newer reads as an unlabelled clip
 // rather than as a wrong label — being told nothing is better than being told
 // that the music is dialogue.
+NLOHMANN_JSON_SERIALIZE_ENUM(WorkingColour, {
+                                                {WorkingColour::Rec709, "rec709"},
+                                                {WorkingColour::Rec2100Pq, "rec2100_pq"},
+                                                {WorkingColour::Rec2100Hlg, "rec2100_hlg"},
+                                            })
+
 NLOHMANN_JSON_SERIALIZE_ENUM(AudioRole, {
                                             {AudioRole::None, "none"},
                                             {AudioRole::Dialogue, "dialogue"},
@@ -364,6 +370,11 @@ json write(const Sequence& s) {
   if (!s.name.empty()) j["name"] = s.name;
   put_unless_empty(j, "master_gain_keyframes", write(s.master_gain_keyframes));
   if (s.master_automation != AutomationMode::Read) j["master_automation"] = s.master_automation;
+  // Only when they say something, so an SDR sequence is written as it always
+  // was.
+  if (s.colour != WorkingColour::Rec709) j["colour"] = s.colour;
+  if (s.graphics_white != kDefaultGraphicsWhite) j["graphics_white"] = s.graphics_white;
+  if (!s.tone_map) j["tone_map"] = false;
 
   json master_effects = json::array();
   for (const AudioClipEffect& e : s.master_effects) master_effects.push_back(write(e));
@@ -717,6 +728,9 @@ Sequence read_sequence(const json& j) {
   s.fps = read_or(j, "fps", s.fps);
   s.master_gain = read_or(j, "master_gain", s.master_gain);
   s.drop_frame = read_or(j, "drop_frame", s.drop_frame);
+  s.colour = read_or(j, "colour", WorkingColour::Rec709);
+  s.graphics_white = std::clamp(read_or(j, "graphics_white", kDefaultGraphicsWhite), 1.0, 10000.0);
+  s.tone_map = read_or(j, "tone_map", true);
 
   const auto master_keys = j.find("master_gain_keyframes");
   if (master_keys != j.end()) s.master_gain_keyframes = read_keyframes(*master_keys);

@@ -2151,16 +2151,49 @@ float — so this is new curves, a tone mapper and plumbing, not a restructure.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| 10-bit decode | P010 kept at 10 bits | **none** — frames are described as NV12 or YUV 4:2:0 8-bit | wiring |
-| PQ and HLG transfer curves | yes | **declared, not implemented** — `TransferFunction::Smpte2084` and `AribStdB67` are read off the frame and nothing honours them | machinery |
-| Rec.2020 primaries | yes | the matrix is chosen; the primaries conversion is not | machinery |
-| A sequence colour space | Rec.709, Rec.2100 PQ, Rec.2100 HLG | **none** — every sequence is Rec.709 | wiring |
+| 10-bit decode | P010 kept at 10 bits | **yes** — P010 from the card's decoder and from memory, and planar 10- and 12-bit, sampled at sixteen bits with studio range expanded in codes; a code eight bits cannot hold comes back exact; see §8.1 | done |
+| PQ and HLG transfer curves | yes | **yes** — both ways, with HLG's system gamma at a nominal 1,000 nits, so its reference white lands on 203 nits | done |
+| Rec.2020 primaries | yes | **yes** — converted to and from Rec.709 in linear light | done |
+| A sequence colour space | Rec.709, Rec.2100 PQ, Rec.2100 HLG | **yes** — the three, with HDR graphics white (100, 203, 300 nits) and Auto Tone Map Media, in Project Settings and in the file; see §8.1 | done |
 | HDR preview | on an HDR display, tone-mapped otherwise | **none** — an SDR swapchain | machinery |
 | Scopes in nits | HDR ranges on the waveform | **none** | control |
-| HDR10 export | HEVC Main10 with mastering and light-level metadata | **none** — and impossible until §7's export stops reading back 8 bits | machinery |
+| HDR10 export | HEVC Main10 with mastering and light-level metadata | **half** — the writer takes P010 and tags BT.2100 PQ or HLG with the metadata in the container, through NVENC; the exporter does not yet ask it to. This build's x265 is 8-bit, so ten bits needs a hardware encoder | wiring |
 
 The fixtures will have to be generated rather than captured: every file the
 owner has is still SDR, and a test that waits for one would wait for ever.
+
+### 8.1 Colour management
+
+As Premiere does it. A sequence has a working space -- Rec.709, Rec.2100 PQ
+or Rec.2100 HLG -- and the scene is linear light in its primaries with 1.0 at
+graphics white: SDR white in Rec.709, and 203 nits by default in HDR, which is
+where BT.2408 and Premiere both put it. Every source is brought into the
+sequence's coded space as it is read, before its effects, so every layer's
+effects work on the same kind of numbers: SDR in an HDR sequence is mapped up
+so its white is graphics white, and HDR in an SDR sequence is tone mapped
+down. A title, a matte or a nest is an SDR Rec.709 source like any other.
+SDR footage in an SDR sequence takes none of this, and comes out bit for bit
+as it did.
+
+Tone mapping works on luminance so a colour keeps its hue. Nothing moves below
+three quarters of SDR white; above it an extended Reinhard shoulder takes
+1,000 nits to exactly white, with the knee's slope unchanged so there is no
+visible bend. Premiere does not publish its curve, so this one is chosen to
+behave the way its Auto Tone Map Media is described: highlights kept apart,
+nothing below them disturbed.
+
+The tests render committed 64x32 lossless fixtures with exact 10-bit codes
+and check against values worked out from the standards, not from what the
+renderer produced: PQ through a PQ sequence comes back as the same codes;
+HLG's 75% reference white lands on the PQ code for 203 nits; an SDR grey in a
+PQ sequence is that grey's share of 203 nits; a white matte is 203 nits, or
+100 when graphics white is set to 100; and in an SDR sequence 1,000 nits is
+white while 203 nits sits below it, unless tone mapping is off, when both
+clip. On screen, a PQ sequence on this SDR display shows the two patches as
+241 and 255, and a Rec.709 one with tone mapping off as 255 and 255.
+
+A nest is still rendered to SDR, so an HDR sequence nested in another loses
+its highlights; that waits for HDR preview, which needs the same thing.
 
 ## 9. Interface and themes
 

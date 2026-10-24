@@ -242,6 +242,29 @@ enum class YuvLayout {
   P010,
 };
 
+/// A sequence's working colour space, and a space to show or write it in.
+///
+/// The scene is linear light in the space's primaries with 1.0 at graphics
+/// white, and every source is brought into the space's coded values as it is
+/// read, before its effects -- Premiere's sequence colour management.
+enum class WorkingColour {
+  Rec709,     ///< SDR
+  Rec2100Pq,  ///< HDR10
+  Rec2100Hlg,
+};
+
+/// How a compositor's sequence is colour managed.
+struct ColourSettings {
+  WorkingColour working = WorkingColour::Rec709;
+  /// Where SDR white sits in an HDR sequence. BT.2408 says 203 nits, and so
+  /// does Premiere's default.
+  float graphics_white_nits = 203.0f;
+  /// Whether HDR footage in an SDR sequence is tone mapped, or clipped.
+  bool tone_map = true;
+
+  friend bool operator==(const ColourSettings&, const ColourSettings&) = default;
+};
+
 /// A frame converted for an encoder, lent rather than copied: the planes are
 /// the readback buffer itself, valid only inside the call that lends them.
 ///
@@ -277,6 +300,10 @@ class Compositor {
   /// should look like rather than stale pixels.
   [[nodiscard]] std::expected<void, std::string> compose(std::span<const Layer> layers);
 
+  /// How what is composed from here on is colour managed. Rec.709 until set.
+  void set_colour(const ColourSettings& colour) noexcept;
+  [[nodiscard]] const ColourSettings& colour() const noexcept;
+
   /// Encodes the scene for display and copies it back to system memory.
   /// Slow by nature — this stalls on the GPU — and meant for tests and stills,
   /// not for every frame of an export.
@@ -293,7 +320,11 @@ class Compositor {
   ///
   /// Waits only when every slot is still lent out, which is what bounds how
   /// far rendering runs ahead of encoding.
-  [[nodiscard]] std::expected<std::size_t, std::string> begin_yuv_read_back(YuvLayout layout);
+  ///
+  /// `output` is the space the file is in, which need not be the sequence's:
+  /// an HDR sequence written to an SDR file is tone mapped on the way.
+  [[nodiscard]] std::expected<std::size_t, std::string> begin_yuv_read_back(
+      YuvLayout layout, WorkingColour output = WorkingColour::Rec709);
 
   /// Waits for a slot's copy to arrive, lends its planes to `use`, and frees
   /// the slot when `use` returns. Safe to call from another thread than the one

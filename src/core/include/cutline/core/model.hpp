@@ -787,6 +787,19 @@ struct Marker {
 /// list kept in step by hand. The bins went the other way for the same reason,
 /// and the note on them says why: the arrangement where two containers can
 /// disagree is the one that eventually does.
+/// A sequence's working colour space: what it composites in and, unless an
+/// export says otherwise, what it is written out as. Premiere's three.
+enum class WorkingColour {
+  Rec709,     ///< SDR
+  Rec2100Pq,  ///< HDR10
+  Rec2100Hlg,
+};
+
+/// Where SDR white sits in an HDR sequence, as Premiere's sequence settings
+/// put it. BT.2408's 203 nits is the default; 100 is how Premiere used to do
+/// it, and 300 is offered for brighter graphics.
+inline constexpr double kDefaultGraphicsWhite = 203.0;
+
 struct Sequence {
   /// Stable across renames, because a nested sequence and the tab strip both
   /// have to name one and neither should break when it is renamed.
@@ -831,6 +844,13 @@ struct Sequence {
   /// — 29.97 and 59.94 — are broadcast rates, and drop-frame is what broadcast
   /// means by timecode.
   bool drop_frame = true;
+
+  /// Colour management, from Premiere's sequence settings: the working space,
+  /// where graphics white sits in nits in an HDR one, and whether HDR footage
+  /// in an SDR one is tone mapped or clipped.
+  WorkingColour colour = WorkingColour::Rec709;
+  double graphics_white = kDefaultGraphicsWhite;
+  bool tone_map = true;
 
   /// Video tracks first (topmost), then audio. Note that video tracks composite
   /// bottom-first, so the render order is the reverse of the storage order.

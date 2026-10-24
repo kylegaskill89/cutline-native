@@ -319,6 +319,9 @@ constexpr int kMaxPooledFrames = 40;
       break;
   }
 
+  out.primaries = frame->color_primaries == AVCOL_PRI_BT2020 ? gpu::ColourPrimaries::Bt2020
+                                                             : gpu::ColourPrimaries::Bt709;
+
   switch (frame->color_trc) {
     case AVCOL_TRC_SMPTE2084:
       out.transfer = gpu::TransferFunction::Smpte2084;
@@ -1937,6 +1940,17 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
     layers.push_back(layer);
   }
 
+  // The sequence's colour management, which every source is brought into as
+  // it is read. The model's names and the card's are declared in one order.
+  static_assert(static_cast<int>(core::WorkingColour::Rec2100Pq) ==
+                    static_cast<int>(gpu::WorkingColour::Rec2100Pq) &&
+                static_cast<int>(core::WorkingColour::Rec2100Hlg) ==
+                    static_cast<int>(gpu::WorkingColour::Rec2100Hlg));
+  const core::Sequence& sequence = project.sequence();
+  d.compositor->set_colour(gpu::ColourSettings{
+      .working = static_cast<gpu::WorkingColour>(sequence.colour),
+      .graphics_white_nits = static_cast<float>(sequence.graphics_white),
+      .tone_map = sequence.tone_map});
   auto composed = d.compositor->compose(layers);
 
   // With the frame drawn, and before the turn is given back. A rough cut is

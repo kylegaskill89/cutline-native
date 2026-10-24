@@ -51,6 +51,15 @@
 #define TRANSFER_SMPTE2084 1  // PQ, HDR10
 #define TRANSFER_ARIB_B67  2  // HLG
 
+// A sequence's working colour space, numbered so that each one's transfer is
+// the TRANSFER_ of the same number: a source already in it needs no work.
+#define WORKING_REC709 0  // sRGB curve, Rec.709 primaries
+#define WORKING_PQ     1  // ST 2084, Rec.2020 primaries
+#define WORKING_HLG    2  // hybrid log-gamma, Rec.2020 primaries
+
+#define PRIMARIES_709  0
+#define PRIMARIES_2020 1
+
 // Blend modes. Normal and Add are handled by fixed-function blending and never
 // reach the shader's blend path; the rest need to read what is underneath.
 #define BLEND_NORMAL     0
@@ -144,10 +153,15 @@ struct Params {
     // How much the source is softened vertically as it is read, 0 to 1.
     float antiFlicker;
     float bits;       // bits in a code: 8, 10, 12
-    // The fourth slot of the last row. HLSL would round the buffer up to it
-    // anyway; declaring it is what keeps this and `ShaderParams` the same
-    // fifty-two floats by statement rather than by coincidence.
-    float rowPad;
+    int sourcePrimaries;  // PRIMARIES_ of the source
+
+    // Colour management: the sequence's working space, its graphics white in
+    // nits, whether HDR sources are tone mapped into an SDR one, and the space
+    // a present or an encode is writing out to.
+    int working;
+    float whiteNits;
+    float toneMap;
+    int output;
 };
 
 
@@ -270,11 +284,134 @@ float3 linearizeHlg(float3 c) {
     return select(c <= 0.5, (c * c) / 3.0, (exp((c - cc) / a) + b) / 12.0);
 }
 
-float3 toLinear(float3 coded, int transfer) {
-    if (transfer == TRANSFER_SMPTE2084) return linearizePq(coded);
-    if (transfer == TRANSFER_ARIB_B67) return linearizeHlg(coded);
+// ---------------------------------------------------------------- colour --
+//
+// The scene is linear light in the sequence's primaries, with 1.0 meaning the
+// sequence's graphics white: SDR white in a Rec.709 sequence, and 203 nits by
+// default in an HDR one, which is where BT.2408 puts SDR white inside HDR. An
+// HDR sequence holds values above 1.0, up to 10,000 nits' worth.
+//
+// Every source is brought into the sequence's own coded space as it is read,
+// so the effects on a layer all work on the same kind of numbers whatever the
+// footage was: SDR in an HDR sequence is mapped up, and HDR in an SDR sequence
+// is tone mapped down, both before anything else touches it.
+
+// HLG is scene light; what a display shows is that through the system gamma,
+// 1.2 at the nominal 1,000-nit peak. 75% signal lands at about 203 nits.
+static const float kHlgPeakNits = 1000.0;
+// What tone mapping takes to SDR white: the peak nearly every HDR grade is
+// mastered to.
+static const float kHdrPeakNits = 1000.0;
+static const float3 kLuma2020 = float3(0.2627, 0.6780, 0.0593);
+static const float3 kLuma709 = float3(0.2126, 0.7152, 0.0722);
+
+// The forward ST 2084 curve, from light normalised so 1.0 is 10,000 nits.
+float3 encodePq(float3 y) {
+    const float m1 = 2610.0 / 16384.0;
+    const float m2 = 128.0 * 2523.0 / 4096.0;
+    const float c1 = 3424.0 / 4096.0;
+    const float c2 = 32.0 * 2413.0 / 4096.0;
+    const float c3 = 32.0 * 2392.0 / 4096.0;
+    const float3 p = pow(max(y, 0.0), m1);
+    return pow((c1 + c2 * p) / (1.0 + c3 * p), m2);
+}
+
+// The HLG OETF, from scene light over the unit range.
+float3 encodeHlg(float3 e) {
+    const float a = 0.17883277;
+    const float b = 1.0 - 4.0 * a;
+    const float c = 0.5 - a * log(4.0 * a);
+    e = max(e, 0.0);
+    return select(e <= 1.0 / 12.0, sqrt(3.0 * e), a * log(max(12.0 * e - b, 1e-6)) + c);
+}
+
+float3 hlgSceneToNits(float3 scene) {
+    const float ys = dot(scene, kLuma2020);
+    return kHlgPeakNits * pow(max(ys, 1e-6), 0.2) * scene;
+}
+
+float3 nitsToHlgScene(float3 nits) {
+    const float yd = dot(nits, kLuma2020);
+    const float ys = pow(max(yd / kHlgPeakNits, 1e-6), 1.0 / 1.2);
+    return nits / (kHlgPeakNits * pow(ys, 0.2));
+}
+
+// Coded to linear light relative to graphics white, in whatever primaries the
+// values were coded in.
+float3 toRelative(float3 coded, int transfer) {
+    if (transfer == TRANSFER_SMPTE2084) return linearizePq(coded) * (10000.0 / params.whiteNits);
+    if (transfer == TRANSFER_ARIB_B67) return hlgSceneToNits(linearizeHlg(coded)) / params.whiteNits;
     return linearizeSrgb(coded);
 }
+
+// And back, for a space's own curve.
+float3 fromRelative(float3 relative, int space) {
+    if (space == WORKING_PQ) return encodePq(relative * (params.whiteNits / 10000.0));
+    if (space == WORKING_HLG) return saturate(encodeHlg(nitsToHlgScene(max(relative, 0.0) * params.whiteNits)));
+    return encodeSrgb(relative);
+}
+
+int primariesOf(int space) {
+    return space == WORKING_REC709 ? PRIMARIES_709 : PRIMARIES_2020;
+}
+
+float3 convertPrimaries(float3 rgb, int from, int to) {
+    if (from == to) return rgb;
+    if (to == PRIMARIES_2020) {
+        return float3(dot(rgb, float3(0.6274, 0.3293, 0.0433)),
+                      dot(rgb, float3(0.0691, 0.9195, 0.0114)),
+                      dot(rgb, float3(0.0164, 0.0880, 0.8956)));
+    }
+    return float3(dot(rgb, float3(1.6605, -0.5876, -0.0728)),
+                  dot(rgb, float3(-0.1246, 1.1329, -0.0083)),
+                  dot(rgb, float3(-0.0182, -0.1006, 1.1187)));
+}
+
+// HDR brought into SDR, on luminance so a colour keeps its hue. Up to three
+// quarters of SDR white nothing moves; above that an extended Reinhard
+// shoulder takes the HDR peak to exactly white, leaving the knee with the same
+// slope it arrived with so there is no visible bend.
+float3 toneMapToSdr(float3 rgb) {
+    rgb = max(rgb, 0.0);
+    const float y = dot(rgb, kLuma709);
+    const float knee = 0.75;
+    if (y > knee) {
+        const float room = 1.0 - knee;
+        const float u = (y - knee) / room;
+        const float most = max((kHdrPeakNits / params.whiteNits - knee) / room, 1e-3);
+        const float mapped = knee + room * (u * (1.0 + u / (most * most)) / (1.0 + u));
+        rgb *= mapped / y;
+    }
+    return min(rgb, 1.0);
+}
+
+// Linear light relative to graphics white, in `primaries`, into a space's
+// coded values: what every source goes through on its way in, and the scene
+// on its way out to a display or a file.
+float3 intoSpace(float3 relative, int primaries, bool fromHdr, int space) {
+    relative = convertPrimaries(relative, primaries, primariesOf(space));
+    if (space == WORKING_REC709 && fromHdr && params.toneMap > 0.5) {
+        relative = toneMapToSdr(relative);
+    }
+    return fromRelative(relative, space);
+}
+
+// A source's coded values in the sequence's coded space. Nothing to do, and
+// nothing done, when the source is already in it, which is SDR footage in an
+// SDR sequence: exactly what every frame was before there was colour
+// management.
+float3 toWorkingCoded(float3 coded) {
+    if (params.transfer == params.working &&
+        params.sourcePrimaries == primariesOf(params.working)) {
+        return coded;
+    }
+    return intoSpace(toRelative(coded, params.transfer), params.sourcePrimaries,
+                     params.transfer != TRANSFER_BT709, params.working);
+}
+
+// The sequence's coded values to linear light, and back.
+float3 workingLinear(float3 coded) { return toRelative(coded, params.working); }
+float3 workingCoded(float3 relative) { return fromRelative(relative, params.working); }
 
 // ------------------------------------------------------------------ matrix --
 
@@ -363,8 +500,9 @@ float3 solidCoded(float2 uv) {
     return encodeSrgb(base);
 }
 
-/// The layer's own pixels at this uv: coded R'G'B', straight alpha.
-float4 codedSource(float2 uv) {
+/// The layer's own pixels at this uv: coded R'G'B', straight alpha, in the
+/// source's own space.
+float4 rawCodedSource(float2 uv) {
     if (params.layout == LAYOUT_CODED) return texture0.Sample(linearSampler, uv);
 
     if (params.layout == LAYOUT_RGBA) {
@@ -411,6 +549,13 @@ float4 codedSource(float2 uv) {
     return float4(saturate(yuvToRgb(float3(y, chroma.x, chroma.y), params.colorSpace)), 1.0);
 }
 
+/// The layer's own pixels at this uv in the sequence's coded space: the one
+/// place a source changes space, before any effect sees it.
+float4 codedSource(float2 uv) {
+    const float4 raw = rawCodedSource(uv);
+    return float4(toWorkingCoded(raw.rgb), raw.a);
+}
+
 /// The source, softened vertically by the anti-flicker filter when one is set.
 ///
 /// The filter belongs here, where the source is *read*, rather than in the pass
@@ -440,7 +585,7 @@ float4 softenedSource(float2 uv) {
 /// or through a stack of passes.
 float4 sourceColor(float2 uv) {
     const float4 coded = softenedSource(uv);
-    return float4(toLinear(coded.rgb, params.transfer), coded.a);
+    return float4(workingLinear(coded.rgb), coded.a);
 }
 
 // ----------------------------------------------------------------- effects --
@@ -790,7 +935,7 @@ float3 levelsPass(float3 coded) {
     c = pow(max(c, 0.0), 1.0 / max(gamma, 1e-3));
 
     if (exposure != 1.0) {
-        c = encodeSrgb(linearizeSrgb(c) * exposure);
+        c = workingCoded(workingLinear(c) * exposure);
     }
     return saturate(c);
 }
@@ -799,7 +944,7 @@ float3 levelsPass(float3 coded) {
 /// light rather than on the numbers it was written down as.
 float3 balancePass(float3 coded) {
     const float3 gain = params.passA.rgb;
-    return saturate(encodeSrgb(linearizeSrgb(coded) * gain));
+    return saturate(workingCoded(workingLinear(coded) * gain));
 }
 
 /// Shadows and highlights mapped to two colours, by luma.
@@ -869,8 +1014,8 @@ float4 PSEffect(VSOutput input) : SV_Target {
             // In linear light and back, because a vignette is a light falloff.
             // Done on coded values it would darken the midtones far more than
             // the ends, which is not what the filter it is named after does.
-            const float3 linearRgb = linearizeSrgb(after.rgb) * vignetteFactor(layerUv(input.uv));
-            after.rgb = encodeSrgb(linearRgb);
+            const float3 linearRgb = workingLinear(after.rgb) * vignetteFactor(layerUv(input.uv));
+            after.rgb = workingCoded(linearRgb);
         } else if (params.passKind == PASS_CROP) {
             if (!insideCrop(layerUv(input.uv))) after.a = 0.0;
         } else if (params.passKind == PASS_CHROMAKEY) {
@@ -935,11 +1080,10 @@ float4 PSAdjustSource(VSOutput input) : SV_Target {
         local.x * params.rotation.y + local.y * params.rotation.x);
     const float2 screen = (params.center + rotated) / params.canvas;
 
-    // Linear and possibly above 1.0; encoding clamps it. That is correct for
-    // the SDR pipeline this ships with and is one of the places that will need
-    // revisiting when HDR lands.
+    // Linear, and in an HDR sequence above 1.0, which the sequence's own curve
+    // keeps; in an SDR one, encoding clamps it.
     const float4 base = backdrop.Sample(linearSampler, screen);
-    return float4(encodeSrgb(base.rgb), 1.0);
+    return float4(workingCoded(base.rgb), 1.0);
 }
 
 // Normal and Add, where fixed-function blending does the combining.
@@ -976,7 +1120,7 @@ float4 PSAdjustment(VSOutput input) : SV_Target {
     const float4 base = backdrop.Sample(linearSampler, screen);
 
     const float4 coded = texture0.Sample(linearSampler, input.uv);
-    const float3 result = linearizeSrgb(coded.rgb);
+    const float3 result = workingLinear(coded.rgb);
 
     return float4(lerp(base.rgb, result, params.opacity * coded.a), base.a);
 }
@@ -996,6 +1140,14 @@ float4 PSPresent(VSOutput input) : SV_Target {
     // reads back exactly as stored, and the encoding happens here. It costs a
     // handful of instructions once per frame.
     const float4 scene = texture0.Sample(linearSampler, input.uv);
+
+    // Out to some other space than the sequence's: an HDR sequence on an SDR
+    // display, tone mapped and brought into Rec.709.
+    if (params.working != WORKING_REC709 || params.output != WORKING_REC709) {
+        return float4(intoSpace(scene.rgb, primariesOf(params.working),
+                                params.working != WORKING_REC709, params.output),
+                      scene.a);
+    }
 
     const float3 low = scene.rgb * 12.92;
     const float3 high = 1.055 * pow(max(scene.rgb, 0.0), 1.0 / 2.4) - 0.055;
@@ -1020,8 +1172,14 @@ float4 PSPresent(VSOutput input) : SV_Target {
 // the monitor are the same picture. `layout` carries the bit depth.
 
 float3 displayCoded(int2 at) {
-    return encodeSrgb(texture0.Load(int3(at, 0)).rgb);
+    const float3 scene = texture0.Load(int3(at, 0)).rgb;
+    if (params.working == WORKING_REC709 && params.output == WORKING_REC709) return encodeSrgb(scene);
+    return intoSpace(scene, primariesOf(params.working), params.working != WORKING_REC709,
+                     params.output);
 }
+
+// The luma weights of the file being written: BT.709 for SDR, BT.2020 for HDR.
+float3 outputLuma() { return params.output == WORKING_REC709 ? kLuma709 : kLuma2020; }
 
 // A level on the studio scale, `offset + span * v` in the stored bits, as the
 // UNORM value that stores it. Ten bits sit at the top of sixteen, so they are
@@ -1037,7 +1195,7 @@ float studioLevel(float v, float offset, float span, int bits) {
 
 float4 PSEncodeLuma(VSOutput input) : SV_Target {
     const float3 rgb = displayCoded(int2(input.position.xy));
-    const float y = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+    const float y = dot(rgb, outputLuma());
     return float4(studioLevel(y, 16.0, 219.0, params.layout), 0.0, 0.0, 1.0);
 }
 
@@ -1047,9 +1205,10 @@ float4 PSEncodeChroma(VSOutput input) : SV_Target {
     const int2 at = int2(input.position.xy) * 2;
     const float3 rgb = 0.25 * (displayCoded(at) + displayCoded(at + int2(1, 0)) +
                                displayCoded(at + int2(0, 1)) + displayCoded(at + int2(1, 1)));
-    const float y = dot(rgb, float3(0.2126, 0.7152, 0.0722));
-    const float cb = (rgb.b - y) / 1.8556;
-    const float cr = (rgb.r - y) / 1.5748;
+    const float3 k = outputLuma();
+    const float y = dot(rgb, k);
+    const float cb = (rgb.b - y) / (2.0 * (1.0 - k.b));
+    const float cr = (rgb.r - y) / (2.0 * (1.0 - k.r));
     return float4(studioLevel(cb, 128.0, 224.0, params.layout),
                   studioLevel(cr, 128.0, 224.0, params.layout), 0.0, 1.0);
 }

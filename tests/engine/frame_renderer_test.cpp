@@ -15,6 +15,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstring>
 
 #include <process.h>
@@ -1190,6 +1191,127 @@ TEST_F(DeepRendererTest, TenBitFootageKeepsItsTenBits) {
   ASSERT_TRUE(renderer_->render(p, 0.05).has_value());
   EXPECT_TRUE(renderer_->missing_media().empty());
   EXPECT_NEAR(luma_code_at(*renderer_, 32, 16), 514, 1);
+}
+
+
+// ------------------------------------------------------- colour management --
+//
+// Every source is brought into the sequence's working space as it is read.
+// The fixtures carry exact codes, so each expectation below is worked out from
+// the standards rather than from what the renderer happened to produce.
+
+/// The 10-bit studio code for a level, the way the fixtures were made.
+[[nodiscard]] int studio_code(double level) { return static_cast<int>(std::lround(64.0 + 876.0 * level)); }
+
+/// ST 2084 for a light level in nits.
+[[nodiscard]] double pq_of(double nits) {
+  const double m1 = 2610.0 / 16384.0;
+  const double m2 = 128.0 * 2523.0 / 4096.0;
+  const double c1 = 3424.0 / 4096.0;
+  const double c2 = 32.0 * 2413.0 / 4096.0;
+  const double c3 = 32.0 * 2392.0 / 4096.0;
+  const double p = std::pow(nits / 10000.0, m1);
+  return std::pow((c1 + c2 * p) / (1.0 + c3 * p), m2);
+}
+
+[[nodiscard]] Project in_colour(Project p, core::WorkingColour colour, double white = 203.0,
+                                bool tone_map = true) {
+  p.sequence().colour = colour;
+  p.sequence().graphics_white = white;
+  p.sequence().tone_map = tone_map;
+  return p;
+}
+
+[[nodiscard]] int luma_code_in(FrameRenderer& renderer, gpu::WorkingColour output, int x, int y) {
+  const auto slot = renderer.compositor().begin_yuv_read_back(gpu::YuvLayout::P010, output);
+  if (!slot) return -1;
+  int code = -1;
+  const auto done =
+      renderer.compositor().finish_yuv_read_back(*slot, [&](const gpu::YuvPlanes& planes) {
+        std::uint16_t value = 0;
+        std::memcpy(&value, planes.luma + static_cast<std::size_t>(y) * planes.luma_stride + x * 2,
+                    2);
+        code = value >> 6;
+      });
+  return done ? code : -1;
+}
+
+// The two patches are 203 and 1000 nits, and nothing about a PQ sequence
+// written out as PQ should move them.
+TEST_F(DeepRendererTest, PqFootageInAPqSequenceComesOutAsItWentIn) {
+  ASSERT_TRUE(renderer_->render(in_colour(showing("pq.mkv"), core::WorkingColour::Rec2100Pq), 0.05)
+                  .has_value());
+  EXPECT_NEAR(luma_code_in(*renderer_, gpu::WorkingColour::Rec2100Pq, 10, 16), 573, 1);
+  EXPECT_NEAR(luma_code_in(*renderer_, gpu::WorkingColour::Rec2100Pq, 54, 16), 723, 1);
+}
+
+// HLG's reference white, 75% signal, is 203 nits on a 1,000-nit display once
+// the system gamma is applied -- which is the PQ code for 203 nits.
+TEST_F(DeepRendererTest, HlgReferenceWhiteLandsOnTheSameLightInAPqSequence) {
+  ASSERT_TRUE(renderer_->render(in_colour(showing("hlg.mkv"), core::WorkingColour::Rec2100Pq), 0.05)
+                  .has_value());
+  EXPECT_NEAR(luma_code_in(*renderer_, gpu::WorkingColour::Rec2100Pq, 10, 16),
+              studio_code(pq_of(203.0)), 2);
+}
+
+// SDR in an HDR sequence: its white is graphics white, so a grey is that grey's
+// share of 203 nits.
+TEST_F(DeepRendererTest, SdrFootageInAPqSequenceIsScaledToGraphicsWhite) {
+  ASSERT_TRUE(renderer_->render(in_colour(showing("grey10.mkv"), core::WorkingColour::Rec2100Pq), 0.05)
+                  .has_value());
+  const double coded = (514.0 - 64.0) / 876.0;
+  const double linear =
+      coded <= 0.04045 ? coded / 12.92 : std::pow((coded + 0.055) / 1.055, 2.4);
+  EXPECT_NEAR(luma_code_in(*renderer_, gpu::WorkingColour::Rec2100Pq, 32, 16),
+              studio_code(pq_of(linear * 203.0)), 2);
+}
+
+TEST_F(DeepRendererTest, GraphicsWhiteDecidesHowBrightAWhiteMatteIs) {
+  Project p = canvas_project();
+  p.sequence().canvas_h = 32;
+  p.media = {matte("w", "#ffffff")};
+  p.sequence().tracks = {video_track("v1", {clip("c", "w", 0.0, 1.0)})};
+
+  ASSERT_TRUE(renderer_->render(in_colour(p, core::WorkingColour::Rec2100Pq), 0.5).has_value());
+  EXPECT_NEAR(luma_code_in(*renderer_, gpu::WorkingColour::Rec2100Pq, 32, 16),
+              studio_code(pq_of(203.0)), 1);
+
+  ASSERT_TRUE(renderer_->render(in_colour(p, core::WorkingColour::Rec2100Pq, 100.0), 0.5).has_value());
+  EXPECT_NEAR(luma_code_in(*renderer_, gpu::WorkingColour::Rec2100Pq, 32, 16),
+              studio_code(pq_of(100.0)), 1);
+}
+
+// HDR in an SDR sequence. Tone mapped, 1,000 nits is brought to white and 203
+// nits sits below it, so the two are still told apart; clipped, both are white.
+TEST_F(DeepRendererTest, HdrFootageInAnSdrSequenceIsToneMappedUnlessToldNotTo) {
+  ASSERT_TRUE(renderer_->render(in_colour(showing("pq.mkv"), core::WorkingColour::Rec709), 0.05)
+                  .has_value());
+  auto image = renderer_->read_back();
+  ASSERT_TRUE(image.has_value()) << image.error();
+  const Rgba mapped_low = pixel_at(*image, 10, 16);
+  const Rgba mapped_high = pixel_at(*image, 54, 16);
+  EXPECT_GE(mapped_high.g, 252);
+  EXPECT_LT(mapped_low.g, mapped_high.g - 8) << "203 nits was not kept below the highlight";
+  EXPECT_GT(mapped_low.g, 200) << "203 nits was taken far below SDR white";
+  EXPECT_NEAR(mapped_low.r, mapped_low.b, 2) << "a neutral grey came out tinted";
+
+  ASSERT_TRUE(renderer_->render(in_colour(showing("pq.mkv"), core::WorkingColour::Rec709, 203.0, false), 0.05)
+                  .has_value());
+  image = renderer_->read_back();
+  ASSERT_TRUE(image.has_value()) << image.error();
+  EXPECT_GE(pixel_at(*image, 10, 16).g, 252);
+  EXPECT_GE(pixel_at(*image, 54, 16).g, 252);
+}
+
+// A PQ sequence written to an SDR file is tone mapped on the way, the same as
+// on an SDR display.
+TEST_F(DeepRendererTest, AnHdrSequenceCanBeWrittenOutAsSdr) {
+  ASSERT_TRUE(renderer_->render(in_colour(showing("pq.mkv"), core::WorkingColour::Rec2100Pq), 0.05)
+                  .has_value());
+  const int low = luma_code_in(*renderer_, gpu::WorkingColour::Rec709, 10, 16);
+  const int high = luma_code_in(*renderer_, gpu::WorkingColour::Rec709, 54, 16);
+  EXPECT_NEAR(high, 940, 2);
+  EXPECT_LT(low, high - 30);
 }
 
 }  // namespace
