@@ -55,7 +55,9 @@ struct PreviewEngine::Impl {
   /// picture.
   std::shared_ptr<const core::Project> project;
   double at = 0.0;
-  bool playing = false;
+  /// Frames of the sequence the playhead crosses per frame shown, signed:
+  /// below zero going backwards, zero still. Rendering ahead steps by it.
+  long long step = 0;
   std::uint64_t serial = 0;
 
   /// A finished picture waiting to be taken, in the order it was rendered.
@@ -70,8 +72,8 @@ struct PreviewEngine::Impl {
   /// a second time while it is still on its way.
   std::optional<std::pair<std::uint64_t, long long>> rendering;
 
-  /// The last frame the interface put up, for this serial. While playing,
-  /// nothing at or before it is worth rendering again.
+  /// The last frame the interface put up, for this serial. While moving,
+  /// nothing at it or behind it is worth rendering again.
   std::optional<long long> taken;
 
   /// Work that has to run on the render thread because it uses the renderer.
@@ -108,18 +110,22 @@ struct PreviewEngine::Impl {
     if (!project || !failure.empty()) return std::nullopt;
     const long long base = frame_of(*project, at);
 
-    if (!playing) {
+    if (step == 0) {
       if (taken == base || have(base)) return std::nullopt;
       return base;
     }
 
     // Ahead of the playhead by as many frames as there are slots to hold
-    // them, less the one the interface may be copying out of.
+    // them, less the one the interface may be copying out of -- ahead in the
+    // direction it is going. A shuttle backwards used to be rendered a frame
+    // at a time as each was asked for, so a frame that cost more than its
+    // share of the turn was a frame missing from the screen.
     const long long last = frame_of(*project, core::timeline_duration(*project));
-    const auto ahead = static_cast<long long>(ring->capacity()) - 1;
-    for (long long frame = base; frame < base + std::max(1ll, ahead); ++frame) {
-      if (frame > last && frame != base) break;
-      if (taken && frame <= *taken) continue;
+    const auto ahead = std::max(1ll, static_cast<long long>(ring->capacity()) - 1);
+    for (long long k = 0; k < ahead; ++k) {
+      const long long frame = base + k * step;
+      if (k > 0 && (frame > last || frame < 0)) break;
+      if (taken && (step > 0 ? frame <= *taken : frame >= *taken)) continue;
       if (!have(frame)) return frame;
     }
     return std::nullopt;
@@ -251,7 +257,7 @@ std::expected<std::unique_ptr<PreviewEngine>, std::string> PreviewEngine::create
   return std::unique_ptr<PreviewEngine>(new PreviewEngine(std::move(impl)));
 }
 
-void PreviewEngine::want(std::shared_ptr<const core::Project> project, double t, bool playing) {
+void PreviewEngine::want(std::shared_ptr<const core::Project> project, double t, double rate) {
   Impl& d = *impl_;
   {
     const std::lock_guard<std::mutex> held(d.lock);
@@ -263,12 +269,20 @@ void PreviewEngine::want(std::shared_ptr<const core::Project> project, double t,
       d.prune([](const Impl::Ready&) { return false; });
     }
     d.at = t;
-    d.playing = playing;
-    if (d.project && playing) {
+    // At least a frame at a time whichever way it is going: slower than one
+    // frame a frame still crosses them one at a time.
+    const auto frames = std::max(1ll, std::llround(std::abs(rate)));
+    const long long step = rate > 0.0 ? frames : rate < 0.0 ? -frames : 0;
+    // Turning round, the frames rendered for the old direction are all behind.
+    if (step * d.step < 0) d.taken.reset();
+    d.step = step;
+    if (d.project && step != 0) {
       // Frames behind the playhead will never be shown. Freeing their slots now
       // is what lets the thread get on with the ones ahead of it.
       const long long now = frame_of(*d.project, t);
-      d.prune([&](const Impl::Ready& r) { return r.frame >= now - 1; });
+      d.prune([&](const Impl::Ready& r) {
+        return step > 0 ? r.frame >= now - 1 : r.frame <= now + 1;
+      });
     }
   }
   d.wake.notify_all();
@@ -283,17 +297,20 @@ std::expected<std::optional<ui::TextureView>, std::string> PreviewEngine::take(d
     if (!d.project) return std::optional<ui::TextureView>{};
 
     const long long now = frame_of(*d.project, t);
+    const long long step = d.step;
     for (const Impl::Ready& r : d.ready) {
       if (r.serial != d.serial) continue;
-      if (d.playing) {
+      if (step > 0) {
         if (r.frame <= now && (!chosen || r.frame > chosen->frame)) chosen = r;
+      } else if (step < 0) {
+        if (r.frame >= now && (!chosen || r.frame < chosen->frame)) chosen = r;
       } else if (r.frame == now) {
         chosen = r;
       }
     }
     // Still, and the exact frame is not in yet: the newest picture of this
     // project, which is where a scrub was a moment ago.
-    if (!d.playing && !chosen) {
+    if (step == 0 && !chosen) {
       for (auto it = d.ready.rbegin(); it != d.ready.rend(); ++it) {
         if (it->serial == d.serial) {
           chosen = *it;
@@ -307,10 +324,11 @@ std::expected<std::optional<ui::TextureView>, std::string> PreviewEngine::take(d
     // slot to another frame while it is being copied out of.
     std::erase_if(d.ready, [&](const Impl::Ready& r) { return r.slot == chosen->slot; });
     d.taken = chosen->frame;
-    // And everything this makes redundant: while playing, any frame before the
+    // And everything this makes redundant: while moving, any frame behind the
     // one going up; when still, everything — the next want says what is next.
     d.prune([&](const Impl::Ready& r) {
-      return r.serial == d.serial && d.playing && r.frame > chosen->frame;
+      if (r.serial != d.serial || step == 0) return false;
+      return step > 0 ? r.frame > chosen->frame : r.frame < chosen->frame;
     });
   }
 

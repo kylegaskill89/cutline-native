@@ -850,6 +850,25 @@ TEST_F(FootageTest, CrossingACutTakesARunDecodedBeforeItGotThere) {
   EXPECT_GE(stats.runs_taken_ahead, 2) << "the cuts were seeked through as they arrived";
 }
 
+TEST_F(FootageTest, CrossingACutBackwardsTakesARunDecodedBeforeItGotThere) {
+  // Backwards, a cut lands on the *end* of the earlier clip, and that is as
+  // likely as not the middle of a group of pictures. Prepared on the reader
+  // while the clip after it is still being played out, the far side is in hand
+  // when the playhead arrives, and the only seek is the one that puts the
+  // playhead at the end to begin with.
+  const Project p = rough_cut(path_);
+  constexpr double kFps = 60.0;
+
+  for (int i = 3 * 60 - 1; i >= 0; --i) {
+    ASSERT_TRUE(renderer_->render(p, i / kFps).has_value());
+  }
+
+  const auto stats = renderer_->decode_stats();
+  ASSERT_GT(stats.frames_decoded_ahead, 0)
+      << "nothing was decoded ahead at all, so the premise is wrong";
+  EXPECT_LE(stats.backward_seeks, 1) << "the cuts were seeked through as they arrived";
+}
+
 TEST_F(FootageTest, PlayingStraightThroughStillDecodesNothingAhead) {
   // The other side of it: a sequence with no jump in it must not pay for a
   // prefetch nothing is going to want. Looking half a second ahead of the

@@ -379,6 +379,11 @@ struct Source {
   Ahead ahead_for = Ahead::None;
   /// Where a `Jump` run begins, in source seconds. Below zero for the others.
   double jump_from = -1.0;
+  /// A `Jump` run built for playing *backwards* across a cut, which ends at
+  /// the far side's last frame rather than starting at its first. `jump_until`
+  /// is that frame, in source seconds.
+  bool jump_back = false;
+  double jump_until = -1.0;
   /// What the reader thread and this thread share about the run being built.
   ///
   /// The reader decodes the far side of a cut on a thread of its own, so the
@@ -387,10 +392,19 @@ struct Source {
   /// moved into the map, and neither a mutex nor an atomic can be.
   struct Shared {
     std::mutex lock;
-    /// The cut the reader is working toward, in source seconds. Read without
-    /// the lock, which is the point: the serving path asks on every frame
-    /// whether it has to wait, and must not wait to find out.
+    /// The source times the reader's job will answer, from `target` up to
+    /// `target_end`. Read without the lock, which is the point: the serving
+    /// path asks on every frame whether it has to wait, and must not wait to
+    /// find out.
+    ///
+    /// A span rather than a start and an assumed length. The forward run
+    /// starts at its cut, but a backwards one *ends* there, and the run before
+    /// the one in hand ends where that one begins. Read as "half a second from
+    /// the start", the frame a backwards run was built for fell a frame past
+    /// the window, the serving path declined to wait, and it sought the same
+    /// group of pictures the reader was a few frames from finishing.
     std::atomic<double> target{-1.0};
+    std::atomic<double> target_end{-1.0};
     /// A job for this source is queued or running. Under `lock`.
     bool posted = false;
   };
@@ -506,6 +520,8 @@ struct Source {
     pending.clear();
     pending_until = -1.0;
     jump_from = -1.0;
+    jump_back = false;
+    jump_until = -1.0;
     ahead_for = Ahead::None;
     extending = false;
   }
@@ -678,6 +694,19 @@ struct FrameRenderer::Impl {
   /// making a group of pictures cheaper, only somewhere else to put the cost,
   /// and the seconds before a cut are full of turns with room to spare.
   void prefetch_jump(Source& source, double target, bool budgeted = true);
+
+  /// The same for playing backwards: a run that *ends* at `until`, the last
+  /// frame of the clip the sequence is about to cut back into.
+  ///
+  /// Backwards, a cut lands on the end of the earlier clip, which is as likely
+  /// as not the middle of a group of pictures -- the whole group decoded to
+  /// reach it, on the frame of the cut. Fifty one-second cuts played in
+  /// reverse stalled up to 364 ms, nine times over 50 ms in six seconds.
+  void prefetch_jump_back(Source& source, double until, bool budgeted = true);
+
+  /// Looks a little way back down the sequence while it plays backwards.
+  void prefetch_cuts_back(const core::Project& project, double t,
+                          std::span<const render::PlannedLayer> now);
 
   /// Looks a little way down the sequence and starts whatever the cut after
   /// this one is going to need.
@@ -1040,6 +1069,155 @@ void FrameRenderer::Impl::prefetch_jump(Source& source, double target, bool budg
   }
 }
 
+void FrameRenderer::Impl::prefetch_jump_back(Source& source, double until, bool budgeted) {
+  if (!source.usable || !source.keep_ahead || source.keep == 0) return;
+  const bool same_cut = source.ahead_for == Source::Ahead::Jump && source.jump_back &&
+                        std::abs(until - source.jump_until) <= kFrameEpsilon;
+  if (same_cut && !source.extending) return;
+
+  if (source.ahead == nullptr) {
+    auto opened = open_decoder(source.path, static_cast<int>(source.keep), true);
+    if (!opened.has_value()) {
+      source.keep_ahead = false;
+      return;
+    }
+    source.ahead = std::move(*opened);
+  }
+
+  if (!same_cut) {
+    // Whatever was being built is for somewhere the playhead is not going: the
+    // run before this clip's, which the cut makes nobody's.
+    source.pending.clear();
+    const double fps = source.ahead->stream().fps;
+    const double gap = fps > 0.0 ? 1.0 / fps : kAssumedFrameGap;
+    // A whole run back from the end, so reverse has a run's worth of frames
+    // to play out while the one before it is decoded in the ordinary way.
+    const double from = std::max(0.0, until - static_cast<double>(source.keep - 1) * gap);
+    if (!source.ahead->seek(from)) {
+      source.keep_ahead = false;
+      source.forget_pending();
+      return;
+    }
+    source.ahead_position = -1.0;
+    source.jump_from = from;
+    source.jump_until = until;
+    source.jump_back = true;
+    source.pending_until = -1.0;
+    source.ahead_for = Source::Ahead::Jump;
+    source.extending = true;
+  }
+
+  const auto started = std::chrono::steady_clock::now();
+  while (source.extending) {
+    if (budgeted && std::chrono::steady_clock::now() - started >= kPrefetchBudget) return;
+
+    const auto got = source.ahead->next_frame();
+    if (!got) {
+      source.keep_ahead = false;
+      source.forget_pending();
+      return;
+    }
+    if (!*got) {
+      // The source ended first, so what was gathered runs to its end.
+      source.extending = false;
+      return;
+    }
+    source.ahead_position = source.ahead->timestamp();
+    // Past the clip's last frame: nothing more of it to show.
+    if (source.ahead_position > source.jump_until + source.slack) {
+      source.extending = false;
+      return;
+    }
+
+    std::unique_ptr<AVFrame, FrameDeleter> copy(av_frame_alloc());
+    if (copy && av_frame_ref(copy.get(), source.ahead->frame()) >= 0) {
+      source.pending.push_back(
+          Source::Recent{.at = source.ahead_position, .frame = std::move(copy)});
+      ++decoded_ahead;
+      // The newest run's worth, which is the end of the clip: the frames from
+      // the keyframe up to it are what the seek cost.
+      source.trim();
+    }
+    if (source.ahead_position >= source.jump_until - source.slack) source.extending = false;
+  }
+}
+
+void FrameRenderer::Impl::prefetch_cuts_back(const core::Project& project, double t,
+                                             std::span<const render::PlannedLayer> now) {
+  const auto measurer = [this](const core::Media& media) { return measure(media); };
+  const double earlier = t - kCutLookahead;
+  if (earlier < 0.0) return;
+  const double fps = project.sequence().fps > 0.0 ? project.sequence().fps : 30.0;
+
+  for (const render::PlannedLayer& layer : render::plan_frame(project, earlier, measurer)) {
+    if (layer.content != render::LayerContent::Video || layer.clip == nullptr) continue;
+    if (layer.media == nullptr || layer.media->path.empty()) continue;
+
+    // The clip the playhead will cut back into, by its last frame. Planned at
+    // that moment rather than worked out from the clip's trim, so speed and
+    // everything else the plan knows about come with it -- and so the target
+    // stays put as the playhead closes in, which a moment read off `earlier`
+    // would not.
+    const double last = core::clip_end(*layer.clip) - 0.5 / fps;
+    // Still inside it, so it is no cut: the run before the one in hand is the
+    // reverse prefetch's ordinary business.
+    if (last >= t - kFrameEpsilon) continue;
+
+    const auto found = sources.find(layer.media->id);
+    // Not open, and opening costs a quarter of a second on this thread.
+    if (found == sources.end()) continue;
+    Source& source = found->second;
+    if (!source.usable || source.recent.empty()) continue;
+
+    double until = -1.0;
+    for (const render::PlannedLayer& at_end : render::plan_frame(project, last, measurer)) {
+      if (at_end.clip == layer.clip) until = at_end.source_time * core::conform_speed(*layer.media);
+    }
+    if (until < 0.0) continue;
+
+    // Only when the run in hand reaches back to where the clip on screen
+    // begins in the source. Before then the run before it is still wanted,
+    // and the second decoder is busy with it.
+    const auto showing = std::ranges::find_if(now, [&](const render::PlannedLayer& live) {
+      return live.media == layer.media && live.content == render::LayerContent::Video;
+    });
+    if (showing != now.end() && showing->clip != nullptr) {
+      double starts = -1.0;
+      const double first = showing->clip->start + 0.5 / fps;
+      for (const render::PlannedLayer& at_start : render::plan_frame(project, first, measurer)) {
+        if (at_start.clip == showing->clip) {
+          starts = at_start.source_time * core::conform_speed(*layer.media);
+        }
+      }
+      // The same stretch of source either side of an edit, so reverse runs
+      // on into it with nothing to prepare.
+      if (std::abs(starts - until - source.slack * 2.0) <= source.slack * 2.0) continue;
+      if (starts < 0.0 || source.recent.front().at > starts + source.slack) continue;
+    }
+
+    std::unique_lock<std::mutex> held(source.shared->lock, std::try_to_lock);
+    if (!held.owns_lock() || source.shared->posted) continue;
+    if (source.ahead_for == Source::Ahead::Jump && source.jump_back &&
+        std::abs(source.jump_until - until) <= kFrameEpsilon) {
+      continue;
+    }
+    source.shared->posted = true;
+    // The span the run will answer, which is what the serving path compares a
+    // request against to decide whether waiting for the reader is worth it.
+    const double gap = 1.0 / std::max(1.0, source.decoder->stream().fps);
+    source.shared->target.store(
+        std::max(0.0, until - static_cast<double>(source.keep - 1) * gap));
+    source.shared->target_end.store(until);
+    held.unlock();
+    Source* raw = &source;
+    reader.post([this, raw, until] {
+      const std::lock_guard<std::mutex> working(raw->shared->lock);
+      raw->shared->posted = false;
+      prefetch_jump_back(*raw, until, false);
+    });
+  }
+}
+
 void FrameRenderer::Impl::prefetch_cuts(const core::Project& project, double t,
                                         std::span<const render::PlannedLayer> now) {
   // What the sequence will be showing shortly. Planned rather than guessed: the
@@ -1106,6 +1284,7 @@ void FrameRenderer::Impl::prefetch_cuts(const core::Project& project, double t,
     if (!held.owns_lock() || source.shared->posted) continue;
     source.shared->posted = true;
     source.shared->target.store(wanted);
+    source.shared->target_end.store(wanted + kSameCut);
     held.unlock();
     Source* raw = &source;
     reader.post([this, raw, wanted] {
@@ -1266,8 +1445,9 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // *behind* where this decoder is reading. Testing only the start made every
   // frame after posting such a cut wait for the reader's whole job.
   if (!held.owns_lock() && source.remembered(time) == nullptr) {
-    const double cut = source.shared->target.load();
-    if (cut >= 0.0 && time >= cut - kFrameEpsilon && time < cut + kSameCut) held.lock();
+    const double begins = source.shared->target.load();
+    const double ends = source.shared->target_end.load();
+    if (begins >= 0.0 && time >= begins - source.slack && time <= ends + source.slack) held.lock();
   }
 
   if (held.owns_lock() && source.remembered(time) == nullptr && source.extending) {
@@ -1276,7 +1456,14 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
       // unbudgeted still beats abandoning it: the seek is already paid for and
       // the group of pictures is already part decoded, where starting over
       // means doing both again.
-      if (time >= source.jump_from - kFrameEpsilon) prefetch_jump(source, source.jump_from, false);
+      if (source.jump_back) {
+        if (time >= source.jump_from - kFrameEpsilon &&
+            time <= source.jump_until + source.slack) {
+          prefetch_jump_back(source, source.jump_until, false);
+        }
+      } else if (time >= source.jump_from - kFrameEpsilon) {
+        prefetch_jump(source, source.jump_from, false);
+      }
     } else if (time < source.pending_until + kFrameEpsilon) {
       decode_ahead(source, false);
     }
@@ -1600,9 +1787,13 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
   // After compositing rather than before, so a frame that is due is never
   // waiting behind work for a frame that is not.
   //
-  // Only while the timeline is going forwards. Backwards has its own run, and a
-  // cut "ahead" of a playhead going the other way is one it will never reach.
-  if (!d.playing_backwards) d.prefetch_cuts(project, t, planned);
+  // Each direction looks the way it is going: a cut "ahead" of a playhead going
+  // the other way is one it will never reach.
+  if (d.playing_backwards) {
+    d.prefetch_cuts_back(project, t, planned);
+  } else {
+    d.prefetch_cuts(project, t, planned);
+  }
 
   return composed;
 }

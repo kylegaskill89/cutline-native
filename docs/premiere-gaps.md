@@ -1833,6 +1833,7 @@ the work happens and what waits for it.
 | Nested and retimed audio | streamed | **decoded whole, up front** — a nest's mix and any retimed clip are rendered before playback begins | wiring |
 | Undo in a long session | cheap per step | each step is a full deep copy of the project; harmless now, and unmeasured at size | audit |
 | Crossing a cut | the next clip is read ahead | **done** — the far side of a cut is read on a thread of its own, on its own decoding device; see below | — |
+| Reverse and J/K/L at 1× | smooth on intra and short-GOP media; long-GOP reverse is costly in Premiere too | **within one clip, yes** — nothing over 50 ms. **Across fifty one-second cuts of a 4.17 s-GOP capture, nearly** — 49 pictures a second, 3 to 6 gaps over 50 ms in six seconds, against 34 and nine; see §7.1 | measured |
 | Painting a long timeline | full rate | **yes** — it was never the painting: 0.3 ms to refresh and 3.5–7 ms to paint at 4K (`--benchmark <project>`). Playback set the playhead to the *nearest* frame while deciding a frame was new by truncating, so one frame in four was drawn twice and the next never; see §7.1 | done |
 
 **The plan is to fix the shape rather than shave the costs.** A ring of
@@ -1901,6 +1902,39 @@ fixed. It is not in.
 
 What is left on the fifty cuts is the picture trailing the timecode, 50 to
 56: frames the render thread has not finished when the interface wants them.
+
+**Reverse, J at 1×**, from the end of each fixture, sampled the same way:
+
+| | before | now |
+|---|---|---|
+| One 4K60 clip | 52.5/s, worst 73 ms, 2 over 50 | **52.7/s, worst 49 ms, none over 50** |
+| Fifty one-second cuts | 34.2/s, worst 364 ms, 9 over 50 | **49/s, worst 72–97 ms, 3 to 6 over 50** |
+| Fifty cuts, bare renderer, paced | — | after the first cut, nothing over 26 ms |
+
+Three changes. Backwards, a cut lands on the *end* of the earlier clip, and
+nothing prepared it: the cut reader only looked ahead of forward play. It now
+looks behind as well, and builds a run that ends on the earlier clip's last
+frame. The serving path's wait for the reader assumed every job answered half
+a second from its *start*; a backwards run ends at its cut, so the very frame
+it was built for fell outside the window, and the serving path sought the
+group of pictures the reader was a few frames from finishing. The job now says
+which span it answers. And the monitor's engine renders ahead in the
+direction a shuttle is going, where it used to render a shuttle a frame at a
+time on demand.
+
+Two things were tried and are not in. Reading the run *before* the one in
+hand on the reader thread, rather than in budgeted slices of the render
+thread, made the clip-only case cleaner and the cuts worse — worst 206 to 241
+ms — because it queued in front of the backwards cut jobs on the one reader.
+And the render-ahead could not by itself bank frames on the cuts, because the
+budgeted slices near the end of a run cost more than a frame's time.
+
+What remains on the cuts is decode throughput. Each half second of 1×
+reverse across them needs a fresh group of pictures, up to 280 frames of 4K
+HEVC, from one second decoder per source — about what a decoder manages in
+that half second. Going further needs the run before and the next cut built at
+once, which is a third decoder per source: another surface pool, about 450 MB
+of video memory at 4K, while reversing. That is a trade for the owner.
 
 **The render thread was not enough on its own.** With the work moved off the
 interface thread the interface still painted twelve times a second under a

@@ -11,10 +11,10 @@
 /// Premiere renders on worker threads and the interface only picks finished
 /// pictures up; this is that.
 ///
-/// The interface says what it *wants* — this project, this moment, playing or
-/// not — and returns at once. A thread renders whatever the latest want is,
-/// and while playing renders the frames after it too, so they are ready before
-/// the playhead arrives. The interface asks for the picture for *now* each time
+/// The interface says what it *wants* — this project, this moment, and how
+/// fast the playhead is moving — and returns at once. A thread renders whatever
+/// the latest want is, and while the playhead moves renders the frames it is
+/// moving towards too, so they are ready before it arrives. The interface asks for the picture for *now* each time
 /// it turns, and gets the best one that is ready.
 ///
 /// Two of these exist: one for the program monitor and one for the source
@@ -66,10 +66,16 @@ class PreviewEngine {
   /// The project is held, not copied, and is never written to. Pass the same
   /// pointer for the same project: a different pointer is a different project,
   /// and every picture rendered from the old one is thrown away.
-  void want(std::shared_ptr<const core::Project> project, double t, bool playing);
+  ///
+  /// `rate` is how fast the playhead is moving, in sequence seconds a second:
+  /// 0 when it is still or being scrubbed, 1 for playback, and a shuttle's own
+  /// rate, backwards included. Rendering ahead goes the way it points, a frame
+  /// for every frame the playhead crosses in a frame's time.
+  void want(std::shared_ptr<const core::Project> project, double t, double rate);
 
   /// The picture to show for `t`, if there is a better one ready than the one
-  /// already up. While playing that is the latest frame not after `t`; when
+  /// already up. While moving that is the frame nearest `t` not beyond it in
+  /// the direction of travel -- the latest not after it, going forwards; when
   /// still, it is the frame at `t`, or failing that the most recent picture
   /// for this project — a scrub showing where it was a moment ago is better
   /// than a scrub showing nothing.

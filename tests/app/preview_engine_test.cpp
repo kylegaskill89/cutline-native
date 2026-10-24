@@ -101,7 +101,7 @@ class PreviewEngineTest : public ::testing::Test {
 };
 
 TEST_F(PreviewEngineTest, AWantIsAnsweredWithItsPicture) {
-  engine_->want(matte_project("#ff0000"), 0.0, false);
+  engine_->want(matte_project("#ff0000"), 0.0, 0.0);
   ASSERT_TRUE(await_picture(0.0));
   EXPECT_EQ(shown_red(), 255);
 }
@@ -111,11 +111,11 @@ TEST_F(PreviewEngineTest, AskingNeverWaitsForARender) {
   // window for as long as the decode took; asking must cost the same whether
   // the thread is idle or in the middle of the most expensive frame it has.
   const auto slow = slow_project();
-  engine_->want(slow, 0.0, false);
+  engine_->want(slow, 0.0, 0.0);
   std::this_thread::sleep_for(5ms);  // so the thread is well into it
 
   const auto began = std::chrono::steady_clock::now();
-  for (int i = 1; i <= 20; ++i) engine_->want(slow, i / 30.0, false);
+  for (int i = 1; i <= 20; ++i) engine_->want(slow, i / 30.0, 0.0);
   (void)engine_->take(0.0);
   const auto spent = std::chrono::steady_clock::now() - began;
   EXPECT_LT(spent, 20ms) << "twenty wants and a take waited on the render thread";
@@ -125,7 +125,7 @@ TEST_F(PreviewEngineTest, TheLatestWantWins) {
   // A scrub is a want per mouse move. Rendering every one of them in turn
   // would leave the picture further behind the pointer with every move.
   const auto slow = slow_project();
-  for (int i = 0; i < 30; ++i) engine_->want(slow, i / 30.0, false);
+  for (int i = 0; i < 30; ++i) engine_->want(slow, i / 30.0, 0.0);
   ASSERT_TRUE(await_picture(29 / 30.0, 30000ms));
   // Settle on the last one, which may be a moment behind the first picture.
   for (int i = 0; i < 100 && engine_->frames_rendered() < 2; ++i) {
@@ -137,7 +137,7 @@ TEST_F(PreviewEngineTest, TheLatestWantWins) {
 
 TEST_F(PreviewEngineTest, PlayingRendersAhead) {
   const auto green = matte_project("#00ff00");
-  engine_->want(green, 0.0, true);
+  engine_->want(green, 0.0, 1.0);
   // Nothing is taken, so everything it does is ahead of the playhead: one
   // frame per slot less the one the interface may be copying from.
   for (int i = 0; i < 500 && engine_->frames_rendered() < 3; ++i) {
@@ -149,7 +149,7 @@ TEST_F(PreviewEngineTest, PlayingRendersAhead) {
 
   // And the playhead moving on, as it does each turn of the interface's loop,
   // lets it carry on into the room the frames behind it leave.
-  engine_->want(green, 2 / 30.0, true);
+  engine_->want(green, 2 / 30.0, 1.0);
   ASSERT_TRUE(await_picture(2 / 30.0));
   for (int i = 0; i < 500 && engine_->frames_rendered() < 5; ++i) {
     std::this_thread::sleep_for(2ms);
@@ -157,20 +157,36 @@ TEST_F(PreviewEngineTest, PlayingRendersAhead) {
   EXPECT_GE(engine_->frames_rendered(), 5u);
 }
 
-TEST_F(PreviewEngineTest, AChangedProjectReplacesWhatWasRenderedForTheOldOne) {
-  // An edit during playback: pictures of the old project waiting in the ring
-  // must not be shown after it, or the edit appears a few frames late.
-  engine_->want(matte_project("#ff0000"), 0.0, true);
+TEST_F(PreviewEngineTest, ShuttlingBackwardsRendersTheFramesBehindThePlayhead) {
+  const auto green = matte_project("#00ff00");
+  engine_->want(green, 1.0, -1.0);
   for (int i = 0; i < 500 && engine_->frames_rendered() < 3; ++i) {
     std::this_thread::sleep_for(2ms);
   }
-  engine_->want(matte_project("#000000"), 0.0, true);
+  ASSERT_EQ(engine_->frames_rendered(), 3u);
+
+  // Two frames back are already there, so the picture for them is waiting
+  // rather than being rendered on being asked for.
+  engine_->want(green, 28 / 30.0, -1.0);
+  const auto got = engine_->take(28 / 30.0);
+  ASSERT_TRUE(got.has_value()) << got.error();
+  EXPECT_TRUE(got->has_value()) << "the frames behind the playhead were not rendered ahead";
+}
+
+TEST_F(PreviewEngineTest, AChangedProjectReplacesWhatWasRenderedForTheOldOne) {
+  // An edit during playback: pictures of the old project waiting in the ring
+  // must not be shown after it, or the edit appears a few frames late.
+  engine_->want(matte_project("#ff0000"), 0.0, 1.0);
+  for (int i = 0; i < 500 && engine_->frames_rendered() < 3; ++i) {
+    std::this_thread::sleep_for(2ms);
+  }
+  engine_->want(matte_project("#000000"), 0.0, 1.0);
   ASSERT_TRUE(await_picture(0.0));
   EXPECT_EQ(shown_red(), 0);
 }
 
 TEST_F(PreviewEngineTest, ACaptureIsTheFrameItWasAskedFor) {
-  engine_->want(matte_project("#000000"), 0.0, false);
+  engine_->want(matte_project("#000000"), 0.0, 0.0);
   const auto image = engine_->capture(matte_project("#ff0000"), 0.0);
   ASSERT_TRUE(image.has_value()) << image.error();
   EXPECT_EQ(image->pixels[0], 255);
@@ -178,7 +194,7 @@ TEST_F(PreviewEngineTest, ACaptureIsTheFrameItWasAskedFor) {
 
 TEST_F(PreviewEngineTest, ItStopsWhileARenderIsRunning) {
   // Closing the window during a slow frame must neither hang nor crash.
-  engine_->want(slow_project(), 0.0, true);
+  engine_->want(slow_project(), 0.0, 1.0);
   std::this_thread::sleep_for(5ms);
   engine_.reset();
   SUCCEED();

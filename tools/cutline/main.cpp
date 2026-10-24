@@ -4266,7 +4266,8 @@ void refresh_preview(App& app) {
   // without one the two have nothing in common and it has to come back through
   // memory, which waits — that machine was always going to be the slow one.
   if (app.shares_device() && std::getenv("CUTLINE_CPU_PREVIEW") == nullptr) {
-    engine->want(project, app.session.playhead(), app.playing());
+    // A shuttle is the playhead moving too, at its own rate and either way.
+    engine->want(project, app.session.playhead(), app.playing() ? 1.0 : app.shuttle);
     poll_preview(app);
     return;
   }
@@ -4613,7 +4614,7 @@ void refresh_source([[maybe_unused]] App& app) {
 
   const double at = std::clamp(app.source_playhead, 0.0, std::max(0.0, media->duration));
   if (app.shares_device()) {
-    engine->want(app.source_snapshot, at, app.source_playing());
+    engine->want(app.source_snapshot, at, app.source_playing() ? 1.0 : 0.0);
     poll_source(app);
     return;
   }
@@ -6008,7 +6009,11 @@ void advance_shuttle(App& app) {
   // a shuttle rebuilt the timeline and asked for a render as fast as the loop
   // could turn, which is a busy core for pictures nobody sees.
   const double fps = app.session.project().sequence().fps > 0.0 ? app.session.project().sequence().fps : 30.0;
-  const auto frame = static_cast<long long>(app.session.playhead() * fps);
+  // Rounded, not truncated: the playhead is already on the frame grid, and
+  // frame k times the rate can come out a hair under k, which truncation
+  // turns into the frame before -- one already shown, so this one was never
+  // drawn.
+  const auto frame = std::llround(app.session.playhead() * fps);
   if (frame == app.shown_frame) {
     Sleep(1);
     return;
