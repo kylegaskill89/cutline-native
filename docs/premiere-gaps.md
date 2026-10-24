@@ -1823,15 +1823,17 @@ the work happens and what waits for it.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| Rendering off the interface thread | the playback engine renders ahead on worker threads; the interface picks up finished frames | **none** — `refresh_preview` decodes and composites on the UI thread, so a seek across a cut (96–287 ms) freezes input for its whole length | machinery |
-| Frames in flight on the card | yes | **none** — one allocator and one command list in `gpu::Device`, so `compose` and `display_texture` each submit and drain; two full round trips a frame | machinery |
-| Editing while it plays | playback carries on through an edit | **none** — any edit stops playback, because the player decoded what it needs up front and has nothing to update in place | machinery |
+| Rendering off the interface thread | the playback engine renders ahead on worker threads; the interface picks up finished frames | **done** — `app::PreviewEngine`, a render thread per monitor with a queue of its own on the card; see below | — |
+| Frames in flight on the card | yes | **deferred, with a measurement** — each compositor has its own command list and waits only on its own fence; the drains themselves measured at a millisecond or two, see below | — |
+| Editing while it plays | playback carries on through an edit | **mostly** — the row was stale: `rebuild_playback` resumes after an edit with a gap of about 25 ms. Seamless means replanning the mixer while its device runs | machinery |
 | Export pipelined | render, convert and encode overlap; the card feeds the hardware encoder | **none** — render, drain, an 8-bit RGBA readback (~33 MB a 4K frame), a CPU `sws_scale`, then encode, strictly in turn; about 2× realtime | machinery |
 | Precision on the way out | 10-bit and float paths to the encoder | **none** — the readback is 8-bit, so the float compositor's precision is thrown away at the last step | machinery |
 | A large pool is cheap until looked at | yes | **no** — forty 4K sources sit at ~1.36 GB with one filmstrip drawn, and nobody has taken the number apart | audit |
 | Filmstrips for a folder of rushes | seconds | ten seconds a source at first, twenty-five by the twentieth — something accumulates | audit |
 | Nested and retimed audio | streamed | **decoded whole, up front** — a nest's mix and any retimed clip are rendered before playback begins | wiring |
 | Undo in a long session | cheap per step | each step is a full deep copy of the project; harmless now, and unmeasured at size | audit |
+| Crossing a cut | the next clip is read ahead | **done** — the far side of a cut is read on a thread of its own, on its own decoding device; see below | — |
+| Painting a long timeline | full rate | **no** — on a hundred-clip timeline the interface paints 43 times a second rather than 60, and the picture follows it | audit |
 
 **The plan is to fix the shape rather than shave the costs.** A ring of
 command allocators so the card holds frames in flight; a playback engine that
@@ -1858,6 +1860,53 @@ them — the handoff's §7B explains why moving the wait alone hangs.
 Each target is to be met with a number in this section beside it, taken the way
 the handoff's playback measurements were — from outside the process, with
 `play_project` as the control — rather than declared.
+
+### 7.1 Measured so far
+
+Two tools, both reproducible. `render_frame <project> <t> <out.png> <frames>`
+walks frames through the bare renderer and prints percentiles;
+`CUTLINE_REALTIME=1` paces it to the project's rate — flat out, anything
+working ahead of the playhead gets a fraction of the time it has in real
+playback — and `CUTLINE_FRAME_LOG=<file>` writes every frame's cost. The
+running application is measured by sampling the program monitor and the
+timecode off the screen together, ~83 times a second; the timecode counts the
+interface's own paints, so a frozen window shows as a frozen timecode.
+
+| | before | now | target |
+|---|---|---|---|
+| Plain 4K60, the application | 56.9/s | **56.8/s** picture, 60.0/s interface, nothing over 50 ms | 60/s |
+| Sixteen blurs on 4K60, interface rate | 12.0/s, worst 183 ms | **59.2/s, worst 36 ms** | never blocked |
+| Sixteen blurs, picture | 10.0/s | 9.4/s — the card's own limit, 78 ms a frame | — |
+| Fifty one-second cuts, bare renderer, paced | p95 29.5, worst 421 ms | **p95 4.1, worst 7.6 ms** | ≤ 2 frames |
+| Fifty cuts, the application | worst 842 ms, 14 over 50 ms | worst 62 ms, 4 over 50 ms | ≤ 2 frames |
+
+The last row is short of the target, and the reason is no longer the picture:
+the interface itself turns 43 times a second on that hundred-clip timeline,
+and the picture can only go up when the interface paints. That is the
+"painting a long timeline" row above.
+
+**The render thread was not enough on its own.** With the work moved off the
+interface thread the interface still painted twelve times a second under a
+heavy stack, because its paint queued *on the card* behind 78 ms of
+compositing: one queue. A render thread's queue of its own, at a lower
+priority than the interface's, is what took it to 59.
+
+**Crossing cuts was four faults, not one.** The far side of a cut was read in
+twelve-millisecond slices of the render thread; it is read on a reader thread
+now. But half the cuts were never read at all, because the direction of play
+was taken from the *source* — a cut back into the same capture moves the
+source backwards while the sequence plays forwards — in three separate places.
+And the reader and the serving decoder shared one Direct3D 11 device, so the
+serving decoder's copy queued behind the reader's whole group of pictures, 28
+ms a frame while a run was read.
+
+**The drains were measured before being removed, and were not removed.**
+`render_frame` with the display pass included: 2.1 ms a frame with no effects,
+78 ms with sixteen per-pixel passes, before and after a command list per
+compositor. The first is fast enough not to matter and the second is the
+card's own work. The drains also guard a real hazard — a decoder's shared
+texture is overwritten by its next frame — so they stay until a measurement
+says they cost something.
 
 ## 8. Colour pipeline: 10-bit and HDR
 
