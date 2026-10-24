@@ -77,6 +77,11 @@ set(CPACK_NSIS_MUI_UNIICON "${CUTLINE_NSIS_ICON}")
 # downloads, verifies, starts this and closes itself -- and an update that left
 # the user staring at a desktop would be one they had to think about.
 set(CPACK_NSIS_MUI_FINISHPAGE_RUN "cutline.exe")
+# Where that is, relative to the install directory. CPack builds the finish
+# page's command as `$INSTDIR\<this>\cutline.exe` and defaults it to `bin`, while
+# the executable is installed at the root -- so "Run Cutline" was ticked, pressed,
+# and launched a file that did not exist, silently.
+set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
 
 set(CPACK_NSIS_CREATE_ICONS_EXTRA
   "CreateShortCut '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Cutline.lnk' '$INSTDIR\\\\cutline.exe'")

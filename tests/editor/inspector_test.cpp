@@ -53,7 +53,7 @@ using core::TrackKind;
 /// `clip_parameters` returns a vector, so nearly every call site here passes a
 /// temporary. A helper handing back a pointer into it dangles at the semicolon,
 /// and the symptom is a test that reads a plausible number out of freed memory
-/// and passes â€” which is exactly what happened before this returned a copy.
+/// and passes — which is exactly what happened before this returned a copy.
 [[nodiscard]] std::optional<ParamSpec> find(const std::vector<ParamSpec>& specs,
                                             ClipParam param) {
   const auto found = std::ranges::find(specs, param, &ParamSpec::param);
