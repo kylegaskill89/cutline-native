@@ -27,6 +27,11 @@ struct PlaneDescription {
 struct Compositor::Impl {
   std::shared_ptr<Device> owner;
 
+  /// This compositor's own command list. Its own so that a compositor can live
+  /// on a thread of its own, and waited on by its own fence so that it never
+  /// waits for anybody else's work.
+  Recorder recorder;
+
   ComPtr<ID3D12RootSignature> root_signature;
   ComPtr<ID3D12PipelineState> pipeline_normal;
   ComPtr<ID3D12PipelineState> pipeline_add;

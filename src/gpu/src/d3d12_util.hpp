@@ -14,6 +14,7 @@
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -143,11 +144,16 @@ inline constexpr UINT kSlotsPerLayer = 5;
 [[nodiscard]] std::expected<std::vector<std::byte>, std::string> read_file(
     const std::filesystem::path& path);
 
-/// The device, its queue, and the single command list everything records into.
+/// The device, its queue, and the one fence every submission is counted on.
 ///
-/// One command list, submitted and waited on per operation, is deliberate for
-/// now: it makes upload aliasing impossible by construction. Overlapping frames
-/// is a throughput optimisation to make once there is something to measure.
+/// It holds no command list. It used to hold the only one, and everything
+/// recorded into it: every compositor, the presenter, and through them every
+/// thread that might ever render. That was safe for as long as one thread drew
+/// everything, and it is the first thing a render thread breaks — two threads
+/// resetting one allocator is not a slow path, it is a removed device. So a
+/// command list belongs to whoever records into it (`Recorder`, below), and
+/// what is shared is only what has to be: the queue, which Direct3D makes safe
+/// to submit to from any thread, and the fence that orders it.
 struct Device::Impl {
   ComPtr<IDXGIFactory6> factory;
   /// Kept rather than dropped after the device is made, because Skia wants the
@@ -158,25 +164,64 @@ struct Device::Impl {
   ComPtr<IDXGIAdapter1> adapter_object;
   ComPtr<ID3D12Device> device;
   ComPtr<ID3D12CommandQueue> queue;
-  ComPtr<ID3D12CommandAllocator> allocator;
-  ComPtr<ID3D12GraphicsCommandList> commands;
 
   ComPtr<ID3D12Fence> fence;
-  HANDLE fence_event = nullptr;
-  UINT64 fence_value = 0;
 
   std::string adapter;
   bool software = false;
 
-  /// Resets the allocator and opens the command list for recording.
-  [[nodiscard]] std::expected<void, std::string> begin();
+  /// Signals the fence on the queue with a new value and returns it: the value
+  /// the fence will reach once everything submitted so far has finished.
+  ///
+  /// Under a lock, because the increment and the signal have to happen as one.
+  /// Two threads each taking a number and then signalling in the other order
+  /// would set the fence *backwards* — Direct3D allows it — and everything
+  /// waiting on the higher value would be released early.
+  [[nodiscard]] UINT64 signal();
 
-  /// Closes the command list and submits it. Does not wait.
-  [[nodiscard]] std::expected<void, std::string> submit();
+  /// Blocks until the fence reaches `value`. Safe from any thread: it waits on
+  /// an event of its own rather than one shared event two threads could arm at
+  /// once.
+  void wait_for(UINT64 value);
 
+  /// Everything submitted by anybody, finished. For the moments something
+  /// shared is about to be freed — a target another thread may be drawing from.
   void wait_for_idle();
 
-  ~Impl();
+  std::mutex signal_lock;
+  UINT64 fence_value = 0;
+};
+
+/// One command list and the allocator behind it, owned by whoever records.
+///
+/// Each submission is waited on before the next one begins, by the recorder's
+/// own fence value rather than by draining the queue: a compositor on a render
+/// thread must not wait for the interface's own drawing to finish, nor for the
+/// source monitor's. It does mean nothing a recorder submitted is ever still in
+/// flight when it next touches its own resources, which is what lets those be
+/// rebuilt without a wait of their own.
+struct Recorder {
+  ComPtr<ID3D12CommandAllocator> allocator;
+  ComPtr<ID3D12GraphicsCommandList> list;
+  /// The fence value the last submission will have reached once it is done.
+  UINT64 submitted = 0;
+
+  [[nodiscard]] std::expected<void, std::string> create(Device::Impl& gpu);
+
+  /// Waits for the last submission, then opens the list for recording.
+  [[nodiscard]] std::expected<ID3D12GraphicsCommandList*, std::string> begin(Device::Impl& gpu);
+
+  /// Closes the list and submits it, without waiting.
+  [[nodiscard]] std::expected<void, std::string> submit(Device::Impl& gpu);
+
+  /// Waits for what `submit` sent.
+  void finish(Device::Impl& gpu) { gpu.wait_for(submitted); }
+
+  /// Closes a list that is being abandoned part-way, so the next `begin` can
+  /// reset it. Nothing is submitted.
+  void abandon() noexcept {
+    if (list) list->Close();
+  }
 };
 
 }  // namespace cutline::gpu

@@ -15,6 +15,7 @@
 #include "cutline/engine/frame_renderer.hpp"
 #include "cutline/gpu/device.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -211,19 +212,45 @@ int main(int argc, char** argv) {
   }
 
   if (frames > 1) {
+    // Each frame as the preview pays for it: the composite *and* the display
+    // pass that hands the picture to the window, which is a second submission
+    // and was a second wait. Timing the composite alone measured the half of
+    // the cost that was not in question.
+    std::vector<double> each;
+    each.reserve(static_cast<std::size_t>(frames));
     const auto started = std::chrono::steady_clock::now();
     for (int i = 1; i < frames; ++i) {
+      const auto began = std::chrono::steady_clock::now();
       if (auto ok = (*renderer)->render(project, time + step * i); !ok) {
         std::println(stderr, "render failed at frame {}: {}", i, ok.error());
         return 1;
       }
+      if (auto shown = (*renderer)->compositor().display_texture(); !shown) {
+        std::println(stderr, "display failed at frame {}: {}", i, shown.error());
+        return 1;
+      }
+      each.push_back(
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began)
+              .count());
     }
+    // Everything submitted has to have *finished* before the clock stops, or a
+    // pipeline that queues work and returns at once would look free.
+    (*device)->wait_for_idle();
     const double seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     const int timed = frames - 1;
     std::println("{} frames in {:.2f}s   {:.1f} fps   {:.2f} ms/frame", timed, seconds,
                  seconds > 0.0 ? timed / seconds : 0.0,
                  timed > 0 ? seconds * 1000.0 / timed : 0.0);
+
+    // The spread, because an average cannot tell thirty even frames from
+    // twenty-nine and a stall, and the stall is what anybody watching sees.
+    std::ranges::sort(each);
+    const auto at = [&each](double fraction) {
+      return each[std::min(each.size() - 1, static_cast<std::size_t>(fraction * each.size()))];
+    };
+    std::println("  per frame: median {:.2f}   p95 {:.2f}   p99 {:.2f}   worst {:.2f} ms",
+                 at(0.5), at(0.95), at(0.99), each.back());
 
     // What the time went on. A run that seeks per frame and one that decodes
     // per frame look identical from outside and want opposite fixes.

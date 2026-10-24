@@ -99,38 +99,69 @@ std::expected<ComPtr<ID3D12RootSignature>, std::string> create_root_signature(
 
 // ------------------------------------------------------------------ Device --
 
-Device::Impl::~Impl() {
-  if (fence_event != nullptr) CloseHandle(fence_event);
+UINT64 Device::Impl::signal() {
+  const std::lock_guard<std::mutex> held(signal_lock);
+  const UINT64 value = ++fence_value;
+  // A failed signal leaves the fence short of `value`, and a wait for it would
+  // never return. Reporting the last value instead makes such a wait a wait
+  // for what was already submitted, which is the most this can still promise.
+  if (FAILED(queue->Signal(fence.Get(), value))) return value - 1;
+  return value;
 }
 
-std::expected<void, std::string> Device::Impl::begin() {
-  if (HRESULT hr = allocator->Reset(); FAILED(hr)) {
-    return std::unexpected(std::format("cannot reset the allocator: {}", hresult_string(hr)));
-  }
-  if (HRESULT hr = commands->Reset(allocator.Get(), nullptr); FAILED(hr)) {
-    return std::unexpected(std::format("cannot reset the command list: {}", hresult_string(hr)));
-  }
-  return {};
-}
-
-std::expected<void, std::string> Device::Impl::submit() {
-  if (HRESULT hr = commands->Close(); FAILED(hr)) {
-    return std::unexpected(std::format("cannot close the command list: {}", hresult_string(hr)));
-  }
-  ID3D12CommandList* lists[] = {commands.Get()};
-  queue->ExecuteCommandLists(1, lists);
-  return {};
+void Device::Impl::wait_for(UINT64 value) {
+  if (!fence || fence->GetCompletedValue() >= value) return;
+  // A null event makes the call block until the fence arrives. Each waiter
+  // therefore has its own wait, where one event shared by every thread could be
+  // armed by two of them for different values and released for the wrong one.
+  fence->SetEventOnCompletion(value, nullptr);
 }
 
 void Device::Impl::wait_for_idle() {
   if (!queue || !fence) return;
+  wait_for(signal());
+}
 
-  const UINT64 target = ++fence_value;
-  if (FAILED(queue->Signal(fence.Get(), target))) return;
-  if (fence->GetCompletedValue() < target) {
-    fence->SetEventOnCompletion(target, fence_event);
-    WaitForSingleObject(fence_event, INFINITE);
+// ---------------------------------------------------------------- Recorder --
+
+std::expected<void, std::string> Recorder::create(Device::Impl& gpu) {
+  if (HRESULT hr = gpu.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                                      IID_PPV_ARGS(&allocator));
+      FAILED(hr)) {
+    return std::unexpected(
+        std::format("cannot create a command allocator: {}", hresult_string(hr)));
   }
+  if (HRESULT hr = gpu.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                                 allocator.Get(), nullptr, IID_PPV_ARGS(&list));
+      FAILED(hr)) {
+    return std::unexpected(std::format("cannot create a command list: {}", hresult_string(hr)));
+  }
+  list->Close();
+  return {};
+}
+
+std::expected<ID3D12GraphicsCommandList*, std::string> Recorder::begin(Device::Impl& gpu) {
+  // Resetting an allocator whose commands are still executing is undefined, and
+  // in practice a removed device. Normally already finished, since `finish`
+  // follows every submit; this is what makes it safe when somebody forgot.
+  gpu.wait_for(submitted);
+  if (HRESULT hr = allocator->Reset(); FAILED(hr)) {
+    return std::unexpected(std::format("cannot reset the allocator: {}", hresult_string(hr)));
+  }
+  if (HRESULT hr = list->Reset(allocator.Get(), nullptr); FAILED(hr)) {
+    return std::unexpected(std::format("cannot reset the command list: {}", hresult_string(hr)));
+  }
+  return list.Get();
+}
+
+std::expected<void, std::string> Recorder::submit(Device::Impl& gpu) {
+  if (HRESULT hr = list->Close(); FAILED(hr)) {
+    return std::unexpected(std::format("cannot close the command list: {}", hresult_string(hr)));
+  }
+  ID3D12CommandList* lists[] = {list.Get()};
+  gpu.queue->ExecuteCommandLists(1, lists);
+  submitted = gpu.signal();
+  return {};
 }
 
 Device::Device(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -206,27 +237,11 @@ std::expected<std::shared_ptr<Device>, std::string> Device::create(DeviceOptions
     return std::unexpected(std::format("cannot create a command queue: {}", hresult_string(hr)));
   }
 
-  if (HRESULT hr = impl->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                                        IID_PPV_ARGS(&impl->allocator));
-      FAILED(hr)) {
-    return std::unexpected(
-        std::format("cannot create a command allocator: {}", hresult_string(hr)));
-  }
-  if (HRESULT hr =
-          impl->device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, impl->allocator.Get(),
-                                          nullptr, IID_PPV_ARGS(&impl->commands));
-      FAILED(hr)) {
-    return std::unexpected(std::format("cannot create a command list: {}", hresult_string(hr)));
-  }
-  impl->commands->Close();
-
   if (HRESULT hr =
           impl->device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&impl->fence));
       FAILED(hr)) {
     return std::unexpected(std::format("cannot create a fence: {}", hresult_string(hr)));
   }
-  impl->fence_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-  if (impl->fence_event == nullptr) return std::unexpected("cannot create a fence event");
 
   return std::shared_ptr<Device>(new Device(std::move(impl)));
 }

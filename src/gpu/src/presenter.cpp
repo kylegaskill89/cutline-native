@@ -43,6 +43,8 @@ struct Fitted {
 
 struct Presenter::Impl {
   std::shared_ptr<Device> owner;
+  /// Its own command list, for the reason `Recorder` gives.
+  Recorder recorder;
 
   ComPtr<IDXGISwapChain3> swapchain;
   ComPtr<ID3D12RootSignature> root_signature;
@@ -72,6 +74,7 @@ std::expected<std::unique_ptr<Presenter>, std::string> Presenter::create(
 
   auto impl = std::make_unique<Impl>();
   impl->owner = std::move(device);
+  if (auto ok = impl->recorder.create(impl->gpu()); !ok) return std::unexpected(ok.error());
   impl->width = std::max(1, width);
   impl->height = std::max(1, height);
 
@@ -191,8 +194,9 @@ std::expected<void, std::string> Presenter::present(Compositor& scene) {
   d.gpu().device->CreateShaderResourceView(scene.internals().scene.Get(), nullptr,
                                            d.srv_heap->GetCPUDescriptorHandleForHeapStart());
 
-  if (auto ok = d.gpu().begin(); !ok) return std::unexpected(ok.error());
-  ID3D12GraphicsCommandList* commands = d.gpu().commands.Get();
+  const auto opened = d.recorder.begin(d.gpu());
+  if (!opened) return std::unexpected(opened.error());
+  ID3D12GraphicsCommandList* commands = *opened;
 
   const UINT index = d.swapchain->GetCurrentBackBufferIndex();
   auto to_target = transition(d.back_buffers[index].Get(), D3D12_RESOURCE_STATE_PRESENT,
@@ -234,7 +238,7 @@ std::expected<void, std::string> Presenter::present(Compositor& scene) {
                                D3D12_RESOURCE_STATE_PRESENT);
   commands->ResourceBarrier(1, &to_present);
 
-  if (auto ok = d.gpu().submit(); !ok) return std::unexpected(ok.error());
+  if (auto ok = d.recorder.submit(d.gpu()); !ok) return std::unexpected(ok.error());
 
   if (HRESULT hr = d.swapchain->Present(1, 0); FAILED(hr)) {
     return std::unexpected(std::format("present failed: {}", hresult_string(hr)));
@@ -242,7 +246,7 @@ std::expected<void, std::string> Presenter::present(Compositor& scene) {
 
   // One frame in flight, fully synchronised. Overlapping frames is a
   // throughput optimisation to make once there is something to measure.
-  d.owner->wait_for_idle();
+  d.recorder.finish(d.gpu());
   return {};
 }
 

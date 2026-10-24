@@ -3,6 +3,7 @@
 #include "compositor_internal.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -140,7 +141,9 @@ std::expected<void, std::string> Compositor::Impl::ensure_capacity(UINT layers) 
   // Grow generously: reallocating the heap means recreating every descriptor,
   // so doing it once per size change rather than once per added layer matters.
   const UINT capacity = std::max(8u, wanted * 2);
-  gpu().wait_for_idle();  // descriptors may still be referenced in flight
+  // No wait: every submission this compositor makes is finished before it
+  // returns, so nothing in flight can be reading these descriptors. See
+  // `Recorder`.
 
   D3D12_DESCRIPTOR_HEAP_DESC desc{};
   desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -199,17 +202,21 @@ namespace {
 /// its predecessor already used, so a stale handle compares equal to a live one
 /// and the guard reports "unchanged" about memory that has been freed since.
 ///
-/// Not atomic. A compositor is built and rebuilt from the thread that owns the
-/// device, and making this thread-safe would suggest it is safe to do
-/// otherwise.
+/// Atomic, because compositors are built on more than one thread now: the
+/// preview's renderer and the source monitor's each live on a render thread of
+/// their own, and two of them taking the same generation is the stale handle
+/// this exists to catch.
 unsigned next_generation() {
-  static unsigned counter = 0;
+  static std::atomic<unsigned> counter = 0;
   return ++counter;
 }
 
 }  // namespace
 
 std::expected<void, std::string> Compositor::Impl::create_targets() {
+  // The whole queue, unlike everywhere else in here. The display target is
+  // sampled by the window's own drawing, which is somebody else's submission,
+  // and freeing it under them is the crash the bug list describes.
   gpu().wait_for_idle();
   // Before anything is freed, so a caller that kept the old handle sees a
   // different generation even if the replacement lands at the same address.
@@ -287,7 +294,6 @@ std::expected<void, std::string> Compositor::Impl::create_targets() {
 std::expected<void, std::string> Compositor::Impl::ensure_scratch() {
   if (scratch[0] && scratch[1]) return {};
 
-  gpu().wait_for_idle();
   const D3D12_HEAP_PROPERTIES heap = heap_of(D3D12_HEAP_TYPE_DEFAULT);
 
   D3D12_RESOURCE_DESC desc{};
@@ -327,7 +333,6 @@ std::expected<void, std::string> Compositor::Impl::ensure_mask_points(std::size_
   const std::size_t wanted = std::max<std::size_t>(points, 1);
   if (mask_points && wanted <= mask_points_capacity) return {};
 
-  gpu().wait_for_idle();
 
   // Grown generously and never shrunk, like the descriptor heap: a frame with
   // one more corner than the last should not reallocate.
@@ -467,7 +472,6 @@ std::expected<void, std::string> Compositor::Impl::upload_planes(std::span<const
       // per layer for nothing.
       PlaneSet& set = planes[i];
       if (!set.textures.empty()) {
-        gpu().wait_for_idle();
         set.textures.clear();
         set.layout.clear();
       }
@@ -485,7 +489,6 @@ std::expected<void, std::string> Compositor::Impl::upload_planes(std::span<const
                     });
 
     if (shape_changed) {
-      gpu().wait_for_idle();  // the old textures may still be in flight
       set.textures.assign(layout.size(), {});
       set.layout = layout;
 
@@ -529,7 +532,6 @@ std::expected<void, std::string> Compositor::Impl::upload_planes(std::span<const
   if (total == 0) return {};
 
   if (upload_capacity < total) {
-    gpu().wait_for_idle();
     upload.Reset();
 
     const D3D12_HEAP_PROPERTIES heap = heap_of(D3D12_HEAP_TYPE_UPLOAD);
@@ -582,7 +584,7 @@ std::expected<void, std::string> Compositor::Impl::upload_planes(std::span<const
 
     auto to_copy = transition(texture, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                               D3D12_RESOURCE_STATE_COPY_DEST);
-    gpu().commands->ResourceBarrier(1, &to_copy);
+    recorder.list->ResourceBarrier(1, &to_copy);
 
     D3D12_TEXTURE_COPY_LOCATION source{};
     source.pResource = upload.Get();
@@ -599,11 +601,11 @@ std::expected<void, std::string> Compositor::Impl::upload_planes(std::span<const
     destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     destination.SubresourceIndex = 0;
 
-    gpu().commands->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
+    recorder.list->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
 
     auto to_read = transition(texture, D3D12_RESOURCE_STATE_COPY_DEST,
                               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    gpu().commands->ResourceBarrier(1, &to_read);
+    recorder.list->ResourceBarrier(1, &to_read);
   }
 
   return {};
@@ -644,6 +646,8 @@ std::expected<std::unique_ptr<Compositor>, std::string> Compositor::create(
   auto signature = create_root_signature(gpu);
   if (!signature) return std::unexpected(signature.error());
   impl->root_signature = std::move(*signature);
+
+  if (auto ok = impl->recorder.create(impl->gpu()); !ok) return std::unexpected(ok.error());
 
   // ------------------------------------------------------------ pipelines --
 
@@ -821,16 +825,17 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     std::memcpy(mapped, corners.data(), corners.size() * sizeof(corners[0]));
     d.mask_points->Unmap(0, nullptr);
   }
-  if (auto ok = d.gpu().begin(); !ok) return std::unexpected(ok.error());
+  const auto opened = d.recorder.begin(d.gpu());
+  if (!opened) return std::unexpected(opened.error());
 
   // Uploads go in before any render target is bound, keeping the copies out of
   // the middle of a pass.
   if (auto ok = d.upload_planes(layers); !ok) {
-    d.gpu().commands->Close();
+    d.recorder.abandon();
     return std::unexpected(ok.error());
   }
 
-  ID3D12GraphicsCommandList* commands = d.gpu().commands.Get();
+  ID3D12GraphicsCommandList* commands = *opened;
   ID3D12DescriptorHeap* heaps[] = {d.srv_heap.Get()};
   commands->SetDescriptorHeaps(1, heaps);
   commands->SetGraphicsRootSignature(d.root_signature.Get());
@@ -940,7 +945,7 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     // side, so the margin is at least that many pixels on both axes.
     //
     // The layer then occupies `span` of the scratch, which makes the blur wider
-    // relative to it — so the reach it needs is `3ÏƒÂ·span`, and the fraction
+    // relative to it — so the reach it needs is `3σ·span`, and the fraction
     // solves to r/(1+2r).
     float margin = 0.0f;
     if (through_passes) {
@@ -1102,8 +1107,14 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     if (wait.fence != nullptr) d.gpu().queue->Wait(wait.fence, wait.value);
   }
 
-  if (auto ok = d.gpu().submit(); !ok) return std::unexpected(ok.error());
-  d.gpu().wait_for_idle();
+  if (auto ok = d.recorder.submit(d.gpu()); !ok) return std::unexpected(ok.error());
+  // Waited on before returning, and not for tidiness. A hardware frame reaches
+  // this through a texture its decoder shares and will overwrite with the next
+  // frame, and the only thing ordering that copy after this read is that the
+  // read is over by the time anybody asks for another frame. Its own fence,
+  // though, not the whole queue: the interface's drawing is none of its
+  // business.
+  d.recorder.finish(d.gpu());
   return {};
 }
 
@@ -1153,8 +1164,9 @@ std::expected<SceneTexture, std::string> Compositor::display_texture() {
   Impl& d = *impl_;
   if (d.display == nullptr) return std::unexpected("nothing has been composited yet");
 
-  if (auto ok = d.gpu().begin(); !ok) return std::unexpected(ok.error());
-  ID3D12GraphicsCommandList* commands = d.gpu().commands.Get();
+  const auto opened = d.recorder.begin(d.gpu());
+  if (!opened) return std::unexpected(opened.error());
+  ID3D12GraphicsCommandList* commands = *opened;
 
   record_display_pass(d, commands);
 
@@ -1164,8 +1176,8 @@ std::expected<SceneTexture, std::string> Compositor::display_texture() {
                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
   commands->ResourceBarrier(1, &to_resource);
 
-  if (auto ok = d.gpu().submit(); !ok) return std::unexpected(ok.error());
-  d.gpu().wait_for_idle();
+  if (auto ok = d.recorder.submit(d.gpu()); !ok) return std::unexpected(ok.error());
+  d.recorder.finish(d.gpu());
 
   return SceneTexture{.resource = d.display.Get(),
                       .width = d.width,
@@ -1185,7 +1197,6 @@ std::expected<Image, std::string> Compositor::read_back() {
   const std::size_t needed = static_cast<std::size_t>(pitch) * d.height;
 
   if (d.readback_capacity < needed) {
-    d.gpu().wait_for_idle();
     d.readback.Reset();
 
     const D3D12_HEAP_PROPERTIES heap = heap_of(D3D12_HEAP_TYPE_READBACK);
@@ -1209,8 +1220,9 @@ std::expected<Image, std::string> Compositor::read_back() {
     d.readback_capacity = needed;
   }
 
-  if (auto ok = d.gpu().begin(); !ok) return std::unexpected(ok.error());
-  ID3D12GraphicsCommandList* commands = d.gpu().commands.Get();
+  const auto opened = d.recorder.begin(d.gpu());
+  if (!opened) return std::unexpected(opened.error());
+  ID3D12GraphicsCommandList* commands = *opened;
 
   record_display_pass(d, commands);
 
@@ -1239,8 +1251,8 @@ std::expected<Image, std::string> Compositor::read_back() {
                                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
   commands->ResourceBarrier(1, &display_to_resource);
 
-  if (auto ok = d.gpu().submit(); !ok) return std::unexpected(ok.error());
-  d.gpu().wait_for_idle();
+  if (auto ok = d.recorder.submit(d.gpu()); !ok) return std::unexpected(ok.error());
+  d.recorder.finish(d.gpu());
 
   std::byte* mapped = nullptr;
   D3D12_RANGE everything{0, needed};
