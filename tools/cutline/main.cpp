@@ -55,6 +55,7 @@
 #include "cutline/ui/browser.hpp"
 #include "cutline/ui/color_picker.hpp"
 #include "cutline/ui/controls.hpp"
+#include "cutline/ui/dialog.hpp"
 #include "cutline/ui/dock.hpp"
 #include "cutline/ui/dock_view.hpp"
 #include "cutline/ui/effects_browser.hpp"
@@ -7580,24 +7581,21 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
   const double span = cutline::core::source_span(*anchor);
   const double speed = cutline::core::clip_speed(*anchor);
 
-  auto panel = std::make_unique<Panel>();
-  panel->emplace<Label>("Speed / Duration").set_bold(true);
+  auto dialog = std::make_unique<cutline::ui::Dialog>("Speed / Duration");
 
-  auto& speed_row = panel->emplace<Box>(Axis::Horizontal);
-  speed_row.emplace<Label>("Speed");
+  auto& speed_row = dialog->row("Speed");
   auto& speed_field = speed_row.emplace<TextField>(std::format("{:.2f}", speed * 100.0));
   speed_field.set_columns(7);
   speed_row.emplace<Label>("%").set_small(true);
 
-  auto& length_row = panel->emplace<Box>(Axis::Horizontal);
-  length_row.emplace<Label>("Duration");
+  auto& length_row = dialog->row("Duration");
   auto& length_field = length_row.emplace<TextField>(
       cutline::core::seconds_to_timecode(cutline::core::clip_duration(*anchor), fps,
                                          app.session.project().sequence().drop_frame));
   length_field.set_columns(11);
 
-  auto& reverse = panel->emplace<Checkbox>("Reverse speed", anchor->reverse);
-  auto& ripple = panel->emplace<Checkbox>("Ripple edit, shifting trailing clips", false);
+  auto& reverse = dialog->body().emplace<Checkbox>("Reverse speed", anchor->reverse);
+  auto& ripple = dialog->body().emplace<Checkbox>("Ripple edit, shifting trailing clips", false);
 
   // Each field rewrites the other when its edit ends. `span` is fixed by the
   // trim, so it is the constant the two are computed through.
@@ -7624,21 +7622,19 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
     other->set_text(std::format("{:.2f}", rate * 100.0));
   });
 
-  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
-  buttons.emplace<Button>(
+  dialog->set_accept(
       "OK", [&app, chosen = std::vector<std::string>(clips.begin(), clips.end()),
-             field = &speed_field, rev = &reverse, rip = &ripple] {
+             field = &speed_field, rev = &reverse,
+             rip = &ripple]() -> std::optional<std::string> {
         double percent = 0.0;
         if (std::from_chars(field->text().data(), field->text().data() + field->text().size(),
                             percent)
                 .ec != std::errc{} ||
             percent <= 0.0) {
-          // A typing mistake leaves the clips alone rather than retiming them
-          // to nothing, which is what a zero would clamp to.
-          if (app.main.host != nullptr) app.main.host->close_popup();
-          return;
+          // Said, and the dialog stays: closing on a typing mistake looked
+          // exactly like the retime having worked.
+          return "Speed has to be a number above 0.";
         }
-        if (app.main.host != nullptr) app.main.host->close_popup();
         app.session.apply(cutline::core::set_clips_speed(app.session.project(), chosen,
                                                          percent / 100.0, rev->checked(),
                                                          rip->checked()));
@@ -7646,12 +7642,10 @@ void open_speed_dialog(App& app, std::span<const std::string> clips) {
         invalidate_preview(app);
         app.inspector_stale = true;
         mark_dirty(app);
+        return std::nullopt;
       });
-  buttons.emplace<Button>("Cancel", [&app] {
-    if (app.main.host != nullptr) app.main.host->close_popup();
-  });
 
-  app.main.host->open_popup(std::move(panel), settings_anchor());
+  app.main.host->open_popup(std::move(dialog), settings_anchor());
 }
 
 /// Premiere's Interpret Footage, which here is one question: what rate is this?
@@ -7686,8 +7680,8 @@ void open_interpret_dialog(App& app, const std::string& media_id) {
   const double file_length = media.file_duration.value_or(media.duration);
   const bool conformed = cutline::core::is_conformed(media);
 
-  auto panel = std::make_unique<Panel>();
-  panel->emplace<Label>("Interpret Footage").set_bold(true);
+  auto dialog = std::make_unique<cutline::ui::Dialog>("Interpret Footage");
+  Box* panel = &dialog->body();
   panel->emplace<Label>(media.name).set_small(true);
 
   auto& choice = panel->emplace<RadioGroup>(
@@ -7712,10 +7706,12 @@ void open_interpret_dialog(App& app, const std::string& media_id) {
   auto& colour_row = panel->emplace<Box>(Axis::Horizontal);
   colour_row.emplace<Label>("Colour space").set_small(true);
   colour_row.emplace<Spacer>();
+  const std::string as_tagged =
+      std::format("As tagged: {}", kSpaces[std::min<std::size_t>(tagged, 2)]);
+  const std::size_t overridden =
+      media.colour_override.has_value() ? static_cast<std::size_t>(*media.colour_override) + 1 : 0u;
   auto& colour = colour_row.emplace<Dropdown>(
-      std::vector<std::string>{std::format("As tagged: {}", kSpaces[std::min<std::size_t>(tagged, 2)]),
-                               kSpaces[0], kSpaces[1], kSpaces[2]},
-      media.colour_override.has_value() ? static_cast<std::size_t>(*media.colour_override) + 1 : 0u);
+      std::vector<std::string>{as_tagged, kSpaces[0], kSpaces[1], kSpaces[2]}, overridden);
 
   // Kept in step from one place, so the radio and the field cannot disagree
   // about which length is on show.
@@ -7736,9 +7732,8 @@ void open_interpret_dialog(App& app, const std::string& media_id) {
   choice.set_on_change([show_length](std::size_t) { show_length(); });
   rate.set_on_finish([show_length] { show_length(); });
 
-  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
-  buttons.emplace<Button>("OK", [&app, media_id, choice = &choice, rate = &rate,
-                                 colour = &colour] {
+  dialog->set_accept("OK", [&app, media_id, choice = &choice, rate = &rate,
+                            colour = &colour]() -> std::optional<std::string> {
     std::optional<double> assumed;
     if (choice->selected() == 1) {
       double typed = 0.0;
@@ -7747,18 +7742,17 @@ void open_interpret_dialog(App& app, const std::string& media_id) {
           typed > 0.0) {
         assumed = typed;
       } else {
-        // A typing mistake leaves the source as it is rather than conforming it
-        // to nothing, which is a source of no length at all.
-        if (app.main.host != nullptr) app.main.host->close_popup();
-        return;
+        // Said, and the dialog stays, rather than conforming the source to
+        // nothing -- which is a source of no length at all.
+        return "The rate has to be a number above 0.";
       }
     }
 
-    if (app.main.host != nullptr) app.main.host->close_popup();
     const std::size_t space = colour->selected();
-    const std::optional<cutline::core::WorkingColour> override =
-        space == 0 ? std::nullopt
-                   : std::optional(static_cast<cutline::core::WorkingColour>(std::min<std::size_t>(space - 1, 2)));
+    std::optional<cutline::core::WorkingColour> override;
+    if (space > 0) {
+      override = static_cast<cutline::core::WorkingColour>(std::min<std::size_t>(space - 1, 2));
+    }
     // One edit, so one undo takes back both.
     app.session.apply(cutline::core::set_colour_override(
         cutline::core::interpret_media(app.session.project(), media_id, assumed), media_id,
@@ -7768,12 +7762,11 @@ void open_interpret_dialog(App& app, const std::string& media_id) {
     refresh_all(app);
     stop_playback(app);
     invalidate_preview(app);
-  });
-  buttons.emplace<Button>("Cancel", [&app] {
-    if (app.main.host != nullptr) app.main.host->close_popup();
+    return std::nullopt;
   });
 
-  app.main.host->open_popup(std::move(panel), settings_anchor());
+
+  app.main.host->open_popup(std::move(dialog), settings_anchor());
 }
 
 /// Premiere's Paste Attributes: some of what was copied, not all of it.
@@ -7805,8 +7798,8 @@ void open_paste_attributes_dialog(App& app) {
 
   const cutline::core::ClipAttributes& was = app.paste_attributes;
 
-  auto panel = std::make_unique<Panel>();
-  panel->emplace<Label>("Paste Attributes").set_bold(true);
+  auto dialog = std::make_unique<cutline::ui::Dialog>("Paste Attributes");
+  Box* panel = &dialog->body();
 
   // Ticked from what was chosen last time, which is what Premiere does and
   // what makes this usable on the second clip: pasting one look onto six
@@ -7837,12 +7830,11 @@ void open_paste_attributes_dialog(App& app) {
       "A two-second push-in becomes a ten-second one on a ten-second shot, rather than "
       "staying two seconds long");
 
-  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
-  buttons.emplace<Button>("Paste", [&app, has_picture, has_sound, motion = &motion,
-                                    opacity = &opacity, blend = &blend, effects = &effects,
-                                    volume = &volume, pan = &pan, channels = &channels,
-                                    role = &role, audio_effects = &audio_effects,
-                                    scale = &scale] {
+  dialog->set_accept("Paste", [&app, has_picture, has_sound, motion = &motion,
+                               opacity = &opacity, blend = &blend, effects = &effects,
+                               volume = &volume, pan = &pan, channels = &channels,
+                               role = &role, audio_effects = &audio_effects,
+                               scale = &scale]() -> std::optional<std::string> {
     // Read through what the clipboard actually holds, so a tick left over from
     // last time on a group that is greyed now cannot travel.
     const cutline::core::ClipAttributes which{
@@ -7857,7 +7849,6 @@ void open_paste_attributes_dialog(App& app) {
         .audio_effects = has_sound && audio_effects->checked(),
         .scale_to_length = scale->checked()};
 
-    if (app.main.host != nullptr) app.main.host->close_popup();
     app.paste_attributes = which;
 
     app.session.apply(cutline::core::paste_attributes(app.session.project(),
@@ -7867,12 +7858,11 @@ void open_paste_attributes_dialog(App& app) {
     invalidate_preview(app);
     app.inspector_stale = true;
     mark_dirty(app);
-  });
-  buttons.emplace<Button>("Cancel", [&app] {
-    if (app.main.host != nullptr) app.main.host->close_popup();
+    return std::nullopt;
   });
 
-  app.main.host->open_popup(std::move(panel), settings_anchor());
+
+  app.main.host->open_popup(std::move(dialog), settings_anchor());
 }
 
 /// The five choices in `core::FitChoice`, in Premiere's own order.
@@ -7900,8 +7890,8 @@ void open_fit_dialog(App& app) {
   if (app.main.host == nullptr) return;
   if (!cutline::editor::can_run(app.session, cutline::editor::Command::FitToFill)) return;
 
-  auto panel = std::make_unique<Panel>();
-  panel->emplace<Label>("Fit Clip").set_bold(true);
+  auto dialog = std::make_unique<cutline::ui::Dialog>("Fit Clip");
+  Box* panel = &dialog->body();
   panel->emplace<Label>("The source and the marked span are different lengths.")
       .set_small(true);
 
@@ -7910,16 +7900,16 @@ void open_fit_dialog(App& app) {
   for (const auto& [label, choice] : kFitChoices) names.emplace_back(label);
   auto& choices = panel->emplace<cutline::ui::RadioGroup>(std::move(names), 0u);
 
-  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
-  buttons.emplace<Button>("OK", [&app, chosen = &choices] {
+  dialog->set_accept("OK", [&app, chosen = &choices]() -> std::optional<std::string> {
     const std::size_t index = chosen->selected();
-    if (app.main.host != nullptr) app.main.host->close_popup();
-    if (index >= kFitChoices.size()) return;
+    if (index >= kFitChoices.size()) return std::nullopt;
 
     // Read again rather than captured at the point the box opened: the marks,
     // the source and the targeted track can all move while it is up, and the
     // edit should be the one the sequence asks for now.
-    if (!cutline::editor::can_run(app.session, cutline::editor::Command::FitToFill)) return;
+    if (!cutline::editor::can_run(app.session, cutline::editor::Command::FitToFill)) {
+      return std::nullopt;
+    }
     cutline::core::Project ready =
         cutline::core::match_sequence_to(app.session.project(), app.session.source_media());
     const std::string target = cutline::editor::edit_target(ready);
@@ -7930,12 +7920,11 @@ void open_fit_dialog(App& app) {
     refresh_all(app);
     invalidate_preview(app);
     mark_dirty(app);
-  });
-  buttons.emplace<Button>("Cancel", [&app] {
-    if (app.main.host != nullptr) app.main.host->close_popup();
+    return std::nullopt;
   });
 
-  app.main.host->open_popup(std::move(panel), settings_anchor());
+
+  app.main.host->open_popup(std::move(dialog), settings_anchor());
 }
 
 /// A marker's name, note, colour and length. Premiere's marker dialogue.
@@ -7955,23 +7944,20 @@ void open_marker_dialog(App& app, std::size_t index) {
   const cutline::core::Marker marker = markers[index];
   const double fps = app.session.project().sequence().fps;
 
-  auto panel = std::make_unique<Panel>();
-  panel->emplace<Label>("Marker at " + cutline::core::seconds_to_timecode(
-                                          marker.time, fps, app.session.project().sequence().drop_frame))
-      .set_bold(true);
+  auto dialog = std::make_unique<cutline::ui::Dialog>(
+      "Marker at " + cutline::core::seconds_to_timecode(
+                         marker.time, fps, app.session.project().sequence().drop_frame));
+  Box* panel = &dialog->body();
 
-  auto& name_row = panel->emplace<Box>(Axis::Horizontal);
-  name_row.emplace<Label>("Name");
+  auto& name_row = dialog->row("Name");
   auto& name = name_row.emplace<TextField>(marker.label);
   name.set_columns(18);
 
-  auto& note_row = panel->emplace<Box>(Axis::Horizontal);
-  note_row.emplace<Label>("Comment");
+  auto& note_row = dialog->row("Comment");
   auto& comment = note_row.emplace<TextField>(marker.comment);
   comment.set_columns(28);
 
-  auto& span_row = panel->emplace<Box>(Axis::Horizontal);
-  span_row.emplace<Label>("Duration");
+  auto& span_row = dialog->row("Duration");
   // A timecode rather than seconds, like every other length in the interface.
   // Zero reads as a point marker, which is what it writes back as too.
   auto& span = span_row.emplace<TextField>(
@@ -8011,9 +7997,8 @@ void open_marker_dialog(App& app, std::size_t index) {
     swatches->push_back(&swatch);
   }
 
-  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
-  buttons.emplace<Button>("OK", [&app, id = marker.id, fps, chosen, n = &name, c = &comment,
-                                 d = &span] {
+  dialog->set_accept("OK", [&app, id = marker.id, fps, chosen, n = &name, c = &comment,
+                            d = &span]() -> std::optional<std::string> {
     // A duration that does not parse leaves the one it had rather than
     // becoming zero, which would silently turn a span back into a point.
     const std::optional<double> length =
@@ -8024,20 +8009,17 @@ void open_marker_dialog(App& app, std::size_t index) {
     }
     const double duration = length.value_or(was != nullptr ? was->duration : 0.0);
 
-    if (app.main.host != nullptr) app.main.host->close_popup();
     app.session.apply(cutline::core::set_marker(app.session.project(), id, n->text(),
                                                 c->text(), *chosen, duration));
     refresh_timeline(app);
     mark_dirty(app);
+    return std::nullopt;
   });
-  buttons.emplace<Button>("Delete", [&app, id = marker.id] {
+  dialog->add_button("Delete", [&app, id = marker.id] {
     if (app.main.host != nullptr) app.main.host->close_popup();
     app.session.apply(cutline::core::remove_marker(app.session.project(), id));
     refresh_timeline(app);
     mark_dirty(app);
-  });
-  buttons.emplace<Button>("Cancel", [&app] {
-    if (app.main.host != nullptr) app.main.host->close_popup();
   });
 
   // Beside the marker rather than under the menu bar. A dialogue about a thing
@@ -8045,7 +8027,8 @@ void open_marker_dialog(App& app, std::size_t index) {
   // from what you are editing and then find your way back — and the marker is
   // usually the very thing you want to see while typing what it means.
   const Rect tab = app.timeline->marker_rect(index);
-  app.main.host->open_popup(std::move(panel),
+
+  app.main.host->open_popup(std::move(dialog),
                             tab.empty() ? settings_anchor() : Rect{tab.x, tab.bottom(), 0.0, 0.0});
 }
 
@@ -9142,8 +9125,8 @@ void open_loudness_dialog(App& app) {
     return;
   }
 
-  auto panel = std::make_unique<Panel>();
-  panel->emplace<Label>("Normalise Loudness").set_bold(true);
+  auto dialog = std::make_unique<cutline::ui::Dialog>("Normalise Loudness");
+  Box* panel = &dialog->body();
 
   const bool measurable = *measured > cutline::audio::kAbsoluteGateLufs;
   panel->emplace<Label>(measurable ? std::format("This sequence measures {:.1f} LUFS.", *measured)
@@ -9169,18 +9152,17 @@ void open_loudness_dialog(App& app) {
   for (const Target& target : kTargets) names.emplace_back(target.label);
   auto& group = panel->emplace<cutline::ui::RadioGroup>(std::move(names), 0u);
 
-  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
-  auto& ok = buttons.emplace<Button>("Normalise", [&app, chosen = &group, at = *measured] {
+  dialog->set_accept("Normalise",
+                     [&app, chosen = &group, at = *measured]() -> std::optional<std::string> {
     const std::size_t index = chosen->selected();
-    if (app.main.host != nullptr) app.main.host->close_popup();
-    if (index >= kTargets.size()) return;
+    if (index >= kTargets.size()) return std::nullopt;
 
     // The offset goes on the *master fader*, which is where a programme's level
     // belongs: it moves everything together and leaves every clip and track
     // exactly as it was set, so normalising is one number to undo rather than a
     // change spread across the whole sequence.
     const double offset = cutline::audio::loudness_offset_db(at, kTargets[index].lufs);
-    if (offset == 0.0) return;
+    if (offset == 0.0) return std::nullopt;
 
     const double now = app.session.project().sequence().master_gain;
     const double moved = now * std::pow(10.0, offset / 20.0);
@@ -9189,15 +9171,15 @@ void open_loudness_dialog(App& app) {
     refresh_all(app);
     stop_playback(app);
     mark_dirty(app);
+    return std::nullopt;
   });
+  auto& ok = dialog->accept_button();
   // Nothing to normalise, so the button says so rather than doing nothing.
   ok.set_enabled(measurable);
 
-  buttons.emplace<Button>("Cancel", [&app] {
-    if (app.main.host != nullptr) app.main.host->close_popup();
-  });
 
-  app.main.host->open_popup(std::move(panel), settings_anchor());
+
+  app.main.host->open_popup(std::move(dialog), settings_anchor());
 #else
   complain(app.main.window, "This build has no media layer, so there is nothing to measure.");
 #endif
@@ -9239,21 +9221,19 @@ void open_channel_dialog(App& app, std::span<const std::string> clips) {
     }
   }
 
-  auto panel = std::make_unique<Panel>();
-  panel->emplace<Label>("Audio Channels").set_bold(true);
+  auto dialog = std::make_unique<cutline::ui::Dialog>("Audio Channels");
+  Box* panel = &dialog->body();
 
   std::vector<std::string> names;
   names.reserve(kChoices.size());
   for (const Choice& choice : kChoices) names.emplace_back(choice.label);
   auto& group = panel->emplace<cutline::ui::RadioGroup>(std::move(names), current);
 
-  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
-  buttons.emplace<Button>(
-      "OK", [&app, chosen = &group, kChoices,
-             ids = std::vector<std::string>(clips.begin(), clips.end())] {
+  dialog->set_accept("OK", [&app, chosen = &group, kChoices,
+                            ids = std::vector<std::string>(clips.begin(), clips.end())]()
+                               -> std::optional<std::string> {
         const std::size_t index = chosen->selected();
-        if (app.main.host != nullptr) app.main.host->close_popup();
-        if (index >= kChoices.size()) return;
+        if (index >= kChoices.size()) return std::nullopt;
 
         // One project, edited once per clip, applied once — so mapping six
         // takes is one press of undo rather than six.
@@ -9268,12 +9248,11 @@ void open_channel_dialog(App& app, std::span<const std::string> clips) {
         // only once the player is rebuilt.
         stop_playback(app);
         mark_dirty(app);
-      });
-  buttons.emplace<Button>("Cancel", [&app] {
-    if (app.main.host != nullptr) app.main.host->close_popup();
+    return std::nullopt;
   });
 
-  app.main.host->open_popup(std::move(panel), settings_anchor());
+
+  app.main.host->open_popup(std::move(dialog), settings_anchor());
 }
 
 /// Premiere's Essential Sound: what a clip is, and the two things that follow
@@ -9307,8 +9286,8 @@ void open_essential_sound(App& app, std::span<const std::string> clips) {
                                  : static_cast<std::size_t>(
                                        at_role - cutline::core::kAudioRoles.begin());
 
-  auto panel = std::make_unique<Panel>();
-  panel->emplace<Label>("Essential Sound").set_bold(true);
+  auto dialog = std::make_unique<cutline::ui::Dialog>("Essential Sound");
+  Box* panel = &dialog->body();
 
   std::vector<std::string> names;
   names.reserve(cutline::core::kAudioRoles.size());
@@ -9373,12 +9352,11 @@ void open_essential_sound(App& app, std::span<const std::string> clips) {
     mark_dirty(app);
   });
 
-  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
-  buttons.emplace<Button>("OK", [&app, ids, chosen = &group, preset = &preset] {
+  dialog->set_accept(
+      "OK", [&app, ids, chosen = &group, preset = &preset]() -> std::optional<std::string> {
     const std::size_t index = chosen->selected();
     const bool with_preset = preset->checked();
-    if (app.main.host != nullptr) app.main.host->close_popup();
-    if (index >= cutline::core::kAudioRoles.size()) return;
+    if (index >= cutline::core::kAudioRoles.size()) return std::nullopt;
     const cutline::core::AudioRole role = cutline::core::kAudioRoles[index];
 
     // One project, edited once per clip, applied once — so naming six takes is
@@ -9393,12 +9371,11 @@ void open_essential_sound(App& app, std::span<const std::string> clips) {
     invalidate_preview(app);
     stop_playback(app);
     mark_dirty(app);
-  });
-  buttons.emplace<Button>("Cancel", [&app] {
-    if (app.main.host != nullptr) app.main.host->close_popup();
+    return std::nullopt;
   });
 
-  app.main.host->open_popup(std::move(panel), settings_anchor());
+
+  app.main.host->open_popup(std::move(dialog), settings_anchor());
 }
 
 /// The effect stack on a mixer strip, as a box that can be opened from it.
@@ -9660,8 +9637,8 @@ void open_strip_sends(App& app, const std::string& track_id) {
   const cutline::core::Track* track = track_now();
   if (track == nullptr) return;
 
-  auto panel = std::make_unique<Panel>();
-  panel->emplace<Label>("Sends").set_bold(true);
+  auto dialog = std::make_unique<cutline::ui::Dialog>("Sends");
+  Box* panel = &dialog->body();
 
   // Every bus this track could feed, each as a row that is either a send or an
   // offer of one. A list of what exists rather than an "Add" button and a
@@ -9743,13 +9720,13 @@ void open_strip_sends(App& app, const std::string& track_id) {
     });
   }
 
-  auto& buttons = panel->emplace<Box>(Axis::Horizontal);
-  buttons.emplace<Spacer>();
-  buttons.emplace<Button>("Close", [&app] {
-    if (app.main.host != nullptr) app.main.host->close_popup();
+  dialog->set_accept("Close", [&app]() -> std::optional<std::string> {
+    return std::nullopt;
   });
 
-  app.main.host->open_popup(std::move(panel), settings_anchor());
+  dialog->set_cancel("");
+
+  app.main.host->open_popup(std::move(dialog), settings_anchor());
 }
 
 /// One audio track's strip in the mixer, in Premiere's order down the column:

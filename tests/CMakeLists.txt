@@ -56,6 +56,7 @@ add_executable(cutline_core_tests
   ui/color_picker_test.cpp
   ui/containers_test.cpp
   ui/controls_test.cpp
+  ui/dialog_test.cpp
   ui/dock_test.cpp
   ui/dock_view_test.cpp
   ui/effects_browser_test.cpp
@@ -159,7 +160,14 @@ if(CUTLINE_WITH_GPU)
     # media/fixtures/make.sh.
     target_compile_definitions(cutline_engine_tests PRIVATE
       CUTLINE_MEDIA_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/media/fixtures")
-    gtest_discover_tests(cutline_engine_tests)
+    # The player's clock is checked for steadiness against the wall clock, and
+    # with every core busy running the rest of the suite its audio thread is
+    # held up by a whole buffer period now and then -- a fact about a
+    # saturated machine, not about the clock. So that one runs on its own.
+    set(clock_test "PlayerTest.TheClockMovesSmoothlyRatherThanInSteps")
+    gtest_discover_tests(cutline_engine_tests TEST_FILTER "-${clock_test}")
+    gtest_discover_tests(cutline_engine_tests TEST_FILTER "${clock_test}"
+      PROPERTIES RUN_SERIAL TRUE)
 
     # The whole stack: a file on disk becomes pixels for the monitor. Every
     # layer is already tested without media; this is the only place they are

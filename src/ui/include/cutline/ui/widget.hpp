@@ -459,6 +459,9 @@ class WidgetHost {
   Rect popup_anchor_;
   /// Set by `close_popup`, acted on at the next layout. See the note there.
   bool popup_closing_ = false;
+  /// Set when a popup opens and cleared when it is first laid out, which is
+  /// when a dialog's first control is given focus.
+  bool popup_fresh_ = false;
   Rect bounds_;
   bool layout_dirty_ = false;
   bool paint_dirty_ = true;

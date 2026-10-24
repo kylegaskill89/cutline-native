@@ -64,6 +64,8 @@ class Label : public Widget {
   void set_bold(bool bold) noexcept { bold_ = bold; }
   /// Uses the theme's smaller size. For secondary text: timecode, hints.
   void set_small(bool small) noexcept { small_ = small; }
+  /// At least this wide, so the labels down a column of rows line up.
+  void set_min_width(double width) noexcept { min_width_ = width; }
 
   [[nodiscard]] Part part() const noexcept override { return part_; }
   [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
@@ -77,6 +79,7 @@ class Label : public Widget {
   TextAlign align_ = TextAlign::Left;
   bool bold_ = false;
   bool small_ = false;
+  double min_width_ = 0.0;
 };
 
 /// A pressable control.
@@ -101,6 +104,15 @@ class Button : public Widget {
 
   [[nodiscard]] Part part() const noexcept override { return part_; }
 
+  /// At least this wide: a dialog's buttons are all one width, as they were on
+  /// every dialog of the period.
+  void set_min_width(double width) noexcept { min_width_ = width; }
+  /// The button Enter presses, drawn the way the platform marks it -- in its
+  /// focused style while nothing else has the look.
+  void set_default(bool on) noexcept { default_ = on; }
+  [[nodiscard]] bool is_default() const noexcept { return default_; }
+  [[nodiscard]] State state() const noexcept override;
+
   /// Everything except a resting menu item, which draws nothing at all.
   ///
   /// A menu bar is a row of words until the pointer is over one — that is what
@@ -123,6 +135,8 @@ class Button : public Widget {
   std::string text_;
   std::function<void()> on_click_;
   Part part_ = Part::Button;
+  double min_width_ = 0.0;
+  bool default_ = false;
 };
 
 /// A row or column of children.

@@ -1,5 +1,8 @@
 #include "cutline/ui/widget.hpp"
 
+#include "cutline/ui/controls.hpp"
+#include "cutline/ui/dialog.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -282,6 +285,17 @@ bool WidgetHost::update_layout(const LayoutContext& context) {
 
   if (!layout_dirty_) return false;
   resize(bounds_, context);
+
+  // A dialog just opened starts with its first control in hand, so it can be
+  // typed into straight away -- and so Tab goes round it rather than behind it.
+  if (popup_fresh_ && popup_ != nullptr && !popup_closing_) {
+    popup_fresh_ = false;
+    if (dynamic_cast<Dialog*>(popup_.get()) != nullptr) {
+      std::vector<Widget*> order;
+      collect_focusable(*popup_, order);
+      if (!order.empty()) set_focus(order.front());
+    }
+  }
   return true;
 }
 
@@ -297,6 +311,7 @@ void WidgetHost::open_popup(std::unique_ptr<Widget> content, const Rect& anchor)
   popup_->host_ = this;
   popup_anchor_ = anchor;
   popup_closing_ = false;
+  popup_fresh_ = true;
   // Placed at the next layout, where a theme and a text measurer are in hand.
   // Nothing that opens a popup — a click handler — has either.
   request_layout();
@@ -485,12 +500,33 @@ bool WidgetHost::key_down(const KeyEvent& event) {
   // go away without a click is a trap, and this is the key everyone reaches
   // for — which also means nothing behind it should act on the same press.
   if (popup_open() && event.key == Key::Escape) {
-    close_popup();
+    // A dialog is told, so it can do whatever cancelling means for it.
+    if (auto* dialog = dynamic_cast<Dialog*>(popup_.get()); dialog != nullptr) {
+      dialog->cancel();
+    } else {
+      close_popup();
+    }
     return true;
   }
 
   Widget* target = focused_ != nullptr ? focused_ : root_.get();
-  return bubble(target, [&](Widget& widget) { return widget.on_key_down(event); }) != nullptr;
+  const bool taken =
+      bubble(target, [&](Widget& widget) { return widget.on_key_down(event); }) != nullptr;
+
+  // Enter accepts a dialog, unless the control with focus took the key for
+  // itself -- a focused Cancel is pressed, not overruled. A text field is the
+  // exception: it takes Enter to finish its edit, and the answer it just
+  // finished is exactly what accepting is about.
+  if (event.key == Key::Enter && popup_open()) {
+    if (auto* dialog = dynamic_cast<Dialog*>(popup_.get()); dialog != nullptr) {
+      const bool field = dynamic_cast<TextField*>(focused_) != nullptr;
+      if (!taken || field) {
+        dialog->accept();
+        return true;
+      }
+    }
+  }
+  return taken;
 }
 
 bool WidgetHost::key_up(const KeyEvent& event) {
@@ -564,7 +600,8 @@ void WidgetHost::collect_focusable(Widget& widget, std::vector<Widget*>& out) co
 
 bool WidgetHost::focus_next(bool backwards) {
   std::vector<Widget*> order;
-  collect_focusable(*root_, order);
+  // Within an open popup, so Tab goes round a dialog rather than behind it.
+  collect_focusable(popup_open() ? *popup_ : *root_, order);
   if (order.empty()) {
     set_focus(nullptr);
     return false;

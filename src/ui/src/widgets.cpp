@@ -32,7 +32,7 @@ LayoutItem Label::sizing(Axis axis, const LayoutContext& context) const {
   // second half of that true — without the clip a squeezed label simply draws
   // over whatever is beside it, which is how a parameter row came to read
   // "Opacity100.0%".
-  const double width = context.text.measure(text_, size, bold_);
+  const double width = std::max(context.text.measure(text_, size, bold_), min_width_);
   return LayoutItem{.basis = width, .grow = 0.0, .shrink = 1.0, .min = 0.0, .max = kUnbounded};
 }
 
@@ -68,7 +68,12 @@ LayoutItem Button::sizing(Axis axis, const LayoutContext& context) const {
   const double label = context.text.measure(text_, metrics.font_size, false);
   const double width = label + 2.0 * metrics.padding_x;
   // Never narrower than it is tall, so a one-character button is not a sliver.
-  return LayoutItem::fixed(std::max(width, metrics.control_height));
+  return LayoutItem::fixed(std::max({width, metrics.control_height, min_width_}));
+}
+
+State Button::state() const noexcept {
+  const State own = Widget::state();
+  return default_ && own == State::Normal ? State::Focused : own;
 }
 
 void Button::paint_content(Painter& painter, const Theme& theme) const {
