@@ -36,7 +36,7 @@ measurements and the one correction they forced.
 | Old app | `github.com/kylegaskill89/cutline` — dead, kept as reference |
 | Old app, local | `d:\Videos\VideoTrimmer` — holds `design.md` (the rewrite spec) and `summary.md` |
 | Size | ~61k lines of source, ~39k of tests |
-| Tests | **2772** under the `ui` preset; 2392 of them need no GPU, no window, no FFmpeg |
+| Tests | over **3,100** under the `ui` preset as of October 2026; the large majority need no GPU, no window, no FFmpeg |
 
 GPL because it links x264 and x265 for software encoding alongside the hardware
 encoders.
@@ -57,7 +57,8 @@ ctest --preset debug
 **Use `default` for anything that does not need pixels.** It configures in
 seconds and builds in a couple of minutes, and it covers the model, the editing
 operations, the effect catalogue, the whole widget and theme layer, and every
-binding between them — 2392 of the 2772 tests.
+binding between them — the large majority of the suite. Exact counts are left
+out on purpose: every one written here has gone stale within weeks.
 
 The heavier presets pull vcpkg features and take a long time on first configure:
 
@@ -141,7 +142,7 @@ tools    executables.
 
 **The rule: everything that can be pure, is.** The model does not know what a
 widget is; the widget layer does not know what a project is; `editor` is the only
-place that knows both, and it is pure too. That is what makes 2392 tests run with
+place that knows both, and it is pure too. That is what makes most of the tests run with
 no GPU, no window and no media, in five seconds.
 
 The one deliberate exception: `ui` depends on `core` for frame durations and
@@ -611,11 +612,14 @@ walked section by section.
 | Gaps section | State |
 |---|---|
 | §1 Effects | done |
-| §2 Timeline | done |
-| §3 Monitors | done bar a deferred row (see the audit list at the foot of that file) |
-| §4 Project panel | done bar "new sequence from a clip", which needs more than one sequence |
+| §2 Timeline | done, nesting included |
+| §3 Monitors | done; safe margins and display mode remain in the audit list at the foot of that file |
+| §4 Project panel | done, "new sequence from a clip" included |
 | §5 Application settings | **done** — every row built or declined with a reason, see that file's §5.6 |
-| Audio, titles, colour, export, sequences, keyboard customisation | not started |
+| §6 Audio | **done**, both halves |
+| Sequences | **done** — a list of them and a tab strip |
+| §7 Engine, §8 HDR, §9 Interface and themes | audited 2026-10-23, **not started** — this is the order of work |
+| §10 Keyboard, §11 Export queue, §12 Titles, §13 Lumetri | audited 2026-10-23, **not started** |
 
 **Works end to end.** Import, place, move, trim, split, ripple, undo/redo. Eleven
 video effects as shaders, stackable, reorderable, keyframeable. Titles, drawn
@@ -674,9 +678,9 @@ things about this codebase.
 
 - **A menu bar entry for everything.** The bar exists and is a real menu bar now,
   but a few commands are still only on a button or a key.
-- **More than one sequence.** A `Project` holds its tracks directly; there is no
-  `Sequence` type. Section 4 ran into this and stopped, and it is written up at
-  the end of that section. It is the largest single piece of unbuilt model.
+- ~~**More than one sequence.**~~ **Done** — `core::Sequence`, a list of them on
+  the project, a tab strip, and nesting on top. See the Sequences entry at the
+  foot of `premiere-gaps.md`.
 
 ### B. Worth doing, and nobody will notice until it is done
 
@@ -717,9 +721,15 @@ things about this codebase.
   directions should not disagree about what is at a given time. Give `covering`
   the same half-frame rule and they will not.
 
-- **Keeping hardware-decoded frames on the GPU** instead of uploading them from
-  system memory. The decoder can already produce D3D12 textures; nothing samples
-  them yet. This is the last large win left in the preview.
+- ~~**Keeping hardware-decoded frames on the GPU**~~ — **already done**, and this
+  entry was stale. The renderer opens its decoders on Direct3D 11, and
+  `VideoDecoder::hardware_texture` carries each frame onto the compositor's
+  Direct3D 12 device through `detail::D3D11Share` with one copy inside the card;
+  `Compositor::view_decoded` samples that texture through `FrameView::texture`
+  and waits on its fence on the GPU rather than the CPU. Nothing is uploaded
+  from system memory unless decoding fell back to software. The large wins left
+  in the preview are in premiere-gaps §7 instead: rendering off the interface
+  thread, and frames in flight on the card.
 - **Retimed audio is still decoded whole.** A clip with a speed or a reverse on
   it is stretched once, up front, across its whole span — a window cannot be
   handed to something that reads its input end to end. Every other clip is
@@ -1137,10 +1147,25 @@ a backwards move smaller than one frame took compositing from 23 ms to 2 ms.
 
 ## 9. Where the work is right now
 
-**`docs/premiere-gaps.md` §6, audio, is closed** — and with it sections 1 to 6.
-The mixer is Premiere's arrangement with Premiere's controls, and the routing
-under it is Premiere's too: submixes, sends, roles, presets and ducking.
-**Pick the next section** — see *The next thing* below.
+**Sections 1 to 6 of `docs/premiere-gaps.md` are closed, and so are sequences
+and nesting.** On 2026-10-23 the owner reviewed the application against
+Premiere and set the next stretch of work, now written up as that file's §7 to
+§13, in this order:
+
+1. **Phase 0** — stabilise: MP3 import (see *Found by the 2026-10 review*), a
+   test over every format the import dialog offers, the installer's "Run
+   Cutline", and documentation that had drifted from the code.
+2. **§7 and §8** — the render engine, properly: frames in flight on the card,
+   a render thread with a queue so nothing decodes on the interface thread,
+   playback that survives an edit, a pipelined export, the pool's memory, and
+   full HDR.
+3. **§9** — the interface and themes: the owner's words were that it "feels
+   like a first draft", and Luna has to feel like XP and Aero like Vista.
+4. **§10 to §13** — keyboard shortcuts, export presets and queue, titles,
+   Lumetri.
+
+*The next thing* below predates that and is kept for its reasoning; the order
+above supersedes it.
 
 The rest of this section is about **§5, application settings**, which closed
 before it. It is kept because it is the part of the application whose rules are
@@ -1436,7 +1461,8 @@ that, but present cost specifically may not be representative.
 Everything is committed and green. Nothing is half-finished, no branch is open,
 and there is no work in progress to reconstruct.
 
-- 3184 tests pass under the `ui` preset, 2743 under `release`. Set
+- The whole suite passes under the `ui` preset — a little over 3,100 tests as of
+  October 2026. Set
   `CUTLINE_TEST_MEDIA_DIR` or about fifty decode tests skip while the run still
   says everything passed.
 - **The suite is stable under `-j`, and this has now been fixed twice.** The

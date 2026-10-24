@@ -1434,9 +1434,10 @@ saying so first is what made the rest worth doing.
 
 **Playback is not what this touches.** Nothing on the playback path reads a
 waveform or a filmstrip. What makes playback hitch is video decode: the reverse
-stalls are group-of-pictures bound and forward runs at about 40 fps on 4K60
-because every frame is uploaded from system memory. The win there is keeping
-hardware-decoded frames on the GPU, which is a different subsystem.
+stalls are group-of-pictures bound, and forward ran at about 40 fps on 4K60 —
+which turned out to be a millisecond of timestamp rounding rather than the
+upload it was blamed on here (handoff §9). Decoded frames already stay on the
+card. Either way it is a different subsystem.
 
 **Editing is, and the cost was far worse than this page had guessed.** Importing
 the reference ten-minute capture — 1.5 GB, four audio streams — and dropping it
@@ -1813,6 +1814,183 @@ it, and the routing last, because it needed the rest.
 
 ---
 
+## 7. Playback and render engine
+
+Written on 2026-10-23 from a code review against the question the owner
+actually asked: why does playback and scrubbing *feel* worse than Premiere when
+the renderer measures as keeping up? The answer is not throughput. It is where
+the work happens and what waits for it.
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Rendering off the interface thread | the playback engine renders ahead on worker threads; the interface picks up finished frames | **none** — `refresh_preview` decodes and composites on the UI thread, so a seek across a cut (96–287 ms) freezes input for its whole length | machinery |
+| Frames in flight on the card | yes | **none** — one allocator and one command list in `gpu::Device`, so `compose` and `display_texture` each submit and drain; two full round trips a frame | machinery |
+| Editing while it plays | playback carries on through an edit | **none** — any edit stops playback, because the player decoded what it needs up front and has nothing to update in place | machinery |
+| Export pipelined | render, convert and encode overlap; the card feeds the hardware encoder | **none** — render, drain, an 8-bit RGBA readback (~33 MB a 4K frame), a CPU `sws_scale`, then encode, strictly in turn; about 2× realtime | machinery |
+| Precision on the way out | 10-bit and float paths to the encoder | **none** — the readback is 8-bit, so the float compositor's precision is thrown away at the last step | machinery |
+| A large pool is cheap until looked at | yes | **no** — forty 4K sources sit at ~1.36 GB with one filmstrip drawn, and nobody has taken the number apart | audit |
+| Filmstrips for a folder of rushes | seconds | ten seconds a source at first, twenty-five by the twentieth — something accumulates | audit |
+| Nested and retimed audio | streamed | **decoded whole, up front** — a nest's mix and any retimed clip are rendered before playback begins | wiring |
+| Undo in a long session | cheap per step | each step is a full deep copy of the project; harmless now, and unmeasured at size | audit |
+
+**The plan is to fix the shape rather than shave the costs.** A ring of
+command allocators so the card holds frames in flight; a playback engine that
+owns the renderer on its own thread, renders ahead of the audio clock into a
+ring of display textures, and coalesces scrub requests so the newest wins; an
+edit hot-swapping the snapshot that engine reads instead of stopping it; and an
+export whose three stages overlap, with the colour conversion done on the card
+into NV12 or P010. The two drains are the prerequisite for everything after
+them — the handoff's §7B explains why moving the wait alone hangs.
+
+**What it is measured against**, on this machine (RTX 5070 Ti):
+
+| Measure | Target |
+|---|---|
+| 4K60 HEVC playback, no effects and with four | 60 distinct frames a second, p99 gap ≤ 1.5 frames |
+| The ten-minute MKV, crossing fifty cuts | no gap over two frames |
+| Reverse and J/K/L at 1× | no stall over 50 ms |
+| Scrub, pointer to picture | under 50 ms typically |
+| Interface input during playback or a seek | never blocked by decoding |
+| Export, a plain 4K60 cut to HEVC on NVENC | at least 4× realtime (about 2× now) |
+| 10-bit HDR export | works, at least 2× realtime |
+| A forty-source pool | under 600 MB; filmstrips under two seconds a source, and flat |
+
+Each target is to be met with a number in this section beside it, taken the way
+the handoff's playback measurements were — from outside the process, with
+`play_project` as the control — rather than declared.
+
+## 8. Colour pipeline: 10-bit and HDR
+
+`architecture.md` deferred HDR past v1 because no footage on hand was HDR. The
+owner has now put it in scope, in full: HDR footage is possible and Premiere's
+behaviour is the bar. The deferral did its job — the colour layer is
+parameterised by transfer and primaries and the compositor is already linear
+float — so this is new curves, a tone mapper and plumbing, not a restructure.
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| 10-bit decode | P010 kept at 10 bits | **none** — frames are described as NV12 or YUV 4:2:0 8-bit | wiring |
+| PQ and HLG transfer curves | yes | **declared, not implemented** — `TransferFunction::Smpte2084` and `AribStdB67` are read off the frame and nothing honours them | machinery |
+| Rec.2020 primaries | yes | the matrix is chosen; the primaries conversion is not | machinery |
+| A sequence colour space | Rec.709, Rec.2100 PQ, Rec.2100 HLG | **none** — every sequence is Rec.709 | wiring |
+| HDR preview | on an HDR display, tone-mapped otherwise | **none** — an SDR swapchain | machinery |
+| Scopes in nits | HDR ranges on the waveform | **none** | control |
+| HDR10 export | HEVC Main10 with mastering and light-level metadata | **none** — and impossible until §7's export stops reading back 8 bits | machinery |
+
+The fixtures will have to be generated rather than captured: every file the
+owner has is still SDR, and a test that waits for one would wait for ever.
+
+## 9. Interface and themes
+
+The owner's words were that it "feels like a first draft", and that is not one
+row. It is four things at once — visual polish, interaction feel, layout and
+workflow, and dialogs and menus — and it is the reason this section comes
+straight after the engine, before any new panel is built on top of what is
+there now.
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Built-in workspaces | Editing, Color, Audio, Graphics, Effects, Assembly, laid out as Premiere does | four, arranged as this application arranged them | wiring |
+| A panel menu on every panel | the ≡ in each header | **none** | control |
+| Every command in the menu bar | yes | most; a few are only on a button or a key | wiring |
+| History panel | the undo list, clickable | **none** | control |
+| Motion | hover and press fades, panel transitions, smooth zoom | **none** — the widget layer has no clock to animate against | machinery |
+| Focus and keyboard navigation | visible focus everywhere | partial | wiring |
+| Dialogs | one consistent framework: button order, Enter and Esc, validation, remembered sizes | each dialog built by hand in `main.cpp` | machinery |
+| Icons | one set, one grid | drawn lines that scale with the text, not drawn on one grid | control |
+| Spacing and type | a type ramp and a spacing grid | metrics per theme, no ramp | audit |
+
+**Luna must feel like XP and Aero like Vista.** Not recolours — the
+architecture already promised themes that change chrome — but the things that
+made those systems recognisable:
+
+| | XP / Vista | Here | Size |
+|---|---|---|---|
+| Faithful controls | Luna's rounded buttons with the orange hover rim, blue-highlighted menus, gripped scrollbars, green block progress; Vista's glossy buttons with a blue glow, the shining progress bar | approximations of both | control, per control |
+| Period fonts | Tahoma and Trebuchet for XP, Segoe UI for Vista | **none** — every theme uses the default face; `SkiaPainter` never asks for one | wiring |
+| A themed window frame | XP's blue caption and round red close; Vista's glass | a custom frame exists (`WM_NCCALCSIZE`) and draws one style | control |
+| Animation | hover glows fading in and out | **none**, for the reason in the table above | machinery |
+| Sounds | the system's own event sounds | **none** — to be played through Windows' sound-scheme aliases, never by bundling Microsoft's recordings | wiring |
+
+Vista's real blur-behind no longer exists on Windows 11. The closest honest
+answer is the DWM system backdrop for the frame and a blur drawn in Skia
+inside the window, and the row will say so rather than claim the original.
+Fonts are used from the system and never bundled, for the same reason the
+sounds are not.
+
+## 10. Keyboard shortcuts
+
+Pulled out of §5 for being larger than the rest of it together, and first of
+the feature sections because the menus and the panel menus in §9 both name
+commands.
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| A command table with stable names | yes | two `constexpr` tables, `kApplicationKeys` and `kTransportKeys`, matched by hand | machinery |
+| Rebinding, saved | per person, carried between machines | **none** | machinery |
+| Conflict check | yes | **none** | wiring |
+| Presets | Premiere's default and others | **none** | wiring |
+| The visual keyboard panel | yes | **none** | control |
+
+## 11. Export presets and queue
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Presets, built in and saved | yes | **none** — one dialog, codec and quality not remembered | wiring |
+| Match Source | yes | **none** | wiring |
+| A queue running in the background | Media Encoder | **none** — one export at a time, owning the window | machinery |
+| HEVC 10-bit and an intermediate (ProRes or DNxHR) | yes | H.264 and HEVC at 8 bits | wiring, after §7 |
+| Smart rendering | untouched spans copied rather than re-encoded | **none** | machinery |
+
+## 12. Titles and Essential Graphics
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Layered graphics | text, shapes and images in one clip | one text layer per title | machinery |
+| Styles and templates | saved and reapplied | **none** | wiring |
+| Responsive pinning | layers follow each other | **none** | machinery |
+| Animated in and out | presets | keyframes only | wiring |
+| Drop Shadow, Track Matte Key | yes | **none** — both need a pass to read a second texture, which the pass chain cannot yet | machinery |
+
+## 13. Lumetri Color
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Basic correction | white balance, tone | Exposure, Levels, Colour Balance and friends, as separate effects | control |
+| Creative | look LUT, faded film, vibrance | **none** | wiring |
+| Curves | RGB and hue curves | **none** | control |
+| Colour wheels | shadows, midtones, highlights | **none** | control |
+| HSL secondary | yes | **none** | machinery |
+| `.cube` LUTs | loaded into a 3D texture | **none** | machinery |
+| One panel | yes | **none** — and it is to be built HDR-aware from §8 rather than retrofitted | machinery |
+
+## Found by the 2026-10 review
+
+**MP3 did not import — fixed.** The cause was the one suspected: a song with
+ID3 cover art carries the sleeve as a picture stream marked
+`AV_DISPOSITION_ATTACHED_PIC`, nothing under `src/media` checked for it, and so
+`has_video()` said yes. The song became a video file — sent to the picture
+decoder, given a filmstrip of one frame — and the sound never arrived as sound.
+A plain mp3 with no art always worked, which is why it read as intermittent.
+M4A and FLAC carry art the same way and failed the same way.
+`detail::is_footage` is now the one rule, used by the probe and by every place
+that picks a stream to decode.
+
+`tests/media/formats_test.cpp` opens a committed fixture of each kind the
+import dialog offers — mp3 with and without art, m4a, flac, ogg, opus, 24-bit
+and float wav, aiff, ProRes, VP9, 10-bit HEVC, gif, jpeg and webp — so "it
+imports" is a measured claim. The fixtures are generated by
+`tests/media/fixtures/make.sh`, because this project's own FFmpeg has no mp3
+encoder to write one with.
+
+**Driving it found a second fault beside it.** An audio-only source in the
+source monitor drew an empty panel and went on drawing one: the monitor took
+whatever peaks the cache had when it opened — none, for a source just opened —
+and the arrival that followed was passed to the timeline and not to it. Driven
+since: an mp3 with art opens as a waveform, and a double-click puts it on A1.
+
+---
+
 ## Found by audit, listed nowhere else
 
 Walking the spec's own parity checklist and Premiere's menus against the source,
@@ -2010,10 +2188,15 @@ The rest of the application, in the order it seems worth walking:
   halves, every row. §6.2 was right that nothing in it could be started before
   a track carried an effect stack, and the routing that four of those rows were
   waiting for came last.
-- **Titles and graphics** — the Essential Graphics panel, layered graphics,
-  responsive design, styles.
-- **Colour** — the Lumetri Color panel and its scopes workflow.
-- **Export** — presets, queue, and the media encoder relationship.
+- ~~**Titles and graphics**, **Colour**, **Export**~~ — audited on 2026-10-23
+  and written up as §11–§13 above.
+
+**The order, chosen by the owner on 2026-10-23**: the engine (§7, with §8's
+colour pipeline beside it), then the interface and themes (§9), then keyboard
+shortcuts (§10), export presets and queue (§11), titles (§12) and Lumetri
+(§13). Engine first because playback and scrubbing are what hurt in daily use;
+the interface before new panels so that the new panels are built on what it
+becomes rather than polished twice.
 - ~~**Sequences**~~ — **done**. `core::Sequence` holds one cut and `Project`
   holds a list of them with the index of the open one; the pool and the bins
   stay project-wide, because importing a clip once and cutting it into three
@@ -2037,8 +2220,9 @@ The rest of the application, in the order it seems worth walking:
   before this reads back as it was and an older build can still open one
   written now; only a second sequence adds anything.
 - **Keyboard customisation** — pulled out of section 5, where it was the single
-  largest row: a command table, a binding store, a conflict check and a panel.
-- **Everything else** — workspaces beyond four, undo history panel. This used to
+  largest row, and written up as §10.
+- **Everything else** — workspaces beyond four and the undo history panel,
+  both now in §9. This used to
   begin with "markers with durations and comments", which §2.4 has had done for
   some time; a section-to-do list is exactly where a finished row survives
   longest, because nobody rereads the bottom of the page.

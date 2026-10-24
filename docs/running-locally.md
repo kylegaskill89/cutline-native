@@ -67,7 +67,8 @@ larger capture beside it.
 CUTLINE_TEST_MEDIA_DIR=D:\Videos\VideoTrimmer ctest --test-dir build/ui -C Release -j 8
 ```
 
-Expect around 3145 tests under `ui`. `build/default` runs roughly 2710 — the
+Expect a little over 3,100 tests under `ui` (October 2026; the number only
+grows). `build/default` runs most of them — the
 same core, without anything that needs a GPU or a decoder — and is much faster
 to build, which is what makes it worth keeping configured.
 

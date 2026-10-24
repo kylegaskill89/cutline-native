@@ -34,8 +34,10 @@ Everything else stands: the data model (§5), editing operations (§6), segment
 resolution (§7), the compositor model (§8), effect and audio-effect parameter
 semantics (§9, §10), scopes (§15), and the UI (§18).
 
-The native version additionally supports **HDR end to end**, which the
-TypeScript version did not. See `architecture.md`.
+**[corrected]** This line used to say the native version supports HDR end to
+end. It does not yet: `architecture.md` deferred HDR past v1, because no source
+on hand was HDR, and the colour layer was built so it could be added without a
+restructure. It is now scheduled — `premiere-gaps.md` §8.
 
 Errata found while porting are corrected in place and marked **[corrected]**.
 
