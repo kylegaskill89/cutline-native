@@ -178,4 +178,58 @@ void Theme::set(Part part, State state, SurfaceStyle style) {
   styles[part][state] = std::move(style);
 }
 
+Color mix(const Color& a, const Color& b, float t) noexcept {
+  return Color{a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t,
+               a.a + (b.a - a.a) * t};
+}
+
+SurfaceStyle mix(const SurfaceStyle& a, const SurfaceStyle& b, float t) {
+  if (t <= 0.0f) return a;
+  if (t >= 1.0f) return b;
+  const auto between = [t](double x, double y) { return x + (y - x) * t; };
+
+  SurfaceStyle out = t < 0.5f ? a : b;
+  out.border = mix(a.border, b.border, t);
+  out.border_width = between(a.border_width, b.border_width);
+  out.corner_radius = between(a.corner_radius, b.corner_radius);
+  out.text = mix(a.text, b.text, t);
+  out.text_glow = between(a.text_glow, b.text_glow);
+
+  if (a.fill.kind == b.fill.kind) {
+    out.fill.color = mix(a.fill.color, b.fill.color, t);
+    out.fill.blur_radius = between(a.fill.blur_radius, b.fill.blur_radius);
+    if (a.fill.stops.size() == b.fill.stops.size()) {
+      for (std::size_t i = 0; i < out.fill.stops.size(); ++i) {
+        out.fill.stops[i].at = static_cast<float>(between(a.fill.stops[i].at, b.fill.stops[i].at));
+        out.fill.stops[i].color = mix(a.fill.stops[i].color, b.fill.stops[i].color, t);
+      }
+    }
+  } else if (a.fill.kind == FillKind::Solid && b.fill.kind == FillKind::Gradient) {
+    // A flat rest state glowing into a ramp: the ramp, starting from the flat
+    // colour at every stop.
+    out.fill = b.fill;
+    for (GradientStop& stop : out.fill.stops) stop.color = mix(a.fill.color, stop.color, t);
+  } else if (a.fill.kind == FillKind::Gradient && b.fill.kind == FillKind::Solid) {
+    out.fill = a.fill;
+    for (GradientStop& stop : out.fill.stops) stop.color = mix(stop.color, b.fill.color, t);
+  }
+
+  if (a.bevel && b.bevel) {
+    out.bevel->light = mix(a.bevel->light, b.bevel->light, t);
+    out.bevel->dark = mix(a.bevel->dark, b.bevel->dark, t);
+  }
+  if (a.shadow && b.shadow) {
+    out.shadow->color = mix(a.shadow->color, b.shadow->color, t);
+    out.shadow->blur = between(a.shadow->blur, b.shadow->blur);
+  } else if (!a.shadow && b.shadow) {
+    // A glow arriving from nothing fades in rather than appearing halfway.
+    out.shadow = b.shadow;
+    out.shadow->color.a *= t;
+  } else if (a.shadow && !b.shadow) {
+    out.shadow = a.shadow;
+    out.shadow->color.a *= 1.0f - t;
+  }
+  return out;
+}
+
 }  // namespace cutline::ui

@@ -48,6 +48,9 @@ struct Color {
 /// else, so a malformed theme file degrades rather than failing to open.
 [[nodiscard]] Color parse_color(std::string_view text, Color fallback = {}) noexcept;
 
+/// The colour `t` of the way from `a` to `b`.
+[[nodiscard]] Color mix(const Color& a, const Color& b, float t) noexcept;
+
 /// `#rrggbbaa`, or `#rrggbb` when fully opaque.
 [[nodiscard]] std::string to_hex(const Color& color);
 
@@ -136,6 +139,12 @@ struct SurfaceStyle {
   friend bool operator==(const SurfaceStyle&, const SurfaceStyle&) = default;
 };
 
+/// A style `t` of the way from `a` to `b`, for a control fading between two
+/// states. Colours, widths and radii move; a gradient's stops move when both
+/// have the same number of them, and otherwise the nearer style's are taken,
+/// since two ramps of different shapes have no halfway.
+[[nodiscard]] SurfaceStyle mix(const SurfaceStyle& a, const SurfaceStyle& b, float t);
+
 /// The surfaces a theme can style. Adding one here is what makes it themeable;
 /// a widget that invented its own look instead would be invisible to every
 /// theme.
@@ -215,6 +224,12 @@ struct Metrics {
   double ruler_height = 24.0;
   /// Width of the column of track headers down the left of the timeline.
   double track_header_width = 140.0;
+
+  /// How long a control takes to fade into how it looks under the pointer,
+  /// and back out of it, in seconds. Zero snaps, which is XP; Vista's glow
+  /// arrived quickly and left slowly.
+  double hover_in = 0.0;
+  double hover_out = 0.0;
 
   friend bool operator==(const Metrics&, const Metrics&) = default;
 };

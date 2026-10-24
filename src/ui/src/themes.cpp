@@ -52,6 +52,9 @@ namespace {
   t.metrics.scrollbar_width = 17.0;  // XP scrollbars were chunky
   t.metrics.splitter_width = 8.0;    // and its splitters were raised bars
   t.metrics.track_height = 60.0;     // bevelled clips need the room
+  // XP's controls changed state in a single frame.
+  t.metrics.hover_in = 0.0;
+  t.metrics.hover_out = 0.0;
   t.metrics.audio_track_height = 48.0;
   t.metrics.ruler_height = 22.0;
 
@@ -368,6 +371,9 @@ namespace {
   t.metrics.font_size = 13.0;
   t.metrics.scrollbar_width = 16.0;
   t.metrics.track_height = 58.0;
+  // Vista's buttons glowed in quickly and let go slowly.
+  t.metrics.hover_in = 0.15;
+  t.metrics.hover_out = 0.5;
   t.metrics.audio_track_height = 46.0;
 
   t.fallback = SurfaceStyle{
@@ -669,6 +675,8 @@ namespace {
   t.metrics.scrollbar_width = 10.0;
   t.metrics.splitter_width = 4.0;  // flat chrome wants a hairline, not a bar
   t.metrics.track_height = 56.0;
+  t.metrics.hover_in = 0.1;
+  t.metrics.hover_out = 0.2;
   t.metrics.audio_track_height = 44.0;
 
   t.fallback = SurfaceStyle{
@@ -905,6 +913,9 @@ namespace {
   t.metrics.line_height = 1.5;  // terminals breathe
   t.metrics.scrollbar_width = 12.0;
   t.metrics.track_height = 52.0;
+  // Phosphor: lit at once, and an afterglow on the way out.
+  t.metrics.hover_in = 0.0;
+  t.metrics.hover_out = 0.25;
   t.metrics.audio_track_height = 40.0;
 
   const Color amber = hex("#ffb000");

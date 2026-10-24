@@ -19,6 +19,7 @@
 /// None of this needs a window. Events are values, so routing is driven from
 /// tests directly and the platform layer only has to translate `WM_*`.
 
+#include "cutline/ui/animator.hpp"
 #include "cutline/ui/cursor.hpp"
 #include "cutline/ui/event.hpp"
 #include "cutline/ui/layout.hpp"
@@ -162,6 +163,12 @@ class Widget {
   /// Overriding `paint_content` is usually what is wanted; overriding this
   /// skips the surface and the clipping too.
   virtual void paint(Painter& painter, const Theme& theme) const;
+
+  /// How this widget looks this paint: its part in its state, partway through
+  /// a fade when it has just been hovered, left or pressed and the theme fades.
+  /// What a widget paints its own surface and text with, so the two move
+  /// together.
+  [[nodiscard]] SurfaceStyle surface_style(const Theme& theme) const;
 
   /// Drawn after the surface and before the children. Labels, icons, the
   /// contents of a timeline track.
@@ -417,6 +424,13 @@ class WidgetHost {
 
   void paint(Painter& painter, const Theme& theme) const;
 
+  /// The clock fades are kept against. Mutable through a const host because
+  /// painting is const and painting is when a fade moves.
+  [[nodiscard]] Animator& animator() const noexcept { return animator_; }
+  /// Whether something is still fading, in which case the host wants painting
+  /// again even though nothing else has changed.
+  [[nodiscard]] bool animating() const noexcept { return animator_.running(); }
+
  private:
   /// Places the popup near its anchor, inside the window.
   void arrange_popup(const LayoutContext& context);
@@ -465,6 +479,8 @@ class WidgetHost {
   double mouse_x_ = 0.0;
   double mouse_y_ = 0.0;
   bool has_mouse_ = false;
+
+  mutable Animator animator_;
 };
 
 }  // namespace cutline::ui

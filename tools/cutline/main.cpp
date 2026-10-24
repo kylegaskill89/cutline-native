@@ -1113,6 +1113,9 @@ struct App {
   Label* export_status = nullptr;
 
   [[nodiscard]] bool exporting() const noexcept { return export_job.running.load(); }
+  /// Whether any window has something fading, which keeps the loop turning
+  /// until it settles.
+  [[nodiscard]] bool animating() noexcept;
 #endif
 
   std::size_t theme = 0;
@@ -11527,6 +11530,13 @@ void refresh_float_titles(App& app) {
 #endif
 }
 
+bool App::animating() noexcept {
+  for (Shell* shell : shells()) {
+    if (shell->host != nullptr && shell->host->animating()) return true;
+  }
+  return false;
+}
+
 /// Asks each window's display whether it is showing HDR, puts each window in
 /// the mode its display wants, and tells the preview engines whether anybody
 /// needs HDR pictures.
@@ -11931,7 +11941,8 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       BeginPaint(window, &paint);
       render(*shell);
       EndPaint(window, &paint);
-      shell->dirty = false;
+      // Something still fading wants the next frame too.
+      shell->dirty = shell->host->animating();
       shell->host->clear_paint();
       return 0;
     }
@@ -13425,8 +13436,9 @@ int main(int argc, char** argv) {
     // running, so a loop watching only that goes back to blocking with the
     // end still to handle — and a loop that was meant to round again never
     // does, because nothing wakes to notice.
+    const bool animating = app.animating();
     if (app.playback_live() || app.shuttling() || app.source_playing() || app.exporting() ||
-        app.export_job.finished.load()) {
+        app.export_job.finished.load() || animating) {
       while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
         if (message.message == WM_QUIT) {
           running = false;
@@ -13442,7 +13454,11 @@ int main(int argc, char** argv) {
         poll_export(app);
         // Nothing is due this instant when only the export is running, and the
         // encoder wants the core far more than this loop does.
-        if (!app.playback_live() && !app.shuttling() && !app.source_playing()) Sleep(8);
+        if (!app.playback_live() && !app.shuttling() && !app.source_playing()) {
+          // A fade is paced by the swapchain's wait for the screen; a
+          // millisecond here is only so a hidden window cannot spin.
+          Sleep(animating && !app.exporting() ? 1 : 8);
+        }
       }
     } else if (GetMessageW(&message, nullptr, 0, 0) > 0) {
       TranslateMessage(&message);

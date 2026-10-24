@@ -51,6 +51,7 @@ add_executable(cutline_core_tests
   render/plan_test.cpp
   render/preview_test.cpp
   render/scopes_test.cpp
+  ui/animator_test.cpp
   ui/browser_test.cpp
   ui/color_picker_test.cpp
   ui/containers_test.cpp

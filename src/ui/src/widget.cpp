@@ -142,10 +142,33 @@ State Widget::state() const noexcept {
   return State::Normal;
 }
 
+SurfaceStyle Widget::surface_style(const Theme& theme) const {
+  const State now = state();
+  const double in = theme.metrics.hover_in;
+  const double out = theme.metrics.hover_out;
+  const bool fades = in > 0.0 || out > 0.0;
+  // Only between rest, hover and pressed: those are what the pointer moves a
+  // control through. Selected, focused and disabled are decisions, and show at
+  // once.
+  const bool moving = now == State::Normal || now == State::Hover || now == State::Pressed;
+  // Through `host()`, which walks up to the root: only the root holds it.
+  WidgetHost* owner = fades && moving ? host() : nullptr;
+  if (owner == nullptr) return theme.style(part(), now);
+
+  Animator& clock = owner->animator();
+  const float hover = clock.toward(this, 0, hovered_ || pressed_, in, out);
+  // A press lands at once -- a button that is slow to look pressed feels
+  // broken -- and lets go as a hover does.
+  const float press = clock.toward(this, 1, pressed_, 0.0, out);
+  SurfaceStyle style = mix(theme.style(part(), State::Normal), theme.style(part(), State::Hover), hover);
+  if (press > 0.0f) style = mix(style, theme.style(part(), State::Pressed), press);
+  return style;
+}
+
 void Widget::paint(Painter& painter, const Theme& theme) const {
   if (!visible_ || bounds_.empty()) return;
 
-  const SurfaceStyle& style = theme.style(part(), state());
+  const SurfaceStyle style = surface_style(theme);
   if (paints_surface()) paint_surface(painter, bounds_, style);
   paint_content(painter, theme);
 
@@ -569,6 +592,7 @@ void WidgetHost::forget(Widget* widget) {
 }
 
 void WidgetHost::paint(Painter& painter, const Theme& theme) const {
+  animator_.begin_frame();
   root_->paint(painter, theme);
   // After everything, and outside every clip the tree set up. That is the
   // entire reason this is not a widget in the tree.

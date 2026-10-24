@@ -73,7 +73,7 @@ LayoutItem Button::sizing(Axis axis, const LayoutContext& context) const {
 
 void Button::paint_content(Painter& painter, const Theme& theme) const {
   if (text_.empty()) return;
-  const SurfaceStyle& style = theme.style(part_, state());
+  const SurfaceStyle style = surface_style(theme);
   painter.text(
       text_run(bounds(), text_, style, theme.metrics.font_size, TextAlign::Center, false));
 }

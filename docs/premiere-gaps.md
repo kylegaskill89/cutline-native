@@ -2280,7 +2280,7 @@ there now.
 | A panel menu on every panel | the ≡ in each header | **none** | control |
 | Every command in the menu bar | yes | most; a few are only on a button or a key | wiring |
 | History panel | the undo list, clickable | **none** | control |
-| Motion | hover and press fades, panel transitions, smooth zoom | **none** — the widget layer has no clock to animate against | machinery |
+| Motion | hover and press fades, panel transitions, smooth zoom | **half** — the clock is in: `ui::Animator`, one per window, and every control fades between rest, hover and pressed at its theme's pace (Aero in 0.15 s and out 0.5 s, Luna snapping as XP did), measured on screen; panel transitions and smooth zoom are still to use it | machinery |
 | Focus and keyboard navigation | visible focus everywhere | partial | wiring |
 | Dialogs | one consistent framework: button order, Enter and Esc, validation, remembered sizes | each dialog built by hand in `main.cpp` | machinery |
 | Icons | one set, one grid | drawn lines that scale with the text, not drawn on one grid | control |

@@ -364,7 +364,7 @@ void NumericField::layout(const LayoutContext& context) {
 void NumericField::paint_content(Painter& painter, const Theme& theme) const {
   if (editing()) return;  // the field is drawing itself over this
 
-  const SurfaceStyle& style = theme.style(part(), state());
+  const SurfaceStyle style = surface_style(theme);
   const Rect area = bounds();
   const Rect where{area.x + padding_, area.y, area.width - padding_ * 2.0, area.height};
 
@@ -1283,7 +1283,7 @@ LayoutItem Dropdown::sizing(Axis axis, const LayoutContext& context) const {
 }
 
 void Dropdown::paint_content(Painter& painter, const Theme& theme) const {
-  const SurfaceStyle& style = theme.style(part(), state());
+  const SurfaceStyle style = surface_style(theme);
   const Rect area = bounds();
   const Rect mark = arrow();
 
@@ -1728,7 +1728,7 @@ bool TextField::on_text(char32_t codepoint) {
 }
 
 void TextField::paint_content(Painter& painter, const Theme& theme) const {
-  const SurfaceStyle& style = theme.style(part(), state());
+  const SurfaceStyle style = surface_style(theme);
   const Rect area = bounds();
 
   if (text_.empty() && !placeholder_.empty()) {
@@ -1968,7 +1968,7 @@ void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const 
 }
 
 void IconButton::paint_content(Painter& painter, const Theme& theme) const {
-  const SurfaceStyle& style = theme.style(part(), state());
+  const SurfaceStyle style = surface_style(theme);
 
   // Scaled with the *text* rather than with the button, because these sit in a
   // row with it and want to match its weight rather than the theme's padding —
