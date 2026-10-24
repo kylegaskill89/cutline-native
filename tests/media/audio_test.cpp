@@ -346,6 +346,57 @@ TEST_F(ReferenceThumbnails, DecodeActualPictureContent) {
   for (std::size_t i = 3; i < rgba.size(); i += 4) ASSERT_EQ(rgba[i], 255);
 }
 
+/// The mean difference between two thumbnails of the same size, per channel.
+[[nodiscard]] double mean_difference(const Thumbnail& a, const Thumbnail& b) {
+  double total = 0.0;
+  for (std::size_t i = 0; i < a.rgba.size(); ++i) {
+    total += std::abs(static_cast<int>(a.rgba[i]) - static_cast<int>(b.rgba[i]));
+  }
+  return a.rgba.empty() ? 0.0 : total / static_cast<double>(a.rgba.size());
+}
+
+// Extraction decodes forward between thumbnails rather than seeking back to
+// the same keyframe for each. This source has keyframes four seconds apart, so
+// most of its thumbnails are reached without a seek, and each has to be the
+// picture that seeking straight to it would have found. A neighbouring frame
+// is 1.5 to 4 out on this measure.
+TEST_F(ReferenceThumbnails, DecodingOnFromTheLastFindsTheFrameASeekWould) {
+  constexpr int kCount = 6;
+  const auto strip = extract_thumbnails(path_, kCount, {.height = 32, .start = 0.0, .end = 8.0});
+  ASSERT_TRUE(strip.has_value()) << strip.error();
+  ASSERT_EQ(strip->size(), static_cast<std::size_t>(kCount));
+
+  for (const Thumbnail& wanted : *strip) {
+    // One thumbnail is taken from the middle of its range, so a narrow range
+    // around the same moment is a fresh seek to it.
+    const auto alone = extract_thumbnails(
+        path_, 1, {.height = 32, .start = wanted.timestamp - 0.001, .end = wanted.timestamp + 0.001});
+    ASSERT_TRUE(alone.has_value()) << alone.error();
+    ASSERT_EQ(alone->size(), 1u);
+    EXPECT_LE(mean_difference(wanted, alone->front()), 0.5) << "at " << wanted.timestamp;
+  }
+}
+
+TEST_F(ReferenceThumbnails, OnTheCardTheyShowWhatSoftwareShows) {
+  const ThumbnailOptions card{.height = 48, .start = 0.0, .end = 8.0};
+  ThumbnailOptions software = card;
+  software.hardware = false;
+
+  const auto fast = extract_thumbnails(path_, 4, card);
+  const auto slow = extract_thumbnails(path_, 4, software);
+  ASSERT_TRUE(fast.has_value()) << fast.error();
+  ASSERT_TRUE(slow.has_value()) << slow.error();
+  ASSERT_EQ(fast->size(), slow->size());
+
+  for (std::size_t i = 0; i < fast->size(); ++i) {
+    EXPECT_DOUBLE_EQ((*fast)[i].timestamp, (*slow)[i].timestamp);
+    ASSERT_EQ((*fast)[i].rgba.size(), (*slow)[i].rgba.size());
+    // A neighbouring frame of this source is 1.5 to 4 out on this measure, so
+    // this is the same frame. Measured, the two are identical.
+    EXPECT_LE(mean_difference((*fast)[i], (*slow)[i]), 0.5) << "thumbnail " << i;
+  }
+}
+
 TEST_F(ReferenceThumbnails, ZeroCountIsEmptyRatherThanAnError) {
   const auto thumbnails = extract_thumbnails(path_, 0);
   ASSERT_TRUE(thumbnails.has_value());

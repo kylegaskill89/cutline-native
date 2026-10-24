@@ -56,6 +56,11 @@ void warm_hardware_decoding() noexcept;
 ///
 /// The texture is NV12: an 8-bit luma plane and a half-resolution interleaved
 /// chroma plane, addressed as plane slices of one resource.
+/// The shared decoding device for work in the background: filmstrips for the
+/// pool and the timeline. Its own, so a strip being extracted never queues in
+/// front of a frame being played, which is what sharing a device would do.
+inline constexpr int kBackgroundDecodingDevice = 3;
+
 struct HardwareTexture {
   /// `ID3D12Resource*`, untyped so d3d12.h stays out of this header. Owned by
   /// the decoder and valid until the next `next_frame`.
@@ -112,8 +117,9 @@ class VideoDecoder {
     /// front of the serving decoder's one copy, and the frame being shown
     /// waited about thirty milliseconds for it, every frame, until the read was
     /// done. Decoders that must not wait for each other ask for different
-    /// devices. There are three, from 0 to 2: a source's serving decoder, the
-    /// one reading the run before it, and the one reading the far side of a cut.
+    /// devices. There are four, from 0 to 3: a source's serving decoder, the
+    /// one reading the run before it, the one reading the far side of a cut,
+    /// and `kBackgroundDecodingDevice` for work nobody is watching happen.
     int d3d11_device = 0;
   };
 
@@ -135,6 +141,16 @@ class VideoDecoder {
 
   /// Presentation timestamp of the current frame, in seconds.
   [[nodiscard]] double timestamp() const noexcept;
+
+  /// Where the keyframe at or before `seconds` is, in seconds, from the
+  /// container's index; nothing when the index does not say. Indexes may count
+  /// in decoding time, which runs a few frames ahead of showing time when a
+  /// stream reorders its pictures, so this can be that much early.
+  ///
+  /// This is what tells a caller whether a seek would land ahead of where the
+  /// decoder already is or behind it. Behind it, the seek only throws away
+  /// frames that were already decoded and decodes them again.
+  [[nodiscard]] std::optional<double> keyframe_at_or_before(double seconds) const noexcept;
 
   /// Jumps to the keyframe at or before `seconds` and flushes the decoder.
   /// Decoding continues sequentially from there, so reaching an exact frame

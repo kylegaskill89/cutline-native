@@ -3527,9 +3527,9 @@ void sort_by_column(App& app, cutline::ui::MediaColumn column) {
 /// How many frames one pool tile is worth taking, across the whole source.
 ///
 /// A tile is about 108 pixels wide and the pointer's position across it picks
-/// the frame, so a dozen is already finer than anybody can aim. Every one of
-/// them is a seek and a decode — measured at about half a second each on a 4K
-/// capture — so this number is the whole cost of showing a pool of footage.
+/// the frame, so a dozen is already finer than anybody can aim. Taking them is
+/// most of the cost of showing a pool of footage: 0.74 s for an eight-second 4K
+/// source, decoded on the card.
 constexpr int kPoolTileFrames = 12;
 
 /// Asks for a few frames of every source the icon view is showing.

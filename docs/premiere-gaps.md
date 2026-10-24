@@ -1828,8 +1828,8 @@ the work happens and what waits for it.
 | Editing while it plays | playback carries on through an edit | **mostly** — the row was stale: `rebuild_playback` resumes after an edit with a gap of about 25 ms. Seamless means replanning the mixer while its device runs | machinery |
 | Export pipelined | render, convert and encode overlap; the card feeds the hardware encoder | **yes** — converted to NV12 on the card, a third of the readback, encoded on a thread of its own with up to three frames on their way back, and a 4K HEVC frame split across both NVENC engines: 4K60 at **4.4× realtime**, from 0.62×; see §7.2 | done |
 | Precision on the way out | 10-bit and float paths to the encoder | **half** — the card converts from the float scene straight to P010 as well as NV12, tested to a code; the writer still takes 8 bits only, which is the 10-bit encoder §8 needs | wiring |
-| A large pool is cheap until looked at | yes | **no** — forty 4K sources sit at ~1.36 GB with one filmstrip drawn, and nobody has taken the number apart | audit |
-| Filmstrips for a folder of rushes | seconds | ten seconds a source at first, twenty-five by the twentieth — something accumulates | audit |
+| A large pool is cheap until looked at | yes | **yes** — forty 4K sources: 231 MB in the list, 307 MB in icons once the strips are in. The 1.36 GB was not there to find; what was, was 200 MB the driver kept per decoding device after decoding, now given back when a device goes quiet; see §7.3 | done |
+| Filmstrips for a folder of rushes | seconds | **yes** — 0.74 s a source, flat across forty, from 11.6 s rising to 14: every tile frame went back to the same keyframe and decoded the same pictures again, in software. Now on the card, seeking only forward; see §7.3 | done |
 | Nested and retimed audio | streamed | **decoded whole, up front** — a nest's mix and any retimed clip are rendered before playback begins | wiring |
 | Undo in a long session | cheap per step | each step is a full deep copy of the project; harmless now, and unmeasured at size | audit |
 | Crossing a cut | the next clip is read ahead | **done** — the far side of a cut is read on a thread of its own, on its own decoding device; see below | — |
@@ -1856,7 +1856,7 @@ them — the handoff's §7B explains why moving the wait alone hangs.
 | Interface input during playback or a seek | never blocked by decoding |
 | Export, a plain 4K60 cut to HEVC on NVENC | at least 4× realtime (about 2× now) |
 | 10-bit HDR export | works, at least 2× realtime |
-| A forty-source pool | under 600 MB; filmstrips under two seconds a source, and flat |
+| A forty-source pool | under 600 MB; filmstrips under two seconds a source, and flat — **307 MB and 0.74 s, flat** |
 
 Each target is to be met with a number in this section beside it, taken the way
 the handoff's playback measurements were — from outside the process, with
@@ -2031,6 +2031,54 @@ the file needs far more frames decoded than it has frames.
 Handing NVENC the card's own textures instead of a copy in system memory was
 the plan's third step. Copying a frame out and back in is now 1 ms of a 3.8 ms
 frame, and is not the limit; it waits for a measurement that says otherwise.
+
+### 7.3 A large pool
+
+Forty copies of the eight-second 4K60 HEVC capture in one pool. Memory is the
+process's private bytes, taken from outside it; filmstrip times are from a
+throwaway test driving `ThumbnailCache` with no cache directory, because the
+on-disk cache makes a second run in the app meaningless.
+
+| | before | now |
+|---|---|---|
+| Empty project | 230 MB | 247 MB |
+| Forty sources, list view | 231 MB | 231 MB |
+| Forty sources, icon view, strips done | ~400 MB in software; 600 MB on the card before the trim | **307 MB** |
+| Filmstrip, one source | 11.6 s, rising to 14 by the twentieth | **0.74 s**, flat |
+| All forty | 512 s | 30 s |
+
+The 1.36 GB from the earlier drive did not reproduce: holding forty sources
+costs nothing until they are looked at, and the list view measured the same as
+an empty project. What was found instead:
+
+- **The extractor decoded the same pictures over and over.** It sought for
+  every tile frame, and this capture has keyframes at 0 and 4.17 s, so twelve
+  frames meant going back to one of two keyframes twelve times — about 1,380
+  frames decoded from a source of 480, on two software threads. It now seeks
+  only when the seek lands ahead of where decoding has got to, which the
+  container's index answers (`VideoDecoder::keyframe_at_or_before`): 3.8 s in
+  software. And it decodes on the card through `VideoDecoder`, on a fourth
+  shared device of its own so a strip never queues in front of a frame being
+  played, bringing back only the dozen frames it keeps: 0.74 s, and no
+  processor time. The pictures are identical to software's, tested, and each
+  is the frame a fresh seek to it would have found.
+- **The slowdown was not an accumulation.** It was the software decode sharing
+  the machine; with the decode on the card the time is flat from the first
+  source to the fortieth.
+- **Each decoding device kept about 200 MB after its decoder closed.** Taken
+  apart with DXGI's per-process figures: the 272 MB of surfaces go back to the
+  card, but the driver grows a store of its own in shared system memory while
+  decoding and keeps it for the device. The devices live for the session, so
+  that was 200 MB each for good — the pool sat at 600 MB with its strips done,
+  and playback's three devices kept theirs the same way. `IDXGIDevice3::Trim`
+  gives it back. It costs 50 ms, so it runs on a thread of its own, and only
+  once a device has had nothing on it for two seconds, so a run of filmstrips
+  or a cut that reopens on the same device never pays for it. A plain close
+  stays at 1.8 ms.
+
+While a strip is being taken the process is at about 600 MB, which is one
+open 4K hardware decoder. That is the cost of decoding, not of the pool, and
+it goes when the decoding does.
 
 ## 8. Colour pipeline: 10-bit and HDR
 

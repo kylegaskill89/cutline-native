@@ -14,6 +14,7 @@
 // fails to compile. Included here its guard is already set by the time libav
 // asks for it.
 #include <d3d11.h>
+#include <dxgi1_3.h>
 
 extern "C" {
 #include <libavutil/hwcontext_d3d11va.h>
@@ -24,8 +25,14 @@ extern "C" {
 #endif
 
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
 #include <format>
 #include <mutex>
+#include <optional>
+#include <thread>
 #include <utility>
 
 namespace cutline::media {
@@ -114,26 +121,149 @@ AVPixelFormat pick_hardware_format(AVCodecContext* ctx, const AVPixelFormat* for
 /// A failure is not cached. It is rare, it is not much cheaper than a success,
 /// and remembering it would make one bad moment permanent for the run.
 ///
-/// Three of them, chosen by `Options::d3d11_device`, for the reason given
-/// there: a source can have three decoders at work at once.
-constexpr int kSharedDecodingDevices = 3;
+/// Four of them, chosen by `Options::d3d11_device`, for the reason given
+/// there: a source can have three decoders at work at once, and the background
+/// work has one of its own. Each is made the first time it is asked for.
+constexpr int kSharedDecodingDevices = 4;
 
-[[nodiscard]] AVBufferRef* shared_d3d11_device(int which) {
-  static std::mutex lock;
-  static AVBufferRef* shared[kSharedDecodingDevices] = {};
-  const auto slot = static_cast<std::size_t>(std::clamp(which, 0, kSharedDecodingDevices - 1));
+/// How long a shared device sits with no decoder on it before it is trimmed.
+///
+/// Trimming costs about 50 ms and the store it gives back is grown again by the
+/// next decoder, so it is for a device that has gone quiet, not for the moment
+/// between one filmstrip and the next or a cut that reopens on the same device.
+constexpr auto kIdleBeforeTrim = std::chrono::seconds(2);
 
-  const std::lock_guard<std::mutex> held(lock);
-  if (shared[slot] == nullptr) {
-    if (av_hwdevice_ctx_create(&shared[slot], AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) <
-        0) {
-      shared[slot] = nullptr;
+struct SharedDecodingDevices {
+  std::mutex lock;
+  std::array<AVBufferRef*, kSharedDecodingDevices> device{};
+  /// How many decoders are using each.
+  std::array<int, kSharedDecodingDevices> users{};
+  /// Bumped whenever a decoder takes one, so a trim that was due can tell that
+  /// the device has been busy since.
+  std::array<std::uint64_t, kSharedDecodingDevices> taken{};
+  /// When each falls due for a trim, and what `taken` was when it went quiet.
+  std::array<std::optional<std::chrono::steady_clock::time_point>, kSharedDecodingDevices> due{};
+  std::array<std::uint64_t, kSharedDecodingDevices> quiet_at{};
+  std::condition_variable wake;
+  bool tidying = false;
+};
+
+[[nodiscard]] SharedDecodingDevices& shared_decoding_devices() {
+  // Never destroyed, for the reason above.
+  static auto* devices = new SharedDecodingDevices;
+  return *devices;
+}
+
+[[nodiscard]] std::size_t device_slot(int which) noexcept {
+  return static_cast<std::size_t>(std::clamp(which, 0, kSharedDecodingDevices - 1));
+}
+
+/// A reference of the caller's own to one of the shared devices, made if it is
+/// not there yet; and, when `borrowing`, counted as a decoder using it.
+[[nodiscard]] AVBufferRef* shared_d3d11_device(int which, bool borrowing) {
+  SharedDecodingDevices& shared = shared_decoding_devices();
+  const std::size_t slot = device_slot(which);
+
+  const std::lock_guard<std::mutex> held(shared.lock);
+  if (shared.device[slot] == nullptr) {
+    if (av_hwdevice_ctx_create(&shared.device[slot], AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr,
+                               0) < 0) {
+      shared.device[slot] = nullptr;
       return nullptr;
     }
   }
+  if (borrowing) {
+    ++shared.users[slot];
+    ++shared.taken[slot];
+  }
   // A reference of the caller's own, so its codec context can own one end of
   // the lifetime the way it does with a context it made itself.
-  return av_buffer_ref(shared[slot]);
+  return av_buffer_ref(shared.device[slot]);
+}
+
+/// Asks the driver for back what it is holding for a device with nothing on it.
+///
+/// `IDXGIDevice3::Trim` is the call for it, and it wants the context cleared
+/// and flushed first.
+void trim(AVBufferRef* device) noexcept {
+  const auto* context = reinterpret_cast<const AVHWDeviceContext*>(device->data);
+  const auto* d3d11 = static_cast<const AVD3D11VADeviceContext*>(context->hwctx);
+  if (d3d11->device == nullptr || d3d11->device_context == nullptr) return;
+  // The context is not free-threaded; libav takes this lock around its own use.
+  d3d11->lock(d3d11->lock_ctx);
+  d3d11->device_context->ClearState();
+  d3d11->device_context->Flush();
+  IDXGIDevice3* dxgi = nullptr;
+  if (SUCCEEDED(d3d11->device->QueryInterface(__uuidof(IDXGIDevice3),
+                                              reinterpret_cast<void**>(&dxgi)))) {
+    dxgi->Trim();
+    dxgi->Release();
+  }
+  d3d11->unlock(d3d11->lock_ctx);
+}
+
+/// Trims each device that has stayed quiet for `kIdleBeforeTrim`. Runs for
+/// the life of the process, like the devices it looks after.
+void tidy() {
+  SharedDecodingDevices& shared = shared_decoding_devices();
+  std::unique_lock<std::mutex> held(shared.lock);
+  for (;;) {
+    std::optional<std::chrono::steady_clock::time_point> next;
+    for (const auto& due : shared.due) {
+      if (due && (!next || *due < *next)) next = due;
+    }
+    if (!next) {
+      shared.wake.wait(held);
+      continue;
+    }
+    if (std::chrono::steady_clock::now() < *next) {
+      shared.wake.wait_until(held, *next);
+      continue;
+    }
+
+    for (std::size_t slot = 0; slot < shared.due.size(); ++slot) {
+      if (!shared.due[slot] || std::chrono::steady_clock::now() < *shared.due[slot]) continue;
+      shared.due[slot].reset();
+      // Taken since it went quiet, even if given back again: the store has
+      // been grown again and will be wanted again, and a later quiet spell
+      // has a trim of its own coming.
+      if (shared.users[slot] > 0 || shared.taken[slot] != shared.quiet_at[slot]) continue;
+      AVBufferRef* device = av_buffer_ref(shared.device[slot]);
+      held.unlock();
+      if (device != nullptr) {
+        trim(device);
+        av_buffer_unref(&device);
+      }
+      held.lock();
+    }
+  }
+}
+
+/// A decoder is done with a shared device.
+///
+/// Decoding grows a store of the driver's own in system memory, about 200 MB
+/// on a device that has decoded a few dozen 4K HEVC frames, and the driver
+/// keeps it when the decoder closes in case another comes along. The devices
+/// outlive every decoder, so that was 200 MB a device for the rest of the
+/// session: a pool whose filmstrips had all been drawn sat at 600 MB rather
+/// than 290, and playback's three devices kept theirs the same way. So a
+/// device left with nothing on it is trimmed once it has stayed that way for a
+/// moment -- on a thread of its own, because a trim takes 50 ms and the last
+/// decoder on a device is often closed by the render thread.
+void return_d3d11_device(int which) noexcept {
+  SharedDecodingDevices& shared = shared_decoding_devices();
+  const std::size_t slot = device_slot(which);
+  {
+    const std::lock_guard<std::mutex> held(shared.lock);
+    if (--shared.users[slot] > 0) return;
+    shared.due[slot] = std::chrono::steady_clock::now() + kIdleBeforeTrim;
+    shared.quiet_at[slot] = shared.taken[slot];
+    if (!shared.tidying) {
+      shared.tidying = true;
+      std::thread(tidy).detach();
+    }
+  }
+  shared.wake.notify_all();
 }
 
 }  // namespace
@@ -142,7 +272,9 @@ void warm_hardware_decoding() noexcept {
   // The reference handed back is the caller's; the static keeps its own, which
   // is the one that makes the next call cheap.
   for (int which = 0; which < kSharedDecodingDevices; ++which) {
-    if (AVBufferRef* ref = shared_d3d11_device(which); ref != nullptr) av_buffer_unref(&ref);
+    if (AVBufferRef* ref = shared_d3d11_device(which, false); ref != nullptr) {
+      av_buffer_unref(&ref);
+    }
   }
 }
 
@@ -161,6 +293,8 @@ struct VideoDecoder::Impl {
   AVFormatContext* format = nullptr;
   AVCodecContext* codec = nullptr;
   AVBufferRef* hw_device = nullptr;
+  /// Which shared device `hw_device` is, when it is one, so closing can say so.
+  int borrowed = -1;
   AVFrame* decoded = nullptr;
   AVPacket* packet = nullptr;
 
@@ -188,7 +322,10 @@ struct VideoDecoder::Impl {
     if (decoded != nullptr) av_frame_free(&decoded);
     if (packet != nullptr) av_packet_free(&packet);
     if (codec != nullptr) avcodec_free_context(&codec);
-    if (hw_device != nullptr) av_buffer_unref(&hw_device);
+    if (hw_device != nullptr) {
+      if (borrowed >= 0) return_d3d11_device(borrowed);
+      av_buffer_unref(&hw_device);
+    }
     if (format != nullptr) avformat_close_input(&format);
   }
 };
@@ -295,7 +432,8 @@ std::expected<std::unique_ptr<VideoDecoder>, std::string> VideoDecoder::open_wit
     if (device != nullptr) {
       impl->hw_device = d3d12_context_for(device);
     } else if (type == AV_HWDEVICE_TYPE_D3D11VA) {
-      impl->hw_device = shared_d3d11_device(options.d3d11_device);
+      impl->hw_device = shared_d3d11_device(options.d3d11_device, true);
+      if (impl->hw_device != nullptr) impl->borrowed = options.d3d11_device;
     } else if (av_hwdevice_ctx_create(&impl->hw_device, type, nullptr, nullptr, 0) < 0) {
       impl->hw_device = nullptr;
     }
@@ -444,6 +582,16 @@ const AVFrame* VideoDecoder::frame() const noexcept {
 }
 
 double VideoDecoder::timestamp() const noexcept { return impl_->timestamp; }
+
+std::optional<double> VideoDecoder::keyframe_at_or_before(double seconds) const noexcept {
+  const Impl& d = *impl_;
+  AVStream* stream = d.format->streams[d.stream_index];
+  const auto target = static_cast<int64_t>(seconds / av_q2d(d.time_base));
+  const AVIndexEntry* entry =
+      avformat_index_get_entry_from_timestamp(stream, target, AVSEEK_FLAG_BACKWARD);
+  if (entry == nullptr || entry->timestamp == AV_NOPTS_VALUE) return std::nullopt;
+  return static_cast<double>(entry->timestamp) * av_q2d(d.time_base);
+}
 
 std::expected<void, std::string> VideoDecoder::seek(double seconds) {
   Impl& d = *impl_;

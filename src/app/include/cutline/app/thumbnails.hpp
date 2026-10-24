@@ -9,9 +9,11 @@
 /// that imported forty sources would otherwise hold every one of them for as
 /// long as it ran.
 ///
-/// Extraction seeks per frame, which is the one place that access pattern is
-/// right: a handful of frames spread across a long file would otherwise mean
-/// decoding everything between them.
+/// Extraction seeks between frames when a seek lands ahead of where decoding
+/// has got to, and decodes on when it would not: a handful of frames spread
+/// across a long file would otherwise mean decoding everything between them,
+/// and seeking back to the same keyframe for each meant decoding the same
+/// pictures over and over.
 
 #include "cutline/ui/timeline.hpp"
 
@@ -53,7 +55,9 @@ inline constexpr double kThumbnailSeconds = 2.0;
 inline constexpr int kMaxThumbnails = 48;
 inline constexpr int kMinThumbnails = 6;
 
-/// How many decoding threads the extractor may use.
+/// How many decoding threads the extractor may use, when it decodes in
+/// software. On the card's decoder, which is where it runs when it can, the
+/// processor is not doing the decoding at all.
 ///
 /// Left to itself libav takes every core, which is right for a tool doing one
 /// job and wrong for a worker running behind an interface: a ten-minute 4K

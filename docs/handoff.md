@@ -735,17 +735,13 @@ things about this codebase.
   handed to something that reads its input end to end. Every other clip is
   windowed now (see §8's note on `AudioMixer`), so this is the one case left
   where a long source costs its whole length in memory.
-- **A large pool costs a great deal of memory before anything is looked at.**
-  Forty 4K sources in the browser sat at ~1.36 GB with one filmstrip extracted,
-  so the cost is in holding forty sources open rather than in the pictures.
-  Nobody has taken this apart; it is the largest unexplained number in the
-  application.
-- **Filmstrips fill a large pool slowly, and slow down as they go.** Ten
-  seconds a source at first and nearer twenty-five by the twentieth, so twenty
-  visible tiles took about nine minutes. Ordered, evicting properly and never
-  blocking, so it degrades well — but browsing a folder of rushes should not be
-  a thing you wait out, and the deceleration says something is accumulating.
-  Both of these are written up under *Driven: forty in the pool* in §5.
+- **The large pool, taken apart (2026-10).** Neither the 1.36 GB nor the
+  slowdown were what they looked like. Holding forty sources costs nothing
+  until they are looked at; the memory was the driver keeping about 200 MB per
+  decoding device after decoding, and the filmstrips were seeking back to the
+  same keyframe for every tile frame, in software. Forty sources now sit at
+  307 MB with their strips drawn, at 0.74 s a strip, flat. Written up in
+  premiere-gaps §7.3.
 - **Undoing an import leaves the source monitor showing the removed source.**
   Small, visible, and a refresh that does not check what it is showing still
   exists. Also in §5.

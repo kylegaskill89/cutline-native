@@ -11,12 +11,17 @@
 
 #include <gtest/gtest.h>
 
+#include <windows.h>
+#include <psapi.h>
+
 #include <cstdlib>
 #include <process.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 namespace cutline::media {
 namespace {
@@ -184,6 +189,54 @@ TEST_F(ReferenceMedia, DecodingRunsToTheEndOfTheStream) {
   // Eight seconds at 60 fps, allowing for the encoder's exact frame count.
   EXPECT_GT(frames, 400);
   EXPECT_LT(frames, 600);
+}
+
+TEST_F(ReferenceMedia, TheIndexSaysWhereEachKeyframeIs) {
+  auto decoder = VideoDecoder::open(path_);
+  ASSERT_TRUE(decoder.has_value()) << decoder.error();
+
+  // This clip has two: at the start and at 4.17 s. The second is indexed at
+  // 4.10, by decoding time, which runs four frames ahead of showing time here.
+  const auto first = (*decoder)->keyframe_at_or_before(3.0);
+  const auto second = (*decoder)->keyframe_at_or_before(6.0);
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  EXPECT_NEAR(*first, 0.0, 0.1);
+  EXPECT_NEAR(*second, 4.1667, 0.1);
+}
+
+[[nodiscard]] double private_megabytes() {
+  PROCESS_MEMORY_COUNTERS_EX counters{};
+  GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                       sizeof counters);
+  return static_cast<double>(counters.PrivateUsage) / (1024.0 * 1024.0);
+}
+
+// The decoding devices are shared and live as long as the process, and the
+// driver keeps a store it grows while decoding -- about 200 MB for a few dozen
+// 4K frames -- after the decoder has gone. Left there, every device that had
+// ever decoded anything held its store for the rest of the session.
+TEST_F(ReferenceMedia, ADecodingDeviceLeftQuietGivesBackWhatTheDriverHeld) {
+  double busy = 0.0;
+  {
+    auto decoder = VideoDecoder::open(
+        path_, {.preferred = Acceleration::D3D11Va, .d3d11_device = kBackgroundDecodingDevice});
+    ASSERT_TRUE(decoder.has_value()) << decoder.error();
+    if ((*decoder)->acceleration() != Acceleration::D3D11Va) {
+      GTEST_SKIP() << "no D3D11 hardware decoding on this machine";
+    }
+    for (int i = 0; i < 60; ++i) ASSERT_TRUE((*decoder)->next_frame().has_value());
+    busy = private_megabytes();
+  }
+
+  // Given back a couple of seconds after the last decoder on it closes, so
+  // allowed a few.
+  double now = busy;
+  for (int i = 0; i < 60 && now > busy - 100.0; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    now = private_megabytes();
+  }
+  EXPECT_LT(now, busy - 100.0) << "busy " << busy << " MB, later " << now << " MB";
 }
 
 TEST_F(ReferenceMedia, SoftwareDecodeIsAlwaysAvailable) {
