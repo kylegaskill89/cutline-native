@@ -1091,5 +1091,29 @@ TEST_F(CoarseTimestampTest, EveryFrameOfTheGridIsADifferentPicture) {
   }
 }
 
+TEST_F(CoarseTimestampTest, BackwardsShowsTheSameFrameAsForwards) {
+  const Project p = with_source();
+  constexpr int kAsked = kFrames - 2;
+
+  std::vector<int> forwards(kAsked);
+  for (int i = 0; i < kAsked; ++i) {
+    forwards[i] = pixel_at(render(p, i / kFps), kWidth / 2, kHeight / 2).r;
+  }
+
+  // Walking back over what was just played is answered from the run of frames
+  // the decoder kept, not by decoding — and that lookup had its own idea of
+  // "the frame at this time". A tenth of a millisecond, against the half frame
+  // the forward loop allows, so on Matroska's millisecond grid the request at
+  // 16.667 ms took the frame stamped 17 forwards and the one stamped 0 back.
+  std::vector<int> backwards(kAsked);
+  for (int i = kAsked - 1; i >= 0; --i) {
+    backwards[i] = pixel_at(render(p, i / kFps), kWidth / 2, kHeight / 2).r;
+  }
+
+  for (int i = 0; i < kAsked; ++i) {
+    EXPECT_EQ(forwards[i], backwards[i]) << "the two directions disagree about frame " << i;
+  }
+}
+
 }  // namespace
 }  // namespace cutline::engine

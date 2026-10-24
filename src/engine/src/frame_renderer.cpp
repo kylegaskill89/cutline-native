@@ -488,27 +488,41 @@ struct Source {
     extending = false;
   }
 
-  /// The remembered frame covering `time`, or null. The last one at or before
-  /// it, which is the same rule the decoder follows: a frame is shown from its
-  /// own timestamp until the next one.
-  [[nodiscard]] static const AVFrame* covering(const std::deque<Recent>& run, double time) {
+  /// How near a frame's timestamp has to be to a request to answer it: half a
+  /// source frame, set when the decoder opens and its rate is known.
+  ///
+  /// The same slack the forward decode loop uses, and it has to be. A run is
+  /// what reverse plays from, so with a tighter rule here the two directions
+  /// disagreed about which frame a moment *is*: on Matroska's millisecond grid
+  /// a request at 16.667 ms took the frame stamped 17 going forwards and the
+  /// one stamped 0 coming back.
+  double slack = kFrameEpsilon;
+
+  /// The remembered frame nearest `time`, or null. The last one at or before
+  /// it once half a frame of slack is allowed, which is the rule the decoder
+  /// follows going forwards: a frame answers from half a frame before its own
+  /// timestamp until half a frame before the next one's.
+  [[nodiscard]] static const AVFrame* covering(const std::deque<Recent>& run, double time,
+                                               double slack) {
     if (run.empty()) return nullptr;
     // Before the run began, so whatever covers this was never decoded here.
-    if (time < run.front().at - kFrameEpsilon) return nullptr;
+    if (time < run.front().at - slack) return nullptr;
     // And past the end of it. "The last frame at or before t" is only an answer
     // *within* the run: beyond the newest entry the right frame is one nobody
     // has decoded yet, and handing back the newest would freeze the picture
     // there for ever while playing forwards.
-    if (time > run.back().at + kFrameEpsilon) return nullptr;
+    if (time > run.back().at + slack) return nullptr;
     const AVFrame* found = nullptr;
     for (const Recent& entry : run) {
-      if (entry.at > time + kFrameEpsilon) break;
+      if (entry.at > time + slack) break;
       found = entry.frame.get();
     }
     return found;
   }
 
-  [[nodiscard]] const AVFrame* remembered(double time) const { return covering(recent, time); }
+  [[nodiscard]] const AVFrame* remembered(double time) const {
+    return covering(recent, time, slack);
+  }
 
   /// Whether the run decoded ahead covers `time`.
   ///
@@ -526,13 +540,13 @@ struct Source {
   /// slower than having none.
   [[nodiscard]] bool pending_covers(double time) const {
     if (pending.empty()) return false;
-    if (time < pending.front().at - kFrameEpsilon) return false;
+    if (time < pending.front().at - slack) return false;
     // A jump run has no run in hand to meet — it is the far side of a cut, and
     // what bounds it is simply how much of it has been decoded. `covering`
     // answers that, and refusing anything past its newest frame is right here
     // for the same reason it is wrong above: beyond it, nobody has decoded the
     // frame yet.
-    if (ahead_for == Ahead::Jump) return covering(pending, time) != nullptr;
+    if (ahead_for == Ahead::Jump) return covering(pending, time, slack) != nullptr;
     if (pending_until < 0.0) return false;
     return time < pending_until - kFrameEpsilon;
   }
@@ -1072,6 +1086,8 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
       source.usable = false;
     } else {
       source.decoder = std::move(*opened);
+      const double rate = source.decoder->stream().fps;
+      source.slack = std::max(kFrameEpsilon, 0.5 / (rate > 0.0 ? rate : 1.0 / kAssumedFrameGap));
     }
     found = sources.emplace(media.id, std::move(source)).first;
   }
@@ -1215,9 +1231,8 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // that cannot reach into the neighbouring frame. It shows a picture at most
   // half a frame early, which is the same trade the backwards tolerance above
   // already makes and is a good deal smaller.
-  const double slack = std::max(kFrameEpsilon, frame_gap * 0.5);
   while (!source.exhausted) {
-    if (source.position >= time - slack && source.position >= 0.0) break;
+    if (source.position >= time - source.slack && source.position >= 0.0) break;
 
     const auto got = source.decoder->next_frame();
     if (!got) {
