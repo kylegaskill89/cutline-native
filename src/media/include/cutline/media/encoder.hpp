@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -37,6 +38,31 @@ enum class VideoCodec {
 
 [[nodiscard]] std::string_view to_string(VideoCodec codec) noexcept;
 
+/// How the picture in the file is encoded: which primaries, which transfer
+/// curve, and so which YCbCr matrix. Written into the stream's tags, which is
+/// what tells a player how to show it.
+enum class VideoColour {
+  Bt709,      ///< SDR, as every export was
+  Bt2100Pq,   ///< HDR10: Rec.2020 primaries, the ST 2084 curve
+  Bt2100Hlg,  ///< Rec.2020 primaries, hybrid log-gamma
+};
+
+/// What an HDR10 file says about the display it was mastered on and the
+/// brightest it gets, so a display that cannot reach that knows how to map it
+/// down. In nits; the primaries are the mastering display's, as CIE xy.
+struct HdrMetadata {
+  /// Display P3 at D65, which is what nearly every HDR grade is mastered on.
+  double red_x = 0.680, red_y = 0.320;
+  double green_x = 0.265, green_y = 0.690;
+  double blue_x = 0.150, blue_y = 0.060;
+  double white_x = 0.3127, white_y = 0.3290;
+  double max_luminance = 1000.0;
+  double min_luminance = 0.0001;
+  /// The brightest pixel anywhere, and the brightest frame on average.
+  int max_content_light = 1000;
+  int max_frame_average_light = 400;
+};
+
 struct VideoEncodeSettings {
   int width = 1920;
   int height = 1080;
@@ -52,6 +78,15 @@ struct VideoEncodeSettings {
   /// Quality when `bitrate` is zero: lower is better, in the encoder's own
   /// scale (CRF for x264/x265, CQ for the hardware encoders).
   int quality = 20;
+  /// 8 or 10. Ten is HEVC only: the hardware encoders do not offer 10-bit
+  /// H.264, and Premiere does not either. The x265 in this build is 8-bit, so
+  /// ten bits needs a hardware encoder that has them -- NVENC, QSV or AMF --
+  /// and a machine without one is told so rather than given eight.
+  int bit_depth = 8;
+  VideoColour colour = VideoColour::Bt709;
+  /// Mastering display and light levels, for a PQ file. Left out of anything
+  /// else, since nothing else carries them.
+  std::optional<HdrMetadata> hdr;
 };
 
 /// Audio output. Disabled by default, so a caller that has nothing to write
@@ -74,10 +109,11 @@ struct AudioEncodeSettings {
   int streams = 1;
 };
 
-/// A frame already converted for an encoder: BT.709 at studio range, 4:2:0 in
-/// two planes -- luma, then the two colour differences interleaved at half size
-/// each way. NV12, or P010 with ten bits at the top of sixteen. Borrowed for the
-/// length of the call that takes it.
+/// A frame already converted for an encoder: in the writer's colour encoding at
+/// studio range, 4:2:0 in two planes -- luma, then the two colour differences
+/// interleaved at half size each way. NV12, or P010 with ten bits at the top of
+/// sixteen, which has to match the writer's bit depth. Borrowed for the length
+/// of the call that takes it.
 struct PlanarFrame {
   bool ten_bit = false;
   const std::uint8_t* luma = nullptr;
@@ -103,7 +139,8 @@ class MediaWriter {
   ~MediaWriter();
 
   /// Appends one frame. `rgba` is row-major 8-bit sRGB, `width * height * 4`
-  /// bytes, and frames are expected in presentation order.
+  /// bytes, and frames are expected in presentation order. BT.709 writers
+  /// only: eight bits of sRGB is not a picture an HDR file can be made from.
   [[nodiscard]] std::expected<void, std::string> write_frame(
       std::span<const std::uint8_t> rgba);
 

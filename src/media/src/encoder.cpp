@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
+#include <optional>
 #include <format>
 #include <vector>
 
@@ -46,28 +48,84 @@ using detail::av_error_string;
   return codec == VideoCodec::Hevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
 }
 
-/// The pixel format to give an encoder, from its own list rather than guessed.
+/// The pixel format to give an encoder, from its own list rather than guessed,
+/// or nothing when it has none at this depth.
 ///
-/// NV12 first, because it is what an export converts to on the card and an
-/// encoder that takes it takes the frame as it is. Planar 4:2:0 for one that
-/// does not, which costs a shuffle of planes on the way in.
-[[nodiscard]] AVPixelFormat preferred_format(const AVCodec* encoder) {
+/// The two-plane form first, NV12 or P010, because it is what an export
+/// converts to on the card and an encoder that takes it takes the frame as it
+/// is. Planar 4:2:0 for one that does not, which costs a shuffle of planes.
+[[nodiscard]] std::optional<AVPixelFormat> preferred_format(const AVCodec* encoder,
+                                                            int bit_depth) {
+  const bool ten = bit_depth > 8;
   const AVPixelFormat* formats = nullptr;
   int count = 0;
   if (avcodec_get_supported_config(nullptr, encoder, AV_CODEC_CONFIG_PIX_FORMAT, 0,
                                    reinterpret_cast<const void**>(&formats), &count) < 0 ||
       formats == nullptr || count <= 0) {
-    return AV_PIX_FMT_YUV420P;
+    return ten ? AV_PIX_FMT_YUV420P10LE : AV_PIX_FMT_YUV420P;
   }
 
-  // Both are 8-bit 4:2:0, so either is a faithful target for SDR output.
-  for (int i = 0; i < count; ++i) {
-    if (formats[i] == AV_PIX_FMT_NV12) return AV_PIX_FMT_NV12;
+  const std::array<AVPixelFormat, 2> wanted =
+      ten ? std::array{AV_PIX_FMT_P010LE, AV_PIX_FMT_YUV420P10LE}
+          : std::array{AV_PIX_FMT_NV12, AV_PIX_FMT_YUV420P};
+  for (const AVPixelFormat format : wanted) {
+    for (int i = 0; i < count; ++i) {
+      if (formats[i] == format) return format;
+    }
   }
-  for (int i = 0; i < count; ++i) {
-    if (formats[i] == AV_PIX_FMT_YUV420P) return AV_PIX_FMT_YUV420P;
-  }
+  if (ten) return std::nullopt;
   return formats[0];
+}
+
+/// Writes the mastering display and light levels into the encoder's side data,
+/// where the encoders that put them in the bitstream look, and into the
+/// stream's, where the container looks.
+[[nodiscard]] bool attach_hdr_metadata(AVCodecContext* context, AVCodecParameters* stream,
+                                       const HdrMetadata& hdr) {
+  const auto ratio = [](double value, int denominator) {
+    return AVRational{static_cast<int>(std::lround(value * denominator)), denominator};
+  };
+  AVMasteringDisplayMetadata mastering{};
+  mastering.display_primaries[0][0] = ratio(hdr.red_x, 50000);
+  mastering.display_primaries[0][1] = ratio(hdr.red_y, 50000);
+  mastering.display_primaries[1][0] = ratio(hdr.green_x, 50000);
+  mastering.display_primaries[1][1] = ratio(hdr.green_y, 50000);
+  mastering.display_primaries[2][0] = ratio(hdr.blue_x, 50000);
+  mastering.display_primaries[2][1] = ratio(hdr.blue_y, 50000);
+  mastering.white_point[0] = ratio(hdr.white_x, 50000);
+  mastering.white_point[1] = ratio(hdr.white_y, 50000);
+  mastering.max_luminance = ratio(hdr.max_luminance, 10000);
+  mastering.min_luminance = ratio(hdr.min_luminance, 10000);
+  mastering.has_primaries = 1;
+  mastering.has_luminance = 1;
+
+  AVContentLightMetadata light{};
+  light.MaxCLL = static_cast<unsigned>(std::max(0, hdr.max_content_light));
+  light.MaxFALL = static_cast<unsigned>(std::max(0, hdr.max_frame_average_light));
+
+  if (context != nullptr) {
+    AVFrameSideData* a = av_frame_side_data_new(
+        &context->decoded_side_data, &context->nb_decoded_side_data,
+        AV_FRAME_DATA_MASTERING_DISPLAY_METADATA, sizeof mastering, 0);
+    AVFrameSideData* b = av_frame_side_data_new(
+        &context->decoded_side_data, &context->nb_decoded_side_data,
+        AV_FRAME_DATA_CONTENT_LIGHT_LEVEL, sizeof light, 0);
+    if (a == nullptr || b == nullptr) return false;
+    std::memcpy(a->data, &mastering, sizeof mastering);
+    std::memcpy(b->data, &light, sizeof light);
+  }
+  if (stream != nullptr) {
+    AVPacketSideData* a = av_packet_side_data_new(
+        &stream->coded_side_data, &stream->nb_coded_side_data,
+        AV_PKT_DATA_MASTERING_DISPLAY_METADATA, sizeof mastering, 0);
+    AVPacketSideData* b = av_packet_side_data_new(
+        &stream->coded_side_data, &stream->nb_coded_side_data, AV_PKT_DATA_CONTENT_LIGHT_LEVEL,
+        sizeof light, 0);
+    if (a == nullptr || b == nullptr) return false;
+    std::memcpy(a->data, &mastering, sizeof mastering);
+    std::memcpy(b->data, &light, sizeof light);
+  }
+  return true;
 }
 
 /// The frame rate as an exact rational where possible. 29.97 and 59.94 are
@@ -123,8 +181,11 @@ struct MediaWriter::Impl {
   detail::CodecContext encoder;
   detail::Frame frame;
   detail::Scaler scaler;
-  /// From NV12, for an encoder that wants planar; made the first time one does.
+  /// From NV12 or P010, for an encoder that wants planar; made the first time
+  /// one does.
   detail::Scaler planar;
+  bool ten_bit = false;
+  bool sdr = true;
   AVStream* stream = nullptr;
   std::string name;
   std::int64_t frames = 0;
@@ -348,6 +409,15 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
   if (settings.width <= 0 || settings.height <= 0) {
     return std::unexpected("the output size must be positive");
   }
+  if (settings.bit_depth != 8 && settings.bit_depth != 10) {
+    return std::unexpected("the bit depth must be 8 or 10");
+  }
+  if (settings.bit_depth == 10 && settings.codec != VideoCodec::Hevc) {
+    return std::unexpected("ten bits needs HEVC");
+  }
+  if (settings.colour != VideoColour::Bt709 && settings.bit_depth != 10) {
+    return std::unexpected("HDR needs ten bits");
+  }
 
   auto impl = std::make_unique<Impl>();
   // Encoders overwhelmingly want even dimensions for 4:2:0 chroma, and an odd
@@ -386,6 +456,13 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
                             static_cast<std::int64_t>(impl->width) * impl->height >=
                                 std::int64_t{3840} * 2160;
 
+    const auto pixel_format = preferred_format(encoder, settings.bit_depth);
+    if (!pixel_format) {
+      if (!attempts.empty()) attempts += ", ";
+      attempts += std::format("{} (no {}-bit input)", name, settings.bit_depth);
+      continue;
+    }
+
     const auto open = [&](bool split) -> std::expected<detail::CodecContext, std::string> {
       detail::CodecContext context(avcodec_alloc_context3(encoder));
       if (!context) return std::unexpected("out of memory");
@@ -394,12 +471,22 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
       context->height = impl->height;
       context->time_base = av_inv_q(rational_fps(settings.fps));
       context->framerate = rational_fps(settings.fps);
-      context->pix_fmt = preferred_format(encoder);
-      // SDR throughout, matching what the compositor reads back.
-      context->colorspace = AVCOL_SPC_BT709;
-      context->color_primaries = AVCOL_PRI_BT709;
-      context->color_trc = AVCOL_TRC_BT709;
+      context->pix_fmt = *pixel_format;
+      if (settings.colour == VideoColour::Bt709) {
+        context->colorspace = AVCOL_SPC_BT709;
+        context->color_primaries = AVCOL_PRI_BT709;
+        context->color_trc = AVCOL_TRC_BT709;
+      } else {
+        context->colorspace = AVCOL_SPC_BT2020_NCL;
+        context->color_primaries = AVCOL_PRI_BT2020;
+        context->color_trc = settings.colour == VideoColour::Bt2100Pq ? AVCOL_TRC_SMPTE2084
+                                                                      : AVCOL_TRC_ARIB_STD_B67;
+      }
       context->color_range = AVCOL_RANGE_MPEG;
+      if (settings.colour == VideoColour::Bt2100Pq && settings.hdr.has_value() &&
+          !attach_hdr_metadata(context.get(), nullptr, *settings.hdr)) {
+        return std::unexpected("out of memory");
+      }
 
       if ((impl->format->oformat->flags & AVFMT_GLOBALHEADER) != 0) {
         context->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -456,6 +543,15 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
     return std::unexpected(
         std::format("cannot describe the stream: {}", av_error_string(rc)));
   }
+  if (settings.colour == VideoColour::Bt2100Pq && settings.hdr.has_value() &&
+      av_packet_side_data_get(impl->stream->codecpar->coded_side_data,
+                              impl->stream->codecpar->nb_coded_side_data,
+                              AV_PKT_DATA_MASTERING_DISPLAY_METADATA) == nullptr &&
+      !attach_hdr_metadata(nullptr, impl->stream->codecpar, *settings.hdr)) {
+    return std::unexpected("out of memory");
+  }
+  impl->ten_bit = settings.bit_depth == 10;
+  impl->sdr = settings.colour == VideoColour::Bt709;
 
   // Audio is set up before the header, because a container records its streams
   // there: adding one afterwards would not appear in the file.
@@ -521,6 +617,7 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
 std::expected<void, std::string> MediaWriter::write_frame(std::span<const std::uint8_t> rgba) {
   Impl& d = *impl_;
   if (d.finished) return std::unexpected("the writer has already been finished");
+  if (!d.sdr) return std::unexpected("an HDR writer takes converted frames, not sRGB");
 
   const std::size_t expected = static_cast<std::size_t>(d.width) * d.height * 4;
   if (rgba.size() < expected) {
@@ -550,15 +647,16 @@ std::expected<void, std::string> MediaWriter::write_frame(const PlanarFrame& pla
   if (planes.luma == nullptr || planes.chroma == nullptr) {
     return std::unexpected("a frame needs both its planes");
   }
-  if (planes.ten_bit) {
-    return std::unexpected("this writer takes 8-bit frames; ten bits needs a 10-bit encoder");
+  if (planes.ten_bit != d.ten_bit) {
+    return std::unexpected(d.ten_bit ? "this writer takes 10-bit frames"
+                                     : "this writer takes 8-bit frames");
   }
 
   if (int rc = av_frame_make_writable(d.frame.get()); rc < 0) {
     return std::unexpected(std::format("cannot write to the frame: {}", av_error_string(rc)));
   }
 
-  if (d.encoder->pix_fmt == AV_PIX_FMT_NV12) {
+  if (d.encoder->pix_fmt == AV_PIX_FMT_NV12 || d.encoder->pix_fmt == AV_PIX_FMT_P010LE) {
     // Copied rather than lent: the planes belong to a readback buffer that is
     // handed back the moment this returns, and an encoder may hold a frame
     // past `avcodec_send_frame`.
@@ -569,15 +667,18 @@ std::expected<void, std::string> MediaWriter::write_frame(const PlanarFrame& pla
                     from + static_cast<std::size_t>(y) * from_stride, bytes);
       }
     };
-    const auto width = static_cast<std::size_t>(d.width);
+    // Two bytes a sample at ten bits.
+    const auto width = static_cast<std::size_t>(d.width) * (d.ten_bit ? 2 : 1);
     rows(d.frame->data[0], d.frame->linesize[0], planes.luma, planes.luma_stride, width,
          d.height);
     rows(d.frame->data[1], d.frame->linesize[1], planes.chroma, planes.chroma_stride, width,
          d.height / 2);
   } else {
     if (!d.planar) {
-      d.planar.reset(sws_getContext(d.width, d.height, AV_PIX_FMT_NV12, d.width, d.height,
-                                    d.encoder->pix_fmt, SWS_POINT, nullptr, nullptr, nullptr));
+      d.planar.reset(sws_getContext(d.width, d.height,
+                                    d.ten_bit ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12, d.width,
+                                    d.height, d.encoder->pix_fmt, SWS_POINT, nullptr, nullptr,
+                                    nullptr));
       if (!d.planar) return std::unexpected("cannot create a plane converter");
     }
     const std::uint8_t* source[4] = {planes.luma, planes.chroma, nullptr, nullptr};

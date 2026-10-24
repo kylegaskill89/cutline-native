@@ -12,14 +12,12 @@
 
 #include <gtest/gtest.h>
 
-extern "C" {
-#include <libavutil/frame.h>
-#include <libavutil/pixfmt.h>
-}
+#include "cutline/media/av_headers.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <process.h>
 
 #include <filesystem>
@@ -197,6 +195,159 @@ TEST(Encoder, ATenBitFrameIsRefusedByAnEightBitWriter) {
                           .chroma = plane.data(),
                           .chroma_stride = kWidth * 2};
   EXPECT_FALSE((*writer)->write_frame(frame).has_value());
+}
+
+// ------------------------------------------------------------------ 10-bit --
+
+/// The luma code at the centre of the first frame of a 10-bit file.
+[[nodiscard]] int centre_luma_10(const std::string& path) {
+  auto decoder = VideoDecoder::open(path, {.preferred = Acceleration::Software});
+  if (!decoder) return -1;
+  const auto got = (*decoder)->next_frame();
+  if (!got || !*got) return -1;
+  const AVFrame* frame = (*decoder)->frame();
+  const std::uint8_t* row =
+      frame->data[0] + static_cast<std::size_t>(frame->height / 2) * frame->linesize[0];
+  std::uint16_t value = 0;
+  std::memcpy(&value, row + static_cast<std::size_t>(frame->width / 2) * 2, 2);
+  // P010 keeps its ten bits at the top, planar 10-bit at the bottom.
+  return frame->format == AV_PIX_FMT_P010LE ? value >> 6 : value;
+}
+
+/// A P010 frame of one luma code and neutral chroma.
+struct TenBitFrame {
+  std::vector<std::uint16_t> luma;
+  std::vector<std::uint16_t> chroma;
+
+  explicit TenBitFrame(int code)
+      : luma(static_cast<std::size_t>(kWidth) * kHeight, static_cast<std::uint16_t>(code << 6)),
+        chroma(static_cast<std::size_t>(kWidth) * (kHeight / 2),
+               static_cast<std::uint16_t>(512 << 6)) {}
+
+  [[nodiscard]] PlanarFrame planes() const {
+    return {.ten_bit = true,
+            .luma = reinterpret_cast<const std::uint8_t*>(luma.data()),
+            .luma_stride = kWidth * 2,
+            .chroma = reinterpret_cast<const std::uint8_t*>(chroma.data()),
+            .chroma_stride = kWidth * 2};
+  }
+};
+
+/// Chosen as an export chooses. This build's x265 is 8-bit only, so ten bits
+/// comes from a hardware encoder, and a machine without one has nothing to
+/// test here.
+[[nodiscard]] VideoEncodeSettings ten_bit(VideoColour colour) {
+  VideoEncodeSettings s = settings();
+  s.codec = VideoCodec::Hevc;
+  s.bit_depth = 10;
+  s.colour = colour;
+  s.preference = EncoderPreference::Auto;
+  s.quality = 0;
+  return s;
+}
+
+/// Whether creating a writer failed only because nothing here encodes ten bits.
+[[nodiscard]] bool no_ten_bit_encoder(
+    const std::expected<std::unique_ptr<MediaWriter>, std::string>& writer) {
+  return !writer && writer.error().find("no 10-bit") != std::string::npos;
+}
+
+// 513 is no multiple of four, so it only comes back as itself if all ten bits
+// made it: through eight it would be 512 or 516.
+TEST(TenBitWriter, AllTenBitsComeBackOut) {
+  const TempFile file(".mp4");
+  auto writer = MediaWriter::create(file.string(), ten_bit(VideoColour::Bt2100Pq));
+  if (no_ten_bit_encoder(writer)) GTEST_SKIP() << "no 10-bit HEVC encoder on this machine";
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+
+  const TenBitFrame frame(513);
+  for (int i = 0; i < 3; ++i) ASSERT_TRUE((*writer)->write_frame(frame.planes()).has_value());
+  ASSERT_TRUE((*writer)->finish().has_value());
+
+  EXPECT_NEAR(centre_luma_10(file.string()), 513, 1) << "through " << (*writer)->encoder_name();
+}
+
+TEST(TenBitWriter, AnHdr10FileSaysWhatItIsAndWhatItWasMasteredOn) {
+  const TempFile file(".mp4");
+  VideoEncodeSettings encode = ten_bit(VideoColour::Bt2100Pq);
+  encode.hdr = HdrMetadata{.max_luminance = 1000.0, .max_content_light = 800};
+  auto writer = MediaWriter::create(file.string(), encode);
+  if (no_ten_bit_encoder(writer)) GTEST_SKIP() << "no 10-bit HEVC encoder on this machine";
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+  const TenBitFrame frame(400);
+  for (int i = 0; i < 3; ++i) ASSERT_TRUE((*writer)->write_frame(frame.planes()).has_value());
+  ASSERT_TRUE((*writer)->finish().has_value());
+
+  const auto info = probe(file.string());
+  ASSERT_TRUE(info.has_value()) << info.error();
+  ASSERT_FALSE(info->video.empty());
+  EXPECT_EQ(info->video[0].color.bits_per_component, 10);
+  EXPECT_EQ(info->video[0].color.transfer, TransferCharacteristic::Smpte2084);
+  EXPECT_EQ(info->video[0].color.primaries, ColorPrimaries::Bt2020);
+  EXPECT_TRUE(info->video[0].color.is_hdr());
+
+  // In the container, where a player that reads boxes rather than the
+  // bitstream finds it.
+  AVFormatContext* raw = nullptr;
+  ASSERT_EQ(avformat_open_input(&raw, file.string().c_str(), nullptr, nullptr), 0);
+  ASSERT_GE(avformat_find_stream_info(raw, nullptr), 0);
+  const AVCodecParameters* stream = raw->streams[0]->codecpar;
+  const AVPacketSideData* mastering = av_packet_side_data_get(
+      stream->coded_side_data, stream->nb_coded_side_data, AV_PKT_DATA_MASTERING_DISPLAY_METADATA);
+  const AVPacketSideData* light = av_packet_side_data_get(
+      stream->coded_side_data, stream->nb_coded_side_data, AV_PKT_DATA_CONTENT_LIGHT_LEVEL);
+  ASSERT_NE(mastering, nullptr) << "no mastering display in the container";
+  ASSERT_NE(light, nullptr) << "no light levels in the container";
+  const auto* display = reinterpret_cast<const AVMasteringDisplayMetadata*>(mastering->data);
+  EXPECT_NEAR(av_q2d(display->max_luminance), 1000.0, 0.5);
+  EXPECT_EQ(reinterpret_cast<const AVContentLightMetadata*>(light->data)->MaxCLL, 800u);
+  avformat_close_input(&raw);
+}
+
+TEST(TenBitWriter, AnHlgFileIsTaggedHlg) {
+  const TempFile file(".mp4");
+  auto writer = MediaWriter::create(file.string(), ten_bit(VideoColour::Bt2100Hlg));
+  if (no_ten_bit_encoder(writer)) GTEST_SKIP() << "no 10-bit HEVC encoder on this machine";
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+  const TenBitFrame frame(400);
+  ASSERT_TRUE((*writer)->write_frame(frame.planes()).has_value());
+  ASSERT_TRUE((*writer)->finish().has_value());
+
+  const auto info = probe(file.string());
+  ASSERT_TRUE(info.has_value()) << info.error();
+  EXPECT_EQ(info->video[0].color.transfer, TransferCharacteristic::AribStdB67);
+  EXPECT_EQ(info->video[0].color.primaries, ColorPrimaries::Bt2020);
+}
+
+TEST(TenBitWriter, TenBitsAreForHevcOnly) {
+  const TempFile file(".mp4");
+  VideoEncodeSettings h264 = ten_bit(VideoColour::Bt709);
+  h264.codec = VideoCodec::H264;
+  EXPECT_FALSE(MediaWriter::create(file.string(), h264).has_value());
+}
+
+TEST(TenBitWriter, HdrNeedsTenBits) {
+  const TempFile file(".mp4");
+  VideoEncodeSettings eight = ten_bit(VideoColour::Bt2100Pq);
+  eight.bit_depth = 8;
+  EXPECT_FALSE(MediaWriter::create(file.string(), eight).has_value());
+}
+
+TEST(TenBitWriter, AnHdrWriterRefusesFramesOfEightBitsOrOfSrgb) {
+  const TempFile file(".mp4");
+  auto writer = MediaWriter::create(file.string(), ten_bit(VideoColour::Bt2100Pq));
+  if (no_ten_bit_encoder(writer)) GTEST_SKIP() << "no 10-bit HEVC encoder on this machine";
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+
+  std::vector<std::uint8_t> plane(static_cast<std::size_t>(kWidth) * kHeight);
+  const PlanarFrame eight{.luma = plane.data(),
+                          .luma_stride = kWidth,
+                          .chroma = plane.data(),
+                          .chroma_stride = kWidth};
+  EXPECT_FALSE((*writer)->write_frame(eight).has_value());
+
+  const std::vector<std::uint8_t> rgba(static_cast<std::size_t>(kWidth) * kHeight * 4, 128);
+  EXPECT_FALSE((*writer)->write_frame(rgba).has_value());
 }
 
 // ------------------------------------------------------------------- counts --
