@@ -24,6 +24,9 @@
 
 #include "cutline/media/decoder.hpp"
 
+// The format enum alone, which is all this needs of DXGI.
+#include <dxgiformat.h>
+
 #include <cstdint>
 #include <optional>
 
@@ -52,7 +55,9 @@ class D3D11Share {
   /// Prepares the crossing for frames of this size. False when the pair of
   /// devices cannot share — an old driver, a format neither will take — in
   /// which case the caller has software to fall back on and should.
-  [[nodiscard]] bool open(ID3D11Device* source, ID3D12Device* target, int width, int height);
+  /// `format` is the decoder's own, NV12 or P010, so ten bits stay ten.
+  [[nodiscard]] bool open(ID3D11Device* source, ID3D12Device* target, int width, int height,
+                          DXGI_FORMAT format);
 
   [[nodiscard]] bool ready() const noexcept;
 

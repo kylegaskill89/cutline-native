@@ -268,15 +268,34 @@ constexpr int kMaxPooledFrames = 40;
     // resource either way — that is the whole reason the crossing lives down
     // there rather than up here.
     case AV_PIX_FMT_D3D12:
-    case AV_PIX_FMT_D3D11:
-      out.layout = gpu::PixelLayout::Nv12;
+    case AV_PIX_FMT_D3D11: {
+      // What the card decoded into, which for 10-bit footage is P010.
+      const auto* frames = frame->hw_frames_ctx != nullptr
+                               ? reinterpret_cast<const AVHWFramesContext*>(frame->hw_frames_ctx->data)
+                               : nullptr;
+      const bool deep = frames != nullptr && frames->sw_format == AV_PIX_FMT_P010LE;
+      out.layout = deep ? gpu::PixelLayout::P010 : gpu::PixelLayout::Nv12;
+      out.bits = deep ? 10 : 8;
       decoded_on_the_card = true;
       break;
+    }
     case AV_PIX_FMT_NV12:
       out.layout = gpu::PixelLayout::Nv12;
       break;
     case AV_PIX_FMT_YUV420P:
       out.layout = gpu::PixelLayout::Yuv420p;
+      break;
+    case AV_PIX_FMT_P010LE:
+      out.layout = gpu::PixelLayout::P010;
+      out.bits = 10;
+      break;
+    case AV_PIX_FMT_YUV420P10LE:
+      out.layout = gpu::PixelLayout::Yuv420p16;
+      out.bits = 10;
+      break;
+    case AV_PIX_FMT_YUV420P12LE:
+      out.layout = gpu::PixelLayout::Yuv420p16;
+      out.bits = 12;
       break;
     default:
       return false;

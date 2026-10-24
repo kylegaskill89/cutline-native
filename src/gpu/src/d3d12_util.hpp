@@ -63,7 +63,10 @@ struct alignas(16) ShaderParams {
   int full_range = 0;
   int blend = 0;
   int pass_kind = 0;
-  float pass_pad = 0.0f;
+  /// What a sampled value is multiplied by to give the integer code: 255 for
+  /// eight bits, 65535 for sixteen-bit planes, and 65535/64 for P010, whose
+  /// ten bits sit at the top.
+  float code_scale = 255.0f;
 
   float solid[4]{};
 
@@ -98,7 +101,8 @@ struct alignas(16) ShaderParams {
   float path_count = 0.0f;
   /// How much the source is softened vertically as it is read, from 0 to 1.
   float anti_flicker = 0.0f;
-  float anti_flicker_pad = 0.0f;
+  /// How many bits a code has, which decides what studio range means.
+  float bits = 8.0f;
   /// The fourth slot of the last row, declared rather than left to the
   /// compiler.
   ///

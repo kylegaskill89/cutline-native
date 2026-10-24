@@ -15,6 +15,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
+
 #include <process.h>
 
 #include <cstdint>
@@ -1132,6 +1134,62 @@ TEST_F(CoarseTimestampTest, BackwardsShowsTheSameFrameAsForwards) {
   for (int i = 0; i < kAsked; ++i) {
     EXPECT_EQ(forwards[i], backwards[i]) << "the two directions disagree about frame " << i;
   }
+}
+
+
+// --------------------------------------------------------------- ten bits --
+
+[[nodiscard]] std::string fixture(const char* name) {
+  return (std::filesystem::path(CUTLINE_MEDIA_FIXTURES) / name).generic_string();
+}
+
+/// A 64x32 committed file, filling a canvas its own size.
+[[nodiscard]] Project showing(const char* name) {
+  Project p = canvas_project();
+  p.sequence().canvas_h = 32;
+  Media m;
+  m.id = "f";
+  m.path = fixture(name);
+  m.has_video = true;
+  m.duration = 0.25;
+  m.width = 64;
+  m.height = 32;
+  p.media = {m};
+  p.sequence().tracks = {video_track("v1", {clip("c", "f", 0.0, 0.25)})};
+  return p;
+}
+
+/// The 10-bit luma code at a point of what was rendered, read back as P010.
+[[nodiscard]] int luma_code_at(FrameRenderer& renderer, int x, int y) {
+  const auto slot = renderer.compositor().begin_yuv_read_back(gpu::YuvLayout::P010);
+  if (!slot) return -1;
+  int code = -1;
+  const auto done = renderer.compositor().finish_yuv_read_back(*slot, [&](const gpu::YuvPlanes& planes) {
+    std::uint16_t value = 0;
+    std::memcpy(&value, planes.luma + static_cast<std::size_t>(y) * planes.luma_stride + x * 2, 2);
+    code = value >> 6;
+  });
+  return done ? code : -1;
+}
+
+class DeepRendererTest : public FrameRendererTest {
+ protected:
+  void SetUp() override {
+    device_ = shared_device();
+    if (!device_) GTEST_SKIP() << "no Direct3D 12 device available";
+    auto created = FrameRenderer::create(device_, 64, 32);
+    ASSERT_TRUE(created.has_value()) << created.error();
+    renderer_ = std::move(*created);
+  }
+};
+
+// Code 514 has no 8-bit equivalent: through eight bits it comes back 512 or
+// 516. Read back at ten, it is only 514 if all ten bits went in and came out.
+TEST_F(DeepRendererTest, TenBitFootageKeepsItsTenBits) {
+  const Project p = showing("grey10.mkv");
+  ASSERT_TRUE(renderer_->render(p, 0.05).has_value());
+  EXPECT_TRUE(renderer_->missing_media().empty());
+  EXPECT_NEAR(luma_code_at(*renderer_, 32, 16), 514, 1);
 }
 
 }  // namespace

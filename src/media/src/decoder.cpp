@@ -667,10 +667,12 @@ std::optional<HardwareTexture> VideoDecoder::hardware_texture(
     // On the first frame, because the size is not known before one arrives —
     // and taking it from the stream header is how a decoder that pads out to
     // whole macroblocks ends up sampled short.
+    D3D11_TEXTURE2D_DESC decoded{};
+    texture->GetDesc(&decoded);
     if (!impl_->share.ready() &&
         !impl_->share.open(device->device,
                            static_cast<ID3D12Device*>(impl_->options.d3d12_device),
-                           frame->width, frame->height)) {
+                           frame->width, frame->height, decoded.Format)) {
       return std::nullopt;
     }
     return impl_->share.copy(texture, slice);

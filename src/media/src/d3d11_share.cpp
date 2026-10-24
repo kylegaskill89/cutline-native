@@ -48,7 +48,8 @@ D3D11Share::~D3D11Share() = default;
 
 bool D3D11Share::ready() const noexcept { return impl_->shared12 != nullptr; }
 
-bool D3D11Share::open(ID3D11Device* source, ID3D12Device* target, int width, int height) {
+bool D3D11Share::open(ID3D11Device* source, ID3D12Device* target, int width, int height,
+                      DXGI_FORMAT format) {
   if (source == nullptr || target == nullptr || width <= 0 || height <= 0) return false;
 
   Impl& d = *impl_;
@@ -66,7 +67,7 @@ bool D3D11Share::open(ID3D11Device* source, ID3D12Device* target, int width, int
   desc.Height = static_cast<UINT>(height);
   desc.MipLevels = 1;
   desc.ArraySize = 1;
-  desc.Format = DXGI_FORMAT_NV12;
+  desc.Format = format;
   desc.SampleDesc.Count = 1;
   desc.Usage = D3D11_USAGE_DEFAULT;
   desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;

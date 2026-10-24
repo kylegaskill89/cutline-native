@@ -78,6 +78,19 @@ constexpr int kCodedLayout = 2;
         {half_width, half_height, 2, DXGI_FORMAT_R8G8_UNORM},
     };
   }
+  if (frame.layout == PixelLayout::P010) {
+    return {
+        {width, height, 2, DXGI_FORMAT_R16_UNORM},
+        {half_width, half_height, 4, DXGI_FORMAT_R16G16_UNORM},
+    };
+  }
+  if (frame.layout == PixelLayout::Yuv420p16) {
+    return {
+        {width, height, 2, DXGI_FORMAT_R16_UNORM},
+        {half_width, half_height, 2, DXGI_FORMAT_R16_UNORM},
+        {half_width, half_height, 2, DXGI_FORMAT_R16_UNORM},
+    };
+  }
   return {
       {width, height, 1, DXGI_FORMAT_R8_UNORM},
       {half_width, half_height, 1, DXGI_FORMAT_R8_UNORM},
@@ -95,8 +108,10 @@ constexpr int kCodedLayout = 2;
   if (layer.frame == nullptr) return -1;  // LAYOUT_SOLID
   switch (layer.frame->layout) {
     case PixelLayout::Nv12:
+    case PixelLayout::P010:
       return 0;
     case PixelLayout::Yuv420p:
+    case PixelLayout::Yuv420p16:
       return 1;
     case PixelLayout::Rgba8:
       // 2 is `kCodedLayout`, a scratch target, which means something else.
@@ -425,11 +440,14 @@ std::expected<void, std::string> Compositor::Impl::view_decoded(const FrameView&
 
   // NV12 is luma in plane 0 and interleaved chroma at half resolution in plane
   // 1 — the same two textures the uploading path creates, so everything after
-  // this is identical whichever way the pixels arrived.
-  constexpr DXGI_FORMAT kPlaneFormats[2] = {DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8_UNORM};
+  // this is identical whichever way the pixels arrived. P010 is the same at
+  // sixteen bits.
+  const bool deep = desc.Format == DXGI_FORMAT_P010;
+  const DXGI_FORMAT plane_formats[2] = {deep ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM,
+                                        deep ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM};
   for (UINT plane = 0; plane < 2; ++plane) {
     D3D12_SHADER_RESOURCE_VIEW_DESC view{};
-    view.Format = kPlaneFormats[plane];
+    view.Format = plane_formats[plane];
     view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     if (array) {
       view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
@@ -963,6 +981,19 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
       params.color_space = shader_space(layer.frame->space);
       params.transfer = shader_transfer(layer.frame->transfer);
       params.full_range = layer.frame->full_range ? 1 : 0;
+      params.bits = static_cast<float>(std::clamp(layer.frame->bits, 8, 16));
+      switch (layer.frame->layout) {
+        case PixelLayout::P010:
+          // Ten bits at the top of sixteen: the code is the value over 64.
+          params.code_scale = 65535.0f / 64.0f;
+          break;
+        case PixelLayout::Yuv420p16:
+          params.code_scale = 65535.0f;
+          break;
+        default:
+          params.code_scale = 255.0f;
+          break;
+      }
     }
 
     // Which scratch target holds the layer as it stands. The chain ping-pongs

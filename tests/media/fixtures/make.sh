@@ -27,3 +27,14 @@ ffmpeg $q $bars -c:v libx265 -pix_fmt yuv420p10le -x265-params log-level=none he
 ffmpeg $q $bars -frames:v 6 bars.gif
 ffmpeg $q $bars -frames:v 1 still.jpg
 ffmpeg $q $bars -frames:v 1 still.webp
+
+# Exact 10-bit codes, losslessly, so a test can say what each pixel should come
+# out as. Tagged on the frames, which is where a current ffmpeg takes them from.
+# grey10: luma 514, which eight bits cannot hold. pq: 203 nits on the left, 1000
+# on the right. hlg: reference white (75%) on the left, peak on the right.
+exact() {
+  ffmpeg $q -f lavfi -i "color=c=black:s=64x32:r=24:d=0.25,format=yuv420p10le,geq=lum='$1':cb=512:cr=512,setparams=range=tv:color_primaries=$2:color_trc=$3:colorspace=$4"     -c:v libx265 -pix_fmt yuv420p10le -x265-params lossless=1:log-level=none "$5"
+}
+exact 514 bt709 bt709 bt709 grey10.mkv
+exact 'if(lt(X,32),573,723)' bt2020 smpte2084 bt2020nc pq.mkv
+exact 'if(lt(X,32),721,940)' bt2020 arib-std-b67 bt2020nc hlg.mkv

@@ -154,6 +154,10 @@ if(CUTLINE_WITH_GPU)
       GTest::gtest
       GTest::gtest_main)
     cutline_gpu_shaders(cutline_engine_tests)
+    # The 10-bit, PQ and HLG footage the colour tests render; see
+    # media/fixtures/make.sh.
+    target_compile_definitions(cutline_engine_tests PRIVATE
+      CUTLINE_MEDIA_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/media/fixtures")
     gtest_discover_tests(cutline_engine_tests)
 
     # The whole stack: a file on disk becomes pixels for the monitor. Every

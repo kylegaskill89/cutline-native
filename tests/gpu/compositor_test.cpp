@@ -2038,6 +2038,79 @@ struct Ycc {
           static_cast<double>(chroma[(x / 2) * 2 + 1])};
 }
 
+// ----------------------------------------------------------- deep uploads --
+
+/// What a software decoder hands back for 10-bit footage, in either of its two
+/// shapes, uploaded from memory: luma at one code throughout and neutral
+/// chroma, studio range.
+struct DeepFrame {
+  std::vector<std::uint16_t> luma;
+  std::vector<std::uint16_t> chroma_a;
+  std::vector<std::uint16_t> chroma_b;
+  FrameView frame;
+
+  DeepFrame(PixelLayout layout, int code) {
+    // P010 keeps its ten bits at the top of sixteen, the planar form at the
+    // bottom; the same code either way.
+    const int shift = layout == PixelLayout::P010 ? 6 : 0;
+    const auto at = [&](int value) { return static_cast<std::uint16_t>(value << shift); };
+    const int half_width = kWidth / 2;
+    const int half_height = kHeight / 2;
+    luma.assign(static_cast<std::size_t>(kWidth) * kHeight, at(code));
+    frame.width = kWidth;
+    frame.height = kHeight;
+    frame.layout = layout;
+    frame.bits = 10;
+    frame.planes[0] = PlaneView{reinterpret_cast<const std::uint8_t*>(luma.data()), kWidth * 2};
+    if (layout == PixelLayout::P010) {
+      chroma_a.assign(static_cast<std::size_t>(kWidth) * half_height, at(512));
+      frame.planes[1] =
+          PlaneView{reinterpret_cast<const std::uint8_t*>(chroma_a.data()), kWidth * 2};
+    } else {
+      chroma_a.assign(static_cast<std::size_t>(half_width) * half_height, at(512));
+      chroma_b.assign(static_cast<std::size_t>(half_width) * half_height, at(512));
+      frame.planes[1] =
+          PlaneView{reinterpret_cast<const std::uint8_t*>(chroma_a.data()), half_width * 2};
+      frame.planes[2] =
+          PlaneView{reinterpret_cast<const std::uint8_t*>(chroma_b.data()), half_width * 2};
+    }
+  }
+};
+
+class DeepUploadTest : public CompositorTest,
+                       public ::testing::WithParamInterface<PixelLayout> {};
+
+// Code 514 has no 8-bit equivalent: through eight bits it would come back 512
+// or 516. Studio range at ten bits is 64 to 940, and expanding it with the
+// 8-bit constants would put it a code or two out as well.
+TEST_P(DeepUploadTest, TenBitsGoInAndTenBitsComeOut) {
+  const DeepFrame deep(GetParam(), 514);
+  Layer layer;
+  layer.frame = &deep.frame;
+  layer.quad = {kWidth * 0.5f, kHeight * 0.5f, kWidth, kHeight, 0.0f};
+  ASSERT_TRUE(compositor_->compose({&layer, 1}).has_value());
+
+  const auto slot = compositor_->begin_yuv_read_back(YuvLayout::P010);
+  ASSERT_TRUE(slot.has_value()) << slot.error();
+  Ycc got;
+  ASSERT_TRUE(compositor_
+                  ->finish_yuv_read_back(*slot,
+                                         [&](const YuvPlanes& planes) {
+                                           got = sample(planes, kWidth / 2, kHeight / 2);
+                                         })
+                  .has_value());
+  // `sample` answers on the 8-bit scale, a quarter of a code each.
+  EXPECT_NEAR(got.y * 4.0, 514.0, 1.0);
+  EXPECT_NEAR(got.cb * 4.0, 512.0, 1.0);
+  EXPECT_NEAR(got.cr * 4.0, 512.0, 1.0);
+}
+
+INSTANTIATE_TEST_SUITE_P(BothShapes, DeepUploadTest,
+                         ::testing::Values(PixelLayout::P010, PixelLayout::Yuv420p16),
+                         [](const auto& info) {
+                           return info.param == PixelLayout::P010 ? "P010" : "Planar";
+                         });
+
 class EncoderFrameTest : public CompositorTest,
                          public ::testing::WithParamInterface<YuvLayout> {};
 

@@ -13,6 +13,13 @@ namespace cutline::gpu {
 enum class PixelLayout {
   Nv12,     ///< Y plane plus interleaved UV at half resolution
   Yuv420p,  ///< separate Y, U, V planes
+  /// NV12's shape at sixteen bits a sample, the significant ones at the top:
+  /// what a hardware decoder hands back for 10-bit footage, and what software
+  /// decoders call P010.
+  P010,
+  /// Three planes at sixteen bits a sample, the significant ones at the
+  /// bottom: what a software decoder hands back for 10-bit and 12-bit footage.
+  Yuv420p16,
   /// One plane of 8-bit RGBA, sRGB-coded, with **premultiplied** alpha. What a
   /// rasteriser produces: titles, and anything else drawn rather than decoded.
   ///
@@ -67,7 +74,7 @@ struct PlaneView {
 /// Untyped so d3d12.h stays out of this header, which is the same bargain the
 /// decoder's `HardwareTexture` makes and for the same reason.
 struct SourceTexture {
-  /// `ID3D12Resource*`, NV12. Borrowed: whoever decoded it keeps it alive, and
+  /// `ID3D12Resource*`, NV12 or P010. Borrowed: whoever decoded it keeps it alive, and
   /// `compose` waits for the GPU before returning, so it only has to outlive
   /// the call.
   void* resource = nullptr;
@@ -93,6 +100,10 @@ struct FrameView {
   /// Studio-range video leaves headroom and footroom; expanding it is what
   /// keeps blacks from crushing and highlights from clipping.
   bool full_range = false;
+  /// How many bits each code has: 8, or 10 or 12 in a sixteen-bit layout.
+  /// Studio range is a different set of codes at each, so the expansion has to
+  /// know.
+  int bits = 8;
 
   PlaneView planes[3];
 

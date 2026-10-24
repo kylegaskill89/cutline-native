@@ -98,7 +98,7 @@ struct Params {
     int fullRange;
     int blend;
     int passKind;
-    float passPad;
+    float codeScale;  // sampled value to integer code
 
     float4 solid;     // linear RGBA, used when layout is LAYOUT_SOLID
 
@@ -143,7 +143,7 @@ struct Params {
 
     // How much the source is softened vertically as it is read, 0 to 1.
     float antiFlicker;
-    float antiFlickerPad;
+    float bits;       // bits in a code: 8, 10, 12
     // The fourth slot of the last row. HLSL would round the buffer up to it
     // anyway; declaring it is what keeps this and `ShaderParams` the same
     // fifty-two floats by statement rather than by coincidence.
@@ -391,12 +391,19 @@ float4 codedSource(float2 uv) {
     }
 
     // Studio-range video leaves headroom and footroom outside [0,1]; expanding
-    // it is what keeps blacks from crushing and highlights from clipping.
+    // it is what keeps blacks from crushing and highlights from clipping. In
+    // codes, because studio range is 16 to 235 at eight bits and 64 to 940 at
+    // ten, and a sixteen-bit texture holds those wherever its layout puts them.
+    y *= params.codeScale;
+    chroma *= params.codeScale;
+    const float unit = exp2(params.bits - 8.0);
     if (params.fullRange == 0) {
-        y = (y * 255.0 - 16.0) / 219.0;
-        chroma = (chroma * 255.0 - 128.0) / 224.0;
+        y = (y - 16.0 * unit) / (219.0 * unit);
+        chroma = (chroma - 128.0 * unit) / (224.0 * unit);
     } else {
-        chroma = chroma - 0.5;
+        const float top = exp2(params.bits) - 1.0;
+        y = y / top;
+        chroma = chroma / top - 0.5;
     }
 
     // Chroma reconstruction can push values slightly outside the legal range;
