@@ -65,7 +65,12 @@ void Dialog::accept() {
     invalidate_layout();
     return;
   }
-  close();
+  // Answered, so whatever it said before is gone.
+  if (error_->visible()) {
+    error_->set_visible(false);
+    invalidate_layout();
+  }
+  if (closes_on_accept_) close();
 }
 
 void Dialog::cancel() {
@@ -82,6 +87,14 @@ void Dialog::close() {
     // In a popup unless somebody said otherwise.
     owner->close_popup();
   }
+}
+
+Dialog* find_dialog(Widget& root) noexcept {
+  if (auto* dialog = dynamic_cast<Dialog*>(&root); dialog != nullptr) return dialog;
+  for (const std::unique_ptr<Widget>& child : root.children()) {
+    if (Dialog* found = find_dialog(*child); found != nullptr) return found;
+  }
+  return nullptr;
 }
 
 void Dialog::layout(const LayoutContext& context) {

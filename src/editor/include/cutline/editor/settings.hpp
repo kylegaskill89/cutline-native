@@ -29,7 +29,9 @@
 
 #include <expected>
 #include <filesystem>
+#include <map>
 #include <string>
+#include <utility>
 #include <string_view>
 #include <vector>
 
@@ -58,6 +60,10 @@ struct Settings {
 
   /// Whether an edge being dragged jumps to the things near it.
   bool snapping = true;
+
+  /// How big each dialog window was last left, by its title, so a dialog
+  /// somebody made bigger opens bigger.
+  std::map<std::string, std::pair<int, int>> dialog_sizes;
   /// Whether playback returns to the start of the marked range.
   bool looping = false;
   /// Whether scaling keeps a layer's shape. Premiere's "Uniform Scale".

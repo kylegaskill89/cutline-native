@@ -488,6 +488,8 @@ struct Shell {
   /// The display the window was last found on, so moving within it does not
   /// ask Windows about HDR on every step of a drag.
   HMONITOR monitor = nullptr;
+  /// For a dialog window, the name its size is remembered under.
+  std::string size_key;
 };
 
 struct App {
@@ -1171,6 +1173,9 @@ void open_paste_attributes_dialog(App& app);
 void open_interpret_dialog(App& app, const std::string& media_id);
 void show_playhead(App& app);
 void save_settings(App& app);
+[[nodiscard]] std::pair<int, int> dialog_size(const App& app, const std::string& name, int width,
+                                              int height);
+void remember_dialog_size(App& app, const Shell& shell);
 void refresh_timeline(App& app);
 void refresh_busy(App& app);
 void refresh_drop_ghost(App& app);
@@ -5569,8 +5574,15 @@ void close_settings_dialog(App& app);
   caption.emplace<CaptionButton>(CaptionButton::Kind::Close,
                                  [&app] { close_settings_dialog(app); });
 
-  auto& split = root->emplace<Box>(Axis::Horizontal);
-  split.set_padding(Edges{12.0, 12.0, 12.0, 12.0});
+  // A dialog with nothing to cancel: every setting takes effect as it changes,
+  // which is what the live preview behind it is for. One Close, which Enter
+  // and Escape both press.
+  auto& dialog = root->emplace<cutline::ui::Dialog>("");
+  dialog.set_accept("Close", [] { return std::optional<std::string>{}; });
+  dialog.set_cancel("");
+  dialog.set_on_close([&app] { close_settings_dialog(app); });
+
+  auto& split = dialog.body().emplace<Box>(Axis::Horizontal);
   split.set_spacing(12.0);
   // Takes the height under the title bar rather than only what its contents
   // need. Without this the category list stops wherever its last row does and
@@ -5641,8 +5653,11 @@ void open_settings_dialog(App& app, SettingsKind kind) {
   // Wide enough for the widest page, which `--check` measures rather than
   // anybody guessing: at 460 it found the pane short of the sentence under the
   // durations by forty pixels, in every theme.
-  const int width = kind == SettingsKind::Project ? 470 : 580;
-  const int height = kind == SettingsKind::Project ? 430 : 420;
+  // Or as big as it was last left.
+  const auto [width, height] = dialog_size(app, kind == SettingsKind::Project ? "Project Settings"
+                                                                              : "Preferences",
+                                           kind == SettingsKind::Project ? 470 : 580,
+                                           kind == SettingsKind::Project ? 430 : 420);
   const int x = owner.left + ((owner.right - owner.left) - width) / 2;
   const int y = owner.top + ((owner.bottom - owner.top) - height) / 2;
 
@@ -5652,6 +5667,7 @@ void open_settings_dialog(App& app, SettingsKind kind) {
       CreateWindowExW(WS_EX_TOOLWINDOW, kWindowClass, title.c_str(), WS_POPUP | WS_THICKFRAME, x,
                       y, width, height, app.main.window, nullptr, GetModuleHandleW(nullptr),
                       nullptr);
+  shell->size_key = kind == SettingsKind::Project ? "Project Settings" : "Preferences";
   if (window == nullptr) return;
 
   shell->window = window;
@@ -5681,6 +5697,7 @@ void close_settings_dialog(App& app) {
   app.settings_tabs = nullptr;
 
   const HWND window = app.settings_window->window;
+  remember_dialog_size(app, *app.settings_window);
   app.settings_window.reset();
   // The owner comes back *before* the dialog goes, so the system has an enabled
   // window to give the foreground to. Re-enabling afterwards leaves the focus
@@ -9403,12 +9420,10 @@ void open_strip_effects(App& app, const std::string& track_id) {
                : found->audio_effects;
   };
 
-  auto panel = std::make_unique<Panel>();
-  auto& heading = panel->emplace<Box>(Axis::Horizontal);
-  heading.emplace<Label>(master ? "Master Effects" : "Track Effects").set_bold(true);
-  heading.emplace<Spacer>();
+  auto dialog = std::make_unique<cutline::ui::Dialog>(master ? "Master Effects" : "Track Effects");
+  Box* panel = &dialog->body();
 
-  auto& add = heading.emplace<Button>("Add");
+  auto& add = dialog->add_button("Add Effect...", {});
   add.set_on_click([&app, track_id, master, control = &add] {
     std::vector<std::string> names;
     for (const cutline::audio::AudioEffectDef& def : cutline::audio::audio_effect_defs()) {
@@ -9500,11 +9515,11 @@ void open_strip_effects(App& app, const std::string& track_id) {
     }
   }
 
-  panel->emplace<Button>("Close", [&app] {
-    if (app.main.host != nullptr) app.main.host->close_popup();
-  });
+  // Every change is made as it is asked for, so there is nothing to cancel.
+  dialog->set_accept("Close", [] { return std::optional<std::string>{}; });
+  dialog->set_cancel("");
 
-  app.main.host->open_popup(std::move(panel), settings_anchor());
+  app.main.host->open_popup(std::move(dialog), settings_anchor());
 }
 
 /// The pass being recorded for a track, made if there is not one yet.
@@ -11091,6 +11106,11 @@ void settle_export(App& app) {
   if (app.export_job.worker.joinable()) app.export_job.worker.join();
 }
 
+/// The Export window's size as designed, which `--check` lays it out at too:
+/// sized by guess, it once left its own Export button below its bottom edge.
+constexpr int kExportWindowWidth = 460;
+constexpr int kExportWindowHeight = 520;
+
 [[nodiscard]] std::unique_ptr<Widget> build_export_interface(App* app, Shell* shell) {
   auto root = std::make_unique<Box>(Axis::Vertical);
   root->set_spacing(0.0);
@@ -11101,19 +11121,14 @@ void settle_export(App& app) {
     if (app != nullptr) close_export_dialog(*app);
   });
 
-  auto& body = root->emplace<Box>(Axis::Vertical);
-  body.set_padding(Edges{16.0, 16.0, 16.0, 16.0});
+  auto& dialog = root->emplace<cutline::ui::Dialog>("");
+  Box& body = dialog.body();
   body.set_spacing(10.0);
 
   // One row per setting, label on the left, control on the right — which is
-  // how every settings dialog on the platform reads, Premiere's included.
-  const auto row = [&body](std::string label) -> Box& {
-    auto& line = body.emplace<Box>(Axis::Horizontal);
-    line.set_spacing(10.0);
-    auto& text = line.emplace<Label>(std::move(label));
-    text.set_align(TextAlign::Left);
-    return line;
-  };
+  // how every settings dialog on the platform reads, Premiere's included —
+  // and the labels lined up, which the dialog does.
+  const auto row = [&dialog](std::string label) -> Box& { return dialog.row(std::move(label)); };
 
   {
     auto& line = row("Format");
@@ -11237,21 +11252,24 @@ void settle_export(App& app) {
   status.set_small(true);
   if (app != nullptr) app->export_status = &status;
 
-  auto& buttons = body.emplace<Box>(Axis::Horizontal);
-  buttons.set_spacing(8.0);
-  buttons.emplace<Spacer>();
-  buttons.emplace<Button>("Close", [app] {
+  // Export first and the default, then Close: the platform's order, which this
+  // had the wrong way round. Exporting keeps the window, to show the progress.
+  dialog.set_accept("Export", [app] {
+    if (app != nullptr) {
+      if (app->exporting()) {
+        cancel_export(*app);
+      } else {
+        start_export(*app);
+      }
+    }
+    return std::optional<std::string>{};
+  });
+  dialog.set_closes_on_accept(false);
+  dialog.set_cancel("Close");
+  dialog.set_on_close([app] {
     if (app != nullptr) close_export_dialog(*app);
   });
-  auto& go = buttons.emplace<Button>("Export", [app] {
-    if (app == nullptr) return;
-    if (app->exporting()) {
-      cancel_export(*app);
-    } else {
-      start_export(*app);
-    }
-  });
-  if (app != nullptr) app->export_start = &go;
+  if (app != nullptr) app->export_start = &dialog.accept_button();
 
   return root;
 }
@@ -11272,8 +11290,8 @@ void open_export_dialog(App& app) {
   // eye already is.
   RECT owner{};
   GetWindowRect(app.main.window, &owner);
-  constexpr int kWidth = 460;
-  constexpr int kHeight = 460;
+  const auto [kWidth, kHeight] =
+      dialog_size(app, "Export Settings", kExportWindowWidth, kExportWindowHeight);
   const int x = owner.left + ((owner.right - owner.left) - kWidth) / 2;
   const int y = owner.top + ((owner.bottom - owner.top) - kHeight) / 2;
 
@@ -11284,6 +11302,7 @@ void open_export_dialog(App& app) {
   if (window == nullptr) return;
 
   shell->window = window;
+  shell->size_key = "Export Settings";
   SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(shell.get()));
 
   const MARGINS shadow{0, 0, 1, 0};
@@ -11309,6 +11328,7 @@ void close_export_dialog(App& app) {
   app.export_mixdown = nullptr;
 
   const HWND window = app.export_window->window;
+  remember_dialog_size(app, *app.export_window);
   app.export_window.reset();
   if (window != nullptr) DestroyWindow(window);
   mark_dirty(app);
@@ -11512,6 +11532,25 @@ bool App::animating() noexcept {
     if (shell->host != nullptr && shell->host->animating()) return true;
   }
   return false;
+}
+
+/// How big a dialog window opens: as it was last left, or as designed.
+[[nodiscard]] std::pair<int, int> dialog_size(const App& app, const std::string& name, int width,
+                                              int height) {
+  const auto found = app.settings.dialog_sizes.find(name);
+  if (found == app.settings.dialog_sizes.end()) return {width, height};
+  // Never smaller than designed: the design is what fits its contents, and
+  // --check measures it at exactly that.
+  return {std::max(width, found->second.first), std::max(height, found->second.second)};
+}
+
+/// Keeps a dialog window's size for next time.
+void remember_dialog_size(App& app, const Shell& shell) {
+  if (shell.window == nullptr || shell.size_key.empty()) return;
+  RECT box{};
+  if (!GetWindowRect(shell.window, &box)) return;
+  app.settings.dialog_sizes[shell.size_key] = {box.right - box.left, box.bottom - box.top};
+  save_settings(app);
 }
 
 /// Asks each window's display whether it is showing HDR, puts each window in
@@ -12062,9 +12101,12 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       // platform does — and this one is genuinely modal, so without it the only
       // way out is the one small button in its corner. Not while a field has
       // the keyboard: there, Escape abandons the edit.
-      if (wparam == VK_ESCAPE && !editing && app->settings_window.get() == shell) {
-        close_settings_dialog(*app);
-        return 0;
+      if (wparam == VK_ESCAPE && !editing && shell->is_dialog && shell->host != nullptr) {
+        if (cutline::ui::Dialog* dialog = cutline::ui::find_dialog(shell->host->root());
+            dialog != nullptr) {
+          dialog->cancel();
+          return 0;
+        }
       }
 
       if (!editing && wparam >= '1' && wparam <= '9') {
@@ -12699,6 +12741,19 @@ template <typename T>
     int clipped = 0;
     int squeezed = 0;
     int counted = 0;
+    /// The window being walked. The main one, until a settings or export
+    /// window is laid out at its own size -- a widget inside that has to be
+    /// inside *it*, which is how the Export window's own buttons were found
+    /// sitting below its bottom edge.
+    Rect frame{0.0, 0.0, static_cast<double>(kWidth), static_cast<double>(kHeight)};
+    /// Whether something is inside a scroll view, where being past the bottom
+    /// is the point.
+    const auto scrolled = [](const Widget& widget) {
+      for (const Widget* up = widget.parent(); up != nullptr; up = up->parent()) {
+        if (dynamic_cast<const ScrollView*>(up) != nullptr) return true;
+      }
+      return false;
+    };
 
     /// Walks a subtree, carrying the nearest ancestor that clips its children.
     ///
@@ -12727,7 +12782,13 @@ template <typename T>
       const bool allowed_to_be_empty =
           !widget.visible() || dynamic_cast<const Spacer*>(&widget) != nullptr;
       if (widget.bounds().empty() && !allowed_to_be_empty) ++empty;
-      if (widget.bounds().x < -0.5 || widget.bounds().right() > kWidth + 0.5) ++escaped;
+      if (widget.visible() && !widget.bounds().empty()) {
+        const Rect& at = widget.bounds();
+        const bool across = at.x < frame.x - 0.5 || at.right() > frame.right() + 0.5;
+        const bool down = !scrolled(widget) &&
+                          (at.y < frame.y - 0.5 || at.bottom() > frame.bottom() + 0.5);
+        if (across || down) ++escaped;
+      }
 
       // A widget narrower than it asked to be.
       //
@@ -13131,9 +13192,9 @@ template <typename T>
           app.settings_page = page;
           WidgetHost dialog(build_settings_interface(app, nullptr, kind));
           refresh_settings_page(app);
-          dialog.resize(Rect{0.0, 0.0, kind == SettingsKind::Project ? 470.0 : 580.0,
-                             kind == SettingsKind::Project ? 430.0 : 420.0},
-                        context);
+          frame = Rect{0.0, 0.0, kind == SettingsKind::Project ? 470.0 : 580.0,
+                       kind == SettingsKind::Project ? 430.0 : 420.0};
+          dialog.resize(frame, context);
           dialog.paint(*painter, theme);
           walk(dialog.root());
         }
@@ -13141,7 +13202,29 @@ template <typename T>
       app.settings.proxy_folder.clear();
       app.settings_body = nullptr;
       app.settings_tabs = nullptr;
+      frame = Rect{0.0, 0.0, static_cast<double>(kWidth), static_cast<double>(kHeight)};
+
+#if CUTLINE_HAVE_PREVIEW
+      // The Export window, at the size it opens at.
+      {
+        Shell scratch;
+        scratch.app = &app;
+        WidgetHost window(build_export_interface(&app, &scratch));
+        frame = Rect{0.0, 0.0, static_cast<double>(kExportWindowWidth),
+                     static_cast<double>(kExportWindowHeight)};
+        window.resize(frame, context);
+        window.paint(*painter, theme);
+        walk(window.root());
+        frame = Rect{0.0, 0.0, static_cast<double>(kWidth), static_cast<double>(kHeight)};
+        app.export_output = nullptr;
+        app.export_progress = nullptr;
+        app.export_status = nullptr;
+        app.export_start = nullptr;
+        app.export_mixdown = nullptr;
+      }
+#endif
     }
+
 
     // And the theme has to reach the pixels. Sampling a scatter of points
     // rather than one keeps a theme that happens to share a background colour

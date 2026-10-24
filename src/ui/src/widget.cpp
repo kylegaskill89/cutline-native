@@ -517,8 +517,11 @@ bool WidgetHost::key_down(const KeyEvent& event) {
   // itself -- a focused Cancel is pressed, not overruled. A text field is the
   // exception: it takes Enter to finish its edit, and the answer it just
   // finished is exactly what accepting is about.
-  if (event.key == Key::Enter && popup_open()) {
-    if (auto* dialog = dynamic_cast<Dialog*>(popup_.get()); dialog != nullptr) {
+  if (event.key == Key::Enter) {
+    // The popup's dialog when one is open; otherwise the one this window is,
+    // if it is one -- Settings and Export are dialogs in windows of their own.
+    Dialog* dialog = popup_open() ? dynamic_cast<Dialog*>(popup_.get()) : find_dialog(*root_);
+    if (dialog != nullptr) {
       const bool field = dynamic_cast<TextField*>(focused_) != nullptr;
       if (!taken || field) {
         dialog->accept();

@@ -383,6 +383,22 @@ TEST(Settings, WritingMakesTheDirectoryItNeeds) {
   std::filesystem::remove_all(base, ignored);
 }
 
+TEST(Settings, ADialogOpensAtTheSizeItWasLeftAt) {
+  Settings settings;
+  settings.dialog_sizes["Export Settings"] = {520, 610};
+  const auto loaded = settings_from_json(to_json(settings));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  ASSERT_TRUE(loaded->dialog_sizes.contains("Export Settings"));
+  EXPECT_EQ(loaded->dialog_sizes.at("Export Settings"), std::make_pair(520, 610));
+}
+
+TEST(Settings, ASizeFromABiggerDisplayIsBroughtInRange) {
+  const auto loaded = settings_from_json(R"({"dialog_sizes":{"Preferences":[90000,20],"Bad":"wide"}})");
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  ASSERT_EQ(loaded->dialog_sizes.size(), 1u) << "a size that is not a pair of numbers is dropped";
+  EXPECT_EQ(loaded->dialog_sizes.at("Preferences"), std::make_pair(4000, 150));
+}
+
 TEST(Settings, TheFileSitsBesideTheOtherApplicationData) {
   const std::filesystem::path path = default_settings_path();
   EXPECT_EQ(path.filename(), "settings.json");

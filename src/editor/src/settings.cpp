@@ -84,6 +84,11 @@ std::string to_json(const Settings& settings, int indent) {
   out["version"] = kSettingsSchemaVersion;
   out["theme"] = settings.theme;
   out["snapping"] = settings.snapping;
+  if (!settings.dialog_sizes.empty()) {
+    json sizes = json::object();
+    for (const auto& [name, size] : settings.dialog_sizes) sizes[name] = {size.first, size.second};
+    out["dialog_sizes"] = std::move(sizes);
+  }
   out["looping"] = settings.looping;
   out["aspect_locked"] = settings.aspect_locked;
   out["preview_scale"] = settings.preview_scale;
@@ -134,6 +139,16 @@ std::expected<Settings, std::string> settings_from_json(std::string_view text) {
   Settings settings;
   settings.theme = document.value("theme", settings.theme);
   settings.snapping = document.value("snapping", settings.snapping);
+  if (const auto sizes = document.find("dialog_sizes"); sizes != document.end() && sizes->is_object()) {
+    for (const auto& [name, size] : sizes->items()) {
+      if (!size.is_array() || size.size() != 2 || !size[0].is_number() || !size[1].is_number()) {
+        continue;
+      }
+      // Clamped, so a size from a bigger display cannot open off this one.
+      settings.dialog_sizes[name] = {std::clamp(size[0].get<int>(), 200, 4000),
+                                     std::clamp(size[1].get<int>(), 150, 3000)};
+    }
+  }
   settings.looping = document.value("looping", settings.looping);
   settings.aspect_locked = document.value("aspect_locked", settings.aspect_locked);
   settings.pool_descending = document.value("pool_descending", settings.pool_descending);

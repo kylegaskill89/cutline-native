@@ -54,6 +54,10 @@ class Dialog : public Panel {
   /// The accepting button, for a dialog that has to say it cannot be pressed.
   [[nodiscard]] Button& accept_button() noexcept { return *accept_button_; }
 
+  /// Whether accepting closes the dialog. Export does not: its button starts a
+  /// render and the window stays to show how it is going.
+  void set_closes_on_accept(bool closes) noexcept { closes_on_accept_ = closes; }
+
   /// How the dialog is taken away -- closing the popup it is in, or the window.
   void set_on_close(std::function<void()> close) { on_close_ = std::move(close); }
 
@@ -80,6 +84,11 @@ class Dialog : public Panel {
   Accept accept_;
   std::function<void()> cancel_;
   std::function<void()> on_close_;
+  bool closes_on_accept_ = true;
 };
+
+/// The dialog in a tree, if it has one: what Enter and Escape answer to in a
+/// window that is a dialog.
+[[nodiscard]] Dialog* find_dialog(Widget& root) noexcept;
 
 }  // namespace cutline::ui
