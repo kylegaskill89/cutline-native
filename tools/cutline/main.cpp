@@ -5770,7 +5770,11 @@ void refresh_scopes([[maybe_unused]] App& app) {
   // the compositor, then rebuild it again for the next picture. The rebuild
   // freed the texture the monitor was showing, which is a crash rather than a
   // slow scope.
-  const auto frame = app.preview->capture(preview_project(app), app.session.playhead());
+  // An HDR sequence is measured as its signal, in its own PQ or HLG code
+  // values, rather than as the tone-mapped picture an SDR display is shown.
+  const cutline::core::WorkingColour colour = app.session.project().sequence().colour;
+  const auto frame = app.preview->capture(preview_project(app), app.session.playhead(),
+                                          static_cast<cutline::gpu::WorkingColour>(colour));
   if (!frame.has_value() || frame->empty()) return;
 
   const int step = std::max(1, frame->width / kScopeWidth);
@@ -5803,6 +5807,9 @@ void refresh_scopes([[maybe_unused]] App& app) {
   readings->parade = cutline::render::compute_parade(image);
   readings->vectorscope = cutline::render::compute_vectorscope(image);
   readings->measured = true;
+  readings->signal = colour == cutline::core::WorkingColour::Rec2100Pq    ? cutline::ui::ScopeSignal::Pq
+                     : colour == cutline::core::WorkingColour::Rec2100Hlg ? cutline::ui::ScopeSignal::Hlg
+                                                                          : cutline::ui::ScopeSignal::Sdr;
 
   app.scope_readings = std::move(readings);
   app.scopes->set_readings(app.scope_readings);

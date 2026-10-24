@@ -26,6 +26,11 @@ enum class ScopeKind { Histogram, Waveform, Parade, Vectorscope };
 /// from a frame that has already been fetched and scaled down — the second and
 /// third cost a pass over a small buffer, while fetching the frame again to
 /// switch tabs would cost a decode.
+/// What the readings measure: an SDR picture, or an HDR signal in PQ or HLG
+/// code values, which is what a waveform of an HDR sequence has to be read
+/// against -- in nits rather than in quarters.
+enum class ScopeSignal { Sdr, Pq, Hlg };
+
 struct ScopeReadings {
   render::Histogram histogram;
   render::Waveform waveform;
@@ -34,6 +39,7 @@ struct ScopeReadings {
   /// False until a frame has been measured, which is what makes the panel say
   /// so rather than drawing four convincing empty graphs.
   bool measured = false;
+  ScopeSignal signal = ScopeSignal::Sdr;
 };
 
 class ScopesView : public Widget {

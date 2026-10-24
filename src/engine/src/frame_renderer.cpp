@@ -1800,8 +1800,8 @@ std::expected<void, std::string> FrameRenderer::resize(int width, int height) {
   return impl_->compositor->resize(width, height);
 }
 
-std::expected<gpu::Image, std::string> FrameRenderer::read_back() {
-  return impl_->compositor->read_back();
+std::expected<gpu::Image, std::string> FrameRenderer::read_back(gpu::WorkingColour output) {
+  return impl_->compositor->read_back(output);
 }
 
 std::expected<void, std::string> FrameRenderer::render(const core::Project& project, double t) {

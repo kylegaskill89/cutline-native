@@ -366,19 +366,19 @@ std::expected<std::optional<ui::TextureView>, std::string> PreviewEngine::take(d
 }
 
 std::expected<gpu::Image, std::string> PreviewEngine::capture(
-    std::shared_ptr<const core::Project> project, double t) {
+    std::shared_ptr<const core::Project> project, double t, gpu::WorkingColour output) {
   Impl& d = *impl_;
   if (!project) return std::unexpected("nothing to capture");
   auto promise = std::make_shared<std::promise<std::expected<gpu::Image, std::string>>>();
   auto answer = promise->get_future();
   {
     const std::lock_guard<std::mutex> held(d.lock);
-    d.jobs.push_back([&d, promise, project, t] {
+    d.jobs.push_back([&d, promise, project, t, output] {
       if (std::string failed = d.render(*project, t); !failed.empty()) {
         promise->set_value(std::unexpected(std::move(failed)));
         return;
       }
-      promise->set_value(d.renderer->read_back());
+      promise->set_value(d.renderer->read_back(output));
     });
   }
   d.wake.notify_all();

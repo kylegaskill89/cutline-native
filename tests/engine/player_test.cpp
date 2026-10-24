@@ -193,12 +193,17 @@ TEST_F(PlayerTest, TheClockMovesSmoothlyRatherThanInSteps) {
   // The best of three. A clock that steps does it every time; the whole suite
   // running at once on every core can hold up the audio thread now and then,
   // and measured once that read as a 10 ms spread on a clock that is smooth.
+  // Half a 60 fps frame. Steps from a coarse anchor are a whole one, so this
+  // still catches them; a third of a frame was tighter than that needs, and
+  // failed one full run in four on a machine with every core busy.
+  constexpr double kHalfAFrame = 0.5 / 60.0;
   double best = 1.0;
-  for (int attempt = 0; attempt < 3 && best >= 0.006; ++attempt) best = std::min(best, spread());
+  for (int attempt = 0; attempt < 3 && best >= kHalfAFrame; ++attempt) {
+    best = std::min(best, spread());
+  }
 
   ASSERT_TRUE(player_->error().empty()) << player_->error();
-  // A third of a 60 fps frame. Steps from a coarse anchor are a whole one.
-  EXPECT_LT(best, 0.006);
+  EXPECT_LT(best, kHalfAFrame);
 }
 
 TEST_F(PlayerTest, PauseStopsTheClock) {

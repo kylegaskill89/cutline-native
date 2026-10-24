@@ -2156,7 +2156,7 @@ float — so this is new curves, a tone mapper and plumbing, not a restructure.
 | Rec.2020 primaries | yes | **yes** — converted to and from Rec.709 in linear light | done |
 | A sequence colour space | Rec.709, Rec.2100 PQ, Rec.2100 HLG | **yes** — the three, with HDR graphics white (100, 203, 300 nits) and Auto Tone Map Media, in Project Settings and in the file; see §8.1 | done |
 | HDR preview | on an HDR display, tone-mapped otherwise | **yes** — a window on an HDR display shows each monitor's picture at its real brightness, the interface around it exactly as before at the desktop's SDR white; on an SDR display an HDR sequence is tone mapped. Each window follows the display it is on; see §8.3 | done |
-| Scopes in nits | HDR ranges on the waveform | **none** | control |
+| Scopes in nits | HDR ranges on the waveform | **yes** — an HDR sequence's scopes measure its signal in its own PQ or HLG code values rather than the tone-mapped picture, and the waveform and parade are ruled at 100, 203, 1,000 and 4,000 nits; driven, the PQ test patches sit on the 203 and 1,000 lines | done |
 | HDR10 export | HEVC Main10 with mastering and light-level metadata | **yes** — an HDR sequence writes HEVC Main 10, BT.2100 PQ or HLG, with the mastering display and light levels in the container and the bitstream; 4K60 at **2.35× realtime**. Any sequence can be written in any of the three spaces from the Export dialog. This build's x265 is 8-bit, so ten bits needs a hardware encoder; see §8.2 | done |
 
 The fixtures will have to be generated rather than captured: every file the
@@ -2253,7 +2253,13 @@ is the desktop's SDR white of 238 nits over 80 and is what puts it at the same
 brightness as every other window on the display itself. The scRGB values the
 monitors are sent are tested against arithmetic.
 
-Still to come: scopes in nits, and an HDR nest, which is rendered to SDR.
+Still to come: an HDR nest, which is rendered to SDR.
+
+A source can also be told what it is. Interpret Footage has Premiere's Color
+Space Override -- Rec. 709, Rec. 2100 PQ or HLG -- for footage tagged wrongly
+or not at all, and every source records its probed depth and colour space, so
+a 10-bit source's decoder pool is sized at the sixteen bits a sample it takes
+rather than the eight it was assumed to.
 
 ## 9. Interface and themes
 

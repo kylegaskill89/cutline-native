@@ -101,6 +101,30 @@ TEST(ScopesView, APanelTooSmallForAGraphDrawsNone) {
   EXPECT_TRUE(fixture.view->graph_area().empty());
 }
 
+/// What the waveform's scale says, in the order it says it.
+[[nodiscard]] std::vector<std::string> scale_of(ScopeSignal signal) {
+  Fixture fixture;
+  fixture.view->set_kind(ScopeKind::Waveform);
+  auto readings = std::make_shared<ScopeReadings>(*readings_of(150, 150, 150));
+  readings->signal = signal;
+  fixture.view->set_readings(readings);
+  RecordingPainter painter;
+  fixture.view->paint(painter, default_theme());
+  std::vector<std::string> said;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::Text && call.run.has_value()) said.push_back(call.run->text);
+  }
+  return said;
+}
+
+// An HDR signal is read in nits. Quarters of its code range mean nothing
+// anybody grades to; 100, 203 and 1,000 nits are what they look for.
+TEST(ScopesView, AnHdrWaveformIsRuledInNits) {
+  EXPECT_EQ(scale_of(ScopeSignal::Pq), (std::vector<std::string>{"100", "203", "1000", "4000"}));
+  EXPECT_EQ(scale_of(ScopeSignal::Hlg), (std::vector<std::string>{"100", "203", "1000"}));
+  EXPECT_TRUE(scale_of(ScopeSignal::Sdr).empty());
+}
+
 TEST(ScopesView, EachKindDrawsSomething) {
   for (const ScopeKind kind : {ScopeKind::Histogram, ScopeKind::Waveform, ScopeKind::Parade,
                                ScopeKind::Vectorscope}) {

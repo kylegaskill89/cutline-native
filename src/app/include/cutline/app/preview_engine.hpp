@@ -90,7 +90,8 @@ class PreviewEngine {
   /// For the things that need pixels in hand: a scope, a snapshot, a preview on
   /// a machine whose windows cannot share the card.
   [[nodiscard]] std::expected<gpu::Image, std::string> capture(
-      std::shared_ptr<const core::Project> project, double t);
+      std::shared_ptr<const core::Project> project, double t,
+      gpu::WorkingColour output = gpu::WorkingColour::Rec709);
 
   /// Closes every decoder, on the render thread, and waits until it has.
   void release_sources();

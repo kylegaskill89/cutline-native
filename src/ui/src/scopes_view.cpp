@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <utility>
 
 namespace cutline::ui {
@@ -41,6 +42,27 @@ constexpr float kScopeGain = 3.0f;
 /// The eighths a graticule is ruled at. Enough to read a level against and few
 /// enough not to be a grid.
 constexpr int kGraticule = 4;
+
+/// The code value, 0 to 1, that a light level has in an HDR signal: where the
+/// waveform's nits are ruled.
+[[nodiscard]] double signal_of(double nits, ScopeSignal signal) noexcept {
+  if (signal == ScopeSignal::Pq) {
+    const double m1 = 2610.0 / 16384.0;
+    const double m2 = 128.0 * 2523.0 / 4096.0;
+    const double c1 = 3424.0 / 4096.0;
+    const double c2 = 32.0 * 2413.0 / 4096.0;
+    const double c3 = 32.0 * 2392.0 / 4096.0;
+    const double p = std::pow(nits / 10000.0, m1);
+    return std::pow((c1 + c2 * p) / (1.0 + c3 * p), m2);
+  }
+  // HLG for a neutral grey, through the inverse of its system gamma at a
+  // 1,000-nit peak.
+  const double scene = std::pow(std::max(nits, 0.0) / 1000.0, 1.0 / 1.2);
+  const double a = 0.17883277;
+  const double b = 1.0 - 4.0 * a;
+  const double c = 0.5 - a * std::log(4.0 * a);
+  return scene <= 1.0 / 12.0 ? std::sqrt(3.0 * scene) : a * std::log(12.0 * scene - b) + c;
+}
 
 }  // namespace
 
@@ -137,9 +159,24 @@ void ScopesView::paint_waveform(Painter& painter, const Theme& theme, const Rect
   if (peak == 0) return;
 
   const SurfaceStyle& style = theme.style(Part::Panel, State::Normal);
-  for (int i = 1; i < kGraticule; ++i) {
-    const double y = area.y + area.height * i / kGraticule;
-    painter.line(area.x, y, area.right(), y, fade(style.text, 0.15f), 1.0);
+  if (readings_->signal == ScopeSignal::Sdr) {
+    for (int i = 1; i < kGraticule; ++i) {
+      const double y = area.y + area.height * i / kGraticule;
+      painter.line(area.x, y, area.right(), y, fade(style.text, 0.15f), 1.0);
+    }
+  } else {
+    // In nits, where they fall in the signal: SDR white at 100, graphics
+    // white at 203, and the peaks grades are mastered to.
+    const bool pq = readings_->signal == ScopeSignal::Pq;
+    for (const double nits : {100.0, 203.0, 1000.0, 4000.0}) {
+      if (!pq && nits > 1000.0) continue;
+      const double y = area.bottom() - area.height * signal_of(nits, readings_->signal);
+      painter.line(area.x, y, area.right(), y, fade(style.text, 0.15f), 1.0);
+      painter.text(text_run(Rect{area.x + 2.0, y - metrics_.small_font_size * 1.4, 60.0,
+                                 metrics_.small_font_size * 1.3},
+                            std::format("{:.0f}", nits), style, metrics_.small_font_size,
+                            TextAlign::Left, false));
+    }
   }
 
   // A cell per pixel of the widget rather than per column of the frame: the

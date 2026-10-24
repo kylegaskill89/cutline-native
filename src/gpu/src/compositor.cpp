@@ -1213,7 +1213,8 @@ namespace {
 ///
 /// Leaves `display` in RENDER_TARGET state; the caller transitions it onward
 /// to whatever it wants next.
-void record_display_pass(Compositor::Impl& d, ID3D12GraphicsCommandList* commands) {
+void record_display_pass(Compositor::Impl& d, ID3D12GraphicsCommandList* commands,
+                         WorkingColour output = WorkingColour::Rec709) {
   ID3D12DescriptorHeap* heaps[] = {d.srv_heap.Get()};
   commands->SetDescriptorHeaps(1, heaps);
   commands->SetGraphicsRootSignature(d.root_signature.Get());
@@ -1235,8 +1236,9 @@ void record_display_pass(Compositor::Impl& d, ID3D12GraphicsCommandList* command
   ShaderParams params{};
   params.canvas[0] = static_cast<float>(d.width);
   params.canvas[1] = static_cast<float>(d.height);
-  // The display is SDR for now: an HDR sequence is tone mapped onto it.
-  d.colour_params(params, WorkingColour::Rec709);
+  // Rec.709 for the monitor on an SDR display, where an HDR sequence is tone
+  // mapped; the sequence's own space for its signal.
+  d.colour_params(params, output);
   commands->SetPipelineState(d.pipeline_present.Get());
   commands->SetGraphicsRootDescriptorTable(0, d.srv_gpu(d.present_slot()));
   commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &params, 0);
@@ -1412,7 +1414,7 @@ std::expected<std::vector<float>, std::string> Compositor::read_back_hdr() {
 
 // ---------------------------------------------------------------- readback --
 
-std::expected<Image, std::string> Compositor::read_back() {
+std::expected<Image, std::string> Compositor::read_back(WorkingColour output) {
   Impl& d = *impl_;
 
   const UINT row_bytes = static_cast<UINT>(d.width) * 4;
@@ -1447,7 +1449,7 @@ std::expected<Image, std::string> Compositor::read_back() {
   if (!opened) return std::unexpected(opened.error());
   ID3D12GraphicsCommandList* commands = *opened;
 
-  record_display_pass(d, commands);
+  record_display_pass(d, commands, output);
 
   auto display_to_source = transition(d.display.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                                       D3D12_RESOURCE_STATE_COPY_SOURCE);

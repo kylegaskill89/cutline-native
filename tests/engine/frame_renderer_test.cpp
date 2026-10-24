@@ -1371,5 +1371,17 @@ TEST_F(DeepRendererTest, AnOverrideReadsTheValuesAsItSays) {
   EXPECT_NEAR(overridden, 514, 1);
   EXPECT_GT(std::abs(as_tagged - 514), 20) << "the override made no difference";
 }
+
+// What a scope of an HDR sequence measures: the signal, in its own code
+// values, not the tone-mapped picture an SDR display is shown -- where 203 and
+// 1,000 nits would be 241 and white.
+TEST_F(DeepRendererTest, AnHdrSequencesSignalIsItsOwnCodeValues) {
+  ASSERT_TRUE(renderer_->render(in_colour(showing("pq.mkv"), core::WorkingColour::Rec2100Pq), 0.05)
+                  .has_value());
+  const auto signal = renderer_->read_back(gpu::WorkingColour::Rec2100Pq);
+  ASSERT_TRUE(signal.has_value()) << signal.error();
+  EXPECT_NEAR(pixel_at(*signal, 10, 16).g, pq_of(203.0) * 255.0, 2.0);
+  EXPECT_NEAR(pixel_at(*signal, 54, 16).g, pq_of(1000.0) * 255.0, 2.0);
+}
 }  // namespace
 }  // namespace cutline::engine

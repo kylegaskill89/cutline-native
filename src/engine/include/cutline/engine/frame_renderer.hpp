@@ -73,7 +73,8 @@ class FrameRenderer {
 
   /// The composited frame as 8-bit sRGB RGBA. Stalls on the GPU, so this is for
   /// stills and tests rather than every frame of an export.
-  [[nodiscard]] std::expected<gpu::Image, std::string> read_back();
+  [[nodiscard]] std::expected<gpu::Image, std::string> read_back(
+      gpu::WorkingColour output = gpu::WorkingColour::Rec709);
 
   /// Media ids that could not be opened during the last `render`, in the order
   /// they were met. Empty when everything resolved.

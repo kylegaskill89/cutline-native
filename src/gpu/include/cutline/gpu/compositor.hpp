@@ -320,7 +320,12 @@ class Compositor {
   /// Encodes the scene for display and copies it back to system memory.
   /// Slow by nature — this stalls on the GPU — and meant for tests and stills,
   /// not for every frame of an export.
-  [[nodiscard]] std::expected<Image, std::string> read_back();
+  ///
+  /// `output` is the space the picture is coded in: Rec.709 is what the
+  /// monitor shows on an SDR display, and an HDR sequence's own space is its
+  /// signal, which is what a scope measures.
+  [[nodiscard]] std::expected<Image, std::string> read_back(
+      WorkingColour output = WorkingColour::Rec709);
 
   /// The HDR display's copy, as RGBA floats in scRGB -- 1.0 is 80 nits. For
   /// tests: it is the one way to check what an HDR display is sent. Fails when
