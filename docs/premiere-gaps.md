@@ -1936,6 +1936,23 @@ that half second. Going further needs the run before and the next cut built at
 once, which is a third decoder per source: another surface pool, about 450 MB
 of video memory at 4K, while reversing. That is a trade for the owner.
 
+**Scrubbing**, pointer to picture: the pointer held on the ruler and moved in
+jumps every 300 ms, timing each jump to the monitor's last change. The
+timecode field is timed beside it, since it moves the moment the playhead
+does, and so measures the interface's own share.
+
+| | timecode | picture |
+|---|---|---|
+| One clip, steps of 0.2 s | 24 ms | **median 43 ms, worst 55** |
+| Fifty cuts, jumps of 0.6 s | 24 ms | median 67 ms, p90 237, worst 249 |
+
+Short steps meet the target. Jumps on the long-GOP capture do not: each lands
+somewhere new in a 4.17 s group of pictures, and the exact frame is up to 250
+decodes from the keyframe before it. The usual answer is to show the keyframe
+at once and the exact frame when it is ready; whether a picture that is
+briefly the wrong one is better than one that is late is a question for the
+owner.
+
 **The render thread was not enough on its own.** With the work moved off the
 interface thread the interface still painted twelve times a second under a
 heavy stack, because its paint queued *on the card* behind 78 ms of
