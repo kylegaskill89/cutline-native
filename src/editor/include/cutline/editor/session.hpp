@@ -88,6 +88,16 @@ class Session {
   /// tell whether it needs rebuilding without comparing whole projects.
   [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
 
+  /// Bumped only when the *project* changes — an edit, an undo or redo, a file
+  /// opened, another sequence shown — and not for a selection.
+  ///
+  /// `revision` cannot answer "did that command change the document": clicking
+  /// a clip moves it too. Without this a command handler either refreshed
+  /// everything on every arrow key or guessed which panels an edit could
+  /// reach, and the guess left out the source monitor — so undoing an import
+  /// went on showing a frame of media the project no longer had.
+  [[nodiscard]] std::uint64_t document_revision() const noexcept { return document_revision_; }
+
   // ------------------------------------------------------------ selection --
 
   [[nodiscard]] std::span<const std::string> selection() const noexcept { return selection_; }
@@ -177,6 +187,7 @@ class Session {
   /// ones that have been away from; the open one's live value is `playhead_`.
   std::map<std::string, double> playheads_;
   std::uint64_t revision_ = 0;
+  std::uint64_t document_revision_ = 0;
 };
 
 }  // namespace cutline::editor

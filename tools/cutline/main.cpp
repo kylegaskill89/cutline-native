@@ -6929,12 +6929,24 @@ void run_command(App& app, cutline::editor::Command command) {
     return;
   }
 
+  const std::uint64_t document_before = app.session.document_revision();
   if (cutline::editor::run(app.session, command)) {
-    refresh_timeline(app);
-    refresh_browser(app);
-    refresh_title(app);
-    invalidate_preview(app);
-    app.inspector_stale = true;
+    if (app.session.document_revision() != document_before) {
+      // The document changed, so everything that shows it does — including the
+      // source monitor and the mixer, which this handler used to leave out
+      // while repeating the rest of `refresh_all` by hand. Undoing an import
+      // then went on showing a frame of media the project no longer had, and
+      // undoing a new track left the mixer with a strip for it.
+      refresh_all(app);
+    } else {
+      // A transport key or a selection. Rebuilding the mixer on every arrow
+      // press would be work for nothing, so this is what it always did.
+      refresh_timeline(app);
+      refresh_browser(app);
+      refresh_title(app);
+      invalidate_preview(app);
+      app.inspector_stale = true;
+    }
 
     // The playhead may have moved: every transport command moves it, and so do
     // the jumps to the next and previous marker. Here rather than in each of
@@ -12009,6 +12021,16 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       const bool waves = app->waveforms.take_arrival();
       const bool strips = app->filmstrips.take_arrival();
       if (waves || strips) refresh_timeline(*app);
+      // And the source monitor, when what it shows *is* a waveform. It asks for
+      // the peaks and takes whatever the cache has at that moment, which for a
+      // source just opened is nothing — so an mp3 opened there drew an empty
+      // panel and went on drawing one, the arrival never being passed on. Only
+      // for a sound: a picture there has no use for peaks, and re-rendering it
+      // for each arrival would decode a frame for nothing.
+      if (waves) {
+        const cutline::core::Media* shown = source_media_of(*app);
+        if (shown != nullptr && !shown->has_video) refresh_source(*app);
+      }
       // And the pool, which draws from the same cache when it is showing
       // pictures. Without this a tile stays blank until something else happens
       // to rebuild the panel.

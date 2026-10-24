@@ -42,6 +42,7 @@ bool Session::apply(core::Project next) {
   prune_selection();
   refresh_modified();
   ++revision_;
+  ++document_revision_;
   return true;
 }
 
@@ -61,6 +62,7 @@ void Session::reset(core::Project project, std::filesystem::path path) {
   playhead_ = 0.0;
   mark_saved(std::move(path));
   ++revision_;
+  ++document_revision_;
 }
 
 bool Session::undo() {
@@ -73,6 +75,7 @@ bool Session::undo() {
   // which a latched flag could never work out.
   refresh_modified();
   ++revision_;
+  ++document_revision_;
   return true;
 }
 
@@ -83,6 +86,7 @@ bool Session::redo() {
   prune_selection();
   refresh_modified();
   ++revision_;
+  ++document_revision_;
   return true;
 }
 
@@ -144,6 +148,7 @@ bool Session::open_sequence(std::string_view id) {
   // every view is showing a different sequence now and all of them have to
   // rebuild.
   ++revision_;
+  ++document_revision_;
   return true;
 }
 

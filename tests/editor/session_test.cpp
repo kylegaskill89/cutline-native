@@ -87,6 +87,27 @@ TEST(Session, UndoAndRedoStepThroughEdits) {
   EXPECT_DOUBLE_EQ(core::find_clip(session.project(), "c1")->start, 2.0);
 }
 
+TEST(Session, TheDocumentRevisionIgnoresTheSelection) {
+  // What lets a command handler refresh every panel exactly when the project
+  // changed: a click is not an edit, and an undo is.
+  Session session(sample_project());
+  session.select_one("c1");
+  EXPECT_EQ(session.document_revision(), 0u);
+  EXPECT_GT(session.revision(), 0u);
+
+  const std::vector<std::string> ids{"c1"};
+  session.apply(core::move_clips(session.project(), ids, 2.0));
+  EXPECT_EQ(session.document_revision(), 1u);
+  session.undo();
+  EXPECT_EQ(session.document_revision(), 2u);
+  session.redo();
+  EXPECT_EQ(session.document_revision(), 3u);
+
+  // And a refused edit moves neither.
+  session.apply(session.project());
+  EXPECT_EQ(session.document_revision(), 3u);
+}
+
 TEST(Session, UndoWithNoHistoryDoesNothing) {
   Session session(sample_project());
   EXPECT_FALSE(session.undo());
