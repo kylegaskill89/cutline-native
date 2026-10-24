@@ -2293,7 +2293,7 @@ made those systems recognisable:
 | | XP / Vista | Here | Size |
 |---|---|---|---|
 | Faithful controls | Luna's rounded buttons with the orange hover rim, blue-highlighted menus, gripped scrollbars, green block progress; Vista's glossy buttons with a blue glow, the shining progress bar | approximations of both | control, per control |
-| Period fonts | Tahoma and Trebuchet for XP, Segoe UI for Vista | **none** — every theme uses the default face; `SkiaPainter` never asks for one | wiring |
+| Period fonts | Tahoma and Trebuchet for XP, Segoe UI for Vista | **half** — each theme names its face and the painter measures and draws in it: Tahoma for Luna, Segoe UI for Aero and Slate, Consolas for Phosphor, from the system. Sizes and XP's Trebuchet captions wait for the reference screenshots | wiring |
 | A themed window frame | XP's blue caption and round red close; Vista's glass | a custom frame exists (`WM_NCCALCSIZE`) and draws one style | control |
 | Animation | hover glows fading in and out | **none**, for the reason in the table above | machinery |
 | Sounds | the system's own event sounds | **none** — to be played through Windows' sound-scheme aliases, never by bundling Microsoft's recordings | wiring |

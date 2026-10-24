@@ -135,6 +135,13 @@ class TextMeasurer {
 
   /// Width of a string at a size, in layout pixels. Empty text is zero.
   [[nodiscard]] virtual double measure(std::string_view text, double size, bool bold) const = 0;
+
+  /// The typeface what follows is measured and drawn in, by family name, or
+  /// empty for the system's. Set by the host from the theme before it lays
+  /// out and before it paints, so the two always agree. Const for the reason
+  /// `measure` is: a measurer is lent as const, and which face it measures in
+  /// is not part of what it is.
+  virtual void set_typeface(std::string_view family) const { (void)family; }
 };
 
 /// The drawing primitives every backend must provide.

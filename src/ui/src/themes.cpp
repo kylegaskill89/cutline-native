@@ -47,6 +47,7 @@ namespace {
   t.metrics.title_bar_height = 30.0;
   t.metrics.panel_header_height = 24.0;
   t.metrics.list_row_height = 20.0;  // Explorer's lists were tight
+  t.metrics.font_family = "Tahoma";
   t.metrics.font_size = 12.0;
   t.metrics.small_font_size = 11.0;
   t.metrics.scrollbar_width = 17.0;  // XP scrollbars were chunky
@@ -368,6 +369,7 @@ namespace {
   t.metrics.title_bar_height = 34.0;
   t.metrics.panel_header_height = 28.0;
   t.metrics.list_row_height = 26.0;
+  t.metrics.font_family = "Segoe UI";
   t.metrics.font_size = 13.0;
   t.metrics.scrollbar_width = 16.0;
   t.metrics.track_height = 58.0;
@@ -671,6 +673,7 @@ namespace {
   t.metrics.title_bar_height = 36.0;
   t.metrics.panel_header_height = 30.0;
   t.metrics.list_row_height = 30.0;  // flat chrome leans roomy
+  t.metrics.font_family = "Segoe UI";
   t.metrics.font_size = 13.0;
   t.metrics.scrollbar_width = 10.0;
   t.metrics.splitter_width = 4.0;  // flat chrome wants a hairline, not a bar
@@ -908,8 +911,11 @@ namespace {
   t.metrics.title_bar_height = 28.0;
   t.metrics.panel_header_height = 24.0;
   t.metrics.list_row_height = 24.0;
+  t.metrics.font_family = "Consolas";
   t.metrics.font_size = 13.0;
-  t.metrics.small_font_size = 12.0;
+  // A size down from the others: a monospaced face is about a tenth wider, and
+  // the sentences that explain things were written to fit a proportional one.
+  t.metrics.small_font_size = 11.0;
   t.metrics.line_height = 1.5;  // terminals breathe
   t.metrics.scrollbar_width = 12.0;
   t.metrics.track_height = 52.0;

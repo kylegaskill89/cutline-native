@@ -227,6 +227,7 @@ WidgetHost::WidgetHost(std::unique_ptr<Widget> root) : root_(std::move(root)) {
 }
 
 void WidgetHost::resize(const Rect& bounds, const LayoutContext& context) {
+  context.text.set_typeface(context.theme.metrics.font_family);
   bounds_ = bounds;
   root_->arrange(bounds_, context);
   if (popup_ != nullptr && !popup_closing_) arrange_popup(context);
@@ -264,6 +265,7 @@ void WidgetHost::arrange_popup(const LayoutContext& context) {
 }
 
 bool WidgetHost::update_layout(const LayoutContext& context) {
+  context.text.set_typeface(context.theme.metrics.font_family);
   // Before the early return: a popup closes whether or not anything asked for
   // layout, and this is the one point in the frame where destroying it cannot
   // land inside the click handler that asked for it.
@@ -592,6 +594,7 @@ void WidgetHost::forget(Widget* widget) {
 }
 
 void WidgetHost::paint(Painter& painter, const Theme& theme) const {
+  painter.set_typeface(theme.metrics.font_family);
   animator_.begin_frame();
   root_->paint(painter, theme);
   // After everything, and outside every clip the tree set up. That is the

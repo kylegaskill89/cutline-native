@@ -212,6 +212,10 @@ struct Metrics {
   /// off the edge with no way to get it back.
   double min_pane = 48.0;
 
+  /// The typeface, by family name, or empty for the system's. Each theme names
+  /// the one its period used -- Tahoma for XP, Segoe UI for Vista -- from the
+  /// system, never bundled.
+  std::string font_family;
   double font_size = 13.0;
   double small_font_size = 11.0;
   /// Multiplied by the font size to get a line's height.

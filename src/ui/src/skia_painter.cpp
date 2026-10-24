@@ -4,7 +4,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <numbers>
+#include <string>
+#include <utility>
 #include <vector>
 
 // Skia's headers are noisy at /W4 and are not ours to keep warning-free.
@@ -88,8 +91,13 @@ struct SkiaPainter::Impl {
   SkCanvas* canvas = nullptr;
   TextureCache* textures = nullptr;
   sk_sp<SkFontMgr> fonts;
-  sk_sp<SkTypeface> regular;
-  sk_sp<SkTypeface> bold;
+  /// The face in use. Mutable because choosing it is not drawing anything.
+  mutable sk_sp<SkTypeface> regular;
+  mutable sk_sp<SkTypeface> bold;
+  mutable std::string family;
+  /// Every family asked for, so a theme switch back and forth looks nothing up
+  /// twice.
+  mutable std::map<std::string, std::pair<sk_sp<SkTypeface>, sk_sp<SkTypeface>>> faces;
 
   [[nodiscard]] SkFont font_for(double size, bool want_bold) const {
     SkFont font(want_bold ? bold : regular, static_cast<SkScalar>(size));
@@ -101,6 +109,24 @@ struct SkiaPainter::Impl {
 
 SkiaPainter::SkiaPainter(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 SkiaPainter::~SkiaPainter() = default;
+
+void SkiaPainter::set_typeface(std::string_view family) const {
+  Impl& d = *impl_;
+  if (d.fonts == nullptr || family == d.family) return;
+  d.family = std::string(family);
+  auto found = d.faces.find(d.family);
+  if (found == d.faces.end()) {
+    // A family the system does not have falls back to its default, which is
+    // the right answer for a font that is never bundled.
+    const char* name = d.family.empty() ? nullptr : d.family.c_str();
+    found = d.faces
+                .emplace(d.family, std::pair{d.fonts->legacyMakeTypeface(name, SkFontStyle::Normal()),
+                                             d.fonts->legacyMakeTypeface(name, SkFontStyle::Bold())})
+                .first;
+  }
+  d.regular = found->second.first;
+  d.bold = found->second.second;
+}
 
 std::unique_ptr<SkiaPainter> SkiaPainter::create(void* canvas, TextureCache* textures) {
   if (canvas == nullptr) return nullptr;
