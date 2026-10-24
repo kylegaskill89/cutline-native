@@ -8,10 +8,10 @@
 /// the fallback, so an export always completes — slower on a machine without a
 /// supported GPU, rather than failing on one.
 ///
-/// Frames arrive as 8-bit sRGB RGBA, which is what the compositor reads back,
-/// and are converted to the encoder's pixel format here. That conversion is on
-/// the CPU for now; doing it in a shader and handing the encoder a GPU surface
-/// is the obvious next optimisation, and the interface does not assume either.
+/// Frames arrive either as 8-bit sRGB RGBA, which is what the compositor reads
+/// back for a still, or already converted on the card to 4:2:0 in two planes,
+/// which is what an export sends. The second is the fast way: converting RGBA
+/// on the processor cost fourteen milliseconds a 4K frame.
 
 #include <cstdint>
 #include <expected>
@@ -74,6 +74,18 @@ struct AudioEncodeSettings {
   int streams = 1;
 };
 
+/// A frame already converted for an encoder: BT.709 at studio range, 4:2:0 in
+/// two planes -- luma, then the two colour differences interleaved at half size
+/// each way. NV12, or P010 with ten bits at the top of sixteen. Borrowed for the
+/// length of the call that takes it.
+struct PlanarFrame {
+  bool ten_bit = false;
+  const std::uint8_t* luma = nullptr;
+  std::size_t luma_stride = 0;
+  const std::uint8_t* chroma = nullptr;
+  std::size_t chroma_stride = 0;
+};
+
 /// Encodes frames and muxes them into a container.
 ///
 /// Audio and video share one writer rather than being written separately,
@@ -94,6 +106,12 @@ class MediaWriter {
   /// bytes, and frames are expected in presentation order.
   [[nodiscard]] std::expected<void, std::string> write_frame(
       std::span<const std::uint8_t> rgba);
+
+  /// Appends one frame already in the encoder's shape. Taken as it is when the
+  /// encoder accepts NV12, which every hardware encoder and x264 do; put into
+  /// planar form for one that does not, which is a shuffle of planes rather
+  /// than a colour conversion.
+  [[nodiscard]] std::expected<void, std::string> write_frame(const PlanarFrame& frame);
 
   /// Appends audio. `interleaved` is float samples in [-1, 1], a whole number
   /// of frames of `channels` each.

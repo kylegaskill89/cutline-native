@@ -7,6 +7,9 @@
 
 #include "d3d12_util.hpp"
 
+#include <array>
+#include <condition_variable>
+#include <mutex>
 #include <span>
 #include <vector>
 
@@ -52,6 +55,12 @@ struct Compositor::Impl {
   /// one pipeline for all of them.
   ComPtr<ID3D12PipelineState> pipeline_effect;
   ComPtr<ID3D12PipelineState> pipeline_present;
+  /// The two halves of the encoder's conversion, at each depth: luma into a
+  /// one-channel target, colour differences into a two-channel one.
+  ComPtr<ID3D12PipelineState> pipeline_luma8;
+  ComPtr<ID3D12PipelineState> pipeline_chroma8;
+  ComPtr<ID3D12PipelineState> pipeline_luma16;
+  ComPtr<ID3D12PipelineState> pipeline_chroma16;
 
   ComPtr<ID3D12DescriptorHeap> rtv_heap;
   ComPtr<ID3D12DescriptorHeap> srv_heap;
@@ -67,6 +76,28 @@ struct Compositor::Impl {
   ComPtr<ID3D12Resource> display;
   ComPtr<ID3D12Resource> readback;
   std::size_t readback_capacity = 0;
+
+  /// The encoder's planes on the card, made when first asked for and again
+  /// when the canvas or the layout changes.
+  ComPtr<ID3D12Resource> yuv_luma;
+  ComPtr<ID3D12Resource> yuv_chroma;
+  YuvLayout yuv_layout = YuvLayout::Nv12;
+
+  /// Where converted frames come back to, one buffer per frame in flight.
+  struct YuvSlot {
+    ComPtr<ID3D12Resource> buffer;
+    std::size_t capacity = 0;
+    UINT64 fence = 0;
+    bool lent = false;
+    YuvPlanes shape;
+    std::size_t chroma_offset = 0;
+  };
+  std::array<YuvSlot, kYuvSlots> yuv_slots;
+  std::mutex yuv_lock;
+  std::condition_variable yuv_returned;
+
+  /// Makes the planes for `layout` at the canvas size, if they are not there.
+  [[nodiscard]] std::expected<void, std::string> ensure_yuv_targets(YuvLayout layout);
 
   /// Plane textures per layer slot, kept between composes because reallocating
   /// them every frame would dominate the cost of drawing.

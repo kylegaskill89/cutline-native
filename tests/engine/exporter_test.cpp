@@ -13,10 +13,16 @@
 #include "cutline/engine/exporter.hpp"
 
 #include "cutline/core/model.hpp"
+#include "cutline/media/decoder.hpp"
 #include "cutline/media/encoder.hpp"
 #include "cutline/media/probe.hpp"
 
 #include <gtest/gtest.h>
+
+extern "C" {
+#include <libavutil/frame.h>
+#include <libavutil/pixfmt.h>
+}
 
 #include <cmath>
 #include <cstdlib>
@@ -273,6 +279,58 @@ TEST_F(ExportTest, EveryStemIsTheSameLengthAsTheMixdownWouldBe) {
 }
 
 // ------------------------------------------------------------- resolution --
+
+TEST_F(ExportTest, TheFileHoldsTheColourTheProjectShows) {
+  // The frame is converted for the encoder on the card now, not by
+  // `sws_scale` on the processor, so the colour in the file is what has to be
+  // checked: pure red, BT.709 at studio range, is Y 63, Cb 102, Cr 240.
+  const TempFile file(".mp4");
+  ExportSettings settings;
+  settings.audio = false;
+  settings.path = file.string();
+  auto exported = export_project(device_, matte_project(), settings);
+  ASSERT_TRUE(exported.has_value()) << exported.error();
+
+  auto decoder = media::VideoDecoder::open(file.string(),
+                                           {.preferred = media::Acceleration::Software});
+  ASSERT_TRUE(decoder.has_value()) << decoder.error();
+  const auto got = (*decoder)->next_frame();
+  ASSERT_TRUE(got.has_value() && *got);
+  const AVFrame* frame = (*decoder)->frame();
+  const int x = frame->width / 2;
+  const int y = frame->height / 2;
+  const int luma = frame->data[0][static_cast<std::size_t>(y) * frame->linesize[0] + x];
+  int cb = 0;
+  int cr = 0;
+  if (frame->format == AV_PIX_FMT_NV12) {
+    const std::uint8_t* row =
+        frame->data[1] + static_cast<std::size_t>(y / 2) * frame->linesize[1];
+    cb = row[(x / 2) * 2];
+    cr = row[(x / 2) * 2 + 1];
+  } else {
+    cb = frame->data[1][static_cast<std::size_t>(y / 2) * frame->linesize[1] + x / 2];
+    cr = frame->data[2][static_cast<std::size_t>(y / 2) * frame->linesize[2] + x / 2];
+  }
+  EXPECT_NEAR(luma, 63, 2);
+  EXPECT_NEAR(cb, 102, 2);
+  EXPECT_NEAR(cr, 240, 2);
+}
+
+TEST_F(ExportTest, CancellingPartWayStopsPromptlyAndSaysSo) {
+  // Frames are encoded on a thread of their own and up to three are on their
+  // way back from the card at any moment, so stopping has to give every one of
+  // them back and stop the thread, rather than leave either waiting.
+  const TempFile file(".mp4");
+  ExportSettings settings;
+  settings.audio = false;
+  settings.path = file.string();
+  int seen = 0;
+  auto exported = export_project(device_, matte_project(), settings,
+                                 [&](const ExportProgress&) { return ++seen < 4; });
+  ASSERT_FALSE(exported.has_value());
+  EXPECT_EQ(exported.error(), "export cancelled");
+  EXPECT_EQ(seen, 4);
+}
 
 TEST_F(ExportTest, WritesTheProjectsOwnCanvasByDefault) {
   const TempFile file(".mp4");

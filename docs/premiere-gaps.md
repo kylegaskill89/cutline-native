@@ -1826,8 +1826,8 @@ the work happens and what waits for it.
 | Rendering off the interface thread | the playback engine renders ahead on worker threads; the interface picks up finished frames | **done** — `app::PreviewEngine`, a render thread per monitor with a queue of its own on the card; see below | — |
 | Frames in flight on the card | yes | **deferred, with a measurement** — each compositor has its own command list and waits only on its own fence; the drains themselves measured at a millisecond or two, see below | — |
 | Editing while it plays | playback carries on through an edit | **mostly** — the row was stale: `rebuild_playback` resumes after an edit with a gap of about 25 ms. Seamless means replanning the mixer while its device runs | machinery |
-| Export pipelined | render, convert and encode overlap; the card feeds the hardware encoder | **none** — render, drain, an 8-bit RGBA readback (~33 MB a 4K frame), a CPU `sws_scale`, then encode, strictly in turn; about 2× realtime | machinery |
-| Precision on the way out | 10-bit and float paths to the encoder | **none** — the readback is 8-bit, so the float compositor's precision is thrown away at the last step | machinery |
+| Export pipelined | render, convert and encode overlap; the card feeds the hardware encoder | **yes** — converted to NV12 on the card, a third of the readback, encoded on a thread of its own with up to three frames on their way back, and a 4K HEVC frame split across both NVENC engines: 4K60 at **4.4× realtime**, from 0.62×; see §7.2 | done |
+| Precision on the way out | 10-bit and float paths to the encoder | **half** — the card converts from the float scene straight to P010 as well as NV12, tested to a code; the writer still takes 8 bits only, which is the 10-bit encoder §8 needs | wiring |
 | A large pool is cheap until looked at | yes | **no** — forty 4K sources sit at ~1.36 GB with one filmstrip drawn, and nobody has taken the number apart | audit |
 | Filmstrips for a folder of rushes | seconds | ten seconds a source at first, twenty-five by the twentieth — something accumulates | audit |
 | Nested and retimed audio | streamed | **decoded whole, up front** — a nest's mix and any retimed clip are rendered before playback begins | wiring |
@@ -1990,6 +1990,47 @@ compositor. The first is fast enough not to matter and the second is the
 card's own work. The drains also guard a real hazard — a decoder's shared
 texture is overwritten by its next frame — so they stay until a measurement
 says they cost something.
+
+### 7.2 Export
+
+`export_project <project> <out.mp4> --hevc --hardware`, 4K60, on this machine.
+The figures in the table above the change were measured first; the plan's
+"about 2× realtime" was for a smaller canvas and was never true at 4K.
+
+| | before | now |
+|---|---|---|
+| Plain 4K60, HEVC on NVENC | 37.8 fps, **0.62×** | 265.7 fps, **4.43×** |
+| Plain 4K60, H.264 on NVENC | — | 151.5 fps, 2.53× |
+| Fifty one-second cuts, HEVC | 38.2 fps, 0.64× | 164.0 fps, 2.73× |
+
+Where a 4K frame went, before: decoding and compositing 2.7 ms, waiting for
+the card and reading back 33 MB of RGBA 8.3 ms, `sws_scale` and the encoder
+14.1 ms, each in turn. Three changes, each measured:
+
+- **Converted on the card.** Two passes from the linear scene write NV12 —
+  BT.709, studio range, chroma averaged over each four pixels in the display
+  encoding as `sws_scale` did it — or P010 at ten bits. 12 MB comes back rather
+  than 33, and the processor converts nothing. Tested against `read_back`'s
+  own picture to within a code at both depths. 0.62× to 2.34×.
+- **Overlapped.** The card's conversion and copy are left running; an
+  encoding thread collects each frame from one of three readback slots and
+  encodes it while the next is decoded. The slots are what bound how far
+  rendering runs ahead.
+- **Split encoding.** With both of those in, NVENC was the limit at 5.3 ms a 4K
+  frame. HEVC at 4K and up now asks for the frame to be split across the
+  card's two encoders: 2.1 ms. At the same quality setting the file came out
+  3.5% larger and 0.03 dB lower in PSNR against the source; preset p3 split was
+  faster still and 12% larger, and was not taken. A card with one encoder
+  refuses the split, and the encoder is then opened without it rather than
+  passed over for software.
+
+H.264 has no split mode, so it stops at 2.5×. The fifty cuts are bound by
+decoding: every clip starts in the middle of a 4.17 s group of pictures, so
+the file needs far more frames decoded than it has frames.
+
+Handing NVENC the card's own textures instead of a copy in system memory was
+the plan's third step. Copying a frame out and back in is now 1 ms of a 3.8 ms
+frame, and is not the limit; it waits for a measurement that says otherwise.
 
 ## 8. Colour pipeline: 10-bit and HDR
 

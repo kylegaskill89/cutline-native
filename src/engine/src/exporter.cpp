@@ -4,14 +4,141 @@
 #include "cutline/engine/audio_mixer.hpp"
 #include "cutline/engine/frame_renderer.hpp"
 
+#include "cutline/gpu/compositor.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <deque>
 #include <format>
+#include <mutex>
+#include <optional>
 #include <set>
+#include <thread>
 #include <vector>
 
 namespace cutline::engine {
+namespace {
+
+/// One frame on its way to the file: where its picture is coming back to, and
+/// the sound that goes with it, a block per stream.
+struct Delivery {
+  std::size_t slot = 0;
+  std::vector<std::vector<float>> audio;
+};
+
+/// The encoding side of an export, on a thread of its own.
+///
+/// An export was render, wait for the card, read back 33 MB of RGBA, convert
+/// on the processor, encode -- each in turn, 26 ms a 4K frame, 0.6x realtime.
+/// Now the card converts while it still has the frame and copies back a third
+/// as much, and this thread collects each frame and encodes it while the next
+/// is being decoded and composited. The compositor's slots are what bound how
+/// far rendering runs ahead.
+class Encoding {
+ public:
+  Encoding(gpu::Compositor& compositor, media::MediaWriter& writer)
+      : compositor_(compositor), writer_(writer), thread_([this] { run(); }) {}
+
+  Encoding(const Encoding&) = delete;
+  Encoding& operator=(const Encoding&) = delete;
+
+  ~Encoding() { stop(); }
+
+  void send(Delivery delivery) {
+    {
+      const std::lock_guard<std::mutex> held(lock_);
+      queue_.push_back(std::move(delivery));
+    }
+    wake_.notify_all();
+  }
+
+  /// Everything sent, written; then the thread is done. Returns the first
+  /// thing that went wrong, if anything did.
+  [[nodiscard]] std::expected<void, std::string> finish() {
+    stop();
+    if (failure_) return std::unexpected(*failure_);
+    return {};
+  }
+
+  /// Whether something has gone wrong, so the renderer stops making frames
+  /// nobody will write.
+  [[nodiscard]] std::optional<std::string> failure() const {
+    const std::lock_guard<std::mutex> held(lock_);
+    return failure_;
+  }
+
+  /// Gives up without writing what is left, handing back every slot so the
+  /// compositor can be torn down.
+  void abandon() {
+    {
+      const std::lock_guard<std::mutex> held(lock_);
+      abandoned_ = true;
+    }
+    stop();
+  }
+
+ private:
+  void stop() {
+    {
+      const std::lock_guard<std::mutex> held(lock_);
+      closing_ = true;
+    }
+    wake_.notify_all();
+    if (thread_.joinable()) thread_.join();
+  }
+
+  void run() {
+    while (true) {
+      Delivery delivery;
+      bool skip = false;
+      {
+        std::unique_lock<std::mutex> held(lock_);
+        wake_.wait(held, [&] { return closing_ || !queue_.empty(); });
+        if (queue_.empty()) return;
+        delivery = std::move(queue_.front());
+        queue_.pop_front();
+        skip = abandoned_ || failure_.has_value();
+      }
+      std::expected<void, std::string> written;
+      // Collected even when it will not be written, because collecting is what
+      // gives the slot back.
+      const auto write = [&](const gpu::YuvPlanes& planes) {
+        if (skip) return;
+        written = writer_.write_frame(
+            media::PlanarFrame{.ten_bit = planes.layout == gpu::YuvLayout::P010,
+                               .luma = planes.luma,
+                               .luma_stride = planes.luma_stride,
+                               .chroma = planes.chroma,
+                               .chroma_stride = planes.chroma_stride});
+      };
+      auto collected = compositor_.finish_yuv_read_back(delivery.slot, write);
+      if (skip) continue;
+      if (!collected) written = std::unexpected(collected.error());
+      for (std::size_t i = 0; written && i < delivery.audio.size(); ++i) {
+        written = writer_.write_audio(delivery.audio[i], static_cast<int>(i));
+      }
+      if (!written) {
+        const std::lock_guard<std::mutex> held(lock_);
+        if (!failure_) failure_ = written.error();
+      }
+    }
+  }
+
+  gpu::Compositor& compositor_;
+  media::MediaWriter& writer_;
+  mutable std::mutex lock_;
+  std::condition_variable wake_;
+  std::deque<Delivery> queue_;
+  bool closing_ = false;
+  bool abandoned_ = false;
+  std::optional<std::string> failure_;
+  // Last, so everything it reads exists before it starts.
+  std::thread thread_;
+};
+
+}  // namespace
 
 std::expected<ExportResult, std::string> export_project(
     const std::shared_ptr<gpu::Device>& device, const core::Project& project,
@@ -148,7 +275,21 @@ std::expected<ExportResult, std::string> export_project(
     }
   }
 
+  Encoding encoding((*renderer)->compositor(), **writer);
+  // Anything that leaves early leaves the encoder stopped and the slots given
+  // back, before the renderer that owns them goes.
+  struct Abandon {
+    Encoding* encoding;
+    ~Abandon() {
+      if (encoding != nullptr) encoding->abandon();
+    }
+  } abandon{&encoding};
+
   for (std::int64_t frame = 0; frame < total; ++frame) {
+    if (auto failed = encoding.failure()) {
+      return std::unexpected(std::format("frame {}: {}", frame, *failed));
+    }
+
     // Time is computed from the frame index rather than accumulated, so a
     // rounding error cannot drift over a long timeline.
     const double t = start + static_cast<double>(frame) / fps;
@@ -158,13 +299,10 @@ std::expected<ExportResult, std::string> export_project(
     }
     for (const std::string& id : (*renderer)->missing_media()) missing.insert(id);
 
-    const auto image = (*renderer)->read_back();
-    if (!image) return std::unexpected(std::format("frame {}: {}", frame, image.error()));
+    const auto slot = (*renderer)->compositor().begin_yuv_read_back(gpu::YuvLayout::Nv12);
+    if (!slot) return std::unexpected(std::format("frame {}: {}", frame, slot.error()));
 
-    if (auto ok = (*writer)->write_frame(image->pixels); !ok) {
-      return std::unexpected(std::format("frame {}: {}", frame, ok.error()));
-    }
-
+    Delivery delivery{.slot = *slot};
     if (!mixers.empty()) {
       // How much audio this frame of video should be accompanied by, computed
       // from the frame index rather than accumulated so the two stay locked
@@ -174,18 +312,17 @@ std::expected<ExportResult, std::string> export_project(
           static_cast<std::int64_t>(std::llround(static_cast<double>(frame + 1) / fps * rate)));
       if (const std::int64_t need = want - audio_fed; need > 0) {
         const double at = start + static_cast<double>(audio_fed) / rate;
-        for (std::size_t i = 0; i < mixers.size(); ++i) {
-          audio_block.assign(static_cast<std::size_t>(need) * channels, 0.0f);
-          if (auto ok = mixers[i]->mix(at, audio_block); !ok) {
+        for (const std::unique_ptr<AudioMixer>& mixer : mixers) {
+          std::vector<float> block(static_cast<std::size_t>(need) * channels, 0.0f);
+          if (auto ok = mixer->mix(at, block); !ok) {
             return std::unexpected(std::format("frame {}: {}", frame, ok.error()));
           }
-          if (auto ok = (*writer)->write_audio(audio_block, static_cast<int>(i)); !ok) {
-            return std::unexpected(std::format("frame {}: {}", frame, ok.error()));
-          }
+          delivery.audio.push_back(std::move(block));
         }
         audio_fed = want;
       }
     }
+    encoding.send(std::move(delivery));
 
     if (on_progress) {
       const ExportProgress progress{.frame = frame + 1, .total = total, .timeline_seconds = t};
@@ -196,6 +333,9 @@ std::expected<ExportResult, std::string> export_project(
       }
     }
   }
+
+  abandon.encoding = nullptr;
+  if (auto ok = encoding.finish(); !ok) return std::unexpected(ok.error());
 
   // The last few milliseconds are still inside the limiter's look-ahead;
   // without this they are simply lost off the end of the timeline.

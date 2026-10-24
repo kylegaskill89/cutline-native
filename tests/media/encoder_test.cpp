@@ -12,6 +12,11 @@
 
 #include <gtest/gtest.h>
 
+extern "C" {
+#include <libavutil/frame.h>
+#include <libavutil/pixfmt.h>
+}
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -115,6 +120,83 @@ class TempFile {
   if (!finished) return -1;
 
   return count_frames(path);
+}
+
+/// The first frame of a file, decoded, as the three samples at its centre.
+struct Samples {
+  int y = -1;
+  int cb = -1;
+  int cr = -1;
+};
+[[nodiscard]] Samples centre_of_first_frame(const std::string& path) {
+  auto decoder = VideoDecoder::open(path, {.preferred = Acceleration::Software});
+  if (!decoder) return {};
+  const auto got = (*decoder)->next_frame();
+  if (!got || !*got) return {};
+  const AVFrame* frame = (*decoder)->frame();
+  const int x = frame->width / 2;
+  const int y = frame->height / 2;
+  // Planar or semi-planar, whichever the decoder hands back.
+  if (frame->format == AV_PIX_FMT_NV12) {
+    const std::uint8_t* chroma =
+        frame->data[1] + static_cast<std::size_t>(y / 2) * frame->linesize[1];
+    return {frame->data[0][static_cast<std::size_t>(y) * frame->linesize[0] + x],
+            chroma[(x / 2) * 2], chroma[(x / 2) * 2 + 1]};
+  }
+  return {frame->data[0][static_cast<std::size_t>(y) * frame->linesize[0] + x],
+          frame->data[1][static_cast<std::size_t>(y / 2) * frame->linesize[1] + x / 2],
+          frame->data[2][static_cast<std::size_t>(y / 2) * frame->linesize[2] + x / 2]};
+}
+
+class PlanarFrameTest : public ::testing::TestWithParam<VideoCodec> {};
+
+TEST_P(PlanarFrameTest, AFrameAlreadyConvertedComesBackOutAsItWentIn) {
+  // What an export sends: two planes converted on the card. H.264 in software
+  // takes them as they are, and x265 wants them planar, so the two codecs are
+  // the two ways in.
+  const TempFile file(".mp4");
+  VideoEncodeSettings encode = settings();
+  encode.codec = GetParam();
+  encode.quality = 0;
+  auto writer = MediaWriter::create(file.string(), encode);
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+
+  std::vector<std::uint8_t> luma(static_cast<std::size_t>(kWidth) * kHeight, 100);
+  std::vector<std::uint8_t> chroma(static_cast<std::size_t>(kWidth) * (kHeight / 2));
+  for (std::size_t i = 0; i < chroma.size(); i += 2) {
+    chroma[i] = 90;
+    chroma[i + 1] = 200;
+  }
+  const PlanarFrame frame{.luma = luma.data(),
+                          .luma_stride = kWidth,
+                          .chroma = chroma.data(),
+                          .chroma_stride = kWidth};
+  for (int i = 0; i < 3; ++i) ASSERT_TRUE((*writer)->write_frame(frame).has_value());
+  ASSERT_TRUE((*writer)->finish().has_value());
+
+  const Samples got = centre_of_first_frame(file.string());
+  EXPECT_NEAR(got.y, 100, 2);
+  EXPECT_NEAR(got.cb, 90, 2);
+  EXPECT_NEAR(got.cr, 200, 2);
+}
+
+INSTANTIATE_TEST_SUITE_P(BothWaysIn, PlanarFrameTest,
+                         ::testing::Values(VideoCodec::H264, VideoCodec::Hevc),
+                         [](const auto& info) {
+                           return std::string(to_string(info.param));
+                         });
+
+TEST(Encoder, ATenBitFrameIsRefusedByAnEightBitWriter) {
+  const TempFile file(".mp4");
+  auto writer = MediaWriter::create(file.string(), settings());
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+  std::vector<std::uint8_t> plane(static_cast<std::size_t>(kWidth) * kHeight * 2);
+  const PlanarFrame frame{.ten_bit = true,
+                          .luma = plane.data(),
+                          .luma_stride = kWidth * 2,
+                          .chroma = plane.data(),
+                          .chroma_stride = kWidth * 2};
+  EXPECT_FALSE((*writer)->write_frame(frame).has_value());
 }
 
 // ------------------------------------------------------------------- counts --

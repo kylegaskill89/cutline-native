@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <format>
 #include <vector>
 
@@ -45,9 +46,11 @@ using detail::av_error_string;
   return codec == VideoCodec::Hevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
 }
 
-/// True when the encoder names a pixel format it can take; NV12 is preferred by
-/// the hardware encoders and YUV420P by the software ones, so rather than
-/// guessing, the encoder's own list decides.
+/// The pixel format to give an encoder, from its own list rather than guessed.
+///
+/// NV12 first, because it is what an export converts to on the card and an
+/// encoder that takes it takes the frame as it is. Planar 4:2:0 for one that
+/// does not, which costs a shuffle of planes on the way in.
 [[nodiscard]] AVPixelFormat preferred_format(const AVCodec* encoder) {
   const AVPixelFormat* formats = nullptr;
   int count = 0;
@@ -59,10 +62,10 @@ using detail::av_error_string;
 
   // Both are 8-bit 4:2:0, so either is a faithful target for SDR output.
   for (int i = 0; i < count; ++i) {
-    if (formats[i] == AV_PIX_FMT_YUV420P) return AV_PIX_FMT_YUV420P;
+    if (formats[i] == AV_PIX_FMT_NV12) return AV_PIX_FMT_NV12;
   }
   for (int i = 0; i < count; ++i) {
-    if (formats[i] == AV_PIX_FMT_NV12) return AV_PIX_FMT_NV12;
+    if (formats[i] == AV_PIX_FMT_YUV420P) return AV_PIX_FMT_YUV420P;
   }
   return formats[0];
 }
@@ -120,6 +123,8 @@ struct MediaWriter::Impl {
   detail::CodecContext encoder;
   detail::Frame frame;
   detail::Scaler scaler;
+  /// From NV12, for an encoder that wants planar; made the first time one does.
+  detail::Scaler planar;
   AVStream* stream = nullptr;
   std::string name;
   std::int64_t frames = 0;
@@ -369,44 +374,67 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
       continue;
     }
 
-    detail::CodecContext context(avcodec_alloc_context3(encoder));
-    if (!context) continue;
+    // One frame across two hardware encoders, where the frame is big enough
+    // to be worth splitting and the encoder can. A 4K frame through one NVENC
+    // took 5.3 ms, which held an export to 2.3x realtime with everything else
+    // waiting on it; split, 2.1 ms. At the same quality setting the file was
+    // 3.5% larger and 0.03 dB lower in PSNR against the source. HEVC only, as
+    // the encoder offers it, and at 4K and up, which is where NVIDIA's own
+    // automatic choice draws the line.
+    const bool splittable = std::string_view(name).ends_with("nvenc") &&
+                            settings.codec == VideoCodec::Hevc &&
+                            static_cast<std::int64_t>(impl->width) * impl->height >=
+                                std::int64_t{3840} * 2160;
 
-    context->width = impl->width;
-    context->height = impl->height;
-    context->time_base = av_inv_q(rational_fps(settings.fps));
-    context->framerate = rational_fps(settings.fps);
-    context->pix_fmt = preferred_format(encoder);
-    // SDR throughout, matching what the compositor reads back.
-    context->colorspace = AVCOL_SPC_BT709;
-    context->color_primaries = AVCOL_PRI_BT709;
-    context->color_trc = AVCOL_TRC_BT709;
-    context->color_range = AVCOL_RANGE_MPEG;
+    const auto open = [&](bool split) -> std::expected<detail::CodecContext, std::string> {
+      detail::CodecContext context(avcodec_alloc_context3(encoder));
+      if (!context) return std::unexpected("out of memory");
 
-    if ((impl->format->oformat->flags & AVFMT_GLOBALHEADER) != 0) {
-      context->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    }
+      context->width = impl->width;
+      context->height = impl->height;
+      context->time_base = av_inv_q(rational_fps(settings.fps));
+      context->framerate = rational_fps(settings.fps);
+      context->pix_fmt = preferred_format(encoder);
+      // SDR throughout, matching what the compositor reads back.
+      context->colorspace = AVCOL_SPC_BT709;
+      context->color_primaries = AVCOL_PRI_BT709;
+      context->color_trc = AVCOL_TRC_BT709;
+      context->color_range = AVCOL_RANGE_MPEG;
 
-    AVDictionary* options = nullptr;
-    if (settings.bitrate > 0) {
-      context->bit_rate = settings.bitrate;
-    } else {
-      // Quality-targeted. The option name differs by encoder family, and
-      // setting one the encoder does not know is harmless.
-      const std::string quality = std::to_string(settings.quality);
-      av_dict_set(&options, "crf", quality.c_str(), 0);
-      av_dict_set(&options, "cq", quality.c_str(), 0);
-      av_dict_set(&options, "global_quality", quality.c_str(), 0);
-      av_dict_set(&options, "qp", quality.c_str(), 0);
-    }
+      if ((impl->format->oformat->flags & AVFMT_GLOBALHEADER) != 0) {
+        context->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+      }
 
-    const int rc = avcodec_open2(context.get(), encoder, &options);
-    av_dict_free(&options);
-    if (rc < 0) {
+      AVDictionary* options = nullptr;
+      if (settings.bitrate > 0) {
+        context->bit_rate = settings.bitrate;
+      } else {
+        // Quality-targeted. The option name differs by encoder family, and
+        // setting one the encoder does not know is harmless.
+        const std::string quality = std::to_string(settings.quality);
+        av_dict_set(&options, "crf", quality.c_str(), 0);
+        av_dict_set(&options, "cq", quality.c_str(), 0);
+        av_dict_set(&options, "global_quality", quality.c_str(), 0);
+        av_dict_set(&options, "qp", quality.c_str(), 0);
+      }
+      if (split) av_dict_set(&options, "split_encode_mode", "forced", 0);
+
+      const int rc = avcodec_open2(context.get(), encoder, &options);
+      av_dict_free(&options);
+      if (rc < 0) return std::unexpected(av_error_string(rc));
+      return context;
+    };
+
+    // A card with one encoder refuses the split when the encoder opens. That
+    // is a reason to encode unsplit, not to fall through to software.
+    auto opened = open(splittable);
+    if (!opened && splittable) opened = open(false);
+    if (!opened) {
       if (!attempts.empty()) attempts += ", ";
-      attempts += std::format("{} ({})", name, av_error_string(rc));
+      attempts += std::format("{} ({})", name, opened.error());
       continue;
     }
+    detail::CodecContext context = std::move(*opened);
 
     impl->encoder = std::move(context);
     impl->name = name;
@@ -513,6 +541,53 @@ std::expected<void, std::string> MediaWriter::write_frame(std::span<const std::u
   d.frame->pts = d.frames;
   ++d.frames;
 
+  return d.drain(d.encoder.get(), d.stream, d.frame.get(), 1);
+}
+
+std::expected<void, std::string> MediaWriter::write_frame(const PlanarFrame& planes) {
+  Impl& d = *impl_;
+  if (d.finished) return std::unexpected("the writer has already been finished");
+  if (planes.luma == nullptr || planes.chroma == nullptr) {
+    return std::unexpected("a frame needs both its planes");
+  }
+  if (planes.ten_bit) {
+    return std::unexpected("this writer takes 8-bit frames; ten bits needs a 10-bit encoder");
+  }
+
+  if (int rc = av_frame_make_writable(d.frame.get()); rc < 0) {
+    return std::unexpected(std::format("cannot write to the frame: {}", av_error_string(rc)));
+  }
+
+  if (d.encoder->pix_fmt == AV_PIX_FMT_NV12) {
+    // Copied rather than lent: the planes belong to a readback buffer that is
+    // handed back the moment this returns, and an encoder may hold a frame
+    // past `avcodec_send_frame`.
+    const auto rows = [](std::uint8_t* to, int to_stride, const std::uint8_t* from,
+                         std::size_t from_stride, std::size_t bytes, int count) {
+      for (int y = 0; y < count; ++y) {
+        std::memcpy(to + static_cast<std::size_t>(y) * to_stride,
+                    from + static_cast<std::size_t>(y) * from_stride, bytes);
+      }
+    };
+    const auto width = static_cast<std::size_t>(d.width);
+    rows(d.frame->data[0], d.frame->linesize[0], planes.luma, planes.luma_stride, width,
+         d.height);
+    rows(d.frame->data[1], d.frame->linesize[1], planes.chroma, planes.chroma_stride, width,
+         d.height / 2);
+  } else {
+    if (!d.planar) {
+      d.planar.reset(sws_getContext(d.width, d.height, AV_PIX_FMT_NV12, d.width, d.height,
+                                    d.encoder->pix_fmt, SWS_POINT, nullptr, nullptr, nullptr));
+      if (!d.planar) return std::unexpected("cannot create a plane converter");
+    }
+    const std::uint8_t* source[4] = {planes.luma, planes.chroma, nullptr, nullptr};
+    const int stride[4] = {static_cast<int>(planes.luma_stride),
+                           static_cast<int>(planes.chroma_stride), 0, 0};
+    sws_scale(d.planar.get(), source, stride, 0, d.height, d.frame->data, d.frame->linesize);
+  }
+
+  d.frame->pts = d.frames;
+  ++d.frames;
   return d.drain(d.encoder.get(), d.stream, d.frame.get(), 1);
 }
 

@@ -1993,5 +1993,143 @@ TEST_F(CompositorTest, ResizingGivesATextureOfTheNewSize) {
   // to something else.
 }
 
+// ---------------------------------------------------------- for an encoder --
+//
+// The frame an export hands its encoder, converted on the card. What it has to
+// be is the picture `read_back` returns, put through BT.709 at studio range --
+// the arithmetic `sws_scale` did on the processor before -- so that is what it
+// is checked against, to within a code of rounding.
+
+struct Ycc {
+  double y = 0.0;
+  double cb = 0.0;
+  double cr = 0.0;
+};
+
+/// BT.709 at studio range, on the 8-bit scale, from display-encoded bytes.
+[[nodiscard]] Ycc studio_709(const Rgba& pixel) {
+  const double r = pixel.r / 255.0;
+  const double g = pixel.g / 255.0;
+  const double b = pixel.b / 255.0;
+  const double y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return {16.0 + 219.0 * y, 128.0 + 224.0 * (b - y) / 1.8556, 128.0 + 224.0 * (r - y) / 1.5748};
+}
+
+/// One pixel's samples out of the planes, on the 8-bit scale whatever the
+/// depth, so one expectation serves both.
+[[nodiscard]] Ycc sample(const YuvPlanes& planes, int x, int y) {
+  if (planes.layout == YuvLayout::P010) {
+    const auto at = [](const std::uint8_t* row, int index) {
+      std::uint16_t value = 0;
+      std::memcpy(&value, row + static_cast<std::size_t>(index) * 2, 2);
+      // Ten bits at the top of sixteen, and a quarter of a code on the 8-bit
+      // scale each.
+      return (value >> 6) / 4.0;
+    };
+    const std::uint8_t* luma = planes.luma + static_cast<std::size_t>(y) * planes.luma_stride;
+    const std::uint8_t* chroma =
+        planes.chroma + static_cast<std::size_t>(y / 2) * planes.chroma_stride;
+    return {at(luma, x), at(chroma, (x / 2) * 2), at(chroma, (x / 2) * 2 + 1)};
+  }
+  const std::uint8_t* luma = planes.luma + static_cast<std::size_t>(y) * planes.luma_stride;
+  const std::uint8_t* chroma =
+      planes.chroma + static_cast<std::size_t>(y / 2) * planes.chroma_stride;
+  return {static_cast<double>(luma[x]), static_cast<double>(chroma[(x / 2) * 2]),
+          static_cast<double>(chroma[(x / 2) * 2 + 1])};
+}
+
+class EncoderFrameTest : public CompositorTest,
+                         public ::testing::WithParamInterface<YuvLayout> {};
+
+TEST_P(EncoderFrameTest, AFrameForTheEncoderIsTheReadBackPictureInBt709StudioRange) {
+  for (const Color colour : {Color::from_srgb(0.25f, 0.5f, 0.75f), Color::from_srgb(1, 1, 1),
+                             Color::from_srgb(0, 0, 0), Color::from_srgb(0.9f, 0.1f, 0.2f)}) {
+    const Layer layer = fill(colour);
+    const Image image = render({&layer, 1});
+    const Ycc expected = studio_709(pixel_at(image, kWidth / 2, kHeight / 2));
+
+    const auto slot = compositor_->begin_yuv_read_back(GetParam());
+    ASSERT_TRUE(slot.has_value()) << slot.error();
+    Ycc got;
+    int width = 0;
+    auto finished = compositor_->finish_yuv_read_back(*slot, [&](const YuvPlanes& planes) {
+      width = planes.width;
+      got = sample(planes, kWidth / 2, kHeight / 2);
+    });
+    ASSERT_TRUE(finished.has_value()) << finished.error();
+
+    EXPECT_EQ(width, kWidth);
+    EXPECT_NEAR(got.y, expected.y, 1.0);
+    EXPECT_NEAR(got.cb, expected.cb, 1.0);
+    EXPECT_NEAR(got.cr, expected.cr, 1.0);
+  }
+}
+
+TEST_P(EncoderFrameTest, ChromaIsTheAverageOfTheFourPixelsItStandsFor) {
+  // A frame split down the middle on an odd column would put two colours in
+  // one chroma sample; on an even one, each sample is one colour, so the left
+  // and right halves come out exactly as each colour alone would.
+  Layer left = fill(Color::from_srgb(1, 0, 0));
+  left.quad = {kWidth * 0.25f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
+  Layer right = fill(Color::from_srgb(0, 0, 1));
+  right.quad = {kWidth * 0.75f, kHeight * 0.5f, kWidth * 0.5f, kHeight, 0.0f};
+  const std::array layers{left, right};
+  const Image image = render(layers);
+  const Ycc red = studio_709(pixel_at(image, 2, kHeight / 2));
+  const Ycc blue = studio_709(pixel_at(image, kWidth - 3, kHeight / 2));
+
+  const auto slot = compositor_->begin_yuv_read_back(GetParam());
+  ASSERT_TRUE(slot.has_value()) << slot.error();
+  Ycc at_left;
+  Ycc at_right;
+  ASSERT_TRUE(compositor_
+                  ->finish_yuv_read_back(*slot,
+                                         [&](const YuvPlanes& planes) {
+                                           at_left = sample(planes, 2, kHeight / 2);
+                                           at_right = sample(planes, kWidth - 3, kHeight / 2);
+                                         })
+                  .has_value());
+  EXPECT_NEAR(at_left.cr, red.cr, 1.0);
+  EXPECT_NEAR(at_right.cb, blue.cb, 1.0);
+}
+
+TEST_P(EncoderFrameTest, EverySlotCanBeInFlightAtOnceAndComesBackInTurn) {
+  // The point of slots: three frames converted and copied before any is
+  // collected, each still holding its own picture when it is.
+  std::vector<std::size_t> slots;
+  std::vector<double> lumas;
+  for (const float grey : {0.2f, 0.5f, 0.8f}) {
+    const Layer layer = fill(Color::from_srgb(grey, grey, grey));
+    ASSERT_TRUE(compositor_->compose({&layer, 1}).has_value());
+    const auto slot = compositor_->begin_yuv_read_back(GetParam());
+    ASSERT_TRUE(slot.has_value()) << slot.error();
+    slots.push_back(*slot);
+    lumas.push_back(16.0 + 219.0 * std::round(grey * 255.0) / 255.0);
+  }
+  for (std::size_t i = 0; i < slots.size(); ++i) {
+    double y = 0.0;
+    ASSERT_TRUE(compositor_
+                    ->finish_yuv_read_back(slots[i],
+                                           [&](const YuvPlanes& planes) {
+                                             y = sample(planes, kWidth / 2, kHeight / 2).y;
+                                           })
+                    .has_value());
+    EXPECT_NEAR(y, lumas[i], 1.0) << "frame " << i;
+  }
+}
+
+TEST_P(EncoderFrameTest, CollectingASlotNotOnItsWayIsRefused) {
+  EXPECT_FALSE(compositor_->finish_yuv_read_back(0, [](const YuvPlanes&) {}).has_value());
+  const auto ignore = [](const YuvPlanes&) {};
+  EXPECT_FALSE(compositor_->finish_yuv_read_back(Compositor::kYuvSlots, ignore).has_value());
+}
+
+INSTANTIATE_TEST_SUITE_P(BothDepths, EncoderFrameTest,
+                         ::testing::Values(YuvLayout::Nv12, YuvLayout::P010),
+                         [](const auto& info) {
+                           return info.param == YuvLayout::P010 ? std::string("P010")
+                                                                : std::string("Nv12");
+                         });
+
 }  // namespace
 }  // namespace cutline::gpu

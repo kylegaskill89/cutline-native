@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -231,8 +232,36 @@ struct SceneTexture {
   }
 };
 
+/// How a frame is laid out for an encoder.
+///
+/// Both are 4:2:0 in two planes: luma at full size, then the two colour
+/// differences interleaved at half size each way. NV12 holds a byte a sample;
+/// P010 holds sixteen bits with the ten that matter at the top.
+enum class YuvLayout {
+  Nv12,
+  P010,
+};
+
+/// A frame converted for an encoder, lent rather than copied: the planes are
+/// the readback buffer itself, valid only inside the call that lends them.
+///
+/// BT.709, studio range, from the display encoding -- the same picture
+/// `read_back` returns, in the form an encoder takes.
+struct YuvPlanes {
+  int width = 0;
+  int height = 0;
+  YuvLayout layout = YuvLayout::Nv12;
+  const std::uint8_t* luma = nullptr;
+  std::size_t luma_stride = 0;
+  const std::uint8_t* chroma = nullptr;
+  std::size_t chroma_stride = 0;
+};
+
 class Compositor {
  public:
+  /// How many frames can be on their way back at once.
+  static constexpr std::size_t kYuvSlots = 3;
+
   /// `queue` is where its work goes; the device's own when null. A render
   /// thread passes one of its own -- see `Device::make_queue`.
   [[nodiscard]] static std::expected<std::unique_ptr<Compositor>, std::string> create(
@@ -252,6 +281,25 @@ class Compositor {
   /// Slow by nature — this stalls on the GPU — and meant for tests and stills,
   /// not for every frame of an export.
   [[nodiscard]] std::expected<Image, std::string> read_back();
+
+  /// Converts the frame just composited for an encoder, on the card, and
+  /// starts copying it back, without waiting for either. Returns which slot it
+  /// went to, for `finish_yuv_read_back`.
+  ///
+  /// For export, where `read_back` was the shape of the whole pipeline: a
+  /// stall on the card, 33 MB of RGBA a 4K frame, and a conversion on the
+  /// processor after it, all before the next frame could start. This leaves
+  /// the card converting and copying while the next frame is decoded.
+  ///
+  /// Waits only when every slot is still lent out, which is what bounds how
+  /// far rendering runs ahead of encoding.
+  [[nodiscard]] std::expected<std::size_t, std::string> begin_yuv_read_back(YuvLayout layout);
+
+  /// Waits for a slot's copy to arrive, lends its planes to `use`, and frees
+  /// the slot when `use` returns. Safe to call from another thread than the one
+  /// rendering, which is the point of it.
+  [[nodiscard]] std::expected<void, std::string> finish_yuv_read_back(
+      std::size_t slot, const std::function<void(const YuvPlanes&)>& use);
 
   /// Encodes the scene for display and stops there, handing back the texture
   /// rather than its contents. Nothing is copied.

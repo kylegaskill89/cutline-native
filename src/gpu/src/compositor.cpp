@@ -7,8 +7,10 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <numbers>
 #include <ranges>
+#include <tuple>
 
 namespace cutline::gpu {
 namespace {
@@ -38,7 +40,17 @@ constexpr DXGI_FORMAT kDisplayFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 constexpr UINT kSceneRtv = 0;
 constexpr UINT kDisplayRtv = 1;
 constexpr UINT kScratchRtv = 2;  // and 3, one per blur ping-pong buffer
-constexpr UINT kRtvCount = 4;
+constexpr UINT kLumaRtv = 4;
+constexpr UINT kChromaRtv = 5;
+constexpr UINT kRtvCount = 6;
+
+/// The encoder's planes, a byte a sample or sixteen bits.
+[[nodiscard]] DXGI_FORMAT luma_format(YuvLayout layout) noexcept {
+  return layout == YuvLayout::P010 ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
+}
+[[nodiscard]] DXGI_FORMAT chroma_format(YuvLayout layout) noexcept {
+  return layout == YuvLayout::P010 ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
+}
 
 /// Taps each side of centre in one blur pass, matching BLUR_TAPS in the shader.
 constexpr int kBlurTaps = 24;
@@ -225,6 +237,9 @@ std::expected<void, std::string> Compositor::Impl::create_targets() {
   // if a layer asks for a blur again.
   scratch[0].Reset();
   scratch[1].Reset();
+  // And the encoder's planes, for the same reason and the same way.
+  yuv_luma.Reset();
+  yuv_chroma.Reset();
 
   const D3D12_HEAP_PROPERTIES heap = heap_of(D3D12_HEAP_TYPE_DEFAULT);
 
@@ -670,6 +685,10 @@ std::expected<std::unique_ptr<Compositor>, std::string> Compositor::create(
   if (!effect_ps) return std::unexpected(effect_ps.error());
   const auto present_ps = read_file(shaders / "composite_present_ps.cso");
   if (!present_ps) return std::unexpected(present_ps.error());
+  const auto luma_ps = read_file(shaders / "composite_luma_ps.cso");
+  if (!luma_ps) return std::unexpected(luma_ps.error());
+  const auto chroma_ps = read_file(shaders / "composite_chroma_ps.cso");
+  if (!chroma_ps) return std::unexpected(chroma_ps.error());
 
   const auto make_pipeline =
       [&](const std::vector<std::byte>& vs, const std::vector<std::byte>& ps, DXGI_FORMAT target,
@@ -757,6 +776,24 @@ std::expected<std::unique_ptr<Compositor>, std::string> Compositor::create(
                               D3D12_BLEND_ZERO, false, impl->pipeline_present);
       !ok) {
     return std::unexpected(ok.error());
+  }
+  using EncodePipeline =
+      std::tuple<const std::vector<std::byte>*, DXGI_FORMAT, ComPtr<ID3D12PipelineState>*>;
+  for (const auto& [ps, format, out] : {
+           EncodePipeline{&*luma_ps, luma_format(YuvLayout::Nv12),
+                          std::addressof(impl->pipeline_luma8)},
+           EncodePipeline{&*chroma_ps, chroma_format(YuvLayout::Nv12),
+                          std::addressof(impl->pipeline_chroma8)},
+           EncodePipeline{&*luma_ps, luma_format(YuvLayout::P010),
+                          std::addressof(impl->pipeline_luma16)},
+           EncodePipeline{&*chroma_ps, chroma_format(YuvLayout::P010),
+                          std::addressof(impl->pipeline_chroma16)},
+       }) {
+    if (auto ok = make_pipeline(*fullscreen_vs, *ps, format, D3D12_BLEND_ONE, D3D12_BLEND_ZERO,
+                                false, *out);
+        !ok) {
+      return std::unexpected(ok.error());
+    }
   }
 
   std::unique_ptr<Compositor> compositor(new Compositor(std::move(impl)));
@@ -1275,5 +1312,218 @@ std::expected<Image, std::string> Compositor::read_back() {
   return image;
 }
 
-}  // namespace cutline::gpu
+// ------------------------------------------------------------- for encoding --
 
+std::expected<void, std::string> Compositor::Impl::ensure_yuv_targets(YuvLayout layout) {
+  if (yuv_luma && yuv_chroma && yuv_layout == layout) return {};
+  yuv_luma.Reset();
+  yuv_chroma.Reset();
+
+  const D3D12_HEAP_PROPERTIES heap = heap_of(D3D12_HEAP_TYPE_DEFAULT);
+  D3D12_RESOURCE_DESC desc{};
+  desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  desc.DepthOrArraySize = 1;
+  desc.MipLevels = 1;
+  desc.SampleDesc.Count = 1;
+  desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+  desc.Width = static_cast<UINT64>(width);
+  desc.Height = static_cast<UINT>(height);
+  desc.Format = luma_format(layout);
+  if (HRESULT hr = gpu().device->CreateCommittedResource(
+          &heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,
+          IID_PPV_ARGS(&yuv_luma));
+      FAILED(hr)) {
+    return std::unexpected(std::format("cannot create the luma plane: {}", hresult_string(hr)));
+  }
+
+  desc.Width = static_cast<UINT64>(std::max(1, width / 2));
+  desc.Height = static_cast<UINT>(std::max(1, height / 2));
+  desc.Format = chroma_format(layout);
+  if (HRESULT hr = gpu().device->CreateCommittedResource(
+          &heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,
+          IID_PPV_ARGS(&yuv_chroma));
+      FAILED(hr)) {
+    return std::unexpected(std::format("cannot create the chroma plane: {}", hresult_string(hr)));
+  }
+
+  gpu().device->CreateRenderTargetView(yuv_luma.Get(), nullptr, rtv(kLumaRtv));
+  gpu().device->CreateRenderTargetView(yuv_chroma.Get(), nullptr, rtv(kChromaRtv));
+  yuv_layout = layout;
+  return {};
+}
+
+std::expected<std::size_t, std::string> Compositor::begin_yuv_read_back(YuvLayout layout) {
+  Impl& d = *impl_;
+  // Both planes subsample by two, so an odd edge has no chroma to go with it.
+  if (d.width % 2 != 0 || d.height % 2 != 0) {
+    return std::unexpected("a frame for an encoder must be an even size each way");
+  }
+  if (auto ok = d.ensure_yuv_targets(layout); !ok) return std::unexpected(ok.error());
+
+  std::size_t index = 0;
+  {
+    std::unique_lock<std::mutex> held(d.yuv_lock);
+    d.yuv_returned.wait(held, [&] {
+      return std::ranges::any_of(d.yuv_slots, [](const Impl::YuvSlot& s) { return !s.lent; });
+    });
+    while (d.yuv_slots[index].lent) ++index;
+    d.yuv_slots[index].lent = true;
+  }
+  Impl::YuvSlot& slot = d.yuv_slots[index];
+
+  const UINT sample = layout == YuvLayout::P010 ? 2 : 1;
+  const UINT half_width = static_cast<UINT>(d.width / 2);
+  const UINT half_height = static_cast<UINT>(d.height / 2);
+  const UINT luma_pitch = aligned_pitch(static_cast<UINT>(d.width) * sample);
+  const UINT chroma_pitch = aligned_pitch(half_width * 2 * sample);
+  const std::size_t luma_bytes = static_cast<std::size_t>(luma_pitch) * d.height;
+  const std::size_t chroma_offset =
+      (luma_bytes + D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT - 1) &
+      ~static_cast<std::size_t>(D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT - 1);
+  const std::size_t needed = chroma_offset + static_cast<std::size_t>(chroma_pitch) * half_height;
+
+  const auto give_back = [&] {
+    const std::lock_guard<std::mutex> held(d.yuv_lock);
+    slot.lent = false;
+    d.yuv_returned.notify_all();
+  };
+
+  if (slot.capacity < needed) {
+    slot.buffer.Reset();
+    const D3D12_HEAP_PROPERTIES heap = heap_of(D3D12_HEAP_TYPE_READBACK);
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = needed;
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    if (HRESULT hr = d.gpu().device->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&slot.buffer));
+        FAILED(hr)) {
+      give_back();
+      return std::unexpected(
+          std::format("cannot create a readback buffer: {}", hresult_string(hr)));
+    }
+    slot.capacity = needed;
+  }
+
+  const auto opened = d.recorder.begin();
+  if (!opened) {
+    give_back();
+    return std::unexpected(opened.error());
+  }
+  ID3D12GraphicsCommandList* commands = *opened;
+
+  ID3D12DescriptorHeap* heaps[] = {d.srv_heap.Get()};
+  commands->SetDescriptorHeaps(1, heaps);
+  commands->SetGraphicsRootSignature(d.root_signature.Get());
+  commands->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  commands->SetGraphicsRootDescriptorTable(0, d.srv_gpu(d.present_slot()));
+
+  ShaderParams params{};
+  params.canvas[0] = static_cast<float>(d.width);
+  params.canvas[1] = static_cast<float>(d.height);
+  params.layout = layout == YuvLayout::P010 ? 10 : 8;
+  commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &params, 0);
+
+  const bool deep = layout == YuvLayout::P010;
+  const auto draw = [&](ID3D12PipelineState* pipeline, UINT target, UINT w, UINT h) {
+    const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h),
+                                  0.0f, 1.0f};
+    const D3D12_RECT scissor{0, 0, static_cast<LONG>(w), static_cast<LONG>(h)};
+    commands->RSSetViewports(1, &viewport);
+    commands->RSSetScissorRects(1, &scissor);
+    const D3D12_CPU_DESCRIPTOR_HANDLE handle = d.rtv(target);
+    commands->OMSetRenderTargets(1, &handle, FALSE, nullptr);
+    commands->SetPipelineState(pipeline);
+    commands->DrawInstanced(3, 1, 0, 0);
+  };
+  draw(deep ? d.pipeline_luma16.Get() : d.pipeline_luma8.Get(), kLumaRtv,
+       static_cast<UINT>(d.width), static_cast<UINT>(d.height));
+  draw(deep ? d.pipeline_chroma16.Get() : d.pipeline_chroma8.Get(), kChromaRtv, half_width,
+       half_height);
+
+  D3D12_RESOURCE_BARRIER to_copy[] = {
+      transition(d.yuv_luma.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                 D3D12_RESOURCE_STATE_COPY_SOURCE),
+      transition(d.yuv_chroma.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                 D3D12_RESOURCE_STATE_COPY_SOURCE)};
+  commands->ResourceBarrier(2, to_copy);
+
+  const auto copy = [&](ID3D12Resource* plane, DXGI_FORMAT format, UINT w, UINT h, UINT pitch,
+                        std::size_t offset) {
+    D3D12_TEXTURE_COPY_LOCATION source{};
+    source.pResource = plane;
+    source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    D3D12_TEXTURE_COPY_LOCATION destination{};
+    destination.pResource = slot.buffer.Get();
+    destination.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    destination.PlacedFootprint.Offset = offset;
+    destination.PlacedFootprint.Footprint = {format, w, h, 1, pitch};
+    commands->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
+  };
+  copy(d.yuv_luma.Get(), luma_format(layout), static_cast<UINT>(d.width),
+       static_cast<UINT>(d.height), luma_pitch, 0);
+  copy(d.yuv_chroma.Get(), chroma_format(layout), half_width, half_height, chroma_pitch,
+       chroma_offset);
+
+  D3D12_RESOURCE_BARRIER to_target[] = {
+      transition(d.yuv_luma.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                 D3D12_RESOURCE_STATE_RENDER_TARGET),
+      transition(d.yuv_chroma.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                 D3D12_RESOURCE_STATE_RENDER_TARGET)};
+  commands->ResourceBarrier(2, to_target);
+
+  if (auto ok = d.recorder.submit(); !ok) {
+    give_back();
+    return std::unexpected(ok.error());
+  }
+  // Deliberately not `finish`: the copy runs while the next frame decodes, and
+  // whoever collects it waits for exactly this fence and nothing later.
+  slot.fence = d.recorder.submitted;
+  slot.chroma_offset = chroma_offset;
+  slot.shape = YuvPlanes{.width = d.width,
+                         .height = d.height,
+                         .layout = layout,
+                         .luma_stride = luma_pitch,
+                         .chroma_stride = chroma_pitch};
+  return index;
+}
+
+std::expected<void, std::string> Compositor::finish_yuv_read_back(
+    std::size_t index, const std::function<void(const YuvPlanes&)>& use) {
+  Impl& d = *impl_;
+  if (index >= d.yuv_slots.size() || !d.yuv_slots[index].lent) {
+    return std::unexpected("that frame is not on its way back");
+  }
+  Impl::YuvSlot& slot = d.yuv_slots[index];
+  d.recorder.target->wait_for(slot.fence);
+
+  std::uint8_t* mapped = nullptr;
+  const D3D12_RANGE everything{0, slot.capacity};
+  std::expected<void, std::string> result;
+  if (HRESULT hr = slot.buffer->Map(0, &everything, reinterpret_cast<void**>(&mapped));
+      FAILED(hr)) {
+    result = std::unexpected(
+        std::format("cannot map the readback buffer: {}", hresult_string(hr)));
+  } else {
+    YuvPlanes planes = slot.shape;
+    planes.luma = mapped;
+    planes.chroma = mapped + slot.chroma_offset;
+    use(planes);
+    const D3D12_RANGE nothing_written{0, 0};
+    slot.buffer->Unmap(0, &nothing_written);
+  }
+
+  const std::lock_guard<std::mutex> held(d.yuv_lock);
+  slot.lent = false;
+  d.yuv_returned.notify_all();
+  return result;
+}
+
+}  // namespace cutline::gpu

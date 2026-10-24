@@ -999,3 +999,50 @@ float4 PSPresent(VSOutput input) : SV_Target {
     // Alpha is linear by definition and is not encoded.
     return float4(encoded, scene.a);
 }
+
+// ----------------------------------------------------------------- encoding --
+//
+// The composited frame as an encoder wants it: Y'CbCr, BT.709, studio range,
+// 4:2:0 -- a full-size plane of luma and a half-size plane of the two colour
+// differences interleaved, which is NV12, or P010 at ten bits. Done here rather
+// than by `sws_scale` after a readback because the readback was 33 MB of RGBA a
+// 4K frame and the conversion fourteen milliseconds of processor; NV12 is 12 MB
+// and this is a fraction of a millisecond.
+//
+// From the display encoding, exactly as `PSPresent` produces it, so a file and
+// the monitor are the same picture. `layout` carries the bit depth.
+
+float3 displayCoded(int2 at) {
+    return encodeSrgb(texture0.Load(int3(at, 0)).rgb);
+}
+
+// A level on the studio scale, `offset + span * v` in the stored bits, as the
+// UNORM value that stores it. Ten bits sit at the top of sixteen, so they are
+// rounded to a whole code first: left to the conversion to sixteen bits, a
+// fractional code would land in the six bits below it.
+float studioLevel(float v, float offset, float span, int bits) {
+    if (bits > 8) {
+        const float code = round((offset + span * v) * 4.0);
+        return code * 64.0 / 65535.0;
+    }
+    return (offset + span * v) / 255.0;
+}
+
+float4 PSEncodeLuma(VSOutput input) : SV_Target {
+    const float3 rgb = displayCoded(int2(input.position.xy));
+    const float y = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+    return float4(studioLevel(y, 16.0, 219.0, params.layout), 0.0, 0.0, 1.0);
+}
+
+float4 PSEncodeChroma(VSOutput input) : SV_Target {
+    // The four pixels this chroma sample stands for, averaged in the display
+    // encoding the way `sws_scale` did it, rather than in linear light.
+    const int2 at = int2(input.position.xy) * 2;
+    const float3 rgb = 0.25 * (displayCoded(at) + displayCoded(at + int2(1, 0)) +
+                               displayCoded(at + int2(0, 1)) + displayCoded(at + int2(1, 1)));
+    const float y = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+    const float cb = (rgb.b - y) / 1.8556;
+    const float cr = (rgb.r - y) / 1.5748;
+    return float4(studioLevel(cb, 128.0, 224.0, params.layout),
+                  studioLevel(cr, 128.0, 224.0, params.layout), 0.0, 1.0);
+}
