@@ -152,6 +152,31 @@ TEST_F(PlayerTest, TheClockAdvancesAtRealTime) {
   EXPECT_NEAR(moved, elapsed, 0.25);
 }
 
+TEST_F(PlayerTest, TheClockMovesSmoothlyRatherThanInSteps) {
+  // Read every couple of milliseconds, the playhead has to keep step with the
+  // wall clock throughout, not just on average. A clock that held for a frame
+  // and then leapt two would show a 60 fps sequence at 45 frames a second, and
+  // look exactly like a slow renderer.
+  player_->play();
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  double lowest = 1e9;
+  double highest = -1e9;
+  const auto began = std::chrono::steady_clock::now();
+  while (std::chrono::steady_clock::now() - began < std::chrono::milliseconds(600)) {
+    const double at = player_->position();
+    const double wall =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+    lowest = std::min(lowest, at - wall);
+    highest = std::max(highest, at - wall);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+
+  ASSERT_TRUE(player_->error().empty()) << player_->error();
+  // A third of a 60 fps frame. Steps from a coarse anchor are a whole one.
+  EXPECT_LT(highest - lowest, 0.006);
+}
+
 TEST_F(PlayerTest, PauseStopsTheClock) {
   player_->play();
   std::this_thread::sleep_for(std::chrono::milliseconds(300));

@@ -126,6 +126,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <numeric>
 #include <thread>
 #include <optional>
 #include <print>
@@ -6085,6 +6086,24 @@ void toggle_playback(App& app) {
 #endif
 }
 
+/// Everything a new frame of playback costs the interface, short of painting.
+///
+/// Apart from `advance_playback` so `--benchmark` can time exactly this: the
+/// part of a playback turn that grows with the length of the timeline.
+void show_playback_frame(App& app, double at) {
+  app.session.set_playhead(at);
+  // Read back rather than stored from `at`: the setter snaps to the frame grid,
+  // and comparing next turn against a value that was never written would make
+  // every turn look like somebody had moved the playhead.
+  app.playhead_from_playback = app.session.playhead();
+  show_playhead(app);
+  follow_playhead(app);
+  refresh_timeline(app);
+  // After the refresh, which is what puts the new time on the view.
+  scroll_to_playhead(app);
+  invalidate_preview(app);
+}
+
 /// One turn of playback: follows the sound card and redraws when the frame it
 /// is pointing at changes.
 ///
@@ -6216,18 +6235,11 @@ void advance_playback(App& app) {
     return;
   }
   app.shown_frame = frame;
-
-  app.session.set_playhead(at);
-  // Read back rather than stored from `at`: the setter snaps to the frame grid,
-  // and comparing next turn against a value that was never written would make
-  // every turn look like somebody had moved the playhead.
-  app.playhead_from_playback = app.session.playhead();
-  show_playhead(app);
-  follow_playhead(app);
-  refresh_timeline(app);
-  // After the refresh, which is what puts the new time on the view.
-  scroll_to_playhead(app);
-  invalidate_preview(app);
+  // The start of the frame the sound is in, not `at` itself. The playhead's
+  // setter rounds to the *nearest* frame, and the test above truncates: a turn
+  // late in one frame rounded up into the next, the turn after found that next
+  // frame "new" and drew it again, and one frame in four was never shown.
+  show_playback_frame(app, static_cast<double>(frame) / fps);
 #else
   (void)app;
 #endif
@@ -12240,14 +12252,17 @@ template <typename T>
     envelope->maximum.push_back(level);
   }
 
-  // Four frames of flat colour — enough to see that tiles land where they
-  // should and that the strip advances along the clip.
+  // Flat colour in four shades, enough to see that tiles land where they should
+  // and that the strip advances along the clip. At the size and spacing the
+  // thumbnailer really makes them, so what the benchmark pays to draw a tile is
+  // what the application pays.
   auto strip = std::make_shared<cutline::ui::Filmstrip>();
-  for (int f = 0; f < 4; ++f) {
+  for (int n = 0; n < 60; ++n) {
+    const int f = n % 4;
     cutline::ui::FilmFrame frame;
-    frame.t = f * 8.0;
-    frame.width = 32;
-    frame.height = 18;
+    frame.t = n * 2.0;
+    frame.width = 128;
+    frame.height = 72;
     frame.rgba.resize(static_cast<std::size_t>(frame.width * frame.height * 4));
     for (std::size_t p = 0; p < frame.rgba.size(); p += 4) {
       frame.rgba[p] = static_cast<std::uint8_t>(40 + f * 50);
@@ -12261,6 +12276,87 @@ template <typename T>
   return cutline::editor::TimelineMedia{
       .waveforms = [envelope](std::string_view, int) { return envelope; },
       .filmstrips = [strip](std::string_view) { return strip; }};
+}
+
+/// Times playback's turns over a real project rather than the sample.
+///
+/// The sample sequence has a handful of clips, and what a playback turn costs
+/// the interface grows with the timeline. Refresh and paint are timed apart,
+/// for the same reason layout and paint are below. On the hundred-clip montage
+/// this was written for they came to 0.3 ms and 3.5 to 7 ms at 4K, which is
+/// what showed that the 43 frames a second on screen were being lost somewhere
+/// other than in drawing them.
+[[nodiscard]] int benchmark_playback(const std::filesystem::path& path) {
+  const auto loaded = cutline::editor::read_project(path);
+  if (!loaded.has_value()) {
+    std::println("could not open {}: {}", path.string(), loaded.error());
+    return 1;
+  }
+
+  constexpr int kWidth = 3840;
+  constexpr int kHeight = 2160;
+  constexpr int kTurns = 120;
+  const HWND hidden =
+      CreateWindowExW(0, kWindowClass, L"Cutline benchmark", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64,
+                      nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+  std::println("-- playing {} at {}x{}", path.filename().string(), kWidth, kHeight);
+  std::println("{:>10} {:>10} {:>10} {:>10} {:>10}", "theme", "refresh", "worst", "paint",
+               "worst");
+  for (const Theme& theme : built_in_themes()) {
+    auto surface = cutline::ui::SkiaWindow::create(hidden, kWidth, kHeight);
+    if (!surface.has_value()) {
+      std::println("{:>10} no device", theme.name);
+      continue;
+    }
+
+    App app;
+    app.main.host = std::make_unique<WidgetHost>(build_interface(&app));
+    app.timeline_media = sample_timeline_media();
+    app.session.reset(loaded->project, path);
+    refresh_all(app);
+    WidgetHost& host = *app.main.host;
+
+    auto* canvas = static_cast<SkCanvas*>((*surface)->begin_frame());
+    if (canvas == nullptr) continue;
+    const std::unique_ptr<SkiaPainter> painter = SkiaPainter::create(canvas);
+    if (painter == nullptr) continue;
+    const LayoutContext context{theme, *painter};
+    const Rect client{0.0, 0.0, static_cast<double>(kWidth), static_cast<double>(kHeight)};
+    host.resize(client, context);
+
+    const double fps = app.session.project().sequence().fps > 0.0
+                           ? app.session.project().sequence().fps
+                           : 30.0;
+    std::vector<double> refresh;
+    std::vector<double> paint;
+    for (int turn = -10; turn < kTurns; ++turn) {
+      using clock = std::chrono::steady_clock;
+      const auto from = clock::now();
+      show_playback_frame(app, (turn + 10) / fps);
+      const auto refreshed = clock::now();
+      canvas->clear(SK_ColorBLACK);
+      paint_surface(*painter, client, theme.style(cutline::ui::Part::Window));
+      host.paint(*painter, theme);
+      (*surface)->flush_and_wait();
+      const auto painted = clock::now();
+      // The first few are left out, for the pipelines the card compiles the
+      // first time it meets them.
+      if (turn < 0) continue;
+      refresh.push_back(std::chrono::duration<double, std::milli>(refreshed - from).count());
+      paint.push_back(std::chrono::duration<double, std::milli>(painted - refreshed).count());
+    }
+    (*surface)->present();
+
+    const auto mean = [](const std::vector<double>& v) {
+      return std::accumulate(v.begin(), v.end(), 0.0) / static_cast<double>(v.size());
+    };
+    std::println("{:>10} {:>8.2f}ms {:>8.2f}ms {:>8.2f}ms {:>8.2f}ms", theme.name, mean(refresh),
+                 std::ranges::max(refresh), mean(paint), std::ranges::max(paint));
+    std::fflush(stdout);
+  }
+  if (hidden != nullptr) DestroyWindow(hidden);
+  return 0;
 }
 
 [[nodiscard]] int benchmark() {
@@ -13027,7 +13123,9 @@ int main(int argc, char** argv) {
   window_class.lpszClassName = kWindowClass;
   RegisterClassExW(&window_class);
 
-  if (argc > 1 && std::string_view(argv[1]) == "--benchmark") return benchmark();
+  if (argc > 1 && std::string_view(argv[1]) == "--benchmark") {
+    return argc > 2 ? benchmark_playback(argv[2]) : benchmark();
+  }
 
   App app;
   app.main.app = &app;

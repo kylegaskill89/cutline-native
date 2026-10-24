@@ -1833,7 +1833,7 @@ the work happens and what waits for it.
 | Nested and retimed audio | streamed | **decoded whole, up front** — a nest's mix and any retimed clip are rendered before playback begins | wiring |
 | Undo in a long session | cheap per step | each step is a full deep copy of the project; harmless now, and unmeasured at size | audit |
 | Crossing a cut | the next clip is read ahead | **done** — the far side of a cut is read on a thread of its own, on its own decoding device; see below | — |
-| Painting a long timeline | full rate | **no** — on a hundred-clip timeline the interface paints 43 times a second rather than 60, and the picture follows it | audit |
+| Painting a long timeline | full rate | **yes** — it was never the painting: 0.3 ms to refresh and 3.5–7 ms to paint at 4K (`--benchmark <project>`). Playback set the playhead to the *nearest* frame while deciding a frame was new by truncating, so one frame in four was drawn twice and the next never; see §7.1 | done |
 
 **The plan is to fix the shape rather than shave the costs.** A ring of
 command allocators so the card holds frames in flight; a playback engine that
@@ -1879,11 +1879,28 @@ interface's own paints, so a frozen window shows as a frozen timecode.
 | Sixteen blurs, picture | 10.0/s | 9.4/s — the card's own limit, 78 ms a frame | — |
 | Fifty one-second cuts, bare renderer, paced | p95 29.5, worst 421 ms | **p95 4.1, worst 7.6 ms** | ≤ 2 frames |
 | Fifty cuts, the application | worst 842 ms, 14 over 50 ms | worst 62 ms, 4 over 50 ms | ≤ 2 frames |
+| Fifty cuts, the application, frames shown | 40.6/s picture, 43.3/s timecode, worst 61 ms | **50.4/s picture, 55.8/s timecode, worst 37 ms**, nothing over 50 ms | 60/s |
 
-The last row is short of the target, and the reason is no longer the picture:
-the interface itself turns 43 times a second on that hundred-clip timeline,
-and the picture can only go up when the interface paints. That is the
-"painting a long timeline" row above.
+The fifty-cut rows were first put down to the interface painting a
+hundred-clip timeline too slowly. Measured, the painting was cheap — 0.3 ms
+to bring the timeline up to date and 3.5 to 7 ms to paint it at 4K — and the
+window was painting 93 times a second. What it painted was the fault: the
+playhead was set by rounding to the nearest frame, and a new frame was
+detected by truncating, so a turn late in one frame rounded up into the next
+and the turn after drew that same frame again. One frame in four never
+reached the screen, on any timeline. Whether a turn lands late in a frame
+depends on what else the loop is doing, so it came and went: the plain 4K60
+row above measured 60 once, and the same build measured between 22 and 45
+while this was being chased. Fixed, it measures 60 timecodes and 56.8
+pictures a second.
+
+Tying the window's paints to the display — a frame-latency waitable object,
+one paint per refresh, the playhead decided just before — was built and
+measured as well, and made no difference on screen once the rounding was
+fixed. It is not in.
+
+What is left on the fifty cuts is the picture trailing the timecode, 50 to
+56: frames the render thread has not finished when the interface wants them.
 
 **The render thread was not enough on its own.** With the work moved off the
 interface thread the interface still painted twelve times a second under a
