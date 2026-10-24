@@ -401,6 +401,12 @@ constexpr UINT_PTR kAutosaveTimer = 1;
 /// enough that resting on a control to ask what it is feels answered rather
 /// than waited for.
 constexpr UINT_PTR kTooltipTimer = 2;
+
+/// How often the displays are asked whether they are showing HDR. Turning HDR
+/// on, or moving Windows' SDR brightness slider, sends no message a window
+/// hears, so it is looked for -- every two seconds costs nothing measurable.
+constexpr UINT_PTR kDisplayTimer = 3;
+constexpr UINT kDisplayTickMs = 2000;
 constexpr UINT kTooltipDelayMs = 500;
 constexpr UINT kAutosaveTickMs = 5000;
 
@@ -478,6 +484,9 @@ struct Shell {
   /// itself would need a painter to measure with, and there is no canvas at
   /// that point — the same reason input defers layout.
   bool resized = true;
+  /// The display the window was last found on, so moving within it does not
+  /// ask Windows about HDR on every step of a drag.
+  HMONITOR monitor = nullptr;
 };
 
 struct App {
@@ -1002,6 +1011,10 @@ struct App {
   std::vector<std::string> preview_missing;
   /// Set when the picture no longer matches the playhead or the project.
   bool preview_stale = true;
+  /// The SDR white of the HDR display any window is on, or nothing when none
+  /// is. What the preview engines are told, so they make HDR pictures only
+  /// when something can show them.
+  std::optional<float> hdr_white;
 
   /// Whether the preview and the windows are on the same device, which is what
   /// decides whether a frame can be handed over as a texture or has to be
@@ -4204,6 +4217,7 @@ void toggle_use_proxies([[maybe_unused]] App& app) {
     return nullptr;
   }
   engine = std::move(*made);
+  engine->set_hdr_display(app.hdr_white);
   return engine.get();
 #else
   (void)app;
@@ -11487,6 +11501,32 @@ void refresh_float_titles(App& app) {
 #endif
 }
 
+/// Asks each window's display whether it is showing HDR, puts each window in
+/// the mode its display wants, and tells the preview engines whether anybody
+/// needs HDR pictures.
+void refresh_hdr(App& app) {
+  std::optional<float> any;
+  for (Shell* shell : app.shells()) {
+    if (shell->window == nullptr) continue;
+    shell->monitor = MonitorFromWindow(shell->window, MONITOR_DEFAULTTONEAREST);
+    const std::optional<float> wanted = cutline::ui::SkiaWindow::hdr_white_for(shell->window);
+    if (!any) any = wanted;
+    if (shell->surface == nullptr || shell->surface->hdr() == wanted) continue;
+    if (auto ok = shell->surface->set_hdr(wanted); !ok && !shell->warned) {
+      shell->warned = true;
+      complain(shell->window, "Could not show HDR on this display.\n\n" + ok.error());
+    }
+    shell->dirty = true;
+  }
+  if (any == app.hdr_white) return;
+  app.hdr_white = any;
+#if CUTLINE_HAVE_PREVIEW
+  if (app.preview != nullptr) app.preview->set_hdr_display(any);
+  if (app.source_preview != nullptr) app.source_preview->set_hdr_display(any);
+  app.preview_stale = true;
+#endif
+}
+
 /// Makes or resizes the window's swapchain.
 ///
 /// A failure is said once and then the window simply does not draw. There is
@@ -11521,6 +11561,8 @@ void resize_surface(Shell& shell, int width, int height) {
     return;
   }
   shell.surface = std::move(*made);
+  // A new surface starts SDR; the display decides.
+  refresh_hdr(*shell.app);
 }
 
 /// The work that belongs to the document rather than to any one window.
@@ -11836,6 +11878,16 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       }
       return HTCLIENT;
     }
+
+    case WM_DISPLAYCHANGE:
+      refresh_hdr(*app);
+      return 0;
+
+    case WM_WINDOWPOSCHANGED:
+      // Only when it has crossed onto another display: a drag sends one of
+      // these for every step.
+      if (MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) != shell->monitor) refresh_hdr(*app);
+      break;
 
     case WM_SIZE:
       resize_surface(*shell, LOWORD(lparam), HIWORD(lparam));
@@ -12159,6 +12211,10 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       }
       if (wparam == kAutosaveTimer) {
         poll_autosave(*app);
+        return 0;
+      }
+      if (wparam == kDisplayTimer) {
+        refresh_hdr(*app);
         return 0;
       }
       break;
@@ -13316,6 +13372,7 @@ int main(int argc, char** argv) {
   }
 
   SetTimer(window, kAutosaveTimer, kAutosaveTickMs, nullptr);
+  SetTimer(window, kDisplayTimer, kDisplayTickMs, nullptr);
 
   // Two loops in one, and which is running is the difference between an
   // interface and a video player.

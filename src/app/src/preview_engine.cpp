@@ -59,6 +59,8 @@ struct PreviewEngine::Impl {
   /// below zero going backwards, zero still. Rendering ahead steps by it.
   long long step = 0;
   std::uint64_t serial = 0;
+  /// The HDR display's SDR white, when the window is on one.
+  std::optional<float> hdr_display;
 
   /// A finished picture waiting to be taken, in the order it was rendered.
   struct Ready {
@@ -151,6 +153,10 @@ std::string PreviewEngine::Impl::render(const core::Project& p, double t) {
   // Every render, from the project: switching proxies on takes effect on the
   // next frame rather than whenever somebody remembers to say so.
   renderer->set_use_proxies(p.use_proxies);
+  {
+    const std::lock_guard<std::mutex> held(lock);
+    renderer->compositor().set_hdr_display(hdr_display);
+  }
   if (auto ok = renderer->render(p, t); !ok) return ok.error();
 
   const std::lock_guard<std::mutex> held(lock);
@@ -257,6 +263,20 @@ std::expected<std::unique_ptr<PreviewEngine>, std::string> PreviewEngine::create
   return std::unique_ptr<PreviewEngine>(new PreviewEngine(std::move(impl)));
 }
 
+void PreviewEngine::set_hdr_display(std::optional<float> sdr_white_nits) {
+  Impl& d = *impl_;
+  {
+    const std::lock_guard<std::mutex> held(d.lock);
+    if (d.hdr_display == sdr_white_nits) return;
+    d.hdr_display = sdr_white_nits;
+    // As a new project would: every frame made the old way is the wrong shape.
+    ++d.serial;
+    d.taken.reset();
+    d.prune([](const Impl::Ready&) { return false; });
+  }
+  d.wake.notify_all();
+}
+
 void PreviewEngine::want(std::shared_ptr<const core::Project> project, double t, double rate) {
   Impl& d = *impl_;
   {
@@ -340,7 +360,9 @@ std::expected<std::optional<ui::TextureView>, std::string> PreviewEngine::take(d
                                                         .height = shown->height,
                                                         .format = shown->format,
                                                         .state = shown->state,
-                                                        .generation = shown->generation});
+                                                        .generation = shown->generation,
+                                                        .hdr_texture = shown->hdr_resource,
+                                                        .hdr_format = shown->hdr_format});
 }
 
 std::expected<gpu::Image, std::string> PreviewEngine::capture(

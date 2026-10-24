@@ -209,6 +209,28 @@ void SkiaPainter::image(const Rect& bounds, const ImageView& view) {
 void SkiaPainter::texture(const Rect& bounds, const TextureView& frame) {
   if (frame.empty() || bounds.empty() || impl_->textures == nullptr) return;
 
+  // On an HDR display the picture is not drawn here at all: the window puts
+  // the HDR copy through a hole left for it, under everything drawn on top of
+  // it -- an overlay on a monitor still covers the picture as it should.
+  if (impl_->textures->hdr() && frame.hdr_texture != nullptr) {
+    const SkRect device = impl_->canvas->getTotalMatrix().mapRect(to_sk(bounds));
+    const SkIRect clip = impl_->canvas->getDeviceClipBounds();
+    SkPaint clear;
+    clear.setBlendMode(SkBlendMode::kClear);
+    impl_->canvas->drawRect(to_sk(bounds), clear);
+    impl_->textures->add_hole(TextureCache::HdrHole{.left = device.left(),
+                                                    .top = device.top(),
+                                                    .right = device.right(),
+                                                    .bottom = device.bottom(),
+                                                    .clip_left = clip.left(),
+                                                    .clip_top = clip.top(),
+                                                    .clip_right = clip.right(),
+                                                    .clip_bottom = clip.bottom(),
+                                                    .texture = frame.hdr_texture,
+                                                    .format = frame.hdr_format});
+    return;
+  }
+
   // From the cache, never made here: a wrapper built and dropped inside one
   // paint takes the Direct3D device down with it. See `TextureCache`.
   const sk_sp<SkImage> image = impl_->textures->image_for(impl_->canvas, frame);

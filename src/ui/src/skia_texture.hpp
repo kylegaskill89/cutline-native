@@ -20,6 +20,7 @@
 #endif
 
 #include <map>
+#include <vector>
 
 class SkCanvas;
 
@@ -63,6 +64,30 @@ class TextureCache {
   /// Forgets everything. For when the context is going away.
   void clear();
 
+  /// Where a monitor's picture goes on an HDR display: the painter leaves the
+  /// rectangle transparent, and the window draws the HDR texture through it
+  /// underneath the interface. In device pixels, with the clip it was drawn
+  /// under.
+  struct HdrHole {
+    float left = 0.0f;
+    float top = 0.0f;
+    float right = 0.0f;
+    float bottom = 0.0f;
+    int clip_left = 0;
+    int clip_top = 0;
+    int clip_right = 0;
+    int clip_bottom = 0;
+    void* texture = nullptr;  ///< ID3D12Resource*
+    unsigned format = 0;
+  };
+
+  /// Whether the window is showing HDR, so pictures with an HDR copy are drawn
+  /// as holes rather than as images.
+  void set_hdr(bool on) noexcept { hdr_ = on; }
+  [[nodiscard]] bool hdr() const noexcept { return hdr_; }
+  void add_hole(const HdrHole& hole) { holes_.push_back(hole); }
+  [[nodiscard]] std::vector<HdrHole> take_holes() { return std::exchange(holes_, {}); }
+
  private:
   /// Keyed by the resource address. The shape is kept alongside because a
   /// resize frees the old target and Direct3D reuses addresses freely — so the
@@ -76,6 +101,8 @@ class TextureCache {
     unsigned generation = 0;
   };
   std::map<void*, Entry> entries_;
+  bool hdr_ = false;
+  std::vector<HdrHole> holes_;
 };
 
 }  // namespace cutline::ui

@@ -91,6 +91,13 @@ struct TextureView {
   /// gets handed straight back out.
   unsigned generation = 0;
 
+  /// The same picture for an HDR display, when there is one: scRGB, at its
+  /// real brightness, in `state` like the other. A window showing HDR draws
+  /// this one through the hole the painter leaves for it; anything else
+  /// ignores it.
+  void* hdr_texture = nullptr;  ///< ID3D12Resource*
+  unsigned hdr_format = 0;      ///< DXGI_FORMAT
+
   [[nodiscard]] bool empty() const noexcept {
     return texture == nullptr || width <= 0 || height <= 0;
   }

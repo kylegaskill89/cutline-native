@@ -22,6 +22,7 @@
 
 #include <expected>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace cutline::ui {
@@ -97,6 +98,22 @@ class SkiaWindow {
 
   /// The adapter it is running on, for saying so.
   [[nodiscard]] const std::string& adapter_name() const noexcept;
+
+  /// Shows HDR, with SDR white at this many nits, or not.
+  ///
+  /// On an HDR display the swapchain becomes sixteen-bit float scRGB. The
+  /// interface is still drawn exactly as before, into an ordinary surface, and
+  /// put on screen at the desktop's SDR white so it looks the same as every
+  /// other window; a monitor's picture goes underneath it at its own
+  /// brightness, through the hole the painter leaves. Nothing changes on an
+  /// SDR display, where this is never asked for.
+  [[nodiscard]] std::expected<void, std::string> set_hdr(std::optional<float> sdr_white_nits);
+  [[nodiscard]] std::optional<float> hdr() const noexcept;
+
+  /// Whether the display `hwnd` is mostly on is showing HDR, and if so where
+  /// its SDR white is in nits -- the brightness Windows' own slider sets for
+  /// SDR content. Nothing for an SDR display, or when it cannot be told.
+  [[nodiscard]] static std::optional<float> hdr_white_for(void* hwnd);
 
  private:
   struct Impl;

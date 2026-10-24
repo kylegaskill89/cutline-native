@@ -2155,7 +2155,7 @@ float — so this is new curves, a tone mapper and plumbing, not a restructure.
 | PQ and HLG transfer curves | yes | **yes** — both ways, with HLG's system gamma at a nominal 1,000 nits, so its reference white lands on 203 nits | done |
 | Rec.2020 primaries | yes | **yes** — converted to and from Rec.709 in linear light | done |
 | A sequence colour space | Rec.709, Rec.2100 PQ, Rec.2100 HLG | **yes** — the three, with HDR graphics white (100, 203, 300 nits) and Auto Tone Map Media, in Project Settings and in the file; see §8.1 | done |
-| HDR preview | on an HDR display, tone-mapped otherwise | **none** — an SDR swapchain | machinery |
+| HDR preview | on an HDR display, tone-mapped otherwise | **yes** — a window on an HDR display shows each monitor's picture at its real brightness, the interface around it exactly as before at the desktop's SDR white; on an SDR display an HDR sequence is tone mapped. Each window follows the display it is on; see §8.3 | done |
 | Scopes in nits | HDR ranges on the waveform | **none** | control |
 | HDR10 export | HEVC Main10 with mastering and light-level metadata | **yes** — an HDR sequence writes HEVC Main 10, BT.2100 PQ or HLG, with the mastering display and light levels in the container and the bitstream; 4K60 at **2.35× realtime**. Any sequence can be written in any of the three spaces from the Export dialog. This build's x265 is 8-bit, so ten bits needs a hardware encoder; see §8.2 | done |
 
@@ -2222,6 +2222,38 @@ stock ffmpeg's does too. 2.35× still clears the 2× target for HDR.
 
 The x265 in this build is 8-bit, so a machine without a 10-bit hardware HEVC
 encoder is told it cannot write ten bits rather than given eight.
+
+### 8.3 HDR preview
+
+The interface is drawn by Skia, which blends in sRGB-coded values, and every
+theme was tuned that way. Moving the whole window into linear scRGB would have
+changed every anti-aliased edge and every pane of Aero glass on the one
+display it matters on. So the interface is still drawn exactly as before, into
+an ordinary surface; on an HDR display that surface is put into a sixteen-bit
+scRGB swapchain at the desktop's SDR white -- the "SDR content brightness"
+Windows sets, read per display -- which is what Windows does with any other
+window there. A monitor leaves a hole where its picture goes, overlays still
+drawn over it, and the picture goes underneath at its own brightness from a
+float copy the compositor makes beside the 8-bit one: an HDR sequence at real
+nits, an SDR one at SDR white so it matches the chrome around it.
+
+Each window follows its display. A window on an SDR display, or every window
+on a machine without one, takes exactly the path it always did; moving one
+across switches it, and so does turning HDR on, which is looked for every two
+seconds because Windows sends nothing a window hears. The HDR copy is only
+made while some window can show it.
+
+Checked on the owner's machine: the primary display is HDR (1,499 nits peak)
+and the other two SDR. On the SDR display the interface captures as its
+original colours exactly and an HDR sequence's 203-nit patch as 241, the
+tone mapping; moved back, the window returns to HDR. A screen capture of an
+HDR desktop is not the HDR picture -- Windows takes scRGB's 1.0, 80 nits, as
+white -- so the interface captures 2.98 times brighter in linear light, which
+is the desktop's SDR white of 238 nits over 80 and is what puts it at the same
+brightness as every other window on the display itself. The scRGB values the
+monitors are sent are tested against arithmetic.
+
+Still to come: scopes in nits, and an HDR nest, which is rendered to SDR.
 
 ## 9. Interface and themes
 

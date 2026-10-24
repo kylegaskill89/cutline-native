@@ -95,6 +95,11 @@ class PreviewEngine {
   /// Closes every decoder, on the render thread, and waits until it has.
   void release_sources();
 
+  /// Whether pictures are also made for an HDR display, and where SDR white
+  /// sits on it; nothing for an SDR one. Frames already made are dropped, so
+  /// the next one shown is made the new way.
+  void set_hdr_display(std::optional<float> sdr_white_nits);
+
   /// Sources that could not be opened in the last frame rendered.
   [[nodiscard]] std::vector<std::string> missing_media() const;
   [[nodiscard]] engine::FrameRenderer::DecodeStats decode_stats() const;

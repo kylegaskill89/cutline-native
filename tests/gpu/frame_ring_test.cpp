@@ -77,6 +77,24 @@ TEST_F(FrameRingTest, WhatIsStoredIsWhatIsShown) {
   EXPECT_EQ(shown_red(), 255);
 }
 
+// A frame made for an HDR display carries its HDR copy through the ring to
+// the interface, and one that was not carries none, so a window on an SDR
+// display is never handed a texture it would have to ignore.
+TEST_F(FrameRingTest, AnHdrCopyComesThroughOnlyWhenOneWasMade) {
+  const std::size_t plain = store(Color{1.0f, 0.0f, 0.0f, 1.0f});
+  const auto shown_plain = ring_->show(plain);
+  ASSERT_TRUE(shown_plain.has_value()) << shown_plain.error();
+  EXPECT_EQ(shown_plain->hdr_resource, nullptr);
+
+  compositor_->set_hdr_display(240.0f);
+  const std::size_t deep = store(Color{1.0f, 0.0f, 0.0f, 1.0f});
+  const auto shown_deep = ring_->show(deep);
+  ASSERT_TRUE(shown_deep.has_value()) << shown_deep.error();
+  EXPECT_NE(shown_deep->hdr_resource, nullptr);
+  EXPECT_NE(shown_deep->hdr_format, 0u);
+  EXPECT_EQ(shown_red(), 255) << "the SDR picture beside it is unchanged";
+}
+
 TEST_F(FrameRingTest, EachSlotKeepsItsOwnPicture) {
   // The point of rendering ahead: the compositor goes on to the next frame,
   // and the one before it is still there to be shown.

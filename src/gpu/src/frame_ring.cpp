@@ -13,12 +13,15 @@ namespace {
 /// and what the interface's painter is told it is sampling.
 constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
+/// The HDR display's copy beside it, when the compositor made one: scRGB.
+constexpr DXGI_FORMAT kHdrFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
 /// The state every texture here rests in between copies. The same one the
 /// compositor leaves its display target in, and the one a painter is told.
 constexpr D3D12_RESOURCE_STATES kResting = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
 [[nodiscard]] std::expected<ComPtr<ID3D12Resource>, std::string> make_texture(
-    ID3D12Device* device, int width, int height) {
+    ID3D12Device* device, int width, int height, DXGI_FORMAT format = kFormat) {
   const D3D12_HEAP_PROPERTIES heap = heap_of(D3D12_HEAP_TYPE_DEFAULT);
   D3D12_RESOURCE_DESC desc{};
   desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -26,7 +29,7 @@ constexpr D3D12_RESOURCE_STATES kResting = D3D12_RESOURCE_STATE_PIXEL_SHADER_RES
   desc.Height = static_cast<UINT>(height);
   desc.DepthOrArraySize = 1;
   desc.MipLevels = 1;
-  desc.Format = kFormat;
+  desc.Format = format;
   desc.SampleDesc.Count = 1;
 
   ComPtr<ID3D12Resource> texture;
@@ -61,6 +64,10 @@ struct FrameRing::Impl {
 
   struct Slot {
     ComPtr<ID3D12Resource> texture;
+    /// The HDR copy, and whether this frame has one: only when the compositor
+    /// was asked for it, which is when the window is on an HDR display.
+    ComPtr<ID3D12Resource> hdr;
+    bool has_hdr = false;
     int width = 0;
     int height = 0;
     bool stored = false;
@@ -81,6 +88,7 @@ struct FrameRing::Impl {
   /// The texture the interface samples, and only the interface's thread
   /// touches it.
   ComPtr<ID3D12Resource> shown;
+  ComPtr<ID3D12Resource> shown_hdr;
   int shown_width = 0;
   int shown_height = 0;
   unsigned generation = 0;
@@ -147,16 +155,26 @@ std::expected<std::size_t, std::string> FrameRing::store(Compositor& from) {
     // the one place that frees a slot rather than writing it.
     d.gpu().wait_for(slot.released);
     slot.texture.Reset();
+    slot.hdr.Reset();
     auto made = make_texture(d.gpu().device.Get(), source.width, source.height);
     if (!made) return std::unexpected(made.error());
     slot.texture = std::move(*made);
     slot.width = source.width;
     slot.height = source.height;
   }
+  const bool hdr = source.hdr_sdr_white.has_value() && source.hdr_display != nullptr;
+  if (hdr && slot.hdr == nullptr) {
+    d.gpu().wait_for(slot.released);
+    auto made = make_texture(d.gpu().device.Get(), source.width, source.height, kHdrFormat);
+    if (!made) return std::unexpected(made.error());
+    slot.hdr = std::move(*made);
+  }
+  slot.has_hdr = hdr;
 
   const auto opened = d.producer.begin();
   if (!opened) return std::unexpected(opened.error());
   record_copy(*opened, source.display.Get(), slot.texture.Get());
+  if (hdr) record_copy(*opened, source.hdr_display.Get(), slot.hdr.Get());
   // The interface's last copy *out* of this slot went to the interface's
   // queue, and on a queue of its own this write is not ordered after it. A
   // wait on the card rather than here: the copy is almost always long done,
@@ -185,6 +203,7 @@ std::expected<SceneTexture, std::string> FrameRing::show(std::size_t which) {
   int width = 0;
   int height = 0;
   ID3D12Resource* stored = nullptr;
+  ID3D12Resource* stored_hdr = nullptr;
   {
     const std::lock_guard<std::mutex> held(d.lock);
     const Impl::Slot& slot = d.slots[which];
@@ -192,6 +211,7 @@ std::expected<SceneTexture, std::string> FrameRing::show(std::size_t which) {
     width = slot.width;
     height = slot.height;
     stored = slot.texture.Get();
+    if (slot.has_hdr) stored_hdr = slot.hdr.Get();
   }
 
   if (d.shown == nullptr || d.shown_width != width || d.shown_height != height) {
@@ -199,6 +219,7 @@ std::expected<SceneTexture, std::string> FrameRing::show(std::size_t which) {
     // from the old texture, and that is somebody else's submission.
     d.gpu().wait_for_idle();
     d.shown.Reset();
+    d.shown_hdr.Reset();
     auto made = make_texture(d.gpu().device.Get(), width, height);
     if (!made) return std::unexpected(made.error());
     d.shown = std::move(*made);
@@ -206,10 +227,18 @@ std::expected<SceneTexture, std::string> FrameRing::show(std::size_t which) {
     d.shown_height = height;
     d.generation = next_generation();
   }
+  if (stored_hdr != nullptr && d.shown_hdr == nullptr) {
+    auto made = make_texture(d.gpu().device.Get(), width, height, kHdrFormat);
+    if (!made) return std::unexpected(made.error());
+    d.shown_hdr = std::move(*made);
+    // A new texture for the painter to wrap, which the generation tells it.
+    d.generation = next_generation();
+  }
 
   const auto opened = d.consumer.begin();
   if (!opened) return std::unexpected(opened.error());
   record_copy(*opened, stored, d.shown.Get());
+  if (stored_hdr != nullptr) record_copy(*opened, stored_hdr, d.shown_hdr.Get());
   if (auto ok = d.consumer.submit(); !ok) return std::unexpected(ok.error());
   // Not waited for. The painter's own submission comes after this one on the
   // same queue, which is all the ordering a paint needs, and the interface
@@ -226,7 +255,9 @@ std::expected<SceneTexture, std::string> FrameRing::show(std::size_t which) {
                       .height = height,
                       .format = static_cast<unsigned>(kFormat),
                       .state = static_cast<unsigned>(kResting),
-                      .generation = d.generation};
+                      .generation = d.generation,
+                      .hdr_resource = stored_hdr != nullptr ? d.shown_hdr.Get() : nullptr,
+                      .hdr_format = stored_hdr != nullptr ? static_cast<unsigned>(kHdrFormat) : 0u};
 }
 
 std::expected<Image, std::string> FrameRing::read_shown() {
