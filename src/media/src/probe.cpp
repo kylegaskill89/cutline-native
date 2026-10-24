@@ -118,7 +118,7 @@ std::expected<MediaInfo, std::string> probe(std::string_view path) {
     const AVStream* stream = context->streams[i];
     const AVCodecParameters* codec = stream->codecpar;
 
-    if (codec->codec_type == AVMEDIA_TYPE_VIDEO) {
+    if (detail::is_footage(stream)) {
       const auto pixel_format = static_cast<AVPixelFormat>(codec->format);
       const char* pixel_name = av_get_pix_fmt_name(pixel_format);
 

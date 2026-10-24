@@ -95,6 +95,43 @@ using Packet = std::unique_ptr<AVPacket, PacketDeleter>;
 using Resampler = std::unique_ptr<SwrContext, SwrDeleter>;
 using Scaler = std::unique_ptr<SwsContext, SwsDeleter>;
 
+/// Whether a stream is footage rather than a picture filed alongside it.
+///
+/// Containers carry cover art as a video stream with the attached-picture
+/// disposition: an mp3 with an album sleeve in its ID3 tag, an m4a or a flac
+/// from any music library. libav reports those exactly as it reports a camera's
+/// picture, so counting every video stream as footage made an mp3 with art a
+/// *video* file — placed on a video track, sent to the picture decoder, given a
+/// filmstrip of one frame — and the sound it actually holds never arrived as
+/// sound.
+[[nodiscard]] inline bool is_footage(const AVStream* stream) noexcept {
+  return stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+         (stream->disposition & AV_DISPOSITION_ATTACHED_PIC) == 0;
+}
+
+/// The video stream worth decoding, or a negative number when there is none.
+///
+/// `av_find_best_stream` with the cover art taken out of the running. It does
+/// not do that itself: art is a stream of one frame and is merely ranked low,
+/// so in a file with nothing else it is the "best" and gets chosen.
+[[nodiscard]] inline int best_footage_stream(AVFormatContext* format,
+                                             const AVCodec** codec) noexcept {
+  const int best = av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, codec, 0);
+  if (best < 0 || is_footage(format->streams[best])) return best;
+
+  // The art won, so it was ranked against footage that has no decoder or
+  // against nothing at all. Take the first footage stream that can be decoded.
+  for (unsigned i = 0; i < format->nb_streams; ++i) {
+    if (!is_footage(format->streams[i])) continue;
+    const AVCodec* found = avcodec_find_decoder(format->streams[i]->codecpar->codec_id);
+    if (found == nullptr) continue;
+    if (codec != nullptr) *codec = found;
+    return static_cast<int>(i);
+  }
+  if (codec != nullptr) *codec = nullptr;
+  return AVERROR_STREAM_NOT_FOUND;
+}
+
 /// Maps an audio-stream ordinal — the N a clip stores, counting only audio
 /// streams — onto libav's index across all streams. Returns -1 when absent.
 [[nodiscard]] inline int audio_stream_index(const AVFormatContext* format, int ordinal) noexcept {

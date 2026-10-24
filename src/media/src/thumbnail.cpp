@@ -117,7 +117,7 @@ std::expected<std::vector<Thumbnail>, std::string> extract_thumbnails(std::strin
   }
 
   const AVCodec* codec = nullptr;
-  ex.stream_index = av_find_best_stream(ex.format.get(), AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+  ex.stream_index = detail::best_footage_stream(ex.format.get(), &codec);
   if (ex.stream_index < 0 || codec == nullptr) {
     return std::unexpected(std::format("{} has no decodable video stream", path_string));
   }

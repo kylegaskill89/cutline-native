@@ -114,12 +114,16 @@ if(CUTLINE_WITH_MEDIA)
   add_executable(cutline_media_tests
     media/audio_test.cpp
     media/encoder_test.cpp
+    media/formats_test.cpp
     media/probe_test.cpp
     media/transcode_test.cpp)
   target_link_libraries(cutline_media_tests PRIVATE
     cutline::media
     GTest::gtest
     GTest::gtest_main)
+  # The small committed files formats_test opens; see media/fixtures/make.sh.
+  target_compile_definitions(cutline_media_tests PRIVATE
+    CUTLINE_MEDIA_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/media/fixtures")
   # These skip unless CUTLINE_TEST_MEDIA_DIR points at the reference footage.
   gtest_discover_tests(cutline_media_tests)
 endif()

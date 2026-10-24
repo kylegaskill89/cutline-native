@@ -130,7 +130,7 @@ std::expected<ProxyResult, std::string> write_proxy(std::string_view source,
 
   const AVCodec* codec = nullptr;
   encode.stream_index =
-      av_find_best_stream(encode.format.get(), AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+      detail::best_footage_stream(encode.format.get(), &codec);
   if (encode.stream_index < 0 || codec == nullptr) {
     return std::unexpected(std::format("{} has no decodable video stream", source_path));
   }

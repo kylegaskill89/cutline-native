@@ -258,7 +258,7 @@ std::expected<std::unique_ptr<VideoDecoder>, std::string> VideoDecoder::open_wit
 
   const AVCodec* codec = nullptr;
   const int index =
-      av_find_best_stream(impl->format, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+      detail::best_footage_stream(impl->format, &codec);
   if (index < 0 || codec == nullptr) {
     return std::unexpected(std::format("{} has no decodable video stream", path_string));
   }
