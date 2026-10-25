@@ -93,14 +93,29 @@ TEST(ScaledCanvas, ATitleShrinksWithTheCanvasItIsSetIn) {
   core::Project p = sequence();
   core::Media title;
   title.id = "t1";
-  title.is_text = true;
+  title.is_graphic = true;
   title.has_video = true;
-  title.text = core::TextSpec{.content = "Hello", .font_size = 96.0, .stroke_width = 4.0};
+  core::GraphicLayer words;
+  words.text = "Hello";
+  words.style.font_size = 96.0;
+  words.style.strokes = {core::GraphicStroke{.width = 4.0}};
+  words.style.shadow = core::GraphicShadow{.distance = 10.0, .blur = 6.0};
+  core::GraphicLayer bar;
+  bar.kind = core::GraphicKind::Rectangle;
+  bar.width = 400.0;
+  bar.pin = core::GraphicPin{.left = true, .left_offset = 30.0};
+  title.graphic = core::Graphic{.layers = {words, bar}};
   p.media.push_back(title);
 
   const core::Project half = scaled_canvas(p, 0.5);
-  EXPECT_DOUBLE_EQ(half.media[1].text->font_size, 48.0);
-  EXPECT_DOUBLE_EQ(half.media[1].text->stroke_width, 2.0);
+  const core::Graphic& scaled = *half.media[1].graphic;
+  EXPECT_DOUBLE_EQ(scaled.layers[0].style.font_size, 48.0);
+  EXPECT_DOUBLE_EQ(scaled.layers[0].style.strokes[0].width, 2.0);
+  EXPECT_DOUBLE_EQ(scaled.layers[0].style.shadow->distance, 5.0);
+  EXPECT_DOUBLE_EQ(scaled.layers[1].width, 200.0);
+  EXPECT_DOUBLE_EQ(scaled.layers[1].pin.left_offset, 15.0);
+  // Positions are fractions of the frame, so they stay put.
+  EXPECT_DOUBLE_EQ(scaled.layers[1].x, 0.5);
   // And the footage's own dimensions are left alone: they describe the source,
   // not the canvas, and `natural_size` fits them to whatever it is given.
   EXPECT_EQ(half.media[0].width, 1280);
@@ -152,13 +167,15 @@ TEST(ScaledCanvas, EverythingIsScaledByWhatTheCanvasBecame) {
 
   core::Media title;
   title.id = "t1";
-  title.is_text = true;
-  title.text = core::TextSpec{.font_size = 100.0};
+  title.is_graphic = true;
+  core::GraphicLayer words;
+  words.style.font_size = 100.0;
+  title.graphic = core::Graphic{.layers = {words}};
   p.media.push_back(title);
 
   const core::Project half = scaled_canvas(p, 0.5);
   EXPECT_EQ(half.sequence().canvas_w, 960);
-  EXPECT_DOUBLE_EQ(half.media[1].text->font_size, 100.0 * 960.0 / 1919.0);
+  EXPECT_DOUBLE_EQ(half.media[1].graphic->layers[0].style.font_size, 100.0 * 960.0 / 1919.0);
 }
 
 TEST(ScaledCanvas, NothingIsLostFromTheProjectOnTheWayThrough) {

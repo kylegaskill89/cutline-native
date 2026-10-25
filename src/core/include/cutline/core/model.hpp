@@ -27,6 +27,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace cutline::core {
@@ -117,7 +118,9 @@ struct MatteGradient {
   friend bool operator==(const MatteGradient&, const MatteGradient&) = default;
 };
 
-/// Styling for a text/title clip. Sizes are in canvas pixels.
+/// Styling for a title as projects before graphics stored it: one block of
+/// text. Read from old files and turned into a one-layer `Graphic` on the way
+/// in; nothing new is written as one. Sizes are in canvas pixels.
 struct TextSpec {
   std::string content = "Text";
   double font_size = 96.0;
@@ -132,6 +135,214 @@ struct TextSpec {
   bool shadow = false;
 
   friend bool operator==(const TextSpec&, const TextSpec&) = default;
+};
+
+// ----------------------------------------------------------------- graphic --
+
+/// What a graphic layer draws. Premiere's Essential Graphics: text, the two
+/// shapes its tools draw, and a picture from a file.
+enum class GraphicKind { Text, Rectangle, Ellipse, Image };
+
+/// An outline round text or a shape. Several may be stacked, as in Premiere,
+/// the first innermost.
+struct GraphicStroke {
+  std::string color = "#000000";
+  /// In canvas pixels, outside the letterform or the shape's edge.
+  double width = 4.0;
+
+  friend bool operator==(const GraphicStroke&, const GraphicStroke&) = default;
+};
+
+/// A box behind text, Premiere's Background.
+struct GraphicBackground {
+  std::string color = "#000000";
+  double opacity = 0.75;
+  /// How far the box reaches past the text, in canvas pixels.
+  double padding = 16.0;
+  double corner_radius = 0.0;
+
+  friend bool operator==(const GraphicBackground&, const GraphicBackground&) = default;
+};
+
+/// A drop shadow, as Premiere sets one: a direction and a distance rather
+/// than an x and a y.
+struct GraphicShadow {
+  std::string color = "#000000";
+  double opacity = 0.75;
+  /// Where the light comes from, in degrees anticlockwise from the right, as
+  /// Premiere and Photoshop measure it. The shadow falls the other way, so the
+  /// default of 135 puts it below and to the right.
+  double angle = 135.0;
+  double distance = 8.0;
+  /// How far the shadow spreads past the shape before it is blurred.
+  double size = 0.0;
+  double blur = 12.0;
+
+  friend bool operator==(const GraphicShadow&, const GraphicShadow&) = default;
+};
+
+/// How a layer looks: the half of it a master style captures and a style
+/// change applies. Sizes in canvas pixels.
+struct GraphicStyle {
+  std::string font_family = "Arial";
+  double font_size = 96.0;
+  bool bold = true;
+  bool italic = false;
+  bool underline = false;
+  bool all_caps = false;
+  /// Extra room between letters, in thousandths of the font size -- the unit
+  /// Premiere's Tracking is in.
+  double tracking = 0.0;
+  /// Extra room between lines, in canvas pixels.
+  double leading = 0.0;
+  TextAlign align = TextAlign::Center;
+
+  bool fill_enabled = true;
+  std::string fill = "#ffffff";
+  std::vector<GraphicStroke> strokes;
+  std::optional<GraphicBackground> background;
+  std::optional<GraphicShadow> shadow;
+
+  friend bool operator==(const GraphicStyle&, const GraphicStyle&) = default;
+};
+
+/// Responsive design, position: which edges of a layer keep their distance
+/// from the edges of another layer, or of the frame, when that changes size.
+/// A lower third's bar that grows with its name is a bar pinned to the name.
+struct GraphicPin {
+  /// The layer pinned to, by id, or empty for the video frame.
+  std::string to;
+  bool left = false;
+  bool top = false;
+  bool right = false;
+  bool bottom = false;
+  /// Each pinned edge's distance from the same edge of what it is pinned to,
+  /// in canvas pixels, as it was when the pin was made. Kept, so the layer
+  /// follows: a name that grows by forty pixels moves the edge pinned to its
+  /// right by forty pixels.
+  double left_offset = 0.0;
+  double top_offset = 0.0;
+  double right_offset = 0.0;
+  double bottom_offset = 0.0;
+
+  [[nodiscard]] bool any() const noexcept { return left || top || right || bottom; }
+  friend bool operator==(const GraphicPin&, const GraphicPin&) = default;
+};
+
+/// How a layer arrives or leaves: the animation presets.
+enum class RevealKind {
+  None,
+  Fade,
+  SlideLeft,   ///< travels in from the left, or out to it
+  SlideRight,
+  SlideUp,     ///< travels in from below, or out upwards
+  SlideDown,
+  Scale,       ///< grows from nothing, or shrinks away
+  Wipe,        ///< uncovered left to right, or covered again
+  Typewriter,  ///< a character at a time
+};
+
+struct GraphicReveal {
+  RevealKind kind = RevealKind::None;
+  double duration = 0.5;
+
+  friend bool operator==(const GraphicReveal&, const GraphicReveal&) = default;
+};
+
+/// The properties of a layer that keyframes animate, by the names their
+/// keyframe lists are stored under.
+inline constexpr std::array<std::string_view, 5> kGraphicAnimated{"x", "y", "scale", "rotation",
+                                                                  "opacity"};
+
+/// One layer of a graphic.
+struct GraphicLayer {
+  std::string id;
+  /// What the Essential Graphics panel lists it as: the text itself for text,
+  /// "Shape 01" and so on otherwise, unless renamed.
+  std::string name;
+  GraphicKind kind = GraphicKind::Text;
+  bool visible = true;
+
+  /// Text: the words, with explicit line breaks.
+  std::string text = "Text";
+  /// Text: Premiere's paragraph text -- a box the lines wrap within. Unset is
+  /// point text, broken only where the text breaks.
+  std::optional<double> box_width;
+
+  /// Shapes: their size before scaling, in canvas pixels.
+  double width = 400.0;
+  double height = 200.0;
+  double corner_radius = 0.0;
+
+  /// Image: the file.
+  std::string path;
+
+  GraphicStyle style;
+  /// The master style this layer follows, by name, or empty for its own.
+  std::string master_style;
+
+  /// Where the layer is, as fractions of the frame like a clip's transform,
+  /// so a graphic means the same thing at any resolution.
+  double x = 0.5;
+  double y = 0.5;
+  double scale = 1.0;
+  double rotation = 0.0;
+  /// The point of the layer that `x`/`y` places, as a fraction of it.
+  double anchor_x = 0.5;
+  double anchor_y = 0.5;
+  double opacity = 1.0;
+  /// By the names in `kGraphicAnimated`, in seconds from the clip's start.
+  std::map<std::string, std::vector<Keyframe>> keyframes;
+
+  GraphicPin pin;
+  GraphicReveal reveal_in;
+  GraphicReveal reveal_out;
+
+  friend bool operator==(const GraphicLayer&, const GraphicLayer&) = default;
+};
+
+/// Premiere's Roll and Crawl: the whole graphic moving through the frame.
+enum class ScrollMode { None, Roll, Crawl };
+
+struct GraphicScroll {
+  ScrollMode mode = ScrollMode::None;
+  /// Whether it starts and ends wholly outside the frame.
+  bool start_off = true;
+  bool end_off = true;
+  /// Seconds held still before it moves and after it stops.
+  double preroll = 0.0;
+  double postroll = 0.0;
+  /// Seconds of easing into and out of the movement.
+  double ease_in = 0.0;
+  double ease_out = 0.0;
+
+  friend bool operator==(const GraphicScroll&, const GraphicScroll&) = default;
+};
+
+/// A graphic: Premiere's Essential Graphics clip. Layers top first, as the
+/// panel lists them.
+struct Graphic {
+  std::vector<GraphicLayer> layers;
+  GraphicScroll scroll;
+  /// Responsive design, time: the opening and closing seconds that keep their
+  /// length, and their keyframes' timing, when the clip is trimmed.
+  double intro = 0.0;
+  double outro = 0.0;
+  /// How long the graphic was when its timing was set: the length its
+  /// keyframes are written against. Zero when nothing is protected.
+  double length = 0.0;
+
+  friend bool operator==(const Graphic&, const Graphic&) = default;
+};
+
+/// A named look that text layers follow: Premiere's master styles. Kept in the
+/// project, so every graphic in it can share one, and changing the style
+/// changes all of them.
+struct GraphicMasterStyle {
+  std::string name;
+  GraphicStyle style;
+
+  friend bool operator==(const GraphicMasterStyle&, const GraphicMasterStyle&) = default;
 };
 
 /// A source asset: a file, a still, or a generated source.
@@ -158,8 +369,9 @@ struct Media {
   bool is_image = false;
   /// An animated source (GIF): loops its animation rather than holding a frame.
   bool is_animated = false;
-  /// A generated title; `text` holds its content and styling.
-  bool is_text = false;
+  /// A graphic -- a title, a lower third, a shape -- made in the editor;
+  /// `graphic` holds its layers.
+  bool is_graphic = false;
   /// A generated colour matte; `color` is its fill, `gradient` optional.
   bool is_color = false;
   /// An adjustment layer: draws nothing itself, but its clip's effect stack
@@ -180,7 +392,7 @@ struct Media {
   /// sequence that could not be dragged in from the pool at all.
   std::string sequence_id;
 
-  std::optional<TextSpec> text;
+  std::optional<Graphic> graphic;
   std::string color;
   std::optional<MatteGradient> gradient;
 
@@ -915,6 +1127,8 @@ struct Project {
   std::vector<Media> media;
   /// Folders the pool is filed into. Flat, and nested by `Bin::parent`.
   std::vector<Bin> bins;
+  /// The project's master styles, by name.
+  std::vector<GraphicMasterStyle> graphic_styles;
 
   /// Whether to cut against proxies where a source has one.
   ///

@@ -26,7 +26,7 @@ template <typename T>
 /// What a pool entry that has just appeared is, in Premiere's words for making
 /// one: a file is imported, everything else is a new item of its kind.
 [[nodiscard]] std::string arrival(const Media& media) {
-  if (media.is_text) return "New Title";
+  if (media.is_graphic) return "New Graphic";
   if (media.is_color) return "New Colour Matte";
   if (media.is_adjustment) return "New Adjustment Layer";
   if (!media.sequence_id.empty()) return "Nest";
@@ -55,7 +55,7 @@ template <typename T>
     if (media->in_point != old.in_point || media->out_point != old.out_point) {
       return "Mark Source";
     }
-    if (media->text != old.text) return "Edit Title";
+    if (media->graphic != old.graphic) return "Edit Graphic";
     if (media->color != old.color || media->gradient != old.gradient) return "Edit Colour Matte";
     // Anything else on an entry is bookkeeping the application keeps up to
     // date — a proxy's path, a nest's length — and is named by whatever edit

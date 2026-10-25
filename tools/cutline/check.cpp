@@ -719,9 +719,9 @@ template <typename T>
       // the text field among them, which nothing else in the interface uses yet
       // and which would otherwise never be laid out in any theme.
       std::string title_clip;
-      app.session.apply(cutline::editor::add_title_at(app.session.project(),
-                                                      cutline::editor::default_title_spec(), 0.0,
-                                                      {}, &title_clip));
+      app.session.apply(cutline::editor::add_graphic_at(app.session.project(),
+                                                        cutline::editor::default_title(), 0.0,
+                                                        {}, &title_clip));
       if (!title_clip.empty()) {
         app.session.select_one(title_clip);
         refresh_inspector(app);

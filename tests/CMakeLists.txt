@@ -11,6 +11,7 @@ add_executable(cutline_core_tests
   core/arrange_test.cpp
   core/attributes_test.cpp
   core/edit_test.cpp
+  core/graphic_test.cpp
   core/interpret_test.cpp
   core/keyframe_test.cpp
   core/layout_test.cpp
@@ -43,7 +44,7 @@ add_executable(cutline_core_tests
   editor/settings_test.cpp
   editor/shortcuts_test.cpp
   editor/timeline_binding_test.cpp
-  editor/titles_test.cpp
+  editor/graphics_test.cpp
   editor/transitions_test.cpp
   editor/updates_test.cpp
   editor/workspace_test.cpp

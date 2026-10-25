@@ -145,7 +145,7 @@ TEST(Transitions, AStillHasAllTheHandleAnyoneCouldWant) {
   // A title has no source to run out of, so refusing a dissolve onto one would
   // be an arbitrary rule about generated media.
   Project project = abutting();
-  project.media.push_back(Media{.id = "t1", .has_video = true, .is_text = true});
+  project.media.push_back(Media{.id = "t1", .has_video = true, .is_graphic = true});
   project.sequence().tracks[0].clips[1].media_id = "t1";
 
   EXPECT_FALSE(clip_transition(project, "a").handles_exhausted);

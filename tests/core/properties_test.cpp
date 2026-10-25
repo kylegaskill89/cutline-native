@@ -320,7 +320,7 @@ TEST(MatchSequence, GeneratedSourcesGiveTheSequenceNothing) {
   Project p;
   Media title;
   title.id = "t1";
-  title.is_text = true;
+  title.is_graphic = true;
   title.width = 100;
   title.height = 100;
   title.fps = 12.0;
@@ -570,23 +570,23 @@ TEST(SpeedAcrossSelection, AnEmptySelectionChangesNothing) {
 
 // ------------------------------------------------------- generated media --
 
-TEST(GeneratedMedia, TextSpecOnlyAppliesToTitles) {
+TEST(GeneratedMedia, AGraphicOnlyAppliesToGraphics) {
   Project p = one_clip_project();
   Media title;
   title.id = "t1";
-  title.is_text = true;
-  title.text = TextSpec{};
+  title.is_graphic = true;
+  title.graphic = Graphic{};
   p.media.push_back(title);
 
-  TextSpec spec;
-  spec.content = "Hello";
-  spec.font_size = 42.0;
-  p = set_text_spec(std::move(p), "t1", spec);
-  EXPECT_EQ(p.media[1].text->content, "Hello");
+  Graphic graphic;
+  graphic.layers.push_back(GraphicLayer{.id = "a", .text = "Hello"});
+  p = set_graphic(std::move(p), "t1", graphic);
+  ASSERT_TRUE(p.media[1].graphic.has_value());
+  EXPECT_EQ(p.media[1].graphic->layers.front().text, "Hello");
 
-  // The footage media is not a title, so it is untouched.
+  // The footage media is not a graphic, so it is untouched.
   const Project before = p;
-  EXPECT_EQ(set_text_spec(before, "m1", spec), before);
+  EXPECT_EQ(set_graphic(before, "m1", graphic), before);
 }
 
 TEST(GeneratedMedia, MatteColourAndGradient) {

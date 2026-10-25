@@ -300,7 +300,7 @@ TEST(Lookups, ClipAtTimeIsHalfOpen) {
 
 TEST(MediaKinds, GeneratedMediaHaveNoSourceFile) {
   Media text;
-  text.is_text = true;
+  text.is_graphic = true;
   EXPECT_TRUE(is_generated_media(text));
   EXPECT_TRUE(is_still_like(text));
 

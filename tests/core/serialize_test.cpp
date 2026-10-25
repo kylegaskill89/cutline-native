@@ -1,5 +1,6 @@
 #include "cutline/core/serialize.hpp"
 
+#include "cutline/core/graphic.hpp"
 #include "cutline/core/history.hpp"
 #include "cutline/core/id.hpp"
 #include "cutline/core/properties.hpp"
@@ -34,7 +35,49 @@ Project rich_project() {
   Media title;
   title.id = "m2";
   title.name = "Title";
-  title.is_text = true;
+  title.is_graphic = true;
+  {
+    GraphicLayer words;
+    words.id = "words";
+    words.text = "Hello\nthere";
+    words.box_width = 600.0;
+    words.style.font_family = "Georgia";
+    words.style.underline = true;
+    words.style.all_caps = true;
+    words.style.tracking = 50.0;
+    words.style.leading = 4.0;
+    words.style.align = TextAlign::Right;
+    words.style.strokes = {GraphicStroke{.color = "#ff0000", .width = 3.0},
+                           GraphicStroke{.color = "#00ff00", .width = 2.0}};
+    words.style.background = GraphicBackground{.color = "#000000", .opacity = 0.5};
+    words.style.shadow = GraphicShadow{.angle = 90.0, .distance = 12.0};
+    words.master_style = "Lower third";
+    words.keyframes["x"] = {{.t = 0.0, .v = 0.2}, {.t = 1.0, .v = 0.5, .e = Interp::Ease}};
+    words.reveal_in = GraphicReveal{.kind = RevealKind::Typewriter, .duration = 1.5};
+    GraphicLayer bar;
+    bar.id = "bar";
+    bar.name = "Shape 01";
+    bar.kind = GraphicKind::Rectangle;
+    bar.width = 640.0;
+    bar.height = 80.0;
+    bar.corner_radius = 8.0;
+    bar.style.fill_enabled = false;
+    bar.visible = false;
+    bar.pin = GraphicPin{.to = "words", .left = true, .right = true, .left_offset = -20.0,
+                         .right_offset = 20.0};
+    bar.reveal_out = GraphicReveal{.kind = RevealKind::Wipe, .duration = 0.25};
+    GraphicLayer logo;
+    logo.id = "logo";
+    logo.kind = GraphicKind::Image;
+    logo.path = "C:/logo.png";
+    Graphic graphic;
+    graphic.layers = {words, bar, logo};
+    graphic.scroll = GraphicScroll{.mode = ScrollMode::Roll, .end_off = false, .preroll = 1.0};
+    graphic.intro = 0.5;
+    graphic.outro = 0.75;
+    graphic.length = 5.0;
+    title.graphic = graphic;
+  }
   TextSpec spec;
   spec.content = "Hello";
   spec.align = TextAlign::Right;
@@ -42,7 +85,7 @@ Project rich_project() {
   spec.stroke_color = "#ffffff";
   spec.stroke_width = 3.0;
   spec.shadow = true;
-  title.text = spec;
+  (void)spec;
 
   Media matte;
   matte.id = "m3";
@@ -51,6 +94,7 @@ Project rich_project() {
   matte.gradient = MatteGradient{.color2 = "#445566", .angle = 45.0};
 
   p.media = {footage, title, matte};
+  p.graphic_styles = {GraphicMasterStyle{.name = "Lower third", .style = GraphicStyle{}}};
 
   Clip c;
   c.id = "c1";
@@ -137,6 +181,42 @@ TEST(Serialize, RoundTripsEveryField) {
   ASSERT_TRUE(loaded.has_value()) << loaded.error();
   EXPECT_EQ(loaded->project, original);
   EXPECT_TRUE(loaded->warnings.empty());
+}
+
+TEST(Serialize, ATitleWrittenBeforeGraphicsReadsAsAGraphicOfOneTextLayer) {
+  const std::string old = R"({"version": 1, "project": {"media": [{"id": "t", "name": "Hi",
+      "is_text": true, "has_video": true, "text": {"content": "Hi", "font_size": 64,
+      "color": "#ff0000", "bold": false, "stroke_color": "#000000", "stroke_width": 2,
+      "shadow": true}}]}})";
+  const auto loaded = from_json(old);
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  ASSERT_EQ(loaded->project.media.size(), 1u);
+  const Media& media = loaded->project.media.front();
+  EXPECT_TRUE(media.is_graphic);
+  ASSERT_TRUE(media.graphic.has_value());
+
+  TextSpec spec;
+  spec.content = "Hi";
+  spec.font_size = 64.0;
+  spec.color = "#ff0000";
+  spec.bold = false;
+  spec.stroke_color = "#000000";
+  spec.stroke_width = 2.0;
+  spec.shadow = true;
+  EXPECT_EQ(*media.graphic, graphic_from_text(spec));
+}
+
+TEST(Serialize, ANewProjectWritesGraphicsNotTitles) {
+  const std::string text = to_json(rich_project());
+  EXPECT_NE(text.find("\"is_graphic\""), std::string::npos);
+  EXPECT_EQ(text.find("\"is_text\""), std::string::npos);
+}
+
+TEST(Serialize, AGraphicSurvivesOnItsOwn) {
+  const Graphic graphic = *rich_project().media[1].graphic;
+  const auto back = graphic_from_json(graphic_to_json(graphic));
+  ASSERT_TRUE(back.has_value()) << back.error();
+  EXPECT_EQ(*back, graphic);
 }
 
 TEST(Serialize, RoundTripsAnEmptyProject) {

@@ -6,7 +6,7 @@
 /// The reference expressed several of these as partial-object merges, which is
 /// natural in JavaScript. Here the value setters take whole values instead:
 /// callers read the current value, change what they want, and set it back.
-/// `Transform` and `TextSpec` are value types, so this is the same edit with
+/// `Transform` and `Graphic` are value types, so this is the same edit with
 /// less machinery. Track header props keep a patch, since a caller genuinely
 /// wants to set one flag without disturbing the others.
 
@@ -180,8 +180,9 @@ inline constexpr double kMaxFps = 240.0;
 
 // ------------------------------------------------------- generated media --
 
-/// Replaces a text media's styling. No-op unless the media is a title.
-[[nodiscard]] Project set_text_spec(Project p, std::string_view media_id, TextSpec spec);
+/// Replaces a graphic's layers and timing. No-op unless the media is a
+/// graphic.
+[[nodiscard]] Project set_graphic(Project p, std::string_view media_id, Graphic graphic);
 
 /// Sets a colour matte's primary fill. No-op unless the media is a matte.
 [[nodiscard]] Project set_matte_color(Project p, std::string_view media_id, std::string color);

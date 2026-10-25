@@ -1644,128 +1644,143 @@ void build_matte_controls(App& app, const std::string& clip_id,
   });
 }
 
-/// A title's own text and styling, when the selected clip is one.
+/// A graphic's layers, when the selected clip is one: a section each, top
+/// first, as Premiere's Effect Controls lists them.
 ///
 /// Above Motion rather than below the effects: what a title *says* is the first
 /// thing anyone wants to change about it, and Premiere puts the same controls at
 /// the top of its own panel.
-void build_title_controls(App& app, const std::string& clip_id,
-                          const cutline::core::TextSpec& spec) {
-  inspector_heading(app, "Text");
-
-  // Written to the document when the field is done with — Enter, or the
+void build_graphic_controls(App& app, const std::string& clip_id,
+                            const cutline::core::Graphic& graphic) {
+  // Written to the document when the control is done with — Enter, or the
   // keyboard leaving. On every keystroke it would be one undo entry per letter.
   //
   // `rebuild_panel` is off for the colour swatches only. Rebuilding destroys
   // the swatch, and a destroyed swatch closes the picker hanging open above it,
   // so a colour could only ever be chosen once per opening.
-  const auto write = [&app, clip_id](cutline::core::TextSpec changed,
+  const auto write = [&app, clip_id](cutline::core::GraphicLayer changed,
                                      bool rebuild_panel = true) {
-    const cutline::core::Clip* clip =
-        cutline::core::find_clip(app.session.project(), clip_id);
+    const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), clip_id);
     if (clip == nullptr) return;
-    app.session.apply(cutline::editor::set_title_spec(app.session.project(), clip->media_id,
-                                                      std::move(changed)));
+    const cutline::core::Graphic* now =
+        cutline::editor::graphic_of(app.session.project(), clip->media_id);
+    if (now == nullptr) return;
+    app.session.apply(cutline::editor::set_graphic(
+        app.session.project(), clip->media_id,
+        cutline::editor::set_layer(*now, std::move(changed))));
     refresh_browser(app);
     refresh_timeline(app);
     invalidate_preview(app);
     if (rebuild_panel) app.inspector_stale = true;
   };
 
-  auto& content = app.inspector->emplace<TextField>(spec.content);
-  content.set_multiline(true);
-  content.set_min_lines(2);
-  content.set_placeholder("Title text");
-  content.set_on_commit([write, spec](const std::string& text) {
-    cutline::core::TextSpec changed = spec;
-    changed.content = text;
-    write(std::move(changed));
-  });
+  for (const cutline::core::GraphicLayer& layer : graphic.layers) {
+    const bool text = layer.kind == cutline::core::GraphicKind::Text;
+    inspector_heading(app, cutline::editor::layer_label(layer));
 
-  app.inspector->emplace<Label>("Size").set_small(true);
-  auto& size = app.inspector->emplace<Slider>(ValueRange{.minimum = 8.0, .maximum = 400.0},
-                                              spec.font_size);
-  size.set_default_value(96.0);
-  size.set_on_commit([write, spec](double value) {
-    cutline::core::TextSpec changed = spec;
-    changed.font_size = value;
-    write(std::move(changed));
-  });
+    if (text) {
+      auto& content = app.inspector->emplace<TextField>(layer.text);
+      content.set_multiline(true);
+      content.set_min_lines(2);
+      content.set_placeholder("Title text");
+      content.set_on_commit([write, layer](const std::string& words) {
+        cutline::core::GraphicLayer changed = layer;
+        changed.text = words;
+        write(std::move(changed));
+      });
 
-  auto& colour_row = app.inspector->emplace<Box>(Axis::Horizontal);
-  colour_row.emplace<Label>("Colour").set_small(true);
-  auto& colour =
-      colour_row.emplace<ColorSwatch>(parse_color(spec.color, Color{1.0f, 1.0f, 1.0f, 1.0f}));
-  colour.set_on_commit([write, spec](const Color& picked) {
-    cutline::core::TextSpec changed = spec;
-    changed.color = to_hex(picked);
-    write(std::move(changed), false);
-  });
-
-  auto& style = app.inspector->emplace<Box>(Axis::Horizontal);
-  auto& bold = style.emplace<Checkbox>("Bold", spec.bold);
-  bold.set_on_change([write, spec](bool on) {
-    cutline::core::TextSpec changed = spec;
-    changed.bold = on;
-    write(std::move(changed));
-  });
-  auto& italic = style.emplace<Checkbox>("Italic", spec.italic);
-  italic.set_on_change([write, spec](bool on) {
-    cutline::core::TextSpec changed = spec;
-    changed.italic = on;
-    write(std::move(changed));
-  });
-  style.emplace<Spacer>();
-
-  auto& decoration = app.inspector->emplace<Box>(Axis::Horizontal);
-  auto& shadow = decoration.emplace<Checkbox>("Shadow", spec.shadow);
-  shadow.set_on_change([write, spec](bool on) {
-    cutline::core::TextSpec changed = spec;
-    changed.shadow = on;
-    write(std::move(changed));
-  });
-  // An outline is a colour and a width, and either one alone does nothing. One
-  // checkbox turns both on, at a width that can be seen.
-  auto& outline = decoration.emplace<Checkbox>("Outline", spec.stroke_color.has_value());
-  outline.set_on_change([write, spec](bool on) {
-    cutline::core::TextSpec changed = spec;
-    if (on) {
-      changed.stroke_color = "#000000";
-      if (changed.stroke_width <= 0.0) changed.stroke_width = 3.0;
-    } else {
-      changed.stroke_color.reset();
+      app.inspector->emplace<Label>("Size").set_small(true);
+      auto& size = app.inspector->emplace<Slider>(ValueRange{.minimum = 8.0, .maximum = 400.0},
+                                                  layer.style.font_size);
+      size.set_default_value(96.0);
+      size.set_on_commit([write, layer](double value) {
+        cutline::core::GraphicLayer changed = layer;
+        changed.style.font_size = value;
+        write(std::move(changed));
+      });
     }
-    write(std::move(changed));
-  });
-  decoration.emplace<Spacer>();
 
-  // Only when there is an outline to colour. A swatch for a property that is
-  // switched off is a control that does nothing, which is worse than a control
-  // that is not there.
-  if (spec.stroke_color.has_value()) {
-    auto& stroke_row = app.inspector->emplace<Box>(Axis::Horizontal);
-    stroke_row.emplace<Label>("Outline colour").set_small(true);
-    auto& stroke = stroke_row.emplace<ColorSwatch>(parse_color(*spec.stroke_color));
-    stroke.set_on_commit([write, spec](const Color& picked) {
-      cutline::core::TextSpec changed = spec;
-      changed.stroke_color = to_hex(picked);
+    auto& colour_row = app.inspector->emplace<Box>(Axis::Horizontal);
+    colour_row.emplace<Label>("Fill").set_small(true);
+    auto& colour = colour_row.emplace<ColorSwatch>(
+        parse_color(layer.style.fill, Color{1.0f, 1.0f, 1.0f, 1.0f}));
+    colour.set_on_commit([write, layer](const Color& picked) {
+      cutline::core::GraphicLayer changed = layer;
+      changed.style.fill = to_hex(picked);
       write(std::move(changed), false);
     });
-  }
 
-  auto& align_row = app.inspector->emplace<Box>(Axis::Horizontal);
-  align_row.emplace<Label>("Align").set_small(true);
-  constexpr std::array kAligns{cutline::core::TextAlign::Left, cutline::core::TextAlign::Center,
-                               cutline::core::TextAlign::Right};
-  const auto found = std::ranges::find(kAligns, spec.align);
-  auto& align = align_row.emplace<Dropdown>(
-      std::vector<std::string>{"Left", "Centre", "Right"},
-      found == kAligns.end() ? 1u : static_cast<std::size_t>(found - kAligns.begin()));
-  align.set_on_change([write, spec](std::size_t index) {
-    cutline::core::TextSpec changed = spec;
-    changed.align = index < kAligns.size() ? kAligns[index] : cutline::core::TextAlign::Center;
-    write(std::move(changed));
-  });
+    if (text) {
+      auto& style = app.inspector->emplace<Box>(Axis::Horizontal);
+      auto& bold = style.emplace<Checkbox>("Bold", layer.style.bold);
+      bold.set_on_change([write, layer](bool on) {
+        cutline::core::GraphicLayer changed = layer;
+        changed.style.bold = on;
+        write(std::move(changed));
+      });
+      auto& italic = style.emplace<Checkbox>("Italic", layer.style.italic);
+      italic.set_on_change([write, layer](bool on) {
+        cutline::core::GraphicLayer changed = layer;
+        changed.style.italic = on;
+        write(std::move(changed));
+      });
+      style.emplace<Spacer>();
+    }
+
+    auto& decoration = app.inspector->emplace<Box>(Axis::Horizontal);
+    auto& shadow = decoration.emplace<Checkbox>("Shadow", layer.style.shadow.has_value());
+    shadow.set_on_change([write, layer](bool on) {
+      cutline::core::GraphicLayer changed = layer;
+      if (on) {
+        changed.style.shadow = cutline::core::GraphicShadow{};
+      } else {
+        changed.style.shadow.reset();
+      }
+      write(std::move(changed));
+    });
+    // An outline is a colour and a width, and either one alone does nothing. One
+    // checkbox turns both on, at a width that can be seen.
+    auto& outline = decoration.emplace<Checkbox>("Outline", !layer.style.strokes.empty());
+    outline.set_on_change([write, layer](bool on) {
+      cutline::core::GraphicLayer changed = layer;
+      changed.style.strokes.clear();
+      if (on) changed.style.strokes.push_back(cutline::core::GraphicStroke{});
+      write(std::move(changed));
+    });
+    decoration.emplace<Spacer>();
+
+    // Only when there is an outline to colour. A swatch for a property that is
+    // switched off is a control that does nothing, which is worse than a control
+    // that is not there.
+    if (!layer.style.strokes.empty()) {
+      auto& stroke_row = app.inspector->emplace<Box>(Axis::Horizontal);
+      stroke_row.emplace<Label>("Outline colour").set_small(true);
+      auto& stroke = stroke_row.emplace<ColorSwatch>(parse_color(layer.style.strokes.front().color));
+      stroke.set_on_commit([write, layer](const Color& picked) {
+        cutline::core::GraphicLayer changed = layer;
+        changed.style.strokes.front().color = to_hex(picked);
+        write(std::move(changed), false);
+      });
+    }
+
+    if (text) {
+      auto& align_row = app.inspector->emplace<Box>(Axis::Horizontal);
+      align_row.emplace<Label>("Align").set_small(true);
+      constexpr std::array kAligns{cutline::core::TextAlign::Left,
+                                   cutline::core::TextAlign::Center,
+                                   cutline::core::TextAlign::Right};
+      const auto found = std::ranges::find(kAligns, layer.style.align);
+      auto& align = align_row.emplace<Dropdown>(
+          std::vector<std::string>{"Left", "Centre", "Right"},
+          found == kAligns.end() ? 1u : static_cast<std::size_t>(found - kAligns.begin()));
+      align.set_on_change([write, layer](std::size_t index) {
+        cutline::core::GraphicLayer changed = layer;
+        changed.style.align =
+            index < kAligns.size() ? kAligns[index] : cutline::core::TextAlign::Center;
+        write(std::move(changed));
+      });
+    }
+  }
 }
 
 /// Rebuilds the inspector for whatever is selected.
@@ -1799,10 +1814,10 @@ void refresh_inspector(App& app) {
 
   // A title's words come first: it is the thing anyone wants to change about a
   // title, and everything below is the same for every clip.
-  if (const cutline::core::TextSpec* spec =
-          cutline::editor::clip_title_spec(app.session.project(), clip_id);
-      spec != nullptr) {
-    build_title_controls(app, clip_id, *spec);
+  if (const cutline::core::Graphic* graphic =
+          cutline::editor::clip_graphic(app.session.project(), clip_id);
+      graphic != nullptr) {
+    build_graphic_controls(app, clip_id, *graphic);
   } else if (const std::optional<cutline::editor::MatteFill> fill =
                  cutline::editor::clip_matte_fill(app.session.project(), clip_id);
              fill.has_value()) {

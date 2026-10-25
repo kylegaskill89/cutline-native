@@ -140,7 +140,7 @@ TEST(PlanAudio, AZeroLengthClipIsSkipped) {
 TEST(PlanAudio, GeneratedMediaHaveNothingToDecode) {
   Media title;
   title.id = "t";
-  title.is_text = true;
+  title.is_graphic = true;
   Project p = project({audio_track("a1", {clip("c", "t", 0.0, 5.0)})}, {title});
   EXPECT_TRUE(plan_audio(p).empty());
 }

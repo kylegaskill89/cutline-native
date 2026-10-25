@@ -1,4 +1,4 @@
-/// Titles, checked by looking at the pixels.
+/// Graphic layers, checked by looking at the pixels.
 ///
 /// Glyph shapes are the font's business and not worth asserting on — what
 /// matters here is that the image is the size the layout said it would be, that
@@ -15,11 +15,23 @@
 namespace cutline::text {
 namespace {
 
-[[nodiscard]] core::TextSpec title(std::string content = "Hello") {
-  core::TextSpec spec;
-  spec.content = std::move(content);
-  spec.font_size = 48.0;
-  return spec;
+using core::GraphicKind;
+using core::GraphicLayer;
+
+[[nodiscard]] GraphicLayer title(std::string content = "Hello") {
+  GraphicLayer layer;
+  layer.text = std::move(content);
+  layer.style.font_size = 48.0;
+  return layer;
+}
+
+[[nodiscard]] GraphicLayer box(double width, double height) {
+  GraphicLayer layer;
+  layer.kind = GraphicKind::Rectangle;
+  layer.width = width;
+  layer.height = height;
+  layer.style.fill = "#ff0000";
+  return layer;
 }
 
 /// How many pixels are not fully transparent.
@@ -31,13 +43,17 @@ namespace {
   return count;
 }
 
-[[nodiscard]] std::uint8_t alpha_at(const Raster& raster, int x, int y) {
-  const std::size_t index = (static_cast<std::size_t>(y) * raster.width + x) * 4 + 3;
+[[nodiscard]] std::uint8_t channel_at(const Raster& raster, int x, int y, int channel) {
+  const std::size_t index = (static_cast<std::size_t>(y) * raster.width + x) * 4 + channel;
   return index < raster.pixels.size() ? raster.pixels[index] : 0;
 }
 
-/// The centre of mass of the drawn pixels along x, as a fraction of the width.
-/// What tells left-aligned text from right-aligned without reading glyphs.
+[[nodiscard]] std::uint8_t alpha_at(const Raster& raster, int x, int y) {
+  return channel_at(raster, x, y, 3);
+}
+
+/// The centre of mass of the drawn pixels, as a fraction of the size. What
+/// tells left-aligned text from right-aligned without reading glyphs.
 [[nodiscard]] double horizontal_balance(const Raster& raster) {
   double weighted = 0.0;
   double total = 0.0;
@@ -50,6 +66,21 @@ namespace {
   }
   return total > 0.0 ? weighted / total / raster.width : 0.5;
 }
+
+[[nodiscard]] double vertical_balance(const Raster& raster) {
+  double weighted = 0.0;
+  double total = 0.0;
+  for (int y = 0; y < raster.height; ++y) {
+    for (int x = 0; x < raster.width; ++x) {
+      const double a = alpha_at(raster, x, y);
+      weighted += a * y;
+      total += a;
+    }
+  }
+  return total > 0.0 ? weighted / total / raster.height : 0.5;
+}
+
+// --------------------------------------------------------------------- text --
 
 TEST(Rasterise, DrawsSomething) {
   const auto raster = rasterise(title());
@@ -76,14 +107,28 @@ TEST(Rasterise, TheBackgroundIsTransparentUnlessAskedFor) {
   EXPECT_EQ(alpha_at(*raster, raster->width - 1, raster->height - 1), 0);
 }
 
-TEST(Rasterise, ABackgroundFillsTheWholeImage) {
-  core::TextSpec spec = title();
-  spec.background = "#000000";
+TEST(Rasterise, ABackgroundBoxReachesPastTheTextByItsPadding) {
+  GraphicLayer layer = title();
+  layer.style.background =
+      core::GraphicBackground{.color = "#000000", .opacity = 1.0, .padding = 10.0};
 
-  const auto raster = rasterise(spec);
+  const auto raster = rasterise(layer);
   ASSERT_TRUE(raster.has_value()) << raster.error();
-  EXPECT_EQ(alpha_at(*raster, 0, 0), 255);
-  EXPECT_EQ(alpha_at(*raster, raster->width - 1, raster->height - 1), 255);
+  const core::LayerExtent extent = measure(layer);
+  // Inside the padding, just outside the text, it is solid.
+  EXPECT_EQ(alpha_at(*raster, static_cast<int>(extent.left) - 5, raster->height / 2), 255);
+  // And the margin past the padding is still clear.
+  EXPECT_EQ(alpha_at(*raster, 0, 0), 0);
+}
+
+TEST(Rasterise, ABackgroundsOpacityIsItsAlpha) {
+  GraphicLayer layer = title();
+  layer.style.background =
+      core::GraphicBackground{.color = "#000000", .opacity = 0.5, .padding = 10.0};
+  const auto raster = rasterise(layer);
+  ASSERT_TRUE(raster.has_value()) << raster.error();
+  const core::LayerExtent extent = measure(layer);
+  EXPECT_NEAR(alpha_at(*raster, static_cast<int>(extent.left) - 5, raster->height / 2), 128, 2);
 }
 
 TEST(Rasterise, TwoLinesAreTallerThanOne) {
@@ -94,6 +139,13 @@ TEST(Rasterise, TwoLinesAreTallerThanOne) {
   EXPECT_GT(two->height, one->height);
 }
 
+TEST(Rasterise, LeadingSpacesTheLinesFurtherApart) {
+  GraphicLayer tight = title("Hello\nagain");
+  GraphicLayer loose = tight;
+  loose.style.leading = 40.0;
+  EXPECT_NEAR(measure(loose).content.height - measure(tight).content.height, 40.0, 0.5);
+}
+
 TEST(Rasterise, ALongerLineIsWider) {
   const auto few = rasterise(title("i"));
   const auto many = rasterise(title("wwwwwwwwww"));
@@ -102,24 +154,41 @@ TEST(Rasterise, ALongerLineIsWider) {
   EXPECT_GT(many->width, few->width);
 }
 
+TEST(Rasterise, TrackingSpreadsTheLetters) {
+  GraphicLayer plain = title("wwwww");
+  GraphicLayer spread = plain;
+  // Two hundred thousandths of 48 pixels, four gaps.
+  spread.style.tracking = 200.0;
+  EXPECT_NEAR(measure(spread).content.width - measure(plain).content.width, 4 * 9.6, 1.0);
+}
+
+TEST(Rasterise, AParagraphBoxWrapsAtSpaces) {
+  GraphicLayer point = title("one two three four five six");
+  GraphicLayer paragraph = point;
+  paragraph.box_width = 200.0;
+  const core::LayerExtent wrapped = measure(paragraph);
+  EXPECT_DOUBLE_EQ(wrapped.content.width, 200.0) << "the box is the text's width";
+  EXPECT_GT(wrapped.content.height, measure(point).content.height * 2.0)
+      << "the words did not wrap onto more lines";
+}
+
+TEST(Rasterise, AllCapsIsDrawnInCapitals) {
+  GraphicLayer lower = title("xxxx");
+  GraphicLayer upper = lower;
+  upper.style.all_caps = true;
+  EXPECT_GT(measure(upper).content.width, measure(lower).content.width);
+}
+
 TEST(Rasterise, AlignmentDecidesWhereShortLinesSit) {
   // A long line sets the width; a short one is placed within it.
-  const auto centred = [] {
-    core::TextSpec spec = title("wwwwwwwwww\ni");
-    spec.align = core::TextAlign::Center;
-    return rasterise(spec);
-  }();
-  const auto left = [] {
-    core::TextSpec spec = title("wwwwwwwwww\ni");
-    spec.align = core::TextAlign::Left;
-    return rasterise(spec);
-  }();
-  const auto right = [] {
-    core::TextSpec spec = title("wwwwwwwwww\ni");
-    spec.align = core::TextAlign::Right;
-    return rasterise(spec);
-  }();
-
+  const auto aligned = [](core::TextAlign align) {
+    GraphicLayer layer = title("wwwwwwwwww\ni");
+    layer.style.align = align;
+    return rasterise(layer);
+  };
+  const auto centred = aligned(core::TextAlign::Center);
+  const auto left = aligned(core::TextAlign::Left);
+  const auto right = aligned(core::TextAlign::Right);
   ASSERT_TRUE(centred.has_value());
   ASSERT_TRUE(left.has_value());
   ASSERT_TRUE(right.has_value());
@@ -128,13 +197,26 @@ TEST(Rasterise, AlignmentDecidesWhereShortLinesSit) {
   EXPECT_GT(horizontal_balance(*right), horizontal_balance(*centred));
 }
 
+TEST(Rasterise, ATypewriterDrawsTheFirstLettersWhereTheWholeTextPutsThem) {
+  const GraphicLayer layer = title("wwwwwwwwww");
+  const auto whole = rasterise(layer);
+  const auto part = rasterise(layer, 3);
+  ASSERT_TRUE(whole.has_value());
+  ASSERT_TRUE(part.has_value());
+  // The same picture size, so the letters already typed do not move.
+  EXPECT_EQ(part->width, whole->width);
+  EXPECT_EQ(part->height, whole->height);
+  EXPECT_LT(drawn(*part), drawn(*whole));
+  EXPECT_LT(horizontal_balance(*part), 0.4) << "the first letters are on the left";
+}
+
 TEST(Rasterise, ThePixelsArePremultiplied) {
   // The compositor divides the alpha back out, and a channel brighter than the
   // alpha it was multiplied by would come back over 1 and clip.
-  core::TextSpec spec = title();
-  spec.color = "#ffffff";
+  GraphicLayer layer = title();
+  layer.style.fill = "#ffffff";
 
-  const auto raster = rasterise(spec);
+  const auto raster = rasterise(layer);
   ASSERT_TRUE(raster.has_value()) << raster.error();
 
   for (std::size_t i = 0; i + 3 < raster->pixels.size(); i += 4) {
@@ -146,10 +228,10 @@ TEST(Rasterise, ThePixelsArePremultiplied) {
 }
 
 TEST(Rasterise, TheColourIsTheOneAsked) {
-  core::TextSpec spec = title();
-  spec.color = "#ff0000";
+  GraphicLayer layer = title();
+  layer.style.fill = "#ff0000";
 
-  const auto raster = rasterise(spec);
+  const auto raster = rasterise(layer);
   ASSERT_TRUE(raster.has_value()) << raster.error();
 
   // The most opaque pixel is inside a glyph, and there the fill is undiluted.
@@ -163,10 +245,10 @@ TEST(Rasterise, TheColourIsTheOneAsked) {
 }
 
 TEST(Rasterise, AMalformedColourFallsBackRatherThanVanishing) {
-  core::TextSpec spec = title();
-  spec.color = "not a colour";
+  GraphicLayer layer = title();
+  layer.style.fill = "not a colour";
 
-  const auto raster = rasterise(spec);
+  const auto raster = rasterise(layer);
   ASSERT_TRUE(raster.has_value()) << raster.error();
   EXPECT_GT(drawn(*raster), 0u);
 }
@@ -174,22 +256,21 @@ TEST(Rasterise, AMalformedColourFallsBackRatherThanVanishing) {
 TEST(Rasterise, AnUnknownFontIsSubstitutedRatherThanRefused) {
   // A project written on another machine can name anything. Every other
   // application substitutes; refusing to draw the title would be worse.
-  core::TextSpec spec = title();
-  spec.font_family = "Definitely Not An Installed Font, sans-serif";
+  GraphicLayer layer = title();
+  layer.style.font_family = "Definitely Not An Installed Font, sans-serif";
 
-  const auto raster = rasterise(spec);
+  const auto raster = rasterise(layer);
   ASSERT_TRUE(raster.has_value()) << raster.error();
   EXPECT_GT(drawn(*raster), 0u);
 }
 
 TEST(Rasterise, AStrokeAndAShadowFitInsideTheImage) {
-  core::TextSpec spec = title();
-  spec.stroke_color = "#000000";
-  spec.stroke_width = 6.0;
-  spec.shadow = true;
+  GraphicLayer layer = title();
+  layer.style.strokes = {core::GraphicStroke{.color = "#000000", .width = 6.0}};
+  layer.style.shadow = core::GraphicShadow{};
 
   const auto plain = rasterise(title());
-  const auto decorated = rasterise(spec);
+  const auto decorated = rasterise(layer);
   ASSERT_TRUE(plain.has_value());
   ASSERT_TRUE(decorated.has_value()) << decorated.error();
 
@@ -200,38 +281,135 @@ TEST(Rasterise, AStrokeAndAShadowFitInsideTheImage) {
 }
 
 TEST(Rasterise, NoTextIsRefusedRatherThanDrawnEmpty) {
-  core::TextSpec spec = title("");
-  EXPECT_FALSE(rasterise(spec).has_value());
+  EXPECT_FALSE(rasterise(title("")).has_value());
 
-  core::TextSpec sizeless = title();
-  sizeless.font_size = 0.0;
+  GraphicLayer sizeless = title();
+  sizeless.style.font_size = 0.0;
   EXPECT_FALSE(rasterise(sizeless).has_value());
 }
 
-TEST(Measure, AgreesWithWhatIsDrawn) {
-  // The layout sizes a title's quad from `measure` and the compositor fills it
-  // with what `rasterise` produced. If the two disagree the text is stretched.
-  const core::TextSpec spec = title("Hello\nagain");
-  const Size size = measure(spec);
-  const auto raster = rasterise(spec);
-  ASSERT_TRUE(raster.has_value()) << raster.error();
+// ------------------------------------------------------------------- shapes --
 
-  EXPECT_NEAR(size.width, raster->width, 1.0);
-  EXPECT_NEAR(size.height, raster->height, 1.0);
+TEST(Rasterise, ARectangleFillsItsBoxInsideItsMargin) {
+  const GraphicLayer layer = box(100.0, 40.0);
+  const auto raster = rasterise(layer);
+  ASSERT_TRUE(raster.has_value()) << raster.error();
+  const core::LayerExtent extent = measure(layer);
+  EXPECT_DOUBLE_EQ(extent.content.width, 100.0);
+  const int cx = static_cast<int>(extent.left + 50.0);
+  const int cy = static_cast<int>(extent.top + 20.0);
+  EXPECT_EQ(alpha_at(*raster, cx, cy), 255);
+  EXPECT_GT(channel_at(*raster, cx, cy, 0), 250);
+  EXPECT_EQ(alpha_at(*raster, 0, 0), 0);
+}
+
+TEST(Rasterise, AnEllipseLeavesItsCornersEmpty) {
+  GraphicLayer layer = box(100.0, 100.0);
+  layer.kind = GraphicKind::Ellipse;
+  const auto raster = rasterise(layer);
+  ASSERT_TRUE(raster.has_value()) << raster.error();
+  const core::LayerExtent extent = measure(layer);
+  EXPECT_EQ(alpha_at(*raster, static_cast<int>(extent.left) + 3, static_cast<int>(extent.top) + 3), 0);
+  EXPECT_EQ(alpha_at(*raster, static_cast<int>(extent.left + 50), static_cast<int>(extent.top + 50)),
+            255);
+}
+
+TEST(Rasterise, RoundedCornersLeaveTheCornerEmpty) {
+  GraphicLayer square = box(100.0, 100.0);
+  GraphicLayer rounded = square;
+  rounded.corner_radius = 30.0;
+  const auto a = rasterise(square);
+  const auto b = rasterise(rounded);
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  const core::LayerExtent extent = measure(square);
+  const int x = static_cast<int>(extent.left) + 2;
+  const int y = static_cast<int>(extent.top) + 2;
+  EXPECT_EQ(alpha_at(*a, x, y), 255);
+  EXPECT_EQ(alpha_at(*b, x, y), 0);
+}
+
+TEST(Rasterise, StrokesStackOutwardsTheFirstInnermost) {
+  GraphicLayer layer = box(100.0, 100.0);
+  layer.style.strokes = {core::GraphicStroke{.color = "#00ff00", .width = 6.0},
+                         core::GraphicStroke{.color = "#0000ff", .width = 6.0}};
+  const auto raster = rasterise(layer);
+  ASSERT_TRUE(raster.has_value()) << raster.error();
+  const core::LayerExtent extent = measure(layer);
+  const int y = static_cast<int>(extent.top + 50.0);
+  // Three pixels outside the edge is the green stroke; nine is the blue one.
+  const int green = static_cast<int>(extent.left) - 3;
+  const int blue = static_cast<int>(extent.left) - 9;
+  EXPECT_GT(channel_at(*raster, green, y, 1), 200);
+  EXPECT_LT(channel_at(*raster, green, y, 2), 50);
+  EXPECT_GT(channel_at(*raster, blue, y, 2), 200);
+  EXPECT_LT(channel_at(*raster, blue, y, 1), 50);
+}
+
+TEST(Rasterise, AShadowFallsAwayFromTheLight) {
+  // The light at 135 degrees is up and to the left, so the shadow is below
+  // and to the right of the shape.
+  GraphicLayer layer = box(60.0, 60.0);
+  layer.style.fill_enabled = false;
+  layer.style.shadow = core::GraphicShadow{.opacity = 1.0, .angle = 135.0, .distance = 20.0,
+                                           .blur = 0.0};
+  const auto raster = rasterise(layer);
+  ASSERT_TRUE(raster.has_value()) << raster.error();
+  EXPECT_GT(horizontal_balance(*raster), 0.55);
+  EXPECT_GT(vertical_balance(*raster), 0.55);
+}
+
+TEST(Rasterise, AShapeWithNoFillDrawsOnlyItsStroke) {
+  GraphicLayer layer = box(100.0, 100.0);
+  layer.style.fill_enabled = false;
+  layer.style.strokes = {core::GraphicStroke{.width = 4.0}};
+  const auto raster = rasterise(layer);
+  ASSERT_TRUE(raster.has_value()) << raster.error();
+  const core::LayerExtent extent = measure(layer);
+  EXPECT_EQ(alpha_at(*raster, static_cast<int>(extent.left + 50), static_cast<int>(extent.top + 50)),
+            0);
+}
+
+TEST(Rasterise, AMissingPictureIsSaidRatherThanDrawnBlank) {
+  GraphicLayer layer;
+  layer.kind = GraphicKind::Image;
+  layer.path = "C:/definitely/not/here.png";
+  EXPECT_FALSE(rasterise(layer).has_value());
+}
+
+// ------------------------------------------------------------------ measure --
+
+TEST(Measure, AgreesWithWhatIsDrawn) {
+  // The placement sizes a layer's quad from `measure` and the compositor fills
+  // it with what `rasterise` produced. If the two disagree it is stretched.
+  for (const GraphicLayer& layer : {title("Hello\nagain"), box(120.0, 30.0)}) {
+    const core::Size size = measure(layer).drawn();
+    const auto raster = rasterise(layer);
+    ASSERT_TRUE(raster.has_value()) << raster.error();
+    EXPECT_NEAR(size.width, raster->width, 1.0);
+    EXPECT_NEAR(size.height, raster->height, 1.0);
+  }
 }
 
 TEST(Measure, NothingMeasuresToNothing) {
-  EXPECT_EQ(measure(title("")), Size{});
+  EXPECT_EQ(measure(title("")).content, core::Size{});
 }
 
 TEST(Measure, ABiggerFontMeasuresBigger) {
-  core::TextSpec small = title();
-  small.font_size = 24.0;
-  core::TextSpec large = title();
-  large.font_size = 96.0;
+  GraphicLayer small = title();
+  small.style.font_size = 24.0;
+  GraphicLayer large = title();
+  large.style.font_size = 96.0;
 
-  EXPECT_GT(measure(large).width, measure(small).width);
-  EXPECT_GT(measure(large).height, measure(small).height);
+  EXPECT_GT(measure(large).content.width, measure(small).content.width);
+  EXPECT_GT(measure(large).content.height, measure(small).content.height);
+}
+
+TEST(Fonts, TheMachinesFamiliesAreListedOnceEachInOrder) {
+  const std::vector<std::string> families = font_families();
+  ASSERT_FALSE(families.empty());
+  EXPECT_TRUE(std::ranges::is_sorted(families));
+  EXPECT_EQ(std::ranges::adjacent_find(families), families.end());
 }
 
 }  // namespace

@@ -3,6 +3,7 @@
   src/attributes.cpp
   src/edit.cpp
   src/effects.cpp
+  src/graphic.cpp
   src/history.cpp
   src/id.cpp
   src/interpret.cpp

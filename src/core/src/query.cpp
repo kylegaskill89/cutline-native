@@ -10,13 +10,13 @@
 namespace cutline::core {
 
 bool is_generated_media(const Media& m) noexcept {
-  return m.is_text || m.is_color || m.is_adjustment;
+  return m.is_graphic || m.is_color || m.is_adjustment;
 }
 
 bool is_nested_sequence(const Media& m) noexcept { return !m.sequence_id.empty(); }
 
 bool is_still_like(const Media& m) noexcept {
-  return m.is_image || m.is_text || m.is_color || m.is_adjustment;
+  return m.is_image || m.is_graphic || m.is_color || m.is_adjustment;
 }
 
 const std::string& source_path(const Media& m, bool prefer_proxy) noexcept {

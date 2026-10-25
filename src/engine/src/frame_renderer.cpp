@@ -1,5 +1,6 @@
 #include "cutline/engine/frame_renderer.hpp"
 
+#include "cutline/core/graphic.hpp"
 #include "cutline/core/interpret.hpp"
 #include "cutline/core/nesting.hpp"
 #include "cutline/core/sequences.hpp"
@@ -728,27 +729,37 @@ struct FrameRenderer::Impl {
   std::atomic<std::uint64_t> decoded_ahead{0};
 
 #if CUTLINE_HAVE_TEXT
-  /// Rasterised titles, keyed by media id.
+  /// Graphic layers as measured and drawn, keyed by media and layer id.
   ///
-  /// Drawing text costs about as much as decoding a frame and a title does not
-  /// change between frames, so it is drawn once and kept. The spec it was drawn
-  /// from is kept beside it: the only thing that can invalidate a title is an
-  /// edit to the text or its styling, and comparing the spec catches every one
-  /// of those without anyone having to remember to say so.
-  struct Title {
-    core::TextSpec spec;
-    text::Raster raster;
+  /// Drawing text costs about as much as decoding a frame, and a layer's
+  /// picture does not change when it only moves -- which is what an animated
+  /// graphic mostly does -- so each is drawn once and kept, and the compositor
+  /// moves it. What it was drawn from is kept beside it: comparing the look
+  /// catches every edit without anyone having to remember to say so. A few
+  /// looks per layer, because a shape stretched by its pins and a typewriter
+  /// part-way through are drawn more than one way in a frame.
+  struct DrawnLayer {
+    core::GraphicLayer look;
+    std::size_t characters = core::kAllCharacters;
+    core::LayerExtent extent;
+    std::optional<text::Raster> raster;
   };
-  std::map<std::string, Title> titles;
+  std::map<std::string, std::vector<DrawnLayer>> drawn_layers;
 
-  /// The rasterised title for a media, drawing it if it is not in hand.
-  /// Null when it cannot be drawn at all.
-  [[nodiscard]] const text::Raster* title_for(const core::Media& media);
+  /// The entry for a layer as it looks now, made if it is not in hand.
+  [[nodiscard]] DrawnLayer& drawn(const std::string& media_id, const core::GraphicLayer& layer,
+                                  std::size_t characters);
+
+  /// One compositor per graphic on screen, keyed by clip: two graphics in a
+  /// frame are two pictures, both alive until the frame is composited.
+  std::map<std::string, std::unique_ptr<gpu::Compositor>> graphic_compositors;
+
+  /// Composites a graphic's layers into a frame-sized picture, still on the
+  /// card, as a nest is. Empty when there is nothing to draw.
+  [[nodiscard]] gpu::SceneTexture graphic_picture(const core::Project& project,
+                                                  const core::Clip& clip,
+                                                  const core::Media& media, double t);
 #endif
-
-  /// How big a title comes out on the canvas. Empty when text cannot be drawn,
-  /// which is what makes a title fall back to filling the canvas.
-  [[nodiscard]] core::Size measure(const core::Media& media);
 
   /// Positions the source at `time` and returns its frame, or null.
   /// `from` receives the decoder that produced the frame, which is what a
@@ -899,37 +910,122 @@ struct FrameRenderer::Impl {
 
 #if CUTLINE_HAVE_TEXT
 
-const text::Raster* FrameRenderer::Impl::title_for(const core::Media& media) {
-  if (!media.text.has_value()) return nullptr;
+namespace {
 
-  const auto found = titles.find(media.id);
-  if (found != titles.end()) {
-    if (found->second.spec == *media.text) return &found->second.raster;
-    // Edited since it was drawn.
-    titles.erase(found);
+/// Whether two versions of a layer draw the same picture: everything but
+/// where it is and how it moves, which the compositor handles.
+[[nodiscard]] bool same_look(const core::GraphicLayer& a, const core::GraphicLayer& b) {
+  return a.kind == b.kind && a.text == b.text && a.box_width == b.box_width &&
+         a.width == b.width && a.height == b.height && a.corner_radius == b.corner_radius &&
+         a.path == b.path && a.style == b.style;
+}
+
+/// Looks kept per layer before the oldest is let go.
+constexpr std::size_t kLooksPerLayer = 4;
+
+}  // namespace
+
+FrameRenderer::Impl::DrawnLayer& FrameRenderer::Impl::drawn(const std::string& media_id,
+                                                           const core::GraphicLayer& layer,
+                                                           std::size_t characters) {
+  std::vector<DrawnLayer>& looks = drawn_layers[media_id + '\x1f' + layer.id];
+  for (DrawnLayer& entry : looks) {
+    if (entry.characters == characters && same_look(entry.look, layer)) return entry;
+  }
+  if (looks.size() >= kLooksPerLayer) looks.erase(looks.begin());
+  // Measured by the same layout the drawing uses, so the quad is exactly the
+  // size of the picture that fills it.
+  looks.push_back(DrawnLayer{.look = layer, .characters = characters,
+                             .extent = text::measure(layer), .raster = std::nullopt});
+  return looks.back();
+}
+
+gpu::SceneTexture FrameRenderer::Impl::graphic_picture(const core::Project& project,
+                                                       const core::Clip& clip,
+                                                       const core::Media& media, double t) {
+  if (!media.graphic.has_value()) return {};
+  const core::Sequence& sequence = project.sequence();
+  const int width = sequence.canvas_w;
+  const int height = sequence.canvas_h;
+  if (width <= 0 || height <= 0) return {};
+
+  const std::vector<core::PlacedLayer> placed = core::place_graphic(
+      *media.graphic, t - clip.start, core::clip_duration(clip), width, height,
+      [this, &media](const core::GraphicLayer& layer) {
+        return drawn(media.id, layer, core::kAllCharacters).extent;
+      });
+  if (placed.empty()) return {};
+
+  auto found = graphic_compositors.find(clip.id);
+  if (found == graphic_compositors.end()) {
+    auto made = gpu::Compositor::create(device, width, height, queue);
+    if (!made.has_value()) return {};
+    found = graphic_compositors.emplace(clip.id, std::move(*made)).first;
+  }
+  gpu::Compositor& graphic = *found->second;
+  if (!graphic.resize(width, height).has_value()) return {};
+
+  // Reserved: the layers point into both.
+  std::vector<gpu::FrameView> frames;
+  frames.reserve(placed.size());
+  std::vector<std::vector<gpu::EffectPass>> passes;
+  passes.reserve(placed.size());
+  std::vector<Layer> layers;
+  layers.reserve(placed.size());
+
+  for (const core::PlacedLayer& at : placed) {
+    // At the size its pins stretched it to, which is a different picture.
+    core::GraphicLayer look = *at.layer;
+    look.width = at.width;
+    look.height = at.height;
+    DrawnLayer& entry = drawn(media.id, look, at.characters);
+    if (!entry.raster.has_value()) {
+      auto made = text::rasterise(look, at.characters);
+      // Nothing drawable -- no text yet, or a picture that cannot be read --
+      // is left out rather than drawn as a blank rectangle.
+      entry.raster = made.has_value() ? std::move(*made) : text::Raster{};
+    }
+    const text::Raster& raster = *entry.raster;
+    if (raster.empty()) continue;
+
+    gpu::FrameView view;
+    view.width = raster.width;
+    view.height = raster.height;
+    view.layout = gpu::PixelLayout::Rgba8;
+    // Not video: a rasteriser works in full-range sRGB, and treating it as
+    // studio-range would lift the blacks of every title.
+    view.full_range = true;
+    view.planes[0] = gpu::PlaneView{.data = raster.pixels.data(), .stride = raster.stride()};
+    frames.push_back(view);
+
+    Layer layer;
+    layer.frame = &frames.back();
+    layer.quad = {static_cast<float>(at.box.center_x), static_cast<float>(at.box.center_y),
+                  static_cast<float>(at.box.width), static_cast<float>(at.box.height),
+                  static_cast<float>(at.box.rotation_deg)};
+    layer.opacity = static_cast<float>(std::clamp(at.opacity, 0.0, 1.0));
+    passes.emplace_back();
+    if (at.wipe < 1.0) {
+      // A wipe is a crop from the right that shrinks to nothing.
+      passes.back().push_back(to_gpu_pass(
+          render::crop_pass(0.0f, 0.0f, static_cast<float>(1.0 - std::max(0.0, at.wipe)), 0.0f)));
+    }
+    layer.passes = passes.back();
+    layers.push_back(layer);
   }
 
-  auto drawn = text::rasterise(*media.text);
-  if (!drawn.has_value()) return nullptr;
-
-  const auto inserted =
-      titles.emplace(media.id, Title{.spec = *media.text, .raster = std::move(*drawn)});
-  return &inserted.first->second.raster;
+  // In the sequence's colour, as a nest is: graphics white lands where the
+  // sequence puts it, and an HDR sequence is taken out at its real brightness.
+  graphic.set_colour(gpu::ColourSettings{
+      .working = static_cast<gpu::WorkingColour>(sequence.colour),
+      .graphics_white_nits = static_cast<float>(sequence.graphics_white),
+      .tone_map = sequence.tone_map});
+  const bool hdr = sequence.colour != core::WorkingColour::Rec709;
+  graphic.set_hdr_display(hdr ? std::optional<float>(80.0f) : std::nullopt);
+  if (!graphic.compose(layers).has_value()) return {};
+  const auto picture = graphic.display_texture();
+  return picture.has_value() ? *picture : gpu::SceneTexture{};
 }
-
-core::Size FrameRenderer::Impl::measure(const core::Media& media) {
-  if (!media.text.has_value()) return {};
-  // Measured by drawing, not by a second code path that could disagree: the
-  // quad has to be exactly the size of the picture that fills it, or the text
-  // is stretched.
-  const text::Raster* raster = title_for(media);
-  if (raster == nullptr) return {};
-  return core::Size{static_cast<double>(raster->width), static_cast<double>(raster->height)};
-}
-
-#else
-
-core::Size FrameRenderer::Impl::measure(const core::Media&) { return {}; }
 
 #endif
 
@@ -1230,7 +1326,6 @@ void FrameRenderer::Impl::prefetch_jump_back(Source& source, double until) {
 
 void FrameRenderer::Impl::prefetch_cuts_back(const core::Project& project, double t,
                                              std::span<const render::PlannedLayer> now) {
-  const auto measurer = [this](const core::Media& media) { return measure(media); };
   const double fps = project.sequence().fps > 0.0 ? project.sequence().fps : 30.0;
 
   // Where each clip on screen begins in its source, unless the clip before it
@@ -1245,12 +1340,12 @@ void FrameRenderer::Impl::prefetch_cuts_back(const core::Project& project, doubl
     const double speed = core::conform_speed(*live.media);
     double starts = -1.0;
     for (const render::PlannedLayer& at : render::plan_frame(
-             project, live.clip->start + 0.5 / fps, measurer)) {
+             project, live.clip->start + 0.5 / fps)) {
       if (at.clip == live.clip) starts = at.source_time * speed;
     }
     if (starts >= 0.0 && live.clip->start >= 0.5 / fps) {
       for (const render::PlannedLayer& at : render::plan_frame(
-               project, live.clip->start - 0.5 / fps, measurer)) {
+               project, live.clip->start - 0.5 / fps)) {
         if (at.media != live.media || at.content != render::LayerContent::Video) continue;
         // One frame earlier in the same source: an edit nobody can see.
         if (std::abs(starts - at.source_time * speed - 1.0 / fps) <= source.slack * 2.0) {
@@ -1288,7 +1383,7 @@ void FrameRenderer::Impl::prefetch_cuts_back(const core::Project& project, doubl
   const double earlier = t - kCutLookbehind;
   if (earlier < 0.0) return;
 
-  for (const render::PlannedLayer& layer : render::plan_frame(project, earlier, measurer)) {
+  for (const render::PlannedLayer& layer : render::plan_frame(project, earlier)) {
     if (layer.content != render::LayerContent::Video || layer.clip == nullptr) continue;
     if (layer.media == nullptr || layer.media->path.empty()) continue;
 
@@ -1309,7 +1404,7 @@ void FrameRenderer::Impl::prefetch_cuts_back(const core::Project& project, doubl
     if (!source.usable) continue;
 
     double until = -1.0;
-    for (const render::PlannedLayer& at_end : render::plan_frame(project, last, measurer)) {
+    for (const render::PlannedLayer& at_end : render::plan_frame(project, last)) {
       if (at_end.clip == layer.clip) until = at_end.source_time * core::conform_speed(*layer.media);
     }
     if (until < 0.0) continue;
@@ -1321,7 +1416,7 @@ void FrameRenderer::Impl::prefetch_cuts_back(const core::Project& project, doubl
     });
     if (showing != now.end() && showing->clip != nullptr) {
       const double first = showing->clip->start + 0.5 / fps;
-      for (const render::PlannedLayer& at_start : render::plan_frame(project, first, measurer)) {
+      for (const render::PlannedLayer& at_start : render::plan_frame(project, first)) {
         if (at_start.clip != showing->clip) continue;
         const double starts = at_start.source_time * core::conform_speed(*layer.media);
         if (std::abs(starts - until - source.slack * 2.0) <= source.slack * 2.0) until = -1.0;
@@ -1356,8 +1451,7 @@ void FrameRenderer::Impl::prefetch_cuts(const core::Project& project, double t,
   // What the sequence will be showing shortly. Planned rather than guessed: the
   // plan already knows which source time every layer wants, and asking it about
   // a moment in the future is the same pure function.
-  const std::vector<render::PlannedLayer> soon = render::plan_frame(
-      project, t + kCutLookahead, [this](const core::Media& media) { return measure(media); });
+  const std::vector<render::PlannedLayer> soon = render::plan_frame(project, t + kCutLookahead);
 
   for (const render::PlannedLayer& layer : soon) {
     if (layer.content != render::LayerContent::Video) continue;
@@ -1818,10 +1912,7 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
     return std::unexpected(ok.error());
   }
 
-  // The measurer is what sizes a title's quad to its text; without it a title
-  // would be stretched to fill the canvas.
-  const std::vector<render::PlannedLayer> planned = render::plan_frame(
-      project, t, [&d](const core::Media& media) { return d.measure(media); });
+  const std::vector<render::PlannedLayer> planned = render::plan_frame(project, t);
 
   // Reserved up front: the layers hold pointers into this, so a reallocation
   // partway through would leave earlier layers pointing at freed memory.
@@ -1901,25 +1992,26 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
         break;
       }
 
-      case render::LayerContent::Text: {
+      case render::LayerContent::Graphic: {
 #if CUTLINE_HAVE_TEXT
-        if (source.media == nullptr) continue;
-        const text::Raster* raster = d.title_for(*source.media);
-        // Nothing drawable — no text, or no font at all. Skipped rather than
-        // drawn as a blank rectangle, so a title that failed is visibly absent
-        // instead of quietly wrong.
-        if (raster == nullptr || raster->empty()) continue;
+        if (source.media == nullptr || source.clip == nullptr) continue;
+        const gpu::SceneTexture picture = d.graphic_picture(project, *source.clip, *source.media, t);
+        // Nothing drawable -- no layers, or none that could be drawn -- is
+        // skipped rather than drawn as a blank frame.
+        if (picture.empty()) continue;
 
         gpu::FrameView view;
-        view.width = raster->width;
-        view.height = raster->height;
-        view.layout = gpu::PixelLayout::Rgba8;
-        // Not video: a rasteriser works in full-range sRGB, and treating it as
-        // studio-range would lift the blacks of every title.
+        view.width = picture.width;
+        view.height = picture.height;
+        // A composited scene, as a nest's is.
+        view.layout = gpu::PixelLayout::Scene;
         view.full_range = true;
-        view.planes[0] = gpu::PlaneView{.data = raster->pixels.data(),
-                                        .stride = raster->stride()};
-
+        view.texture = gpu::SourceTexture{.resource = picture.resource};
+        if (picture.hdr_resource != nullptr) {
+          view.texture = gpu::SourceTexture{.resource = picture.hdr_resource};
+          view.transfer = gpu::TransferFunction::ScRgb;
+          view.primaries = gpu::ColourPrimaries::Bt709;
+        }
         d.views.push_back(view);
         layer.frame = &d.views.back();
         break;

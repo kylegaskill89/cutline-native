@@ -25,7 +25,7 @@ namespace cutline::render {
 enum class LayerContent {
   Video,       ///< a frame from a source file, at `source_time`
   Still,       ///< an image; `source_time` is meaningless
-  Text,        ///< a title, laid out from the media's text spec
+  Graphic,     ///< a graphic: its layers composited into a frame-sized picture
   Color,       ///< a colour matte, possibly a gradient
   Adjustment,  ///< draws nothing; its effects apply to everything beneath it
   /// A sequence composited on its own and drawn as one picture.
@@ -66,15 +66,6 @@ struct PlannedLayer {
   int track_index = 0;
 };
 
-/// How big a title comes out.
-///
-/// The model stores what the text says, not how much room it takes — that
-/// depends on a font, which is not something a pure layer can know. A caller
-/// able to draw text supplies this and its titles are sized to their content; a
-/// caller that cannot leaves it empty, and a title falls back to filling the
-/// canvas rather than to nothing.
-using TextMeasurer = std::function<core::Size(const core::Media& media)>;
-
 /// The layers active at timeline time `t`, in the order they should be drawn:
 /// bottom track first, and within a track, earlier-starting segments first so a
 /// dissolve's incoming clip lands on top of the outgoing one.
@@ -84,13 +75,11 @@ using TextMeasurer = std::function<core::Size(const core::Media& media)>;
 /// for stills and generated media.
 [[nodiscard]] std::vector<PlannedLayer> plan_frame(
     const core::Project& project, double t,
-    const std::function<double(std::string_view media_id)>& media_duration_of,
-    const TextMeasurer& measure_text = {});
+    const std::function<double(std::string_view media_id)>& media_duration_of);
 
 /// As `plan_frame`, using the project's own media list for durations. This is
 /// what callers normally want; the callback form exists for tests and for
 /// sources whose real duration is not yet known.
-[[nodiscard]] std::vector<PlannedLayer> plan_frame(const core::Project& project, double t,
-                                                   const TextMeasurer& measure_text = {});
+[[nodiscard]] std::vector<PlannedLayer> plan_frame(const core::Project& project, double t);
 
 }  // namespace cutline::render

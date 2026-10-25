@@ -156,7 +156,7 @@ Project match_sequence_to(Project p, std::string_view media_id) {
   // Generated sources take the canvas's shape rather than giving it one, and a
   // still has no rate to give. Both are the same test: only real footage knows
   // what it is.
-  if (media->is_text || media->is_color || media->is_adjustment) return p;
+  if (media->is_graphic || media->is_color || media->is_adjustment) return p;
 
   if (media->width.has_value() && media->height.has_value() && *media->width > 0 &&
       *media->height > 0) {
@@ -312,10 +312,10 @@ Project set_clip_transform(Project p, std::string_view clip_id, Transform transf
 
 // ------------------------------------------------------- generated media --
 
-Project set_text_spec(Project p, std::string_view media_id, TextSpec spec) {
+Project set_graphic(Project p, std::string_view media_id, Graphic graphic) {
   Media* m = find_media(p, media_id);
-  if (m == nullptr || !m->is_text) return p;
-  m->text = std::move(spec);
+  if (m == nullptr || !m->is_graphic) return p;
+  m->graphic = std::move(graphic);
   return p;
 }
 

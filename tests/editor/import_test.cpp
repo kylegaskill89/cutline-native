@@ -322,8 +322,8 @@ TEST(Import, LookingUpByPathFindsIt) {
 TEST(Import, GeneratedMediaAreNotMatchedByTheirEmptyPath) {
   // Titles and mattes have no path. Two of them must not collapse into one.
   Project project;
-  project.media.push_back(core::Media{.id = "title1", .name = "Title", .is_text = true});
-  project.media.push_back(core::Media{.id = "title2", .name = "Title", .is_text = true});
+  project.media.push_back(core::Media{.id = "title1", .name = "Title", .is_graphic = true});
+  project.media.push_back(core::Media{.id = "title2", .name = "Title", .is_graphic = true});
 
   std::string id;
   project = import_media(std::move(project), a_video(), &id);

@@ -1,5 +1,7 @@
 #include "cutline/render/preview.hpp"
 
+#include "cutline/core/graphic.hpp"
+
 #include "cutline/render/effect_catalog.hpp"
 
 #include <algorithm>
@@ -59,9 +61,7 @@ core::Project scaled_canvas(core::Project project, double factor) {
   project.sequence().canvas_h = height;
 
   for (core::Media& media : project.media) {
-    if (!media.text.has_value()) continue;
-    media.text->font_size *= actual;
-    media.text->stroke_width *= actual;
+    if (media.graphic.has_value()) media.graphic = core::scaled_graphic(*media.graphic, actual);
   }
 
   for (core::Track& track : project.sequence().tracks) {

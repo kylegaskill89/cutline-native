@@ -9,15 +9,12 @@
 
 namespace cutline::core {
 
-Size natural_size(const Media* media, double canvas_w, double canvas_h,
-                  Size measured_text) noexcept {
-  if (media != nullptr && media->is_text && measured_text.width > 0.0 &&
-      measured_text.height > 0.0) {
-    return measured_text;
-  }
+Size natural_size(const Media* media, double canvas_w, double canvas_h) noexcept {
+  if (media != nullptr && media->is_graphic) return {canvas_w, canvas_h};
 
   // A media with no dimensions of its own — a colour matte, an adjustment
-  // layer — is canvas-sized, so it covers exactly the frame at scale 1.
+  // layer, a graphic — is canvas-sized, so it covers exactly the frame at
+  // scale 1.
   const auto dimension = [](const std::optional<int>& value, double fallback) {
     return (value && *value > 0) ? static_cast<double>(*value) : fallback;
   };
@@ -41,8 +38,8 @@ Offset anchor_offset(const Transform& transform, Size drawn) noexcept {
 }
 
 LayerBox layer_box(const Clip& clip, const Media* media, double canvas_w, double canvas_h,
-                   double t, Size measured_text) noexcept {
-  const Size natural = natural_size(media, canvas_w, canvas_h, measured_text);
+                   double t) noexcept {
+  const Size natural = natural_size(media, canvas_w, canvas_h);
   const Transform transform = animated_transform(clip, t - clip.start);
 
   const Size drawn{natural.width * transform.scale_x, natural.height * transform.scale_y};
@@ -61,10 +58,10 @@ LayerBox layer_box(const Clip& clip, const Media* media, double canvas_w, double
 }
 
 LayerBox segment_box(const VideoSeg& seg, const Media* media, double canvas_w, double canvas_h,
-                     double t, Size measured_text) noexcept {
+                     double t) noexcept {
   if (seg.clip == nullptr) return {};
 
-  LayerBox box = layer_box(*seg.clip, media, canvas_w, canvas_h, t, measured_text);
+  LayerBox box = layer_box(*seg.clip, media, canvas_w, canvas_h, t);
   // The slide offset is a fraction of canvas width, so a push travels the same
   // visual distance whatever the export resolution.
   box.center_x += seg_slide_offset_x(seg, t) * canvas_w;

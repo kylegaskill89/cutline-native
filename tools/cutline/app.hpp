@@ -42,7 +42,7 @@
 #include "cutline/editor/settings.hpp"
 #include "cutline/editor/shortcuts.hpp"
 #include "cutline/editor/timeline_binding.hpp"
-#include "cutline/editor/titles.hpp"
+#include "cutline/editor/graphics.hpp"
 #include "cutline/editor/transitions.hpp"
 #include "cutline/editor/workspace.hpp"
 #include "cutline/render/preview.hpp"

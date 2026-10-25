@@ -7,6 +7,7 @@
 
 #include "cutline/engine/frame_renderer.hpp"
 
+#include "cutline/core/graphic.hpp"
 #include "cutline/core/interpret.hpp"
 #include "cutline/core/nesting.hpp"
 #include "cutline/core/sequences.hpp"
@@ -282,11 +283,13 @@ TEST_F(FrameRendererTest, ANestPointingAtNothingDrawsNothingRatherThanFailing) {
 
 // ------------------------------------------------------------------ titles --
 
+/// A title as it was written before graphics, turned into one as a project
+/// file from then is: what these tests checked then, they check of that now.
 Media titled(std::string id, core::TextSpec spec) {
   Media m;
   m.id = std::move(id);
-  m.is_text = true;
-  m.text = std::move(spec);
+  m.is_graphic = true;
+  m.graphic = core::graphic_from_text(spec);
   return m;
 }
 
@@ -414,6 +417,104 @@ TEST_F(TitleRendererTest, ATitleTakesTheEffectsOnItsClip) {
   EXPECT_EQ(centre.r, centre.g) << "a title should be as effectable as a video clip";
   EXPECT_EQ(centre.g, centre.b);
   EXPECT_EQ(centre.a, 255);
+}
+
+// ---------------------------------------------------------------- graphics --
+
+/// A shape of a colour, `size` pixels square, centred at a point in pixels.
+[[nodiscard]] core::GraphicLayer square(std::string id, std::string colour, double x, double y,
+                                        double size = 24.0) {
+  core::GraphicLayer layer;
+  layer.id = std::move(id);
+  layer.kind = core::GraphicKind::Rectangle;
+  layer.width = size;
+  layer.height = size;
+  layer.x = x / kWidth;
+  layer.y = y / kHeight;
+  layer.style.fill = std::move(colour);
+  return layer;
+}
+
+[[nodiscard]] Media graphic(std::string id, std::vector<core::GraphicLayer> layers) {
+  Media m;
+  m.id = std::move(id);
+  m.is_graphic = true;
+  m.graphic = core::Graphic{.layers = std::move(layers)};
+  return m;
+}
+
+TEST_F(TitleRendererTest, AGraphicDrawsEachLayerWhereItIsPut) {
+  Project p = canvas_project();
+  p.media = {graphic("g", {square("red", "#ff0000", 16.0, 16.0),
+                           square("blue", "#0000ff", 48.0, 48.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("c", "g", 0.0, 5.0)})};
+
+  const gpu::Image image = render(p, 1.0);
+  const Rgba red = pixel_at(image, 16, 16);
+  const Rgba blue = pixel_at(image, 48, 48);
+  EXPECT_GT(red.r, 240);
+  EXPECT_LT(red.b, 15);
+  EXPECT_GT(blue.b, 240);
+  EXPECT_LT(blue.r, 15);
+  EXPECT_EQ(pixel_at(image, 48, 16).a, 0) << "nothing was put there";
+}
+
+TEST_F(TitleRendererTest, TheTopLayerOfAGraphicIsDrawnOverTheOthers) {
+  Project p = canvas_project();
+  // Top first, as the panel lists them.
+  p.media = {graphic("g", {square("top", "#00ff00", 32.0, 32.0),
+                           square("under", "#ff0000", 32.0, 32.0, 40.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("c", "g", 0.0, 5.0)})};
+
+  const Rgba centre = pixel_at(render(p, 1.0), 32, 32);
+  EXPECT_GT(centre.g, 240);
+  EXPECT_LT(centre.r, 15);
+}
+
+TEST_F(TitleRendererTest, AClipsOpacityAppliesToTheWholeGraphicNotEachLayer) {
+  // Two layers overlapping, and the clip at half opacity. Drawn layer by
+  // layer, the overlap would be three quarters opaque; as one picture, as
+  // Premiere draws a graphic, it is half like everything else.
+  Project p = canvas_project();
+  p.media = {graphic("g", {square("a", "#ffffff", 32.0, 32.0, 40.0),
+                           square("b", "#ffffff", 32.0, 32.0, 40.0)}),
+             matte("black", "#000000")};
+  Clip over = clip("c", "g", 0.0, 5.0);
+  over.opacity = 0.5;
+  p.sequence().tracks = {video_track("v2", {over}),
+                         video_track("v1", {clip("bg", "black", 0.0, 5.0)})};
+
+  const Rgba centre = pixel_at(render(p, 1.0), 32, 32);
+  // Half of white over black, in the coded values the read-back gives: well
+  // short of the 220 or so that three quarters would come to.
+  EXPECT_LT(centre.r, 200);
+  EXPECT_GT(centre.r, 150);
+}
+
+TEST_F(TitleRendererTest, AWipeUncoversALayerFromTheLeft) {
+  core::GraphicLayer wide = square("w", "#ffffff", 32.0, 32.0, 48.0);
+  wide.reveal_in = core::GraphicReveal{.kind = core::RevealKind::Wipe, .duration = 2.0};
+  Project p = canvas_project();
+  p.media = {graphic("g", {wide})};
+  p.sequence().tracks = {video_track("v1", {clip("c", "g", 0.0, 5.0)})};
+
+  // Half way through the wipe: the left of the square shows, the right not yet.
+  const gpu::Image image = render(p, 1.0);
+  EXPECT_GT(pixel_at(image, 14, 32).a, 200);
+  EXPECT_EQ(pixel_at(image, 50, 32).a, 0);
+}
+
+TEST_F(TitleRendererTest, AnAnimatedLayerMovesBetweenFrames) {
+  core::GraphicLayer moving = square("m", "#ffffff", 16.0, 32.0, 12.0);
+  moving.keyframes["x"] = {{.t = 0.0, .v = 16.0 / kWidth}, {.t = 2.0, .v = 48.0 / kWidth}};
+  Project p = canvas_project();
+  p.media = {graphic("g", {moving})};
+  p.sequence().tracks = {video_track("v1", {clip("c", "g", 0.0, 5.0)})};
+
+  EXPECT_GT(pixel_at(render(p, 0.0), 16, 32).a, 200);
+  const gpu::Image later = render(p, 2.0);
+  EXPECT_EQ(pixel_at(later, 16, 32).a, 0);
+  EXPECT_GT(pixel_at(later, 48, 32).a, 200);
 }
 
 TEST_F(FrameRendererTest, ATitleWithNoTextIsSkippedRatherThanFailingTheFrame) {

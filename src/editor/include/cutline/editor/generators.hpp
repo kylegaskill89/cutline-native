@@ -3,7 +3,7 @@
 /// Creating and editing the generated media that are not titles: colour mattes
 /// and adjustment layers.
 ///
-/// Same shape as `titles.hpp`, and for the same reasons — nothing on disk, no
+/// Same shape as `graphics.hpp`, and for the same reasons — nothing on disk, no
 /// probe, no pool to deduplicate against, and a length that has to be chosen
 /// because there is no source to take one from. Two mattes of the same colour
 /// are two mattes.

@@ -92,8 +92,8 @@ TEST(EditNames, AFileArrivingInThePoolIsAnImport) {
   EXPECT_EQ(describe_edit(before, after), "Import");
 
   Project titled = before;
-  titled.media.push_back(Media{.id = "t1", .name = "Title", .is_text = true});
-  EXPECT_EQ(describe_edit(before, titled), "New Title");
+  titled.media.push_back(Media{.id = "t1", .name = "Title", .is_graphic = true});
+  EXPECT_EQ(describe_edit(before, titled), "New Graphic");
 }
 
 TEST(EditNames, ATrackAddedIsNamedForItsKind) {

@@ -205,8 +205,8 @@ TEST(PlanFrame, RecognisesEachKindOfGeneratedMedia) {
 
   Media title;
   title.id = "title";
-  title.is_text = true;
-  title.text = core::TextSpec{};
+  title.is_graphic = true;
+  title.graphic = core::Graphic{};
 
   Media matte;
   matte.id = "matte";
@@ -232,7 +232,7 @@ TEST(PlanFrame, RecognisesEachKindOfGeneratedMedia) {
 
   const std::vector<PlannedLayer> layers = plan_frame(p, 5.0);
   ASSERT_EQ(layers.size(), 4u);
-  EXPECT_EQ(layers[0].content, LayerContent::Text);
+  EXPECT_EQ(layers[0].content, LayerContent::Graphic);
   EXPECT_EQ(layers[1].content, LayerContent::Color);
   EXPECT_EQ(layers[2].content, LayerContent::Adjustment);
   EXPECT_EQ(layers[3].content, LayerContent::Still);

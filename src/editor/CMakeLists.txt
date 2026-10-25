@@ -24,7 +24,7 @@ add_library(cutline_editor
   src/settings.cpp
   src/shortcuts.cpp
   src/timeline_binding.cpp
-  src/titles.cpp
+  src/graphics.cpp
   src/transitions.cpp
   src/updates.cpp
   src/presets.cpp

@@ -23,13 +23,9 @@ struct Size {
 /// A media's draw size at scale 1, in canvas pixels: aspect-fit to the canvas,
 /// so scale 1 means "fills the canvas as much as it can without distortion"
 /// rather than "native pixels". That is what keeps a project's transforms
-/// independent of the resolution it is exported at.
-///
-/// Text is measured, not derived, so callers that have laid a title out pass
-/// the result in `measured_text`; core cannot shape glyphs. A zero measurement
-/// falls back to the media's stored dimensions.
-[[nodiscard]] Size natural_size(const Media* media, double canvas_w, double canvas_h,
-                                Size measured_text = {}) noexcept;
+/// independent of the resolution it is exported at. A graphic is the frame:
+/// its layers are placed within it, by `place_graphic`.
+[[nodiscard]] Size natural_size(const Media* media, double canvas_w, double canvas_h) noexcept;
 
 /// A resolved draw rectangle in canvas pixels, centred on `center_x, center_y`
 /// and rotated clockwise about that centre.
@@ -71,13 +67,13 @@ struct Offset {
 /// applied. Stored `x, y` are canvas fractions naming where the anchor lands,
 /// so (0.5, 0.5) puts the anchor in the middle of the frame.
 [[nodiscard]] LayerBox layer_box(const Clip& clip, const Media* media, double canvas_w,
-                                 double canvas_h, double t, Size measured_text = {}) noexcept;
+                                 double canvas_h, double t) noexcept;
 
 /// As `layer_box`, but including the horizontal offset a push or slide
 /// transition contributes at `t`. Segments without a geometric transition give
 /// the same answer as `layer_box`.
 [[nodiscard]] LayerBox segment_box(const VideoSeg& seg, const Media* media, double canvas_w,
-                                   double canvas_h, double t, Size measured_text = {}) noexcept;
+                                   double canvas_h, double t) noexcept;
 
 /// A segment's alpha at timeline time `t`: keyframed opacity multiplied by the
 /// fade ramps. Manual fades and transition ramps are not additive — the longer

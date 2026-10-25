@@ -38,7 +38,7 @@ ui::MediaKind media_kind(const core::Media& media) noexcept {
   // it to a file that does not exist.
   if (core::is_nested_sequence(media)) return ui::MediaKind::Sequence;
   if (media.is_adjustment) return ui::MediaKind::Adjustment;
-  if (media.is_text) return ui::MediaKind::Title;
+  if (media.is_graphic) return ui::MediaKind::Title;
   if (media.is_color) return ui::MediaKind::Color;
   if (media.is_image) return ui::MediaKind::Image;
   if (!media.has_video && media.audio_stream_count > 0) return ui::MediaKind::Audio;

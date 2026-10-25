@@ -58,4 +58,12 @@ struct EffectStacks {
 
 [[nodiscard]] std::expected<EffectStacks, std::string> effects_from_json(std::string_view text);
 
+/// A graphic, and a style, encoded as they are inside a project: for
+/// templates and master styles, which are saved outside one.
+[[nodiscard]] std::string graphic_to_json(const Graphic& graphic, int indent = 2);
+[[nodiscard]] std::expected<Graphic, std::string> graphic_from_json(std::string_view text);
+[[nodiscard]] std::string graphic_style_to_json(const GraphicStyle& style, int indent = 2);
+[[nodiscard]] std::expected<GraphicStyle, std::string> graphic_style_from_json(
+    std::string_view text);
+
 }  // namespace cutline::core

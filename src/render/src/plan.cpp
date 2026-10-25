@@ -15,7 +15,7 @@ using core::Media;
   // Before the rest: a nest has no file and no flags, so every other test here
   // would fall through it to `Video` and send it to a decoder.
   if (core::is_nested_sequence(*media)) return LayerContent::Nested;
-  if (media->is_text) return LayerContent::Text;
+  if (media->is_graphic) return LayerContent::Graphic;
   if (media->is_color) return LayerContent::Color;
   if (media->is_adjustment) return LayerContent::Adjustment;
   if (media->is_image) return LayerContent::Still;
@@ -34,8 +34,7 @@ struct Ordered {
 
 std::vector<PlannedLayer> plan_frame(
     const core::Project& project, double t,
-    const std::function<double(std::string_view media_id)>& media_duration_of,
-    const TextMeasurer& measure_text) {
+    const std::function<double(std::string_view media_id)>& media_duration_of) {
   std::vector<Ordered> active;
 
   // Video tracks are stored top-first, so the bottom one is drawn first.
@@ -82,13 +81,8 @@ std::vector<PlannedLayer> plan_frame(
     layer.media = media;
     layer.content = content_of(media);
     layer.track_index = entry.track_index;
-    // A title is as big as its text, which only something that can draw text
-    // knows. Without a measurer it keeps the fallback — the whole canvas —
-    // because a title of no size would simply not be there.
-    core::Size measured;
-    if (media != nullptr && media->is_text && measure_text) measured = measure_text(*media);
     layer.box =
-        core::segment_box(seg, media, project.sequence().canvas_w, project.sequence().canvas_h, t, measured);
+        core::segment_box(seg, media, project.sequence().canvas_w, project.sequence().canvas_h, t);
     layer.alpha = core::segment_alpha(seg, t);
     layer.blend = clip.blend;
     layer.anti_flicker = std::clamp(clip.transform.anti_flicker, 0.0, 1.0);
@@ -107,8 +101,7 @@ std::vector<PlannedLayer> plan_frame(
   return layers;
 }
 
-std::vector<PlannedLayer> plan_frame(const core::Project& project, double t,
-                                     const TextMeasurer& measure_text) {
+std::vector<PlannedLayer> plan_frame(const core::Project& project, double t) {
   return plan_frame(
       project, t,
       [&project](std::string_view media_id) {
@@ -123,8 +116,7 @@ std::vector<PlannedLayer> plan_frame(const core::Project& project, double t,
           return media.duration;
         }
         return 0.0;
-      },
-      measure_text);
+      });
 }
 
 }  // namespace cutline::render

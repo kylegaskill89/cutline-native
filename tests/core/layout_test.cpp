@@ -88,26 +88,18 @@ TEST(NaturalSize, MissingMediaCoversTheCanvas) {
   EXPECT_DOUBLE_EQ(size.height, kCanvasH);
 }
 
-TEST(NaturalSize, TextUsesItsMeasurementRatherThanStoredDimensions) {
+TEST(NaturalSize, AGraphicIsTheFrameWhateverItSays) {
+  // Its layers are placed within the frame; the clip's own transform then
+  // moves the whole picture, as Premiere's Motion does a graphic's.
   Media title;
   title.id = "t";
-  title.is_text = true;
-  title.text = TextSpec{};
-  const Size size = natural_size(&title, kCanvasW, kCanvasH, {600.0, 120.0});
-  EXPECT_DOUBLE_EQ(size.width, 600.0);
-  EXPECT_DOUBLE_EQ(size.height, 120.0);
-}
-
-TEST(NaturalSize, UnmeasuredTextFallsBackRatherThanCollapsing) {
-  // A title that has not been laid out yet must not come out zero-sized; it
-  // would silently vanish from the composite.
-  Media title;
-  title.id = "t";
-  title.is_text = true;
-  title.text = TextSpec{};
+  title.is_graphic = true;
+  title.graphic = Graphic{};
+  title.width = 100;
+  title.height = 50;
   const Size size = natural_size(&title, kCanvasW, kCanvasH);
-  EXPECT_GT(size.width, 0.0);
-  EXPECT_GT(size.height, 0.0);
+  EXPECT_DOUBLE_EQ(size.width, kCanvasW);
+  EXPECT_DOUBLE_EQ(size.height, kCanvasH);
 }
 
 // --------------------------------------------------------------- layer box --

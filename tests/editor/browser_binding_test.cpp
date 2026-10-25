@@ -71,7 +71,7 @@ TEST(BrowserBinding, GeneratedMediaBeatsTheStillFlag) {
   // concerned. Testing the flags in the other order would call them images.
   core::Media title;
   title.is_image = true;
-  title.is_text = true;
+  title.is_graphic = true;
   EXPECT_EQ(media_kind(title), ui::MediaKind::Title);
 
   core::Media matte;
@@ -168,7 +168,7 @@ TEST(BrowserBinding, GeneratedMediaIsNeverOffline) {
   core::Media title;
   title.id = "t";
   title.name = "Opening";
-  title.is_text = true;
+  title.is_graphic = true;
   project.media.push_back(title);
 
   const std::vector<std::string> missing{""};

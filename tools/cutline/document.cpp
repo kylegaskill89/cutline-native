@@ -113,9 +113,9 @@ void import_media(App& app) {
 /// go and find it.
 void add_title(App& app) {
   std::string clip_id;
-  app.session.apply(cutline::editor::add_title_at(app.session.project(),
-                                                  cutline::editor::default_title_spec(),
-                                                  app.session.playhead(), {}, &clip_id));
+  app.session.apply(cutline::editor::add_graphic_at(app.session.project(),
+                                                    cutline::editor::default_title(),
+                                                    app.session.playhead(), {}, &clip_id));
   if (!clip_id.empty()) app.session.select_one(clip_id);
   refresh_all(app);
 }
