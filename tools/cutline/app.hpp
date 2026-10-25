@@ -1089,6 +1089,16 @@ void apply_canvas(App& app, int width, int height);
 void apply_fps(App& app, double fps);
 [[nodiscard]] std::string fps_label(double fps);
 
+[[nodiscard]] std::optional<std::filesystem::path> choose_movie_file(HWND owner);
+
+// The Export window, in `export_window.cpp`.
+void close_export_dialog(App& app);
+[[nodiscard]] std::unique_ptr<Widget> build_export_interface(App* app, Shell* shell);
+/// Its size as designed, which `--check` lays it out at too: sized by guess,
+/// it once left its own Export button below its bottom edge.
+constexpr int kExportWindowWidth = 460;
+constexpr int kExportWindowHeight = 520;
+
 // The settings windows, in `settings_window.cpp`.
 [[nodiscard]] std::vector<SettingsPage> pages_for(SettingsKind kind);
 [[nodiscard]] std::unique_ptr<Widget> build_settings_interface(App& app, Shell* shell,
