@@ -99,6 +99,18 @@ inline constexpr std::string_view kMaskParamPrefix = "mask.";
                                             std::size_t index, std::string key,
                                             std::string value);
 
+/// Replaces a curve. The points are sorted along x and held to 0 to 1; two at
+/// the same x keep the later. An empty list removes the curve, which is a
+/// straight one.
+[[nodiscard]] Project set_clip_effect_curve(Project p, std::string_view clip_id,
+                                            std::size_t index, std::string key,
+                                            std::vector<CurvePoint> points);
+
+/// Sets a file the effect reads, such as a LUT. Empty removes it.
+[[nodiscard]] Project set_clip_effect_file(Project p, std::string_view clip_id,
+                                           std::size_t index, std::string key,
+                                           std::string path);
+
 /// Sets where one effect applies. `MaskShape::None` takes the mask off again.
 ///
 /// The whole mask at once rather than a field at a time: it is one shape, every

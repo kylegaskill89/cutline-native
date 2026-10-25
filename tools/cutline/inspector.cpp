@@ -959,7 +959,38 @@ void build_effect_controls(App& app, const std::string& clip_id) {
       continue;
     }
 
+    // An effect with sections, as Lumetri has, folds each away under a twirl
+    // as Premiere does: sixty controls in one column is a list nobody can find
+    // anything in. A section's own switch sits in its heading.
+    std::string group;
+    bool showing = true;
     for (const cutline::editor::EffectParamRow& param : row.params) {
+      if (!param.group.empty() && param.group != group) {
+        group = param.group;
+        const std::string key = std::format("fxgroup.{}.{}.{}", clip_id, row.index, group);
+        showing = app.expanded_params.contains(key);
+        auto& head = app.inspector->emplace<Box>(Axis::Horizontal);
+        head.emplace<IconButton>(IconButton::Icon::Disclosure, [&app, key] {
+              if (!app.expanded_params.erase(key)) app.expanded_params.insert(key);
+              app.inspector_stale = true;
+            })
+            .set_selected(showing);
+        if (param.toggle && param.name == group) {
+          auto& box = head.emplace<Checkbox>(param.name, param.value >= 0.5);
+          box.set_on_change([&app, clip_id, index = row.index, key = param.key](bool checked) {
+            app.session.apply(cutline::core::set_clip_effect_param(
+                app.session.project(), clip_id, index, key, checked ? 1.0 : 0.0));
+            app.inspector_stale = true;
+            invalidate_preview(app);
+          });
+          head.emplace<Spacer>();
+          continue;
+        }
+        head.emplace<Label>(group).set_small(true);
+        head.emplace<Spacer>();
+      }
+      if (!param.group.empty() && !showing) continue;
+
       if (param.toggle) {
         auto& box = app.inspector->emplace<Checkbox>(param.name, param.value >= 0.5);
         box.set_on_change([&app, clip_id, index = row.index, key = param.key](bool checked) {

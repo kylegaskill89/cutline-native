@@ -42,6 +42,9 @@ struct EffectParamSpec {
   std::string_view suffix;
   /// Zero or one, and worth a checkbox rather than a slider.
   bool toggle = false;
+  /// The heading it sits under, for an effect with enough parameters to need
+  /// some: Lumetri's sections. Empty for the rest.
+  std::string_view group;
 };
 
 /// A colour parameter, kept apart from the numeric ones because it is stored

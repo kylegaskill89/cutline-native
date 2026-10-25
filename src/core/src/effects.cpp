@@ -200,6 +200,44 @@ Project set_clip_effect_color(Project p, std::string_view clip_id, std::size_t i
   return p;
 }
 
+Project set_clip_effect_curve(Project p, std::string_view clip_id, std::size_t index,
+                              std::string key, std::vector<CurvePoint> points) {
+  ClipEffect* effect = find_effect(p, clip_id, index);
+  if (effect == nullptr) return p;
+  if (points.empty()) {
+    effect->curves.erase(key);
+    return p;
+  }
+  for (CurvePoint& point : points) {
+    point.x = std::clamp(point.x, 0.0, 1.0);
+    point.y = std::clamp(point.y, 0.0, 1.0);
+  }
+  // Stable, so of two at one x the one given later is the one kept.
+  std::ranges::stable_sort(points, {}, &CurvePoint::x);
+  std::vector<CurvePoint> kept;
+  for (const CurvePoint& point : points) {
+    if (!kept.empty() && kept.back().x == point.x) {
+      kept.back() = point;
+    } else {
+      kept.push_back(point);
+    }
+  }
+  effect->curves[std::move(key)] = std::move(kept);
+  return p;
+}
+
+Project set_clip_effect_file(Project p, std::string_view clip_id, std::size_t index,
+                             std::string key, std::string path) {
+  ClipEffect* effect = find_effect(p, clip_id, index);
+  if (effect == nullptr) return p;
+  if (path.empty()) {
+    effect->files.erase(key);
+  } else {
+    effect->files[std::move(key)] = std::move(path);
+  }
+  return p;
+}
+
 Project set_effect_mask(Project p, std::string_view clip_id, std::size_t index, Mask mask) {
   ClipEffect* effect = find_effect(p, clip_id, index);
   if (effect == nullptr) return p;

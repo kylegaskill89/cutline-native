@@ -643,6 +643,14 @@ struct Mask {
 };
 
 /// One entry in a clip's visual effect stack. `type` keys the effect registry.
+/// A point a curve passes through, both ends in 0 to 1.
+struct CurvePoint {
+  double x = 0.0;
+  double y = 0.0;
+
+  friend bool operator==(const CurvePoint&, const CurvePoint&) = default;
+};
+
 struct ClipEffect {
   std::string type;
   /// Disabled entries stay in the stack but contribute nothing.
@@ -653,6 +661,12 @@ struct ClipEffect {
   /// Per-parameter animation. An animated parameter's `params` entry is ignored
   /// in favour of its keyframes.
   std::map<std::string, std::vector<Keyframe>> keyframes;
+  /// Curves, such as Lumetri's RGB and hue curves, by name, each in the order
+  /// of its points along x. A missing curve is a straight one. Not keyframeable,
+  /// as Premiere's are not.
+  std::map<std::string, std::vector<CurvePoint>> curves;
+  /// Files the effect reads, such as a LUT, by path. Empty is none.
+  std::map<std::string, std::string> files;
 
   /// Where this effect applies. `MaskShape::None` is everywhere.
   Mask mask;

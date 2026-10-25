@@ -99,6 +99,13 @@ enum class PassKind {
   UnderKept,
   /// The layer's alpha times `Layer::matte`'s, where the layer is on the frame.
   Matte,
+  /// A Lumetri grade: basic correction, creative, curves and wheels, from the
+  /// pass's data.
+  Lumetri,
+  /// Lumetri's HSL secondary: a key and the correction inside it.
+  LumetriSecondary,
+  /// Lumetri's vignette.
+  LumetriVignette,
 };
 
 /// How many floats a pass carries. Eight, shared by every kind, because only
@@ -147,6 +154,9 @@ struct EffectPass {
   PassKind kind = PassKind::Color;
   std::array<float, kPassValues> values{};
   PassMask mask;
+  /// What will not fit in `values`: a grade's settings, curves and LUTs. Read
+  /// by the shader from one buffer the whole frame shares.
+  std::vector<float> data;
 
   friend bool operator==(const EffectPass&, const EffectPass&) = default;
 };

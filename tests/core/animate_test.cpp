@@ -234,6 +234,31 @@ TEST(EffectStack, SetParamAndColour) {
   EXPECT_EQ(only_clip(p).effects[0].colors.at("key"), "#00d000");
 }
 
+TEST(EffectStack, ACurveIsKeptInOrderAndOnePointToAnX) {
+  Project p = with_effect();
+  p = set_clip_effect_curve(std::move(p), "c1", 0, "rgb_master",
+                            {{.x = 0.8, .y = 0.9}, {.x = 0.2, .y = 0.1}, {.x = 0.8, .y = 0.7},
+                             {.x = 1.5, .y = -0.5}});
+  const std::vector<CurvePoint>& curve = only_clip(p).effects[0].curves.at("rgb_master");
+  ASSERT_EQ(curve.size(), 3u);
+  EXPECT_EQ(curve[0], (CurvePoint{.x = 0.2, .y = 0.1}));
+  // Of the two at 0.8, the one given later.
+  EXPECT_EQ(curve[1], (CurvePoint{.x = 0.8, .y = 0.7}));
+  // Held to the square.
+  EXPECT_EQ(curve[2], (CurvePoint{.x = 1.0, .y = 0.0}));
+
+  p = set_clip_effect_curve(std::move(p), "c1", 0, "rgb_master", {});
+  EXPECT_TRUE(only_clip(p).effects[0].curves.empty());
+}
+
+TEST(EffectStack, AFileIsSetAndTakenAwayByEmptying) {
+  Project p = with_effect();
+  p = set_clip_effect_file(std::move(p), "c1", 0, "look", "C:/Looks/Warm.cube");
+  EXPECT_EQ(only_clip(p).effects[0].files.at("look"), "C:/Looks/Warm.cube");
+  p = set_clip_effect_file(std::move(p), "c1", 0, "look", "");
+  EXPECT_TRUE(only_clip(p).effects[0].files.empty());
+}
+
 // -------------------------------------------------- effect param animation --
 
 TEST(EffectParams, ReadTheStaticValueWhenNotAnimated) {

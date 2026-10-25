@@ -118,6 +118,13 @@ struct alignas(16) ShaderParams {
   float white_nits = 203.0f;
   float tone_map = 1.0f;
   int output = 0;
+
+  /// Where this pass's own data starts in the shared pass-data buffer, and how
+  /// many floats it has: the curves, LUTs and settings of a pass too big for
+  /// eight values, which is what a colour grade is.
+  float data_first = 0.0f;
+  float data_count = 0.0f;
+  float data_pad[2]{};
 };
 
 /// The most of the scratch a margin may take, per side.
@@ -127,14 +134,14 @@ struct alignas(16) ShaderParams {
 /// each side leaves the layer three fifths of the scratch, which is the point
 /// where the softness it buys stops being worth the sharpness it costs.
 inline constexpr float kMaxScratchMargin = 0.2f;
-static_assert(sizeof(ShaderParams) == 56 * sizeof(float),
+static_assert(sizeof(ShaderParams) == 60 * sizeof(float),
               "root constants must match the shader's cbuffer exactly");
 
 inline constexpr UINT kShaderParamCount = sizeof(ShaderParams) / sizeof(float);
 
-/// The descriptor table every pass binds: three plane slots, a backdrop, and
-/// the shared buffer of mask-path corners.
-inline constexpr UINT kSlotsPerLayer = 5;
+/// The descriptor table every pass binds: three plane slots, a backdrop, the
+/// shared buffer of mask-path corners, and the shared buffer of pass data.
+inline constexpr UINT kSlotsPerLayer = 6;
 
 /// Builds the root signature both the compositor and the presenter use.
 [[nodiscard]] std::expected<ComPtr<ID3D12RootSignature>, std::string> create_root_signature(

@@ -24,6 +24,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <map>
 #include <memory>
 #include <numbers>
 #include <set>
@@ -1628,6 +1630,153 @@ TEST_F(DeepRendererTest, AnHdrNestInAnSdrSequenceIsToneMapped) {
   ASSERT_TRUE(image.has_value()) << image.error();
   EXPECT_GE(pixel_at(*image, 54, 16).g, 252);
   EXPECT_LT(pixel_at(*image, 10, 16).g, pixel_at(*image, 54, 16).g - 8);
+}
+
+// ----------------------------------------------------------------- lumetri --
+//
+// Each expectation is worked out from the grade's own maths on a flat matte:
+// sRGB coding in a Rec.709 sequence, and the PQ code of the light in an HDR one.
+
+/// A matte of one colour, filling the frame, graded.
+[[nodiscard]] Project graded(std::string colour, core::ClipEffect grade) {
+  Project p = canvas_project();
+  p.media = {matte("m", std::move(colour))};
+  Clip c = clip("c", "m", 0.0, 5.0);
+  c.effects = {std::move(grade)};
+  p.sequence().tracks = {video_track("v1", {c})};
+  return p;
+}
+
+[[nodiscard]] core::ClipEffect lumetri(std::map<std::string, double> params) {
+  return core::ClipEffect{.type = "lumetri", .params = std::move(params)};
+}
+
+/// A .cube that swaps red and blue, written where a test can point at it.
+[[nodiscard]] std::filesystem::path swap_lut() {
+  const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     ("cutline_swap_" + std::to_string(_getpid()) + ".cube");
+  std::ofstream(path) << "LUT_3D_SIZE 2\n0 0 0\n0 0 1\n0 1 0\n0 1 1\n1 0 0\n1 0 1\n1 1 0\n1 1 1\n";
+  return path;
+}
+
+TEST_F(FrameRendererTest, LumetriExposureIsAStopOfLight) {
+  // Grey 128 is 0.2159 in light; twice that is coded as 175.6.
+  const Rgba grey = pixel_at(render(graded("#808080", lumetri({{"exposure", 1.0}})), 1.0), 32, 32);
+  EXPECT_NEAR(grey.r, 176, 2);
+  EXPECT_NEAR(grey.g, 176, 2);
+  EXPECT_NEAR(grey.b, 176, 2);
+}
+
+TEST_F(FrameRendererTest, LumetriSaturationAtNoughtLeavesTheLuma) {
+  const Rgba red = pixel_at(render(graded("#ff0000", lumetri({{"saturation", 0.0}})), 1.0), 32, 32);
+  EXPECT_NEAR(red.r, 54, 2);
+  EXPECT_NEAR(red.g, 54, 2);
+  EXPECT_NEAR(red.b, 54, 2);
+}
+
+TEST_F(FrameRendererTest, LumetriTemperatureWarmsAGrey) {
+  const Rgba grey =
+      pixel_at(render(graded("#808080", lumetri({{"temperature", 100.0}})), 1.0), 32, 32);
+  EXPECT_GT(grey.r, grey.g + 10);
+  EXPECT_GT(grey.g, grey.b + 10);
+}
+
+TEST_F(FrameRendererTest, LumetriMasterCurveMovesTheMiddle) {
+  core::ClipEffect grade = lumetri({});
+  grade.curves["rgb_master"] = {{.x = 0.5, .y = 0.75}};
+  const Rgba grey = pixel_at(render(graded("#808080", grade), 1.0), 32, 32);
+  EXPECT_NEAR(grey.r, 192, 2);
+  EXPECT_NEAR(grey.b, 192, 2);
+}
+
+TEST_F(FrameRendererTest, LumetriHueVsSaturationTakesTheColourOutOfOneHueOnly) {
+  core::ClipEffect grade = lumetri({});
+  // Down to nothing at red, back to no change by yellow and magenta.
+  grade.curves["hue_sat"] = {{.x = 0.0, .y = 0.0}, {.x = 0.15, .y = 0.5}, {.x = 0.85, .y = 0.5}};
+  const Rgba red = pixel_at(render(graded("#ff0000", grade), 1.0), 32, 32);
+  EXPECT_NEAR(red.r, red.g, 3);
+  const Rgba green = pixel_at(render(graded("#00ff00", grade), 1.0), 32, 32);
+  EXPECT_GT(green.g, 250);
+  EXPECT_LT(green.r, 5);
+}
+
+TEST_F(FrameRendererTest, LumetriInputLutIsApplied) {
+  const std::filesystem::path path = swap_lut();
+  core::ClipEffect grade = lumetri({});
+  grade.files["input_lut"] = path.string();
+  const Rgba red = pixel_at(render(graded("#ff0000", grade), 1.0), 32, 32);
+  std::filesystem::remove(path);
+  EXPECT_LT(red.r, 3);
+  EXPECT_GT(red.b, 252);
+}
+
+TEST_F(FrameRendererTest, LumetriLookIntensityMixesTheLookIn) {
+  const std::filesystem::path path = swap_lut();
+  core::ClipEffect grade = lumetri({{"intensity", 50.0}});
+  grade.files["look"] = path.string();
+  const Rgba red = pixel_at(render(graded("#ff0000", grade), 1.0), 32, 32);
+  std::filesystem::remove(path);
+  EXPECT_NEAR(red.r, 128, 2);
+  EXPECT_NEAR(red.b, 128, 2);
+  EXPECT_LT(red.g, 3);
+}
+
+TEST_F(FrameRendererTest, LumetriWheelsLiftAndGain) {
+  // Gain: half as much again. Lift: a quarter of the way to white.
+  EXPECT_NEAR(pixel_at(render(graded("#808080", lumetri({{"highlights_luma", 100.0}})), 1.0),
+                       32, 32).r, 192, 2);
+  EXPECT_NEAR(pixel_at(render(graded("#808080", lumetri({{"shadows_luma", 100.0}})), 1.0),
+                       32, 32).r, 160, 2);
+}
+
+TEST_F(FrameRendererTest, LumetriSecondaryCorrectsOnlyWhatItKeys) {
+  const auto reds = lumetri({{"key_hue_lo", 330.0}, {"key_hue_hi", 30.0}, {"sec_saturation", 0.0}});
+  const Rgba keyed = pixel_at(render(graded("#ff0000", reds), 1.0), 32, 32);
+  EXPECT_NEAR(keyed.r, 54, 2);
+  EXPECT_NEAR(keyed.g, 54, 2);
+
+  const auto greens =
+      lumetri({{"key_hue_lo", 90.0}, {"key_hue_hi", 150.0}, {"sec_saturation", 0.0}});
+  const Rgba left = pixel_at(render(graded("#ff0000", greens), 1.0), 32, 32);
+  EXPECT_GT(left.r, 252);
+  EXPECT_LT(left.g, 3);
+}
+
+TEST_F(FrameRendererTest, LumetriShowMaskGreysWhatIsNotKeyed) {
+  const auto greens = lumetri({{"key_hue_lo", 90.0}, {"key_hue_hi", 150.0}, {"show_mask", 1.0}});
+  const Rgba grey = pixel_at(render(graded("#ff0000", greens), 1.0), 32, 32);
+  EXPECT_NEAR(grey.r, 128, 2);
+  EXPECT_NEAR(grey.g, 128, 2);
+}
+
+TEST_F(FrameRendererTest, LumetriVignetteDarkensTheCornersAndNotTheMiddle) {
+  const gpu::Image image = render(graded("#808080", lumetri({{"vig_amount", -5.0}})), 1.0);
+  EXPECT_NEAR(pixel_at(image, 32, 32).r, 128, 2);
+  EXPECT_LT(pixel_at(image, 0, 0).r, 10);
+  const int edge = pixel_at(image, 0, 32).r;
+  EXPECT_LT(edge, 120);
+  EXPECT_GT(edge, 10);
+}
+
+TEST_F(FrameRendererTest, LumetriCreativeSharpenStillGradesEitherSideOfIt) {
+  core::ClipEffect grade = lumetri({{"exposure", 1.0}, {"sharpen", 50.0}});
+  grade.curves["rgb_master"] = {{.x = 0.0, .y = 0.0}, {.x = 1.0, .y = 1.0}};
+  grade.curves["rgb_red"] = {{.x = 0.0, .y = 0.0}, {.x = 0.5, .y = 0.5}, {.x = 1.0, .y = 1.0}};
+  // Flat, so sharpening finds no edge: exposure before it, the straight
+  // curves after it, and the stop of light is all that shows.
+  EXPECT_NEAR(pixel_at(render(graded("#808080", grade), 1.0), 32, 32).g, 176, 2);
+}
+
+// Graphics white is 203 nits in a PQ sequence; a stop up is 406, which only an
+// HDR grade can reach without clipping.
+TEST_F(FrameRendererTest, LumetriExposureInAPqSequenceDoublesTheLight) {
+  ASSERT_TRUE(renderer_
+                  ->render(in_colour(graded("#ffffff", lumetri({{"exposure", 1.0}})),
+                                     core::WorkingColour::Rec2100Pq),
+                           1.0)
+                  .has_value());
+  EXPECT_NEAR(luma_code_in(*renderer_, gpu::WorkingColour::Rec2100Pq, 32, 32),
+              studio_code(pq_of(406.0)), 2);
 }
 }  // namespace
 }  // namespace cutline::engine

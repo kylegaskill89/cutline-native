@@ -392,9 +392,11 @@ std::expected<void, std::string> Compositor::Impl::ensure_scratch() {
   return {};
 }
 
-std::expected<void, std::string> Compositor::Impl::ensure_mask_points(std::size_t points) {
-  const std::size_t wanted = std::max<std::size_t>(points, 1);
-  if (mask_points && wanted <= mask_points_capacity) return {};
+std::expected<void, std::string> Compositor::Impl::ensure_shared_buffer(
+    ComPtr<ID3D12Resource>& target, std::size_t& target_capacity, std::size_t count, UINT stride,
+    UINT slot, std::string_view what) {
+  const std::size_t wanted = std::max<std::size_t>(count, 1);
+  if (target && wanted <= target_capacity) return {};
 
 
   // Grown generously and never shrunk, like the descriptor heap: a frame with
@@ -404,7 +406,7 @@ std::expected<void, std::string> Compositor::Impl::ensure_mask_points(std::size_
 
   D3D12_RESOURCE_DESC desc{};
   desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-  desc.Width = static_cast<UINT64>(capacity * sizeof(float) * 2);
+  desc.Width = static_cast<UINT64>(capacity * stride);
   desc.Height = 1;
   desc.DepthOrArraySize = 1;
   desc.MipLevels = 1;
@@ -416,29 +418,41 @@ std::expected<void, std::string> Compositor::Impl::ensure_mask_points(std::size_
           &heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
           IID_PPV_ARGS(&buffer));
       FAILED(hr)) {
-    return std::unexpected(
-        std::format("cannot create the mask point buffer: {}", hresult_string(hr)));
+    return std::unexpected(std::format("cannot create the {}: {}", what, hresult_string(hr)));
   }
 
-  mask_points = std::move(buffer);
-  mask_points_capacity = capacity;
+  target = std::move(buffer);
+  target_capacity = capacity;
 
-  // An upload heap read straight by the shader: the points are a handful of
-  // floats rewritten every frame, and a copy to a default-heap buffer would
-  // cost a barrier and a transfer to save a read that is already cached.
+  // An upload heap read straight by the shader: what is in it is rewritten
+  // every frame, and a copy to a default-heap buffer would cost a barrier and
+  // a transfer to save a read that is already cached.
   D3D12_SHADER_RESOURCE_VIEW_DESC view{};
   view.Format = DXGI_FORMAT_UNKNOWN;
   view.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
   view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
   view.Buffer.NumElements = static_cast<UINT>(capacity);
-  view.Buffer.StructureByteStride = sizeof(float) * 2;
+  view.Buffer.StructureByteStride = stride;
 
-  // Into every run of the table, because a path may be masking any pass of any
-  // layer and the run is chosen by which layer is being drawn.
+  // Into every run of the table, because any pass of any layer may read it
+  // and the run is chosen by which layer is being drawn.
   for (UINT i = 0; i < run_count(); ++i) {
-    gpu().device->CreateShaderResourceView(mask_points.Get(), &view,
-                                           srv_cpu(i * kSlotsPerLayer + 4));
+    gpu().device->CreateShaderResourceView(target.Get(), &view, srv_cpu(i * kSlotsPerLayer + slot));
   }
+  return {};
+}
+
+std::expected<void, std::string> Compositor::Impl::fill_shared_buffer(ID3D12Resource* buffer,
+                                                                      const void* bytes,
+                                                                      std::size_t size,
+                                                                      std::string_view what) {
+  void* mapped = nullptr;
+  const D3D12_RANGE nothing{0, 0};
+  if (HRESULT hr = buffer->Map(0, &nothing, &mapped); FAILED(hr)) {
+    return std::unexpected(std::format("cannot map the {}: {}", what, hresult_string(hr)));
+  }
+  std::memcpy(mapped, bytes, size);
+  buffer->Unmap(0, nullptr);
   return {};
 }
 
@@ -909,17 +923,40 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     }
   }
   if (!corners.empty()) {
-    if (auto ok = d.ensure_mask_points(corners.size()); !ok) {
+    if (auto ok = d.ensure_shared_buffer(d.mask_points, d.mask_points_capacity, corners.size(),
+                                         sizeof(float) * 2, 4, "mask point buffer");
+        !ok) {
       return std::unexpected(ok.error());
     }
-    void* mapped = nullptr;
-    const D3D12_RANGE nothing{0, 0};
-    if (HRESULT hr = d.mask_points->Map(0, &nothing, &mapped); FAILED(hr)) {
-      return std::unexpected(
-          std::format("cannot map the mask point buffer: {}", hresult_string(hr)));
+    if (auto ok = d.fill_shared_buffer(d.mask_points.Get(), corners.data(),
+                                       corners.size() * sizeof(corners[0]), "mask point buffer");
+        !ok) {
+      return std::unexpected(ok.error());
     }
-    std::memcpy(mapped, corners.data(), corners.size() * sizeof(corners[0]));
-    d.mask_points->Unmap(0, nullptr);
+  }
+
+  // And every pass's own data, gathered the same way and for the same reason.
+  std::vector<float> data;
+  std::map<const EffectPass*, std::pair<UINT, UINT>> data_runs;
+  for (const Layer& layer : layers) {
+    for (const EffectPass& effect : layer.passes) {
+      if (effect.data.empty()) continue;
+      const auto first = static_cast<UINT>(data.size());
+      data.insert(data.end(), effect.data.begin(), effect.data.end());
+      data_runs.emplace(&effect, std::pair{first, static_cast<UINT>(effect.data.size())});
+    }
+  }
+  if (!data.empty()) {
+    if (auto ok = d.ensure_shared_buffer(d.pass_data, d.pass_data_capacity, data.size(),
+                                         sizeof(float), 5, "pass data buffer");
+        !ok) {
+      return std::unexpected(ok.error());
+    }
+    if (auto ok = d.fill_shared_buffer(d.pass_data.Get(), data.data(),
+                                       data.size() * sizeof(float), "pass data buffer");
+        !ok) {
+      return std::unexpected(ok.error());
+    }
   }
   const auto opened = d.recorder.begin();
   if (!opened) return std::unexpected(opened.error());
@@ -1175,6 +1212,10 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
             pass.path_first = static_cast<float>(run->second.first);
             pass.path_count = static_cast<float>(run->second.second);
           }
+          if (const auto run = data_runs.find(&effect); run != data_runs.end()) {
+            pass.data_first = static_cast<float>(run->second.first);
+            pass.data_count = static_cast<float>(run->second.second);
+          }
 
           // How wide a tap is depends on the target's size, which is the one
           // thing the plan cannot know — so every pass that samples its
@@ -1207,6 +1248,11 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
             const float radius = std::max(0.0f, effect.values[1]) * span;
             pass.pass_a[2] = radius * texel_x;
             pass.pass_a[3] = radius * texel_y;
+          } else if (effect.kind == PassKind::LumetriSecondary) {
+            // One of the layer's pixels as a step across the scratch, for the
+            // key's softening taps.
+            pass.pass_b[2] = span * texel_x;
+            pass.pass_b[3] = span * texel_y;
           } else if (effect.kind == PassKind::ShadowShape) {
             // The offset in the layer's pixels, as a step across the scratch.
             pass.pass_b[0] = effect.values[4] * span * texel_x;

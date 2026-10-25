@@ -309,6 +309,16 @@ json write(const ClipEffect& e) {
     for (const auto& [key, list] : e.keyframes) kfs[key] = write(list);
     j["keyframes"] = std::move(kfs);
   }
+  if (!e.curves.empty()) {
+    json curves = json::object();
+    for (const auto& [key, points] : e.curves) {
+      json list = json::array();
+      for (const CurvePoint& point : points) list.push_back(json::array({point.x, point.y}));
+      curves[key] = std::move(list);
+    }
+    j["curves"] = std::move(curves);
+  }
+  put_unless_empty(j, "files", e.files);
   return j;
 }
 
@@ -738,10 +748,23 @@ ClipEffect read_clip_effect(const json& j) {
   e.enabled = read_or(j, "enabled", true);
   e.params = read_or(j, "params", std::map<std::string, double>{});
   e.colors = read_or(j, "colors", std::map<std::string, std::string>{});
+  e.files = read_or(j, "files", std::map<std::string, std::string>{});
 
   const auto kfs = j.find("keyframes");
   if (kfs != j.end() && kfs->is_object()) {
     for (const auto& [key, list] : kfs->items()) e.keyframes[key] = read_keyframes(list);
+  }
+  if (const auto curves = j.find("curves"); curves != j.end() && curves->is_object()) {
+    for (const auto& [key, list] : curves->items()) {
+      if (!list.is_array()) continue;
+      std::vector<CurvePoint>& points = e.curves[key];
+      for (const auto& point : list) {
+        if (point.is_array() && point.size() == 2 && point[0].is_number() &&
+            point[1].is_number()) {
+          points.push_back(CurvePoint{.x = point[0].get<double>(), .y = point[1].get<double>()});
+        }
+      }
+    }
   }
 
   if (const auto mask = j.find("mask"); mask != j.end() && mask->is_object()) {

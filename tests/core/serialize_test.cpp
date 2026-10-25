@@ -134,6 +134,8 @@ Project rich_project() {
   blur.enabled = false;
   blur.params = {{"amount", 4.5}};
   blur.colors = {{"key", "#00d000"}};
+  blur.curves["rgb_master"] = {{.x = 0.0, .y = 0.1}, {.x = 0.5, .y = 0.6}, {.x = 1.0, .y = 1.0}};
+  blur.files = {{"look", "C:/Looks/Warm.cube"}};
   blur.keyframes["amount"] = {{.t = 0.0, .v = 0.0}, {.t = 1.0, .v = 9.0, .e = Interp::Ease}};
   blur.mask = Mask{.shape = MaskShape::Ellipse,
                    .x = 0.3,

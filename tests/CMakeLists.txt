@@ -53,6 +53,7 @@ add_executable(cutline_core_tests
   render/effect_catalog_test.cpp
   render/effect_passes_test.cpp
   render/effects_test.cpp
+  render/lumetri_test.cpp
   render/mix_test.cpp
   render/plan_test.cpp
   render/preview_test.cpp

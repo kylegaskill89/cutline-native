@@ -115,6 +115,7 @@ std::vector<EffectRow> clip_effects(const core::Project& project, std::string_vi
           .fallback = param.fallback,
           .suffix = std::string(param.suffix),
           .toggle = param.toggle,
+          .group = std::string(param.group),
           .animated = animated,
           .keyed_here = animated && keyed_at(effect, param.key, local_t),
           .interp = core::effect_keyframe_interp_of(effect, param.key)});

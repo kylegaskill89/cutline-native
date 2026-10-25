@@ -243,6 +243,7 @@ constexpr int kMaxPooledFrames = 40;
   // and masked nothing whatever. The two shapes made of numbers were fine,
   // because all ten of their numbers are in that list.
   out.mask.points = pass.mask.points;
+  out.data = pass.data;
   return out;
 }
 

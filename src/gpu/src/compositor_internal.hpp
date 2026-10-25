@@ -153,9 +153,22 @@ struct Compositor::Impl {
   ComPtr<ID3D12Resource> mask_points;
   std::size_t mask_points_capacity = 0;
 
-  /// Makes the point buffer hold at least `points` of them, and writes the
-  /// descriptor every layer run reads it through.
-  [[nodiscard]] std::expected<void, std::string> ensure_mask_points(std::size_t points);
+  /// Every pass's own data in the frame, one run after another, for the same
+  /// reason the corners share a buffer.
+  ComPtr<ID3D12Resource> pass_data;
+  std::size_t pass_data_capacity = 0;
+
+  /// Makes a shared buffer hold at least `count` elements of `stride` bytes,
+  /// and writes the descriptor every run reads it through at `slot`.
+  [[nodiscard]] std::expected<void, std::string> ensure_shared_buffer(
+      ComPtr<ID3D12Resource>& buffer, std::size_t& capacity, std::size_t count, UINT stride,
+      UINT slot, std::string_view what);
+
+  /// Copies `bytes` into a shared buffer, already big enough.
+  [[nodiscard]] std::expected<void, std::string> fill_shared_buffer(ID3D12Resource* buffer,
+                                                                    const void* bytes,
+                                                                    std::size_t size,
+                                                                    std::string_view what);
 
   int width = 0;
   int height = 0;

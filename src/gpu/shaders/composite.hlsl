@@ -99,6 +99,9 @@
 #define PASS_SHADOW    18
 #define PASS_UNDER     19
 #define PASS_MATTE     20
+#define PASS_LUMETRI   21
+#define PASS_SECONDARY 22
+#define PASS_LVIGNETTE 23
 
 // Laid out so no member straddles a 16-byte boundary, because these arrive as
 // root constants and HLSL packs a cbuffer in float4 rows.
@@ -172,6 +175,12 @@ struct Params {
     float whiteNits;
     float toneMap;
     int output;
+
+    // This pass's run in the shared pass data, for passes with more to say
+    // than eight values: a grade's settings, curves and LUTs.
+    float dataFirst;
+    float dataCount;
+    float2 dataPad;
 };
 
 
@@ -207,6 +216,10 @@ Texture2D<float4> backdrop : register(t3);
 /// the mask moves the path, and turning it turns the path, through exactly the
 /// transform the other two shapes already go through.
 StructuredBuffer<float2> maskPath : register(t4);
+
+/// Every pass's own data in the frame, one run after another; a pass reads from
+/// `dataFirst` on.
+StructuredBuffer<float> passData : register(t5);
 
 SamplerState linearSampler : register(s0);
 
@@ -1006,6 +1019,337 @@ float matteFactor(float2 uv) {
     return params.passA.y > 0.5 ? 1.0 - factor : factor;
 }
 
+// ----------------------------------------------------------------- lumetri --
+//
+// Lumetri Color. Its settings, curves and LUTs are the pass's data, laid out as
+// `render/lumetri.hpp` says, and every section grades in one space: the
+// sequence's own coded values in Rec.709, and in HDR the light scaled so
+// graphics white is 1.0 and coded with the same curve, carrying on above 1 on
+// a log scale. That is what lets a slider mean the same thing in either.
+
+static const float kGradingLog = 0.2;
+static const float kLutHeader = 8.0;
+
+float pd(float at) { return passData[(uint)(params.dataFirst + at)]; }
+float3 pd3(float at) { return float3(pd(at), pd(at + 1.0), pd(at + 2.0)); }
+
+float gradingLuma(float3 rgb) {
+    return dot(rgb, params.working == WORKING_REC709 ? kLuma709 : kLuma2020);
+}
+
+float3 gradingEncode(float3 x) {
+    const float3 low = encodeSrgb(saturate(x));
+    const float3 high = 1.0 + log2(max(x, 1.0)) * kGradingLog;
+    return lerp(low, high, step(1.0, x));
+}
+
+float3 gradingDecode(float3 g) {
+    const float3 low = linearizeSrgb(saturate(g));
+    const float3 high = exp2((max(g, 1.0) - 1.0) / kGradingLog);
+    return lerp(low, high, step(1.0, g));
+}
+
+float3 toGrading(float3 coded) {
+    return params.working == WORKING_REC709 ? coded : gradingEncode(workingLinear(coded));
+}
+
+float3 fromGrading(float3 g) {
+    return params.working == WORKING_REC709 ? max(g, 0.0) : workingCoded(gradingDecode(max(g, 0.0)));
+}
+
+float3 rgbToHsv(float3 c) {
+    const float4 k = float4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    const float4 p = c.g < c.b ? float4(c.bg, k.wz) : float4(c.gb, k.xy);
+    const float4 q = c.r < p.x ? float4(p.xyw, c.r) : float4(c.r, p.yzx);
+    const float d = q.x - min(q.w, q.y);
+    return float3(abs(q.z + (q.w - q.y) / (6.0 * d + 1e-10)), d / (q.x + 1e-10), q.x);
+}
+
+float3 hsvToRgb(float3 c) {
+    const float3 p = abs(frac(c.xxx + float3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+    return c.z * lerp(float3(1.0, 1.0, 1.0), saturate(p - 1.0), c.y);
+}
+
+/// An S about the middle that keeps black and white where they are: steeper
+/// through the middle for an exponent above one, flatter below. Past the ends
+/// it carries on in a straight line rather than clipping.
+float3 sCurve(float3 x, float k) {
+    const float3 lowHalf = 0.5 * pow(saturate(2.0 * x), k);
+    const float3 highHalf = 1.0 - 0.5 * pow(saturate(2.0 - 2.0 * x), k);
+    return lerp(lowHalf, highHalf, step(0.5, x)) + (max(x - 1.0, 0.0) + min(x, 0.0)) * k;
+}
+
+float3 lutEntry(float base, int3 i, int size) {
+    return pd3(base + kLutHeader + 3.0 * (float)(i.x + size * (i.y + size * i.z)));
+}
+
+/// A LUT from the data, at `base`. A cube is read with tetrahedral
+/// interpolation, which is what grading applications use: smoother along the
+/// grey axis than trilinear, and four reads rather than eight.
+float3 applyLut(float base, float3 c) {
+    const int size = (int)pd(base);
+    const float3 low = pd3(base + 2.0);
+    const float3 high = pd3(base + 5.0);
+    const float3 x = saturate((c - low) / (high - low)) * (float)(size - 1);
+    if (pd(base + 1.0) < 0.5) {
+        float3 out1d;
+        [unroll] for (int ch = 0; ch < 3; ++ch) {
+            const int i0 = min((int)floor(x[ch]), size - 2);
+            const float a = pd(base + kLutHeader + 3.0 * (float)i0 + (float)ch);
+            const float b = pd(base + kLutHeader + 3.0 * (float)(i0 + 1) + (float)ch);
+            out1d[ch] = lerp(a, b, x[ch] - (float)i0);
+        }
+        return out1d;
+    }
+    const int3 i0 = min((int3)floor(x), int3(size - 2, size - 2, size - 2));
+    const float3 t = x - (float3)i0;
+    const float3 c000 = lutEntry(base, i0, size);
+    const float3 c111 = lutEntry(base, i0 + int3(1, 1, 1), size);
+    if (t.x >= t.y) {
+        if (t.y >= t.z) {
+            const float3 c100 = lutEntry(base, i0 + int3(1, 0, 0), size);
+            const float3 c110 = lutEntry(base, i0 + int3(1, 1, 0), size);
+            return c000 + t.x * (c100 - c000) + t.y * (c110 - c100) + t.z * (c111 - c110);
+        }
+        if (t.x >= t.z) {
+            const float3 c100 = lutEntry(base, i0 + int3(1, 0, 0), size);
+            const float3 c101 = lutEntry(base, i0 + int3(1, 0, 1), size);
+            return c000 + t.x * (c100 - c000) + t.z * (c101 - c100) + t.y * (c111 - c101);
+        }
+        const float3 c001 = lutEntry(base, i0 + int3(0, 0, 1), size);
+        const float3 c101 = lutEntry(base, i0 + int3(1, 0, 1), size);
+        return c000 + t.z * (c001 - c000) + t.x * (c101 - c001) + t.y * (c111 - c101);
+    }
+    if (t.z >= t.y) {
+        const float3 c001 = lutEntry(base, i0 + int3(0, 0, 1), size);
+        const float3 c011 = lutEntry(base, i0 + int3(0, 1, 1), size);
+        return c000 + t.z * (c001 - c000) + t.y * (c011 - c001) + t.x * (c111 - c011);
+    }
+    if (t.z >= t.x) {
+        const float3 c010 = lutEntry(base, i0 + int3(0, 1, 0), size);
+        const float3 c011 = lutEntry(base, i0 + int3(0, 1, 1), size);
+        return c000 + t.y * (c010 - c000) + t.z * (c011 - c010) + t.x * (c111 - c011);
+    }
+    const float3 c010 = lutEntry(base, i0 + int3(0, 1, 0), size);
+    const float3 c110 = lutEntry(base, i0 + int3(1, 1, 0), size);
+    return c000 + t.y * (c010 - c000) + t.x * (c110 - c010) + t.z * (c111 - c110);
+}
+
+/// A LUT over what lies between black and white, with anything brighter
+/// carried through by how far it was over, so a look does not clip HDR.
+float3 applyLutKeepingExcess(float base, float3 c) {
+    const float3 inRange = saturate(c);
+    return applyLut(base, inRange) + (c - inRange);
+}
+
+/// One of the curve tables, read between its samples.
+float curveAt(float base, int index, float x) {
+    const float f = saturate(x) * 255.0;
+    const float i0 = min(floor(f), 254.0);
+    const float at = base + (float)index * 256.0 + i0;
+    return lerp(pd(at), pd(at + 1.0), f - i0);
+}
+
+float3 lumetriBasic(float3 c) {
+    if (params.passA.y >= 0.0) c = applyLutKeepingExcess(params.passA.y, c);
+
+    // White balance and exposure are changes to the light.
+    c = gradingEncode(gradingDecode(c) * pd3(0.0) * pd(3.0));
+    // What is above white, stretched or pulled in.
+    c = lerp(c, 1.0 + (c - 1.0) * pd(10.0), step(1.0, c));
+    c = sCurve(c, pd(4.0));
+
+    // Highlights and shadows lift or lower a band of tones each, by luma, and
+    // leave black and white where they are.
+    const float l = saturate(gradingLuma(c));
+    const float shadows = 4.0 * l * (1.0 - l) * (1.0 - l);
+    const float highlights = 4.0 * l * l * (1.0 - l);
+    c += 0.5 * (pd(6.0) * shadows + pd(5.0) * highlights);
+
+    // Whites and blacks move the ends themselves.
+    const float3 s = saturate(c);
+    c += pd(7.0) * 0.25 * s * s;
+    c += pd(8.0) * 0.25 * (1.0 - s) * (1.0 - s);
+    c = max(c, 0.0);
+
+    const float luma = gradingLuma(c);
+    return max(luma + (c - luma) * pd(9.0), 0.0);
+}
+
+float3 lumetriCreative(float3 c) {
+    if (params.passA.z >= 0.0) c = lerp(c, applyLutKeepingExcess(params.passA.z, c), pd(11.0));
+
+    // Faded film lifts the blacks the way a print loses its density.
+    const float3 s = saturate(c);
+    c += pd(12.0) * 0.25 * (1.0 - s) * (1.0 - s) * (1.0 - s);
+
+    // Vibrance does most to what is least saturated, then saturation to all.
+    const float luma = gradingLuma(c);
+    const float chroma = saturate(max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)));
+    c = luma + (c - luma) * (1.0 + pd(13.0) * (1.0 - chroma));
+    c = luma + (c - luma) * pd(14.0);
+
+    // The two tints, split by luma at a point the balance moves.
+    const float high = pow(saturate(luma), exp2(-2.0 * pd(21.0)));
+    c += pd3(15.0) * (1.0 - high) + pd3(18.0) * high;
+    return max(c, 0.0);
+}
+
+float3 lumetriCurves(float3 c) {
+    const float base = params.passA.w;
+    if (params.passB.x > 0.5) {
+        const float3 inRange = saturate(c);
+        float3 x = float3(curveAt(base, 0, inRange.r), curveAt(base, 0, inRange.g),
+                          curveAt(base, 0, inRange.b));
+        x = float3(curveAt(base, 1, x.r), curveAt(base, 2, x.g), curveAt(base, 3, x.b));
+        c = x + (c - inRange);
+    }
+    if (params.passB.y > 0.5) {
+        const float3 inRange = saturate(c);
+        const float luma = gradingLuma(inRange);
+        float3 hsv = rgbToHsv(inRange);
+        const float hue = hsv.x;
+        const float saturation = hsv.y;
+        hsv.y = curveAt(base, 8, saturation);
+        hsv.y *= 2.0 * curveAt(base, 4, hue) * 2.0 * curveAt(base, 7, luma);
+        hsv.x = frac(hue + curveAt(base, 5, hue) - 0.5);
+        float3 graded = hsvToRgb(float3(hsv.x, saturate(hsv.y), hsv.z));
+        // Lighter or darker by hue, weighted by how much of that hue there is,
+        // so a grey is never moved by a hue it does not have.
+        graded += (curveAt(base, 6, hue) - 0.5) * 0.5 * saturation;
+        c = graded + (c - inRange);
+    }
+    return max(c, 0.0);
+}
+
+/// Lift, gamma and gain, each a colour and an amount, from the three wheels.
+float3 lumetriWheels(float3 c) {
+    c += pd3(22.0) * (1.0 - saturate(c));
+    c *= 1.0 + pd3(28.0);
+    return pow(max(c, 0.0), 1.0 / max(1.0 + pd3(25.0), 0.05));
+}
+
+float3 lumetriPass(float3 coded) {
+    const int sections = (int)params.passA.x;
+    float3 c = toGrading(coded);
+    if ((sections & 1) != 0) c = lumetriBasic(c);
+    if ((sections & 2) != 0) c = lumetriCreative(c);
+    if ((sections & 4) != 0) c = lumetriCurves(c);
+    if ((sections & 8) != 0) c = lumetriWheels(c);
+    return fromGrading(c);
+}
+
+/// How far into a range a value is: 1 inside it, falling away over the
+/// softness either side, and a hard edge when there is none.
+float rangeKey(float v, float low, float high, float soft) {
+    const float rise = soft > 0.0 ? smoothstep(low - soft, low, v) : step(low, v);
+    const float fall = soft > 0.0 ? 1.0 - smoothstep(high, high + soft, v) : step(v, high);
+    return rise * fall;
+}
+
+float secondaryKeyOf(float3 c) {
+    const float3 s = saturate(c);
+    const float3 hsv = rgbToHsv(s);
+    float hueKey = 1.0;
+    const float half = pd(1.0);
+    if (half < 0.5) {
+        const float distance = abs(frac(hsv.x - pd(0.0) + 0.5) - 0.5);
+        const float soft = pd(2.0);
+        hueKey = soft > 0.0 ? 1.0 - smoothstep(half, half + soft, distance) : step(distance, half);
+    }
+    return hueKey * rangeKey(hsv.y, pd(3.0), pd(4.0), pd(5.0)) *
+           rangeKey(gradingLuma(s), pd(6.0), pd(7.0), pd(8.0));
+}
+
+float3 gradedAt(float2 uv) { return toGrading(texture0.Sample(linearSampler, uv).rgb); }
+
+/// The colour the key is pulled from: averaged with its neighbours when
+/// Denoise asks, so grain does not speckle the edge of what is selected.
+float3 denoisedAt(float2 uv) {
+    const float radius = pd(9.0);
+    float3 c = gradedAt(uv);
+    if (radius <= 0.0) return c;
+    const float2 step = params.passB.zw * radius;
+    c += gradedAt(uv + float2(step.x, 0.0)) + gradedAt(uv - float2(step.x, 0.0));
+    c += gradedAt(uv + float2(0.0, step.y)) + gradedAt(uv - float2(0.0, step.y));
+    return c / 5.0;
+}
+
+/// The key, softened by Blur: the key itself averaged round a ring, which is
+/// the matte blurred without a pass of its own to hold it.
+float secondaryKey(float2 uv) {
+    float key = secondaryKeyOf(denoisedAt(uv));
+    const float radius = pd(10.0);
+    if (radius > 0.0) {
+        const float2 step = params.passB.zw * radius;
+        float sum = key;
+        [unroll] for (int i = 0; i < 8; ++i) {
+            const float angle = (float)i * (6.2831853 / 8.0);
+            const float2 offset = float2(cos(angle), sin(angle)) * step;
+            sum += secondaryKeyOf(denoisedAt(uv + offset));
+            sum += secondaryKeyOf(denoisedAt(uv + offset * 0.5));
+        }
+        key = sum / 17.0;
+    }
+    return pd(11.0) > 0.5 ? 1.0 - key : key;
+}
+
+float3 secondaryCorrect(float3 c) {
+    c = gradingEncode(gradingDecode(c) * pd3(16.0));
+    c += pd3(13.0);
+    c = sCurve(c, pd(19.0));
+    const float luma = gradingLuma(c);
+    return max(luma + (c - luma) * pd(20.0), 0.0);
+}
+
+float4 secondaryPass(float2 uv, float4 before) {
+    const float3 c = toGrading(before.rgb);
+    const float key = secondaryKey(uv);
+    // Show Mask: the selection in colour, everything else grey.
+    if (pd(12.0) > 0.5) return float4(fromGrading(lerp(float3(0.5, 0.5, 0.5), c, key)), before.a);
+
+    float3 sharpened = c;
+    if (pd(21.0) != 0.0) {
+        const float2 step = params.passB.zw;
+        const float3 around = 0.25 * (gradedAt(uv + float2(step.x, 0.0)) +
+                                      gradedAt(uv - float2(step.x, 0.0)) +
+                                      gradedAt(uv + float2(0.0, step.y)) +
+                                      gradedAt(uv - float2(0.0, step.y)));
+        sharpened = c + (c - around) * pd(21.0);
+    }
+    return float4(fromGrading(lerp(c, secondaryCorrect(sharpened), key)), before.a);
+}
+
+/// Lumetri's vignette: darker or lighter towards the edges, on a shape between
+/// the frame's rectangle and a circle.
+float3 lumetriVignette(float2 uv, float3 coded) {
+    const float amount = params.passA.x;
+    const float midpoint = params.passA.y;
+    const float roundness = params.passA.z;
+    const float feather = params.passA.w;
+
+    float2 p = (layerUv(uv) - 0.5) * 2.0;
+    // Toward a circle on the picture rather than an ellipse fitted to it.
+    const float aspect = params.size.x / max(params.size.y, 1.0);
+    if (roundness > 0.0) p.x *= lerp(1.0, aspect, roundness);
+    // Toward the rectangle, as a squarer and squarer superellipse.
+    const float n = roundness < 0.0 ? lerp(2.0, 8.0, -roundness) : 2.0;
+    const float2 a = abs(p);
+    const float d = pow(pow(a.x, n) + pow(a.y, n), 1.0 / n);
+
+    const float centre = lerp(0.2, 1.6, midpoint);
+    const float width = max(feather, 0.02) * 1.2;
+    const float m = smoothstep(centre - width * 0.5, centre + width * 0.5, d);
+
+    float3 c = toGrading(coded);
+    if (amount < 0.0) {
+        c = gradingEncode(gradingDecode(c) * (1.0 + amount * m));
+    } else {
+        c = lerp(c, float3(1.0, 1.0, 1.0), amount * m);
+    }
+    return fromGrading(c);
+}
+
 float4 PSEffect(VSOutput input) : SV_Target {
     const float4 before = texture0.Sample(linearSampler, input.uv);
 
@@ -1036,6 +1380,8 @@ float4 PSEffect(VSOutput input) : SV_Target {
             ? (kept.rgb * kept.a + before.rgb * before.a * (1.0 - kept.a)) / alpha
             : float3(0.0, 0.0, 0.0);
         after = float4(rgb, alpha);
+    } else if (params.passKind == PASS_SECONDARY) {
+        after = secondaryPass(input.uv, before);
     } else if (params.passKind == PASS_SHARPEN) {
         after = float4(sharpenPass(input.uv), texture0.Sample(linearSampler, input.uv).a);
     } else if (params.passKind == PASS_FLIP) {
@@ -1075,6 +1421,10 @@ float4 PSEffect(VSOutput input) : SV_Target {
             // instead of half of one.
             const float levels = max(params.passA.x, 2.0);
             after.rgb = saturate(round(after.rgb * (levels - 1.0)) / (levels - 1.0));
+        } else if (params.passKind == PASS_LUMETRI) {
+            after.rgb = lumetriPass(after.rgb);
+        } else if (params.passKind == PASS_LVIGNETTE) {
+            after.rgb = lumetriVignette(input.uv, after.rgb);
         } else if (params.passKind == PASS_MATTE) {
             after.a *= matteFactor(input.uv);
         } else if (params.passKind == PASS_THRESHOLD) {

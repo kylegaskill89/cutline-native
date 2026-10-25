@@ -42,6 +42,8 @@ struct EffectParamRow {
   std::string suffix;
   /// Worth a checkbox rather than a slider.
   bool toggle = false;
+  /// The section it sits in, for an effect that has them; empty otherwise.
+  std::string group;
   /// Animated, so `value` is what the keyframes evaluate to rather than the
   /// stored one — which is ignored entirely while a parameter is animated.
   bool animated = false;

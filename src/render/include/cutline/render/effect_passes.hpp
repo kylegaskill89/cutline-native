@@ -94,6 +94,15 @@ enum class EffectPassKind {
   UnderKept,
   /// Opacity from another track's picture where this layer is on the frame.
   Matte,
+
+  // Lumetri Color, whose settings live in the pass's data. See `lumetri.hpp`.
+
+  /// Basic correction, creative, curves and wheels: whichever the values say.
+  Lumetri,
+  /// The HSL secondary: a key, softened, and a correction inside it.
+  LumetriSecondary,
+  /// Lumetri's vignette: amount, midpoint, roundness and feather.
+  LumetriVignette,
 };
 
 /// How many floats a pass carries.
@@ -152,6 +161,9 @@ struct EffectPass {
   /// that write them.
   std::array<float, kPassValues> values{};
   PassMask mask;
+  /// What does not fit in `values`: a grade's settings, its curves and its
+  /// LUTs. Empty for every pass that is not a grade.
+  std::vector<float> data;
 
   friend bool operator==(const EffectPass&, const EffectPass&) = default;
 };

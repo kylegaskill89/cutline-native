@@ -2,6 +2,7 @@
 
 #include "cutline/core/effects.hpp"
 #include "cutline/core/mask_path.hpp"
+#include "cutline/render/lumetri.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -475,6 +476,9 @@ std::vector<EffectPass> plan_effect_passes(const core::Clip& clip, double local_
       if (param(effect, "track", 0.0) >= 1.0) {
         passes.push_back(matte_pass(toggled(effect, "luma", 0.0), toggled(effect, "reverse", 0.0)));
       }
+
+    } else if (effect.type == "lumetri") {
+      plan_lumetri(effect, passes);
 
     } else if (effect.type == "chromakey") {
       const auto color = effect.colors.find("color");
