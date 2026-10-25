@@ -198,7 +198,8 @@ std::vector<Workspace> built_in_workspaces() {
                    {tabs({"scopes", "source"}), tabs({"monitor"}), tabs({"effects"})},
                    {0.22, 0.48, 0.30}),
              split(Axis::Horizontal,
-                   {tabs({"project", "library", "audio", "history"}), tabs({"timeline", "queue"})},
+                   {tabs({"project", "library", "audio"}),
+                    tabs({"timeline", "queue", "history"})},
                    {0.3, 0.7})},
             {0.6, 0.4});
 
@@ -212,7 +213,8 @@ std::vector<Workspace> built_in_workspaces() {
                    {tabs({"effects", "source"}), tabs({"monitor"}), tabs({"library"})},
                    {0.32, 0.48, 0.20}),
              split(Axis::Horizontal,
-                   {tabs({"project", "scopes", "audio", "history"}), tabs({"timeline", "queue"})},
+                   {tabs({"project", "scopes", "audio"}),
+                    tabs({"timeline", "queue", "history"})},
                    {0.3, 0.7})},
             {0.58, 0.42});
 

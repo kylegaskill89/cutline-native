@@ -71,6 +71,12 @@ class TabStrip : public Widget {
   [[nodiscard]] Rect menu_rect(std::size_t index) const;
   [[nodiscard]] std::optional<std::size_t> tab_at(double x, double y) const;
 
+  /// Whether the tabs were given less room than their titles need, at the
+  /// last layout. They still work -- a squeezed title is cut short with an
+  /// ellipsis -- but a built-in arrangement that squeezes them at an ordinary
+  /// window size has put too many tabs in one place, which `--check` says.
+  [[nodiscard]] bool squeezed() const noexcept { return squeezed_; }
+
   [[nodiscard]] Part part() const noexcept override { return Part::TabBar; }
   [[nodiscard]] bool paints_surface() const noexcept override { return true; }
 
@@ -97,6 +103,7 @@ class TabStrip : public Widget {
   /// Measured during layout, because input arrives with no way to measure text.
   std::vector<double> widths_;
   Metrics metrics_;
+  bool squeezed_ = false;
 
   std::size_t hovered_tab_ = 0;
   bool has_hovered_tab_ = false;

@@ -67,6 +67,7 @@ void TabStrip::set_tabs(std::vector<Tab> tabs, std::size_t active) {
 void TabStrip::layout(const LayoutContext& context) {
   metrics_ = context.metrics();
   widths_.assign(tabs_.size(), 0.0);
+  squeezed_ = false;
   if (tabs_.empty()) return;
 
   const double closer = metrics_.font_size + metrics_.padding_x * 0.5;
@@ -87,6 +88,7 @@ void TabStrip::layout(const LayoutContext& context) {
   if (total > bounds().width && bounds().width > 0.0) {
     const double each = bounds().width / static_cast<double>(tabs_.size());
     std::ranges::fill(widths_, each);
+    squeezed_ = true;
   }
 }
 
@@ -170,8 +172,30 @@ void TabStrip::paint_content(Painter& painter, const Theme& theme) const {
     const Rect text = Rect{tab.x + theme.metrics.padding_x, tab.y,
                            std::max(0.0, text_end - tab.x - theme.metrics.padding_x), tab.height};
     if (!text.empty()) {
-      painter.text(text_run(text, tabs_[i].title, style, theme.metrics.font_size,
-                            TextAlign::Left, i == active_ && theme.metrics.bold_active_tab));
+      const bool bold = i == active_ && theme.metrics.bold_active_tab;
+      // Cut short with an ellipsis when the tab is too narrow, as Premiere
+      // does. Left whole, the title ran on under the cross: "Project" read
+      // as "Proje" with an X through the rest.
+      std::string title = tabs_[i].title;
+      const double room = text.width;
+      if (painter.measure(title, theme.metrics.font_size, bold) > room) {
+        static constexpr std::string_view kEllipsis = "\u2026";
+        while (!title.empty()) {
+          // Whole characters: a UTF-8 continuation byte goes with the one
+          // it continues.
+          do {
+            title.pop_back();
+          } while (!title.empty() && (static_cast<unsigned char>(title.back()) & 0xC0) == 0x80);
+          if (painter.measure(title + std::string(kEllipsis), theme.metrics.font_size, bold) <=
+              room) {
+            break;
+          }
+        }
+        title = title.empty() ? std::string{} : title + std::string(kEllipsis);
+      }
+      if (!title.empty()) {
+        painter.text(text_run(text, title, style, theme.metrics.font_size, TextAlign::Left, bold));
+      }
     }
 
     if (!closer.empty()) {

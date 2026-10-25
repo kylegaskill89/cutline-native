@@ -432,6 +432,13 @@ template <typename T>
         ++squeezed;
       }
 
+      // A tab strip grows, so the test above cannot see inside it; it says
+      // itself when its tabs were given less than their titles need.
+      if (const auto* strip = dynamic_cast<const cutline::ui::TabStrip*>(&widget);
+          strip != nullptr && strip->squeezed()) {
+        ++squeezed;
+      }
+
       if (clipper != nullptr && !widget.bounds().empty() &&
           dynamic_cast<const ScrollView*>(clipper) == nullptr &&
           (widget.bounds().x < clipper->bounds().x - 0.5 ||
