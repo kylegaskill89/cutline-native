@@ -264,6 +264,9 @@ enum class CaptionGlyphs {
   /// XP's: heavy white pixel patterns on an eleven-pixel grid -- a bar, a box
   /// with a thick top, a cross three pixels wide.
   Luna,
+  /// Vista's: white shapes outlined in dark grey, on an eleven by nine grid.
+  /// The outline is the style's text shadow colour.
+  Vista,
 };
 
 /// How a theme shows where the keyboard is.
@@ -345,10 +348,16 @@ struct Metrics {
   bool lit_radio_dot = false;
   ThumbShape slider_thumb = ThumbShape::Block;
   CaptionGlyphs caption_glyphs = CaptionGlyphs::Stroked;
-  /// A caption button's side, as a square inside the title bar with a gap of
-  /// `tight_spacing` after it; zero fills the bar's height and is wider than
-  /// tall, as modern Windows draws them.
-  double caption_button = 0.0;
+  /// A caption button's size inside the title bar, with `caption_gap` after
+  /// each and the close button `caption_close_width` wide where that is set.
+  /// A zero width fills the bar's height and is wider than tall, as modern
+  /// Windows draws them. XP's were squares centred in the bar; Vista's hung
+  /// from the frame's top edge, the close nearly twice as wide.
+  double caption_width = 0.0;
+  double caption_height = 0.0;
+  double caption_close_width = 0.0;
+  double caption_gap = 0.0;
+  bool caption_hangs = false;
   /// A progress bar drawn as blocks this wide, `progress_gap` apart, inside
   /// its trough, as XP drew it; zero fills it continuously.
   double progress_block = 0.0;

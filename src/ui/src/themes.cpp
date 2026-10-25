@@ -309,7 +309,9 @@ namespace {
   // The caption buttons: squares with a white edge and three-pixel corners,
   // lit from the top left, blue but for the red close. Under the pointer they
   // brighten; held, they darken and their glyph dims.
-  t.metrics.caption_button = 21.0;
+  t.metrics.caption_width = 21.0;
+  t.metrics.caption_height = 21.0;
+  t.metrics.caption_gap = 2.0;
   t.metrics.caption_glyphs = CaptionGlyphs::Luna;
   const auto caption = [](std::string_view light, std::string_view middle, std::string_view dark,
                           std::string_view edge_light, std::string_view edge_dark,
@@ -612,6 +614,13 @@ namespace {
   t.metrics.menu_row_height = 22.0;
   t.metrics.menu_separator_height = 7.0;
   t.metrics.menu_padding = 3.0;
+  // Hung from the frame's top edge, the close nearly twice as wide as the
+  // others, with Vista's outlined glyphs.
+  t.metrics.caption_width = 26.0;
+  t.metrics.caption_height = 18.0;
+  t.metrics.caption_close_width = 43.0;
+  t.metrics.caption_hangs = true;
+  t.metrics.caption_glyphs = CaptionGlyphs::Vista;
 
   const Color ink = hex("#000000");
   const Color greyed = hex("#838383");
@@ -944,10 +953,11 @@ namespace {
         .border_width = 1.0,
         .corner_radius = 3.0,
         .text = hex(glyph),
+        .text_shadow = Shadow{.color = hex("#535666")},
     };
   };
   t.set(Part::Caption, State::Normal,
-        caption("#ffffff99", "#ffffff40", "#00000010", "#ffffff30", "#00000060", "#1d2a3a"));
+        caption("#ffffff99", "#ffffff40", "#00000010", "#ffffff30", "#00000060", "#ffffff"));
   t.set(Part::Caption, State::Hover,
         caption("#c9e9ff", "#8ccdf9", "#3e9ee8", "#74ccff", "#00000080", "#ffffff"));
   t.set(Part::Caption, State::Pressed,

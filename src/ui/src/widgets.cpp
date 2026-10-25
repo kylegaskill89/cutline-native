@@ -377,19 +377,25 @@ LayoutItem CaptionButton::sizing(Axis axis, const LayoutContext& context) const 
   const Metrics& metrics = context.metrics();
   const double height = metrics.title_bar_height;
   if (axis == Axis::Vertical) return LayoutItem::fixed(height);
-  // XP's are squares with a gap after each; the bar's height is still the
-  // button's, so the pointer finds it anywhere above or below the square.
-  if (metrics.caption_button > 0.0) {
-    return LayoutItem::fixed(metrics.caption_button + metrics.tight_spacing);
+  // A face of the theme's size with a gap after it; the bar's height is still
+  // the button's, so the pointer finds it anywhere above or below the face.
+  if (metrics.caption_width > 0.0) {
+    const double width = kind_ == Kind::Close && metrics.caption_close_width > 0.0
+                             ? metrics.caption_close_width
+                             : metrics.caption_width;
+    return LayoutItem::fixed(width + metrics.caption_gap);
   }
   // Wider than tall, the way every caption button on the platform is.
   return LayoutItem::fixed(std::round(height * 1.6));
 }
 
 Rect CaptionButton::face(const Theme& theme) const {
-  const double side = theme.metrics.caption_button;
-  if (side <= 0.0) return bounds();
-  return Rect{bounds().x, bounds().y + (bounds().height - side) / 2.0, side, side};
+  const Metrics& metrics = theme.metrics;
+  if (metrics.caption_width <= 0.0) return bounds();
+  const double width = std::max(0.0, bounds().width - metrics.caption_gap);
+  const double height = std::min(bounds().height, metrics.caption_height);
+  const double y = metrics.caption_hangs ? bounds().y : bounds().y + (bounds().height - height) / 2.0;
+  return Rect{bounds().x, y, width, height};
 }
 
 bool CaptionButton::paints_surface() const noexcept { return false; }
@@ -416,6 +422,26 @@ constexpr std::array<std::string_view, 11> kLunaClose{{
     "...#####...", "..###.###..", ".###...###.", "###.....###", "a#.......#a",
 }};
 
+/// Vista's, measured from its caption buttons: `#` the white body, `o` its
+/// dark outline and `h` the outline half covered. Restore was not among the
+/// captures, and is the maximise box twice over in the same hand.
+constexpr std::array<std::string_view, 9> kVistaMinimise{{
+    "...........", "...........", "...........", "...........", ".ooooooooo.",
+    "o#########o", "o#########o", "o#########o", ".ooooooooo.",
+}};
+constexpr std::array<std::string_view, 9> kVistaMaximise{{
+    ".ooooooooo.", "o#########o", "o#########o", "o##ooooo##o", "o##o...o##o",
+    "o##ooooo##o", "o#########o", "o#########o", ".ooooooooo.",
+}};
+constexpr std::array<std::string_view, 9> kVistaRestore{{
+    "...oooooooo", "...o######o", "ooooooo###o", "o#####o###o", "o#ooo#o###o",
+    "o#o.o#ooooo", "o#ooo#o....", "o#####o....", "ooooooo....",
+}};
+constexpr std::array<std::string_view, 9> kVistaClose{{
+    "hoooh.hoooh", "o###oho###o", "ho###o###oh", ".ho#####oh.", "..ho###oh..",
+    ".ho#####oh.", "ho###o###oh", "o###oho###o", "hoooh.hoooh",
+}};
+
 }  // namespace
 
 void CaptionButton::paint_content(Painter& painter, const Theme& theme) const {
@@ -423,6 +449,36 @@ void CaptionButton::paint_content(Painter& painter, const Theme& theme) const {
   const Rect square = face(theme);
   paint_surface(painter, square, style);
   const Color& ink = style.text;
+
+  if (theme.metrics.caption_glyphs == CaptionGlyphs::Vista) {
+    const std::array<std::string_view, 9>* glyph = &kVistaClose;
+    switch (kind_) {
+      case Kind::Minimise: glyph = &kVistaMinimise; break;
+      case Kind::Maximise: glyph = &kVistaMaximise; break;
+      case Kind::Restore: glyph = &kVistaRestore; break;
+      case Kind::Close: break;
+    }
+    const Color outline = style.text_shadow ? style.text_shadow->color : style.border;
+    Color half = outline;
+    half.a *= 0.5f;
+    const double left = std::round(square.x + (square.width - 11.0) / 2.0);
+    const double top = std::round(square.y + (square.height - 9.0) / 2.0);
+    for (std::size_t row = 0; row < glyph->size(); ++row) {
+      const std::string_view line = (*glyph)[row];
+      for (std::size_t col = 0; col < line.size(); ++col) {
+        Color colour;
+        switch (line[col]) {
+          case '#': colour = ink; break;
+          case 'o': colour = outline; break;
+          case 'h': colour = half; break;
+          default: continue;
+        }
+        painter.fill(Rect{left + static_cast<double>(col), top + static_cast<double>(row), 1.0, 1.0},
+                     0.0, Fill::solid(colour));
+      }
+    }
+    return;
+  }
 
   if (theme.metrics.caption_glyphs == CaptionGlyphs::Luna) {
     const std::array<std::string_view, 11>* glyph = &kLunaClose;

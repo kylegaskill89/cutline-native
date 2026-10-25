@@ -584,6 +584,26 @@ TEST(CaptionButton, EachKindLooksDifferent) {
   EXPECT_NE(shape_of(CaptionButton::Kind::Minimise), shape_of(CaptionButton::Kind::Maximise));
 }
 
+TEST(CaptionButton, VistasHangFromTheTopAndItsCloseIsWider) {
+  // On the glass, Vista's caption buttons hung from the frame's top edge and
+  // the close was nearly twice the width of the others.
+  const Theme& aero = *built_in_theme("aero");
+  const LayoutContext context = context_for(aero);
+  CaptionButton minimise(CaptionButton::Kind::Minimise);
+  CaptionButton close(CaptionButton::Kind::Close);
+  const double wide = close.sizing(Axis::Horizontal, context).basis;
+  const double narrow = minimise.sizing(Axis::Horizontal, context).basis;
+  EXPECT_GT(wide, narrow * 1.5);
+
+  close.arrange(Rect{0.0, 10.0, wide, 30.0}, context);
+  RecordingPainter painter;
+  close.paint(painter, aero);
+  const DrawCall* face = painter.first(DrawCall::Kind::Fill);
+  ASSERT_NE(face, nullptr);
+  EXPECT_DOUBLE_EQ(face->bounds.y, 10.0) << "hung from the top, not centred";
+  EXPECT_DOUBLE_EQ(face->bounds.height, aero.metrics.caption_height);
+}
+
 TEST(CaptionButton, IsNotInTheTabOrder) {
   // Closing the window because focus happened to be resting on the close
   // button when Space was pressed would be unforgivable.
