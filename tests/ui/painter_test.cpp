@@ -8,6 +8,7 @@
 #include "cutline/ui/painter.hpp"
 
 #include "cutline/ui/recording_painter.hpp"
+#include "cutline/ui/theme.hpp"
 
 #include <gtest/gtest.h>
 
@@ -359,6 +360,44 @@ TEST(RecordingPainterBasics, KindsComeBackInOrder) {
 
   const std::vector<Kind> expected{Kind::Fill, Kind::Bevel, Kind::Stroke};
   EXPECT_EQ(painter.kinds(), expected);
+}
+
+// -------------------------------------------------------------------- drops --
+
+TEST(Drop, ATargetIsTheAccentWashedOverAndDrawnRound) {
+  const Theme& theme = default_theme();
+  RecordingPainter painter;
+  paint_drop_target(painter, theme, Rect{10.0, 10.0, 100.0, 40.0}, 4.0);
+
+  const DrawCall* wash = painter.first(DrawCall::Kind::Fill);
+  const DrawCall* line = painter.first(DrawCall::Kind::Stroke);
+  ASSERT_NE(wash, nullptr);
+  ASSERT_NE(line, nullptr);
+  EXPECT_EQ(wash->fill.color.r, theme.accent.r);
+  EXPECT_LT(wash->fill.color.a, theme.accent.a * 0.5F) << "what is aimed at must still show";
+  EXPECT_EQ(line->color, theme.accent);
+  EXPECT_EQ(line->corner_radius, 4.0);
+}
+
+TEST(Drop, AGhostIsWhatItWillBeFadedWithTheSameOutlineAsATarget) {
+  const Theme& theme = default_theme();
+  const Color clip = parse_color("#3366cc");
+  RecordingPainter ghost;
+  paint_drop_ghost(ghost, theme, Rect{10.0, 10.0, 100.0, 40.0}, 4.0, clip);
+  RecordingPainter target;
+  paint_drop_target(target, theme, Rect{10.0, 10.0, 100.0, 40.0}, 4.0);
+
+  const DrawCall* fill = ghost.first(DrawCall::Kind::Fill);
+  ASSERT_NE(fill, nullptr);
+  EXPECT_EQ(fill->fill.color.b, clip.b) << "it shows what it will be";
+  EXPECT_LT(fill->fill.color.a, clip.a);
+
+  const DrawCall* ghost_line = ghost.first(DrawCall::Kind::Stroke);
+  const DrawCall* target_line = target.first(DrawCall::Kind::Stroke);
+  ASSERT_NE(ghost_line, nullptr);
+  ASSERT_NE(target_line, nullptr);
+  EXPECT_EQ(ghost_line->color, target_line->color);
+  EXPECT_EQ(ghost_line->width, target_line->width) << "one line for every drop";
 }
 
 }  // namespace

@@ -538,7 +538,7 @@ void MediaBrowser::paint_content(Painter& painter, const Theme& theme) const {
     // The bin a drag would file into, drawn the same way a row being hovered
     // for a drop is drawn everywhere else here.
     if (const auto target = file_target(); target.has_value() && *target == i) {
-      painter.stroke(row, 0.0, theme.accent, 2.0);
+      paint_drop_target(painter, theme, row, theme.style(Part::MenuItem).corner_radius);
     }
 
     const Rect twist = twist_rect(i);

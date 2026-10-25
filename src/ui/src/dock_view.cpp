@@ -484,12 +484,7 @@ void DockView::paint_overlay(Painter& painter, const Theme& theme) const {
   const Rect where = drop_rect(*target);
   if (where.empty()) return;
 
-  // The accent, washed out. Anything opaque would hide the panel being aimed
-  // at, which is the one thing the user is looking at while aiming.
-  Color wash = theme.accent;
-  wash.a *= 0.28f;
-  painter.fill(where, theme.style(Part::Panel).corner_radius, Fill::solid(wash));
-  painter.stroke(where, theme.style(Part::Panel).corner_radius, theme.accent, 2.0);
+  paint_drop_target(painter, theme, where, theme.style(Part::Panel).corner_radius);
 }
 
 bool DockView::on_mouse_up(const MouseEvent& event) {

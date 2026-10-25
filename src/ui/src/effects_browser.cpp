@@ -304,8 +304,8 @@ void EffectsBrowser::paint_drop_folder(Painter& painter, const Theme& theme) con
   }
   if (!any) return;
 
-  painter.stroke(Rect{bounds().x, top, bounds().width, bottom - top}.inset(1.0), 3.0,
-                 theme.accent, 1.5);
+  paint_drop_target(painter, theme, Rect{bounds().x, top, bounds().width, bottom - top}.inset(1.0),
+                    theme.style(Part::MenuItem).corner_radius);
 }
 
 // ------------------------------------------------------------------ input --

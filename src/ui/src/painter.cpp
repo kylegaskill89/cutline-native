@@ -29,6 +29,35 @@ Rect Rect::intersect(const Rect& other) const noexcept {
   return Rect{left, top, std::max(0.0, right - left), std::max(0.0, bottom - top)};
 }
 
+namespace {
+
+/// How strongly a drop's accent shows. Enough to see over any panel; little
+/// enough that what is being aimed at still shows through, which is the thing
+/// being looked at while aiming.
+constexpr float kDropWash = 0.28F;
+constexpr float kGhostFill = 0.45F;
+constexpr double kDropLine = 2.0;
+
+}  // namespace
+
+void paint_drop_target(Painter& painter, const Theme& theme, const Rect& bounds,
+                       double corner_radius) {
+  if (bounds.empty()) return;
+  Color wash = theme.accent;
+  wash.a *= kDropWash;
+  painter.fill(bounds, corner_radius, Fill::solid(wash));
+  painter.stroke(bounds, corner_radius, theme.accent, kDropLine);
+}
+
+void paint_drop_ghost(Painter& painter, const Theme& theme, const Rect& bounds,
+                      double corner_radius, const Color& content) {
+  if (bounds.empty()) return;
+  Color faded = content;
+  faded.a *= kGhostFill;
+  painter.fill(bounds, corner_radius, Fill::solid(faded));
+  painter.stroke(bounds, corner_radius, theme.accent, kDropLine);
+}
+
 void paint_surface(Painter& painter, const Rect& bounds, const SurfaceStyle& style) {
   if (bounds.empty()) return;
 

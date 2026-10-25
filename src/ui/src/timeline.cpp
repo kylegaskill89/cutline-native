@@ -1142,18 +1142,16 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
   // track with a clip across the whole visible span hid the ghost completely,
   // which is exactly the case where somebody most needs to see where a drop
   // will go. Over the top and mostly transparent shows both.
-  const auto paint_drop_ghost = [&] {
+  const auto paint_landing = [&] {
     const Rect landing = drop_ghost_rect();
     if (landing.empty() || landing.right() < tracks.x || landing.x > tracks.right()) return;
 
     const SurfaceStyle& style = theme.style(Part::Clip, State::Normal);
-    painter.fill(landing.inset(1.0), style.corner_radius, Fill::solid(fade(style.fill.color, 0.55f)));
-    painter.stroke(landing.inset(1.0), style.corner_radius, fade(style.text, 0.75f), 1.0);
+    paint_drop_ghost(painter, theme, landing.inset(1.0), style.corner_radius, style.fill.color);
 
     // The leading edge picked out, because where it *starts* is the thing being
     // aimed and a soft-edged rectangle does not say precisely where that is.
-    painter.line(landing.x, landing.y, landing.x, landing.bottom(),
-                 theme.style(Part::Playhead, State::Normal).fill.color, 1.5);
+    painter.line(landing.x, landing.y, landing.x, landing.bottom(), theme.accent, 2.0);
 
     if (!drop_ghost_->label.empty() && landing.width > metrics_.padding_x * 3.0) {
       const Rect text{landing.x + metrics_.padding_x * 0.5, landing.y,
@@ -1191,14 +1189,6 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
         SurfaceStyle labelled = style;
         labelled.fill = Fill::solid(parse_color(clip.color, style.text));
         paint_surface(painter, box.inset(1.0), labelled);
-      }
-
-      // The clip a drop is about to land on. Outlined rather than filled: the
-      // point is to say *which* one receives it, and repainting the block would
-      // hide the picture somebody is aiming at.
-      if (drop_target_.has_value() && drop_target_->track == track &&
-          drop_target_->block == i) {
-        painter.stroke(box.inset(1.0), style.corner_radius, theme.accent, 2.0);
       }
 
       // The filmstrip first, under everything, for the same reason the waveform
@@ -1403,6 +1393,14 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
         }
         painter.pop_clip();
       }
+
+      // The clip a drop is about to land on, last, over its picture and its
+      // name: washed rather than repainted, so what is being aimed at still
+      // shows through.
+      if (drop_target_.has_value() && drop_target_->track == track &&
+          drop_target_->block == i) {
+        paint_drop_target(painter, theme, box.inset(1.0), style.corner_radius);
+      }
     }
 
     // Transitions last on this track, so one always draws over both the clips
@@ -1441,12 +1439,11 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
       const Rect box = transition_ghost_rect();
       if (!box.empty() && box.right() >= tracks.x && box.x <= tracks.right()) {
         const SurfaceStyle& style = theme.style(Part::Clip, State::Selected);
-        const Color ink = fade(style.text, 0.85f);
-        painter.fill(box.inset(1.0), style.corner_radius,
-                     Fill::solid(fade(style.fill.color, 0.35f)));
-        painter.line(box.x + 1.0, box.bottom() - 1.0, box.right() - 1.0, box.y + 1.0, ink,
-                     1.0);
-        painter.stroke(box.inset(1.0), style.corner_radius, ink, 1.0);
+        paint_drop_ghost(painter, theme, box.inset(1.0), style.corner_radius, style.fill.color);
+        // The diagonal a transition is drawn with once it is there, so the
+        // ghost says which kind of thing it is.
+        painter.line(box.x + 1.0, box.bottom() - 1.0, box.right() - 1.0, box.y + 1.0,
+                     fade(style.text, 0.85f), 1.0);
 
         if (!transition_ghost_->label.empty() &&
             painter.measure(transition_ghost_->label, metrics_.small_font_size, false) <=
@@ -1460,7 +1457,7 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
 
   // Last, and inside the tracks' clip, so it lies over whatever is already
   // there and stops at the track headers like everything else.
-  paint_drop_ghost();
+  paint_landing();
   painter.pop_clip();
 
   // ---- what the drag has snapped to, over the clips so it can be seen on one

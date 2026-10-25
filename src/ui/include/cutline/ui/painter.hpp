@@ -209,6 +209,23 @@ class Painter : public TextMeasurer {
 /// lives in one function with tests on it.
 void paint_surface(Painter& painter, const Rect& bounds, const SurfaceStyle& style);
 
+/// What a drag would land on: an existing thing -- a panel to dock beside, a
+/// clip to put an effect on, a bin or a folder to file into. The accent washed
+/// over it and drawn round it.
+///
+/// One look for every drag in the application. Each used to draw its own, and
+/// the four of them disagreed about whether there was a wash, how thick the
+/// line was and whether the corners were round -- so a drop meant something
+/// slightly different to the eye in each panel.
+void paint_drop_target(Painter& painter, const Theme& theme, const Rect& bounds,
+                       double corner_radius);
+
+/// Where something a drag would make would go -- a clip from the browser, a
+/// transition on a cut: what it will look like, faded, with the same accent
+/// outline a drop target has. `content` is the fill of the thing it will be.
+void paint_drop_ghost(Painter& painter, const Theme& theme, const Rect& bounds,
+                      double corner_radius, const Color& content);
+
 /// The text colour and glow a style asks for, positioned in `bounds`.
 /// A convenience so widgets do not reassemble it and drift apart.
 [[nodiscard]] TextRun text_run(const Rect& bounds, std::string text, const SurfaceStyle& style,
