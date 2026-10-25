@@ -1230,6 +1230,9 @@ void keep_bins(App& app);
 [[nodiscard]] std::vector<cutline::ui::EffectEntry> library_entries(const App& app);
 void refresh_library(App& app);
 
+// The Audio Master panel and the audio dialogs, in `audio_panel.cpp`.
+[[nodiscard]] std::unique_ptr<Widget> make_audio_panel(App* app);
+
 // The headless check and the benchmarks, in `check.cpp`.
 [[nodiscard]] int self_check(std::string_view shots = {});
 [[nodiscard]] int benchmark();
