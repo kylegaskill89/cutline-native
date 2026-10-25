@@ -1248,6 +1248,16 @@ void advance_playback(App& app);
 void add_zoom_control(Box& transport, MonitorView& picture, double chosen,
                       std::function<void(double)> on_choose);
 
+// The panels, in `panels.cpp`.
+/// What fills a panel with this name in the layout.
+[[nodiscard]] std::unique_ptr<Widget> make_panel(App* app, const PanelId& id);
+void refresh_history(App& app);
+void new_bin(App& app);
+
+// Defined in `main.cpp`, for the panels.
+void set_pool_view(App& app, cutline::ui::BrowserView view);
+void go_to_time(App& app, double at);
+
 // The headless check and the benchmarks, in `check.cpp`.
 [[nodiscard]] int self_check(std::string_view shots = {});
 [[nodiscard]] int benchmark();
