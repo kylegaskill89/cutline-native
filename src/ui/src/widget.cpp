@@ -231,6 +231,7 @@ WidgetHost::WidgetHost(std::unique_ptr<Widget> root) : root_(std::move(root)) {
 
 void WidgetHost::resize(const Rect& bounds, const LayoutContext& context) {
   context.text.set_typeface(context.theme.metrics.font_family);
+  context.text.set_text_smoothing(context.theme.metrics.text_smoothing);
   bounds_ = bounds;
   root_->arrange(bounds_, context);
   if (popup_ != nullptr && !popup_closing_) arrange_popup(context);
@@ -280,6 +281,7 @@ void WidgetHost::tick_me(Widget* widget) {
 
 bool WidgetHost::update_layout(const LayoutContext& context) {
   context.text.set_typeface(context.theme.metrics.font_family);
+  context.text.set_text_smoothing(context.theme.metrics.text_smoothing);
   // Moved on first, so what is laid out and drawn this frame is where each
   // has got to. Taken from the list before any runs: one that has not
   // arrived asks again, for the frame after.
@@ -680,6 +682,7 @@ void WidgetHost::forget(Widget* widget) {
 
 void WidgetHost::paint(Painter& painter, const Theme& theme) const {
   painter.set_typeface(theme.metrics.font_family);
+  painter.set_text_smoothing(theme.metrics.text_smoothing);
   animator_.begin_frame();
   root_->paint(painter, theme);
   paint_focus_cue(painter, theme, *root_);

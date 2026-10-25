@@ -233,24 +233,24 @@ TEST(PaintSurface, ASolidFillNeverBlurs) {
 
 // ------------------------------------------------- the real themes drawing --
 
-TEST(PaintSurface, AnXpButtonDrawsItsBevelRaisedAndPressedInset) {
-  // The chrome claim, followed all the way through to the drawing: pressing
-  // does not merely darken the fill, it swaps which edges are light.
+TEST(PaintSurface, AnXpButtonLightsABandUnderThePointer) {
+  // Measured from XP's own: under the pointer the face stays where it was and
+  // an orange band lights just inside the hairline. Followed through to the
+  // drawing, because a band the painter never draws is a band nobody sees.
   const Theme& xp = *built_in_theme("xp");
 
-  RecordingPainter normal;
-  paint_surface(normal, kBounds, xp.style(Part::Button, State::Normal));
-  const DrawCall* raised = normal.first(Kind::Bevel);
-  ASSERT_NE(raised, nullptr) << "an XP button with no bevel is not an XP button";
-  ASSERT_TRUE(raised->bevel.has_value());
-  EXPECT_FALSE(raised->bevel->inset);
+  RecordingPainter resting;
+  paint_surface(resting, kBounds, xp.style(Part::Button, State::Normal));
+  EXPECT_EQ(resting.count(Kind::Fill), 1u);
 
-  RecordingPainter pressed;
-  paint_surface(pressed, kBounds, xp.style(Part::Button, State::Pressed));
-  const DrawCall* sunken = pressed.first(Kind::Bevel);
-  ASSERT_NE(sunken, nullptr);
-  ASSERT_TRUE(sunken->bevel.has_value());
-  EXPECT_TRUE(sunken->bevel->inset);
+  RecordingPainter hovered;
+  paint_surface(hovered, kBounds, xp.style(Part::Button, State::Hover));
+  ASSERT_EQ(hovered.count(Kind::Fill), 2u) << "the band, then the face inside it";
+  const DrawCall* band = hovered.first(Kind::Fill);
+  ASSERT_NE(band, nullptr);
+  ASSERT_FALSE(band->fill.stops.empty());
+  const Color bottom = band->fill.stops.back().color;
+  EXPECT_GT(bottom.r, bottom.b + 0.3f) << "the band is orange at its foot";
 }
 
 TEST(PaintSurface, AnAeroPanelBlursWhatIsBehindIt) {

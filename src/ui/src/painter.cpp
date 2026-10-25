@@ -73,7 +73,16 @@ void paint_surface(Painter& painter, const Rect& bounds, const SurfaceStyle& sty
   if (style.fill.kind == FillKind::Glass && style.fill.blur_radius > 0.0) {
     painter.backdrop_blur(bounds, radius, style.fill.blur_radius);
   }
-  painter.fill(bounds, radius, style.fill);
+  if (style.rim && style.rim->width > 0.0) {
+    // The band, then the body inside it: two fills rather than a gradient
+    // stroke, which the painter has no such thing as and which would have to
+    // follow the rounded corners besides.
+    painter.fill(bounds, radius, style.rim->fill);
+    const double in = style.border_width + style.rim->width;
+    painter.fill(bounds.inset(in), std::max(0.0, radius - in), style.fill);
+  } else {
+    painter.fill(bounds, radius, style.fill);
+  }
 
   // Inside the shape, and over the fill: an inner shadow drawn before the fill
   // would simply be painted over.

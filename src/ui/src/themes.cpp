@@ -2,7 +2,7 @@
 ///
 /// These exist to prove the theme model can express real chrome, not to be a
 /// palette gallery. Each one is here because it needs something the others do
-/// not: XP needs bevels and a hard gradient step, Aero needs a blurred
+/// not: XP needs bevels and bands of colour inside an edge, Aero needs a blurred
 /// backdrop, Flat needs neither and gets its definition from borders, and
 /// Terminal needs an inner glow and a monospace rhythm. If any of them had to
 /// be faked, the model would be wrong.
@@ -39,7 +39,7 @@ namespace {
   t.dark = false;
   t.accent = hex("#2a5fd6");
 
-  t.metrics.control_height = 23.0;
+  t.metrics.control_height = 21.0;  // XP's dialog buttons, measured
   t.metrics.padding_x = 12.0;
   t.metrics.padding_y = 3.0;
   t.metrics.spacing = 6.0;
@@ -48,7 +48,10 @@ namespace {
   t.metrics.panel_header_height = 24.0;
   t.metrics.list_row_height = 20.0;  // Explorer's lists were tight
   t.metrics.font_family = "Tahoma";
-  t.metrics.font_size = 12.0;
+  // Tahoma 8 point, which at 96 DPI is eleven pixels, unsmoothed: XP's
+  // "Standard" smoothing left body text alone.
+  t.metrics.font_size = 11.0;
+  t.metrics.text_smoothing = TextSmoothing::Standard;
   t.metrics.small_font_size = 11.0;
   t.metrics.heading_font_size = 12.0;  // XP headed a section in bold, not larger
   t.metrics.group_spacing = 10.0;
@@ -140,41 +143,63 @@ namespace {
             .text = hex("#0a246a"),
         });
 
-  // The button. Note the hard step at 0.5 -- above it the surface is bright and
-  // ramps gently, below it darker and ramps back up, which is the plastic look.
+  // The button, measured from XP's own: a navy hairline with three-pixel
+  // corners round a face that is nearly white at the top and falls away over
+  // its last three rows. There is no step in the middle — that was the title
+  // bar's look, guessed onto the button.
+  const Fill luna_face = Fill::gradient({{0.05f, hex("#ffffff")},
+                                         {0.80f, hex("#f0f0ea")},
+                                         {0.85f, hex("#ecebe6")},
+                                         {0.90f, hex("#e2dfd6")},
+                                         {0.95f, hex("#d6d0c5")}});
+  // The same face seen from inside a two-pixel band, where only its middle
+  // shows.
+  const Fill luna_face_inner = Fill::gradient({{0.0f, hex("#fcfcfb")},
+                                               {0.85f, hex("#f0f0ea")},
+                                               {1.0f, hex("#ecebe6")}});
   const SurfaceStyle button{
-      .fill = Fill::gradient({{0.00f, hex("#ffffff")},
-                              {0.45f, hex("#f2f1e8")},
-                              {0.50f, hex("#e3e1d2")},
-                              {1.00f, hex("#f5f4ec")}}),
-      .bevel = raised("#ffffff", "#9d9a8f"),
-      .border = hex("#7b7a70"),
+      .fill = luna_face,
+      .border = hex("#003c74"),
       .border_width = 1.0,
       .corner_radius = 3.0,
       .text = hex("#000000"),
   };
   t.set(Part::Button, State::Normal, button);
 
+  // Under the pointer the face stays and an orange band lights inside the
+  // hairline: pale at the top, deep amber at the bottom.
   SurfaceStyle button_hover = button;
-  button_hover.fill = Fill::gradient({{0.00f, hex("#fffdf4")},
-                                      {0.45f, hex("#fff4c8")},
-                                      {0.50f, hex("#ffe894")},
-                                      {1.00f, hex("#fff2c0")}});
-  button_hover.border = hex("#e0a000");
+  button_hover.fill = luna_face_inner;
+  button_hover.rim = Rim{.width = 2.0,
+                         .fill = Fill::gradient({{0.05f, hex("#fff0cf")},
+                                                 {0.10f, hex("#fdd889")},
+                                                 {0.90f, hex("#f8b230")},
+                                                 {0.95f, hex("#e59700")}})};
   t.set(Part::Button, State::Hover, button_hover);
 
-  // Pressed inverts the bevel rather than merely darkening the fill. This is
-  // the case a colour-only theme cannot express at all.
+  // The default button, and the one with the keyboard: the same band in blue.
+  SurfaceStyle button_default = button_hover;
+  button_default.rim = Rim{.width = 2.0,
+                           .fill = Fill::gradient({{0.05f, hex("#cee7ff")},
+                                                   {0.10f, hex("#bcd4f6")},
+                                                   {0.90f, hex("#89ade4")},
+                                                   {0.95f, hex("#6982ee")}})};
+  t.set(Part::Button, State::Focused, button_default);
+
+  // Held down: the face goes grey and its light moves to the bottom, as if the
+  // button had turned away from it.
   SurfaceStyle button_pressed = button;
-  button_pressed.fill = Fill::gradient({{0.00f, hex("#d8d5c6")},
-                                        {0.50f, hex("#e6e3d5")},
-                                        {1.00f, hex("#f2f0e6")}});
-  button_pressed.bevel = sunken("#ffffff", "#8a8779");
+  button_pressed.fill = Fill::gradient({{0.05f, hex("#d1ccc1")},
+                                        {0.10f, hex("#dcd8cf")},
+                                        {0.15f, hex("#e5e4dd")},
+                                        {0.80f, hex("#e0e0d7")},
+                                        {0.90f, hex("#eae9e3")},
+                                        {0.95f, hex("#f2f1ee")}});
   t.set(Part::Button, State::Pressed, button_pressed);
 
   SurfaceStyle button_disabled = button;
-  button_disabled.fill = Fill::solid(hex("#ece9d8"));
-  button_disabled.bevel = raised("#ffffff", "#d4d0c0");
+  button_disabled.fill = Fill::solid(hex("#f5f4ea"));
+  button_disabled.border = hex("#c9c7ba");
   button_disabled.text = hex("#aca899");
   t.set(Part::Button, State::Disabled, button_disabled);
 
@@ -263,6 +288,52 @@ namespace {
             .border_width = 1.0,
             .text = hex("#000000"),
         });
+
+  // The check box and the radio, measured from XP's: a navy hairline round a
+  // face that lightens from the top left corner to the bottom right, an orange
+  // band under the pointer, and a grey well while held. The marks are green.
+  t.metrics.check_mark = CheckMark::Luna;
+  const Fill luna_well = Fill::gradient({{0.0f, hex("#dcdcd7")}, {1.0f, hex("#ffffff")}}, 315.0);
+  const SurfaceStyle check{.fill = luna_well,
+                           .border = hex("#1c5180"),
+                           .border_width = 1.0,
+                           .text = hex("#000000")};
+  t.set(Part::Check, State::Normal, check);
+  SurfaceStyle check_hover = check;
+  check_hover.fill = Fill::solid(hex("#e7e7e3"));
+  check_hover.rim = Rim{.width = 2.0,
+                        .fill = Fill::gradient({{0.0f, hex("#fff0cf")}, {1.0f, hex("#f8b330")}},
+                                               315.0)};
+  t.set(Part::Check, State::Hover, check_hover);
+  SurfaceStyle check_pressed = check;
+  check_pressed.fill = Fill::gradient({{0.0f, hex("#b0b0a7")}, {1.0f, hex("#f1efdf")}}, 315.0);
+  t.set(Part::Check, State::Pressed, check_pressed);
+  SurfaceStyle check_disabled = check;
+  check_disabled.fill = Fill::solid(hex("#ffffff"));
+  check_disabled.border = hex("#cac8bb");
+  check_disabled.text = hex("#aca899");
+  t.set(Part::Check, State::Disabled, check_disabled);
+  // The mark's colour.
+  t.set(Part::Check, State::Selected, SurfaceStyle{.text = hex("#21a121")});
+
+  SurfaceStyle radio = check;
+  radio.border = hex("#215481");
+  t.set(Part::Radio, State::Normal, radio);
+  SurfaceStyle radio_hover = check_hover;
+  radio_hover.border = hex("#215481");
+  t.set(Part::Radio, State::Hover, radio_hover);
+  SurfaceStyle radio_pressed = check_pressed;
+  radio_pressed.border = hex("#215481");
+  t.set(Part::Radio, State::Pressed, radio_pressed);
+  SurfaceStyle radio_disabled = check_disabled;
+  t.set(Part::Radio, State::Disabled, radio_disabled);
+  // The dot: lit from the top left, as everything in Luna is.
+  t.set(Part::Radio, State::Selected,
+        SurfaceStyle{.fill = Fill::gradient({{0.0f, hex("#55d551")},
+                                             {0.5f, hex("#21a121")},
+                                             {1.0f, hex("#139210")}},
+                                            315.0),
+                     .text = hex("#21a121")});
 
   t.set(Part::Clip, State::Normal,
         SurfaceStyle{
@@ -1167,10 +1238,31 @@ namespace {
   return t;
 }
 
+/// Gives `to` every state of `from` it does not style itself.
+///
+/// Check boxes and radios were drawn as text fields until Luna needed them to
+/// be drawn as XP drew them; a theme that has not been told otherwise goes on
+/// drawing them exactly as it did.
+[[nodiscard]] Theme with_inherited(Theme theme, Part to, Part from) {
+  for (int i = 0; i <= static_cast<int>(State::Focused); ++i) {
+    const auto state = static_cast<State>(i);
+    if (!theme.defines(to, state) && theme.defines(from, state)) {
+      theme.set(to, state, theme.style(from, state));
+    }
+  }
+  return theme;
+}
+
+[[nodiscard]] Theme finished(Theme theme) {
+  theme = with_inherited(std::move(theme), Part::Check, Part::Input);
+  return with_inherited(std::move(theme), Part::Radio, Part::Input);
+}
+
 /// Built once. Themes are immutable and shared, and rebuilding this list per
 /// lookup would be needless work in a paint loop.
 [[nodiscard]] const std::array<Theme, 4>& all_themes() {
-  static const std::array<Theme, 4> themes{make_flat(), make_xp(), make_aero(), make_terminal()};
+  static const std::array<Theme, 4> themes{finished(make_flat()), finished(make_xp()),
+                                           finished(make_aero()), finished(make_terminal())};
   return themes;
 }
 

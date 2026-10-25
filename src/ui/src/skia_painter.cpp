@@ -136,14 +136,22 @@ struct SkiaPainter::Impl {
   mutable sk_sp<SkTypeface> regular;
   mutable sk_sp<SkTypeface> bold;
   mutable std::string family;
+  mutable TextSmoothing smoothing = TextSmoothing::ClearType;
   /// Every family asked for, so a theme switch back and forth looks nothing up
   /// twice.
   mutable std::map<std::string, std::pair<sk_sp<SkTypeface>, sk_sp<SkTypeface>>> faces;
 
   [[nodiscard]] SkFont font_for(double size, bool want_bold) const {
     SkFont font(want_bold ? bold : regular, static_cast<SkScalar>(size));
-    font.setSubpixel(true);
-    font.setEdging(SkFont::Edging::kSubpixelAntiAlias);
+    if (smoothing == TextSmoothing::Standard) {
+      // Whole pixels and full hinting, as GDI drew Tahoma at 8 points.
+      font.setSubpixel(false);
+      font.setEdging(SkFont::Edging::kAlias);
+      font.setHinting(SkFontHinting::kFull);
+    } else {
+      font.setSubpixel(true);
+      font.setEdging(SkFont::Edging::kSubpixelAntiAlias);
+    }
     return font;
   }
 };
@@ -167,6 +175,10 @@ void SkiaPainter::set_typeface(std::string_view family) const {
   }
   d.regular = found->second.first;
   d.bold = found->second.second;
+}
+
+void SkiaPainter::set_text_smoothing(TextSmoothing smoothing) const {
+  impl_->smoothing = smoothing;
 }
 
 std::unique_ptr<SkiaPainter> SkiaPainter::create(void* canvas, TextureCache* textures) {

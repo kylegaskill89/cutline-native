@@ -17,7 +17,7 @@ namespace {
 
 [[nodiscard]] float channel(int value) noexcept { return static_cast<float>(value) / 255.0f; }
 
-constexpr std::array<std::pair<Part, std::string_view>, 21> kPartNames{{
+constexpr std::array<std::pair<Part, std::string_view>, 23> kPartNames{{
     {Part::Window, "window"},
     {Part::TitleBar, "title_bar"},
     {Part::Panel, "panel"},
@@ -39,6 +39,8 @@ constexpr std::array<std::pair<Part, std::string_view>, 21> kPartNames{{
     {Part::Ruler, "ruler"},
     {Part::Scrollbar, "scrollbar"},
     {Part::ScrollThumb, "scroll_thumb"},
+    {Part::Check, "check"},
+    {Part::Radio, "radio"},
 }};
 
 constexpr std::array<std::pair<State, std::string_view>, 6> kStateNames{{
@@ -183,6 +185,35 @@ Color mix(const Color& a, const Color& b, float t) noexcept {
                a.a + (b.a - a.a) * t};
 }
 
+namespace {
+
+/// One fill `t` of the way to another, as far as their shapes allow.
+[[nodiscard]] Fill mix_fill(const Fill& a, const Fill& b, float t) {
+  const auto between = [t](double x, double y) { return x + (y - x) * t; };
+  Fill out = t < 0.5f ? a : b;
+  if (a.kind == b.kind) {
+    out.color = mix(a.color, b.color, t);
+    out.blur_radius = between(a.blur_radius, b.blur_radius);
+    if (a.stops.size() == b.stops.size()) {
+      for (std::size_t i = 0; i < out.stops.size(); ++i) {
+        out.stops[i].at = static_cast<float>(between(a.stops[i].at, b.stops[i].at));
+        out.stops[i].color = mix(a.stops[i].color, b.stops[i].color, t);
+      }
+    }
+  } else if (a.kind == FillKind::Solid && b.kind == FillKind::Gradient) {
+    // A flat rest state glowing into a ramp: the ramp, starting from the flat
+    // colour at every stop.
+    out = b;
+    for (GradientStop& stop : out.stops) stop.color = mix(a.color, stop.color, t);
+  } else if (a.kind == FillKind::Gradient && b.kind == FillKind::Solid) {
+    out = a;
+    for (GradientStop& stop : out.stops) stop.color = mix(stop.color, b.color, t);
+  }
+  return out;
+}
+
+}  // namespace
+
 SurfaceStyle mix(const SurfaceStyle& a, const SurfaceStyle& b, float t) {
   if (t <= 0.0f) return a;
   if (t >= 1.0f) return b;
@@ -195,23 +226,17 @@ SurfaceStyle mix(const SurfaceStyle& a, const SurfaceStyle& b, float t) {
   out.text = mix(a.text, b.text, t);
   out.text_glow = between(a.text_glow, b.text_glow);
 
-  if (a.fill.kind == b.fill.kind) {
-    out.fill.color = mix(a.fill.color, b.fill.color, t);
-    out.fill.blur_radius = between(a.fill.blur_radius, b.fill.blur_radius);
-    if (a.fill.stops.size() == b.fill.stops.size()) {
-      for (std::size_t i = 0; i < out.fill.stops.size(); ++i) {
-        out.fill.stops[i].at = static_cast<float>(between(a.fill.stops[i].at, b.fill.stops[i].at));
-        out.fill.stops[i].color = mix(a.fill.stops[i].color, b.fill.stops[i].color, t);
-      }
-    }
-  } else if (a.fill.kind == FillKind::Solid && b.fill.kind == FillKind::Gradient) {
-    // A flat rest state glowing into a ramp: the ramp, starting from the flat
-    // colour at every stop.
-    out.fill = b.fill;
-    for (GradientStop& stop : out.fill.stops) stop.color = mix(a.fill.color, stop.color, t);
-  } else if (a.fill.kind == FillKind::Gradient && b.fill.kind == FillKind::Solid) {
-    out.fill = a.fill;
-    for (GradientStop& stop : out.fill.stops) stop.color = mix(stop.color, b.fill.color, t);
+  out.fill = mix_fill(a.fill, b.fill, t);
+
+  // A band arriving from nothing grows out of the body it is drawn on rather
+  // than appearing in full halfway through the fade.
+  if (a.rim && b.rim) {
+    out.rim = Rim{.width = between(a.rim->width, b.rim->width),
+                  .fill = mix_fill(a.rim->fill, b.rim->fill, t)};
+  } else if (!a.rim && b.rim) {
+    out.rim = Rim{.width = b.rim->width, .fill = mix_fill(a.fill, b.rim->fill, t)};
+  } else if (a.rim && !b.rim) {
+    out.rim = Rim{.width = a.rim->width, .fill = mix_fill(a.rim->fill, b.fill, t)};
   }
 
   if (a.bevel && b.bevel) {

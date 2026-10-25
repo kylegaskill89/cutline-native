@@ -121,11 +121,26 @@ struct Shadow {
   friend bool operator==(const Shadow&, const Shadow&) = default;
 };
 
+/// A band of its own fill just inside the border, round the whole surface.
+///
+/// Luna's buttons light up this way: an orange band under the pointer and a
+/// blue one on the default button, two pixels wide and graded top to bottom,
+/// so its sides fall halfway between its top and its bottom. A bevel cannot
+/// draw it — a bevel is one colour on the top and left and another on the
+/// bottom and right, and Luna's band is the same on both sides.
+struct Rim {
+  double width = 0.0;
+  Fill fill;
+
+  friend bool operator==(const Rim&, const Rim&) = default;
+};
+
 /// Everything needed to draw one surface in one state.
 struct SurfaceStyle {
   Fill fill;
   std::optional<Bevel> bevel;
   std::optional<Shadow> shadow;
+  std::optional<Rim> rim;
 
   Color border;
   double border_width = 0.0;
@@ -170,7 +185,12 @@ enum class Part {
   Ruler,
   Scrollbar,
   ScrollThumb,
+  Check,        ///< a check box's box. `Selected` styles the mark
+  Radio,        ///< a radio button's circle. `Selected` styles the dot
 };
+
+/// The last part, for walking every one of them.
+inline constexpr Part kLastPart = Part::Radio;
 
 [[nodiscard]] std::string_view to_string(Part part) noexcept;
 [[nodiscard]] std::optional<Part> part_from_string(std::string_view name) noexcept;
@@ -187,6 +207,26 @@ enum class State {
 
 [[nodiscard]] std::string_view to_string(State state) noexcept;
 [[nodiscard]] std::optional<State> state_from_string(std::string_view name) noexcept;
+
+/// How a theme's text is smoothed.
+enum class TextSmoothing {
+  /// ClearType: smoothed across the colour of each pixel, placed between
+  /// pixels. Vista's default, and what a modern interface expects.
+  ClearType,
+  /// XP's "Standard": no smoothing at body sizes, each glyph hinted onto whole
+  /// pixels. Crisp black stems, which is half of why XP looks like XP.
+  Standard,
+};
+
+/// How a check box's tick is drawn.
+enum class CheckMark {
+  /// Two strokes, at any size.
+  Stroked,
+  /// XP's tick: a fixed pattern of twenty-one pixels in a thirteen-pixel box,
+  /// scaled with the box. Its stepped edge is the look, and strokes cannot
+  /// make it.
+  Luna,
+};
 
 /// How a theme shows where the keyboard is.
 enum class FocusCue {
@@ -260,6 +300,8 @@ struct Metrics {
   double hover_out = 0.0;
 
   FocusCue focus_cue = FocusCue::Ring;
+  TextSmoothing text_smoothing = TextSmoothing::ClearType;
+  CheckMark check_mark = CheckMark::Stroked;
 
   /// How long a view takes to get where it was sent -- a zoom, a scroll by
   /// the wheel -- and how long a popup takes to arrive, in seconds. Zero

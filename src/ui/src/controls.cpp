@@ -915,8 +915,8 @@ std::size_t RadioGroup::row_at(double y) const {
 }
 
 void RadioGroup::paint_content(Painter& painter, const Theme& theme) const {
-  const SurfaceStyle& style = theme.style(Part::Input, state());
-  const SurfaceStyle& taken = theme.style(Part::Input, State::Selected);
+  const SurfaceStyle& style = theme.style(Part::Radio, state());
+  const SurfaceStyle& taken = theme.style(Part::Radio, State::Selected);
 
   for (std::size_t i = 0; i < options_.size(); ++i) {
     const Rect circle = dot(i);
@@ -925,7 +925,13 @@ void RadioGroup::paint_content(Painter& painter, const Theme& theme) const {
     // circle at every size, and it goes through the same fill and stroke every
     // other themed surface uses, so a radio looks like it belongs in all four.
     const double radius = circle.width / 2.0;
-    painter.fill(circle, radius, style.fill);
+    if (style.rim && style.rim->width > 0.0) {
+      painter.fill(circle, radius, style.rim->fill);
+      const double in = style.border_width + style.rim->width;
+      painter.fill(circle.inset(in), std::max(0.0, radius - in), style.fill);
+    } else {
+      painter.fill(circle, radius, style.fill);
+    }
     if (style.border_width > 0.0) {
       painter.stroke(circle, radius, style.border, style.border_width);
     }
@@ -936,7 +942,10 @@ void RadioGroup::paint_content(Painter& painter, const Theme& theme) const {
       const double inset_by = circle.width * 0.28;
       const Rect mark{circle.x + inset_by, circle.y + inset_by, circle.width - inset_by * 2.0,
                       circle.height - inset_by * 2.0};
-      painter.fill(mark, mark.width / 2.0, Fill::solid(taken.text));
+      // Luna's dot is lit like a bead; elsewhere it is the mark's colour.
+      const bool lit = theme.metrics.check_mark == CheckMark::Luna &&
+                       taken.fill.kind == FillKind::Gradient;
+      painter.fill(mark, mark.width / 2.0, lit ? taken.fill : Fill::solid(taken.text));
     }
 
     const Rect row = row_rect(i);
@@ -1012,11 +1021,26 @@ LayoutItem Checkbox::sizing(Axis axis, const LayoutContext& context) const {
 }
 
 void Checkbox::paint_content(Painter& painter, const Theme& theme) const {
-  const SurfaceStyle& style = theme.style(Part::Input, state());
+  const SurfaceStyle& style = theme.style(Part::Check, state());
   const Rect square = box();
   paint_surface(painter, square, style);
 
-  if (checked_) {
+  if (checked_ && theme.metrics.check_mark == CheckMark::Luna) {
+    // XP's tick, a pixel at a time: where each of its twenty-one pixels sits
+    // in the thirteen-pixel box, border included. Scaled with the box, so it
+    // keeps its stepped edge at every size rather than becoming a stroke.
+    static constexpr std::array<std::pair<int, int>, 21> kTick{{
+        {9, 3}, {8, 4}, {9, 4}, {3, 5}, {7, 5}, {8, 5}, {9, 5},
+        {3, 6}, {4, 6}, {6, 6}, {7, 6}, {8, 6}, {3, 7}, {4, 7},
+        {5, 7}, {6, 7}, {7, 7}, {4, 8}, {5, 8}, {6, 8}, {5, 9},
+    }};
+    const Color mark = theme.style(Part::Check, State::Selected).text;
+    const double unit = square.width / 13.0;
+    for (const auto& [x, y] : kTick) {
+      painter.fill(Rect{square.x + x * unit, square.y + y * unit, unit, unit}, 0.0,
+                   Fill::solid(state() == State::Disabled ? style.text : mark));
+    }
+  } else if (checked_) {
     // Drawn from lines rather than a glyph, for the same reason the caption
     // buttons are: there is no font that can be relied on to have a tick.
     const double inset_by = square.width * 0.25;

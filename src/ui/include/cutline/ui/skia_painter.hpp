@@ -58,6 +58,7 @@ class SkiaPainter final : public Painter {
 
   [[nodiscard]] double measure(std::string_view text, double size, bool bold) const override;
   void set_typeface(std::string_view family) const override;
+  void set_text_smoothing(TextSmoothing smoothing) const override;
 
  private:
   struct Impl;

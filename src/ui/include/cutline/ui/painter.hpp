@@ -144,6 +144,10 @@ class TextMeasurer {
   /// `measure` is: a measurer is lent as const, and which face it measures in
   /// is not part of what it is.
   virtual void set_typeface(std::string_view family) const { (void)family; }
+
+  /// How what follows is smoothed, set beside the typeface for the same
+  /// reason: smoothing changes where glyphs land, and so how wide text is.
+  virtual void set_text_smoothing(TextSmoothing smoothing) const { (void)smoothing; }
 };
 
 /// The drawing primitives every backend must provide.

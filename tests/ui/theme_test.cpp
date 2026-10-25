@@ -55,7 +55,7 @@ TEST(Color, OpaqueColoursDropTheAlphaDigits) {
 // ------------------------------------------------------------------- names --
 
 TEST(ThemeNames, PartsRoundTrip) {
-  for (int i = 0; i <= static_cast<int>(Part::ScrollThumb); ++i) {
+  for (int i = 0; i <= static_cast<int>(kLastPart); ++i) {
     const auto part = static_cast<Part>(i);
     const auto back = part_from_string(to_string(part));
     ASSERT_TRUE(back.has_value()) << to_string(part);
@@ -75,7 +75,7 @@ TEST(ThemeNames, StatesRoundTrip) {
 TEST(ThemeNames, PartNamesAreDistinct) {
   // Two parts sharing a name would silently collide when a theme file is read.
   std::set<std::string_view> seen;
-  for (int i = 0; i <= static_cast<int>(Part::ScrollThumb); ++i) {
+  for (int i = 0; i <= static_cast<int>(kLastPart); ++i) {
     EXPECT_TRUE(seen.insert(to_string(static_cast<Part>(i))).second)
         << "duplicate name " << to_string(static_cast<Part>(i));
   }
@@ -174,7 +174,7 @@ TEST(BuiltInThemes, EveryPartIsStyledEverywhere) {
   // asking only that the style *looks* usable is what let tool buttons go
   // unstyled in all four themes without anything noticing.
   for (const Theme& theme : built_in_themes()) {
-    for (int i = 0; i <= static_cast<int>(Part::ScrollThumb); ++i) {
+    for (int i = 0; i <= static_cast<int>(kLastPart); ++i) {
       const auto part = static_cast<Part>(i);
       EXPECT_TRUE(theme.defines(part, State::Normal))
           << theme.id << " leaves " << to_string(part) << " to the fallback";
@@ -308,37 +308,36 @@ TEST(ThemeChrome, TabsDifferBetweenThemesInMoreThanColour) {
   EXPECT_EQ(aero.fill.kind, FillKind::Glass);
 }
 
-TEST(ThemeChrome, XpUsesBevelsAndFlatDoesNot) {
-  EXPECT_TRUE(built_in_theme("xp")->style(Part::Button).bevel.has_value());
-  EXPECT_FALSE(built_in_theme("flat")->style(Part::Button).bevel.has_value());
+[[nodiscard]] float lightness(const Color& c) { return c.r + c.g + c.b; }
+
+TEST(ThemeChrome, XpButtonsAreNavyHairlines) {
+  // XP's button edge is a single navy line, not a bevel. The bevel was a guess
+  // that the captures of the real thing put right.
+  const SurfaceStyle& button = built_in_theme("xp")->style(Part::Button);
+  EXPECT_EQ(button.border, parse_color("#003c74"));
+  EXPECT_DOUBLE_EQ(button.border_width, 1.0);
+  EXPECT_FALSE(button.bevel.has_value());
 }
 
-TEST(ThemeChrome, PressingAnXpButtonInvertsItsBevel) {
-  // The case a colour-only theme cannot express at all: the light and dark
-  // edges swap sides, which is what reads as "pressed" rather than "darker".
+TEST(ThemeChrome, XpBandsItsButtonsAndFlatDoesNot) {
+  // Orange under the pointer and blue on the default button: a band inside the
+  // edge, which a flat theme has no use for.
   const Theme& xp = *built_in_theme("xp");
-  const auto normal = xp.style(Part::Button, State::Normal).bevel;
-  const auto pressed = xp.style(Part::Button, State::Pressed).bevel;
-
-  ASSERT_TRUE(normal.has_value());
-  ASSERT_TRUE(pressed.has_value());
-  EXPECT_FALSE(normal->inset);
-  EXPECT_TRUE(pressed->inset);
+  EXPECT_TRUE(xp.style(Part::Button, State::Hover).rim.has_value());
+  EXPECT_TRUE(xp.style(Part::Button, State::Focused).rim.has_value());
+  EXPECT_FALSE(built_in_theme("flat")->style(Part::Button, State::Hover).rim.has_value());
 }
 
-TEST(ThemeChrome, XpGlossHasTheHardStepAtItsMidpoint) {
-  // Two stops make a ramp; the plastic look needs a discontinuity partway down,
-  // where the surface curves away from the light.
-  const Fill& fill = built_in_theme("xp")->style(Part::Button).fill;
-  ASSERT_EQ(fill.kind, FillKind::Gradient);
-  ASSERT_GE(fill.stops.size(), 4u);
-
-  bool found_step = false;
-  for (std::size_t i = 1; i < fill.stops.size(); ++i) {
-    const float gap = fill.stops[i].at - fill.stops[i - 1].at;
-    if (gap > 0.0f && gap < 0.1f) found_step = true;
-  }
-  EXPECT_TRUE(found_step) << "no hard step, so this is a plain ramp";
+TEST(ThemeChrome, PressingAnXpButtonTurnsItsLightToTheBottom) {
+  // At rest the face is lightest at the top; held down it is lightest at the
+  // bottom, which is what reads as pressed rather than merely darker.
+  const Theme& xp = *built_in_theme("xp");
+  const Fill& rest = xp.style(Part::Button, State::Normal).fill;
+  const Fill& held = xp.style(Part::Button, State::Pressed).fill;
+  ASSERT_GE(rest.stops.size(), 2u);
+  ASSERT_GE(held.stops.size(), 2u);
+  EXPECT_GT(lightness(rest.stops.front().color), lightness(rest.stops.back().color));
+  EXPECT_LT(lightness(held.stops.front().color), lightness(held.stops.back().color));
 }
 
 TEST(ThemeChrome, AeroUsesGlassAndNoOtherThemeDoes) {

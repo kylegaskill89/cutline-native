@@ -79,11 +79,15 @@ template <typename T, typename... Args>
 [[nodiscard]] std::function<std::unique_ptr<Widget>()> alone(std::function<void(T&)> setup,
                                                             Args... args) {
   return [setup, args...]() -> std::unique_ptr<Widget> {
-    auto row = std::make_unique<Box>(Axis::Horizontal);
-    auto& control = row->emplace<T>(args...);
+    // In a row in a column, each with a spring after it, so the control is as
+    // wide and as tall as it asks to be rather than as big as its cell.
+    auto column = std::make_unique<Box>(Axis::Vertical);
+    auto& row = column->emplace<Box>(Axis::Horizontal);
+    auto& control = row.emplace<T>(args...);
     if (setup) setup(control);
-    row->emplace<ui::Spacer>();
-    return row;
+    row.emplace<ui::Spacer>();
+    column->emplace<ui::Spacer>();
+    return column;
   };
 }
 
@@ -349,6 +353,7 @@ int write_gallery(std::string_view dir) {
     const LayoutContext context{theme, *painter};
 
     painter->set_typeface(theme.metrics.font_family);
+    painter->set_text_smoothing(theme.metrics.text_smoothing);
     ui::paint_surface(*painter, Rect{0.0, 0.0, kWidth, static_cast<double>(height)},
                       theme.style(ui::Part::Window));
     const ui::SurfaceStyle& words = theme.style(ui::Part::Window);
