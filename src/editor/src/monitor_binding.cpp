@@ -369,6 +369,49 @@ std::optional<ui::MonitorBox> graphic_layer_box(const core::Project& project,
   };
 }
 
+std::optional<LayerHit> graphic_layer_at(const core::Project& project, double t, double x,
+                                         double y, const core::LayerMeasurer& measure) {
+  const double canvas_w = project.sequence().canvas_w;
+  const double canvas_h = project.sequence().canvas_h;
+  // Tracks are stored top first, which is the order a click should meet them.
+  for (const core::Track& track : project.sequence().tracks) {
+    if (track.kind != core::TrackKind::Video || track.hidden) continue;
+    for (const core::Clip& clip : track.clips) {
+      if (clip.disabled || t < clip.start || t >= core::clip_end(clip)) continue;
+      const core::Graphic* graphic = graphic_of(project, clip.media_id);
+      if (graphic == nullptr) continue;
+      for (const core::GraphicLayer& layer : graphic->layers) {
+        if (!layer.visible) continue;
+        const std::optional<ui::MonitorBox> box =
+            graphic_layer_box(project, clip.id, layer.id, t, measure);
+        if (!box.has_value()) continue;
+        // In pixels and unturned, so the test is the layer's own rectangle.
+        const auto [dx, dy] = turned((x - box->x) * canvas_w, (y - box->y) * canvas_h,
+                                     -box->rotation);
+        if (std::abs(dx) <= box->width * canvas_w / 2.0 &&
+            std::abs(dy) <= box->height * canvas_h / 2.0) {
+          return LayerHit{.clip_id = clip.id, .layer_id = layer.id};
+        }
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::pair<double, double>> frame_to_graphic(const core::Project& project,
+                                                          std::string_view clip_id, double t,
+                                                          double x, double y) {
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr) return std::nullopt;
+  const std::optional<ui::MonitorBox> frame = mask_frame(project, *clip, t);
+  if (!frame.has_value() || frame->width <= 0.0 || frame->height <= 0.0) return std::nullopt;
+  const double canvas_w = project.sequence().canvas_w;
+  const double canvas_h = project.sequence().canvas_h;
+  const auto [dx, dy] = turned((x - frame->x) * canvas_w, (y - frame->y) * canvas_h,
+                               -frame->rotation);
+  return std::pair{dx / frame->width + canvas_w / 2.0, dy / frame->height + canvas_h / 2.0};
+}
+
 core::Project apply_graphic_layer_box(core::Project project, std::string_view clip_id,
                                       std::string_view layer_id, const ui::MonitorBox& box,
                                       double t, const core::LayerMeasurer& measure) {

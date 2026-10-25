@@ -964,6 +964,11 @@ class IconButton : public Button {
     /// A join moving: two blocks that meet, with the line between them carrying
     /// arrows both ways.
     Roll,
+    /// The Type tool: a capital T, which is what Premiere's is.
+    Type,
+    /// The shape tools: the outline each draws.
+    Rectangle,
+    Ellipse,
   };
 
   explicit IconButton(Icon icon, std::function<void()> on_click = {});

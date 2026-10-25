@@ -216,6 +216,14 @@ namespace cutline::tool {
       app->inspector_stale = true;
     });
 
+    picture.set_on_picture_press([app](double x, double y, int clicks) {
+      return press_on_picture(*app, x, y, clicks);
+    });
+    picture.set_box_drawing(app->tool == cutline::ui::Tool::Rectangle ||
+                            app->tool == cutline::ui::Tool::Ellipse);
+    picture.set_on_box_drawn([app](const cutline::ui::MonitorBox& box, bool done) {
+      box_drawn_on_picture(*app, box, done);
+    });
     picture.set_on_transform_change([app](const cutline::ui::MonitorBox& box) {
       const auto selection = app->session.selection();
       if (selection.empty()) return;

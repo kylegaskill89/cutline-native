@@ -58,6 +58,22 @@ namespace cutline::editor {
     const core::Project& project, std::string_view clip_id, std::string_view layer_id, double t,
     const core::LayerMeasurer& measure);
 
+/// A graphic layer under a point on the frame, given in fractions of it: the
+/// topmost, in the topmost graphic on screen there. What a click on the
+/// picture chooses.
+struct LayerHit {
+  std::string clip_id;
+  std::string layer_id;
+};
+[[nodiscard]] std::optional<LayerHit> graphic_layer_at(const core::Project& project, double t,
+                                                      double x, double y,
+                                                      const core::LayerMeasurer& measure);
+
+/// A point on the frame, in fractions of it, as pixels of a graphic clip's own
+/// canvas: where on the graphic a click landed, through the clip's transform.
+[[nodiscard]] std::optional<std::pair<double, double>> frame_to_graphic(
+    const core::Project& project, std::string_view clip_id, double t, double x, double y);
+
 /// Applies a box the handles produced back to the layer: its position, its
 /// scale and its turn, keyed at the playhead where they are animated -- the
 /// same edit the Essential Graphics panel's numbers make.

@@ -296,6 +296,15 @@ void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
   painter.push_clip(bounds(), 0.0);
   paint_masks(painter, theme);
   if (has_picture()) paint_overlay(painter, theme);
+  // The shape being drawn out, as an outline in the handles' colour.
+  if (drawing_box_) {
+    const SurfaceStyle& selected = theme.style(Part::Button, State::Selected);
+    const Color ink = selected.border.a > 0.0 ? selected.border : selected.text;
+    painter.stroke(Rect{area.x + (drawn_box_.x - drawn_box_.width / 2.0) * area.width,
+                        area.y + (drawn_box_.y - drawn_box_.height / 2.0) * area.height,
+                        drawn_box_.width * area.width, drawn_box_.height * area.height},
+                   0.0, ink, 1.0);
+  }
   painter.pop_clip();
 }
 
@@ -930,6 +939,17 @@ bool MonitorView::on_mouse_down(const MouseEvent& event) {
   // points and not a layer to drag or a mask to pick up.
   if (mask_drawing_.has_value()) return place_mask_point(event);
 
+  // And drawing out a shape, for the same reason.
+  if (box_drawing_ && picture().contains(event.x, event.y)) {
+    const auto at = to_picture(event.x, event.y);
+    if (!at.has_value()) return false;
+    drawing_box_ = true;
+    box_from_x_ = at->first;
+    box_from_y_ = at->second;
+    drawn_box_ = MonitorBox{.x = at->first, .y = at->second, .width = 0.0, .height = 0.0};
+    return true;
+  }
+
   // Three things want this press, and the order between them is the whole of
   // what makes both gestures reachable.
   //
@@ -1043,6 +1063,28 @@ bool MonitorView::on_mouse_down(const MouseEvent& event) {
   }
   mask_selected_.reset();
 
+  // Asked before the press becomes a move: it may choose another layer, whose
+  // handles are then in place for this same press to drag.
+  if (on_picture_press_ && picture().contains(event.x, event.y)) {
+    if (const auto at = to_picture(event.x, event.y); at.has_value()) {
+      if (on_picture_press_(at->first, at->second, event.click_count)) return true;
+      const TransformHandle now = box_.has_value() ? handle_at(event.x, event.y)
+                                                   : TransformHandle::None;
+      if (now == TransformHandle::Move) {
+        dragging_ = now;
+        origin_ = *box_;
+        press_x_ = event.x;
+        press_y_ = event.y;
+        guides_.clear();
+        return true;
+      }
+      if (now == TransformHandle::None && handle == TransformHandle::Move) {
+        // The press chose nothing it could move.
+        return true;
+      }
+    }
+  }
+
   if (handle == TransformHandle::Move) return take_layer();
 
   // Last, so it can only start where nothing else wanted the press: a layer's
@@ -1057,7 +1099,31 @@ bool MonitorView::on_mouse_down(const MouseEvent& event) {
   return false;
 }
 
+void MonitorView::set_box_drawing(bool drawing) noexcept {
+  box_drawing_ = drawing;
+  if (!drawing) drawing_box_ = false;
+}
+
 bool MonitorView::on_mouse_move(const MouseEvent& event) {
+  if (drawing_box_) {
+    if (const auto at = to_picture(event.x, event.y); at.has_value()) {
+      double dx = at->first - box_from_x_;
+      double dy = at->second - box_from_y_;
+      if (event.modifiers.shift && canvas_aspect_ > 0.0) {
+        // Square on the frame, which is wider than it is tall: the same
+        // distance in pixels each way.
+        const double side = std::max(std::abs(dx) * canvas_aspect_, std::abs(dy));
+        dx = std::copysign(side / canvas_aspect_, dx);
+        dy = std::copysign(side, dy);
+      }
+      drawn_box_ = MonitorBox{.x = box_from_x_ + dx / 2.0, .y = box_from_y_ + dy / 2.0,
+                              .width = std::abs(dx), .height = std::abs(dy)};
+      if (on_box_drawn_) on_box_drawn_(drawn_box_, false);
+      if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+    }
+    return true;
+  }
+
   if (panning_) {
     // From the press rather than accumulated, like every other drag here, so
     // a pan that runs into the clamp and comes back lands where it started
@@ -1167,6 +1233,13 @@ void MonitorView::drag_mask(double x, double y) {
 }
 
 bool MonitorView::on_mouse_up(const MouseEvent& event) {
+  if (drawing_box_) {
+    drawing_box_ = false;
+    if (on_box_drawn_) on_box_drawn_(drawn_box_, true);
+    if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+    return true;
+  }
+
   if (panning_) {
     panning_ = false;
     return true;

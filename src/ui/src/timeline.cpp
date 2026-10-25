@@ -119,6 +119,9 @@ std::string_view to_string(Tool tool) noexcept {
     case Tool::RateStretch: return "rate";
     case Tool::Slip: return "slip";
     case Tool::Slide: return "slide";
+    case Tool::Type: return "type";
+    case Tool::Rectangle: return "rectangle";
+    case Tool::Ellipse: return "ellipse";
   }
   return "selection";
 }
@@ -1054,6 +1057,9 @@ DragMode TimelineView::zone_at(double x, double y, Modifiers modifiers) const {
       return x < box.x + box.width * 0.5 ? DragMode::RollStart : DragMode::RollEnd;
 
     case Tool::Selection:
+    case Tool::Type:
+    case Tool::Rectangle:
+    case Tool::Ellipse:
       break;
   }
 

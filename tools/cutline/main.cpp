@@ -485,6 +485,11 @@ void toggle_snapping(App& app) {
 void choose_tool(App& app, cutline::ui::Tool tool) {
   app.tool = tool;
   if (app.timeline != nullptr) app.timeline->set_tool(tool);
+  // The shape tools draw on the picture, which is a mode the monitor holds.
+  if (app.monitor != nullptr) {
+    app.monitor->set_box_drawing(tool == cutline::ui::Tool::Rectangle ||
+                                 tool == cutline::ui::Tool::Ellipse);
+  }
   for (std::size_t i = 0; i < app.tool_buttons.size() && i < kTools.size(); ++i) {
     app.tool_buttons[i]->set_selected(kTools[i].tool == tool);
   }
@@ -1159,6 +1164,16 @@ void settle(App& app) {
     app.live_gesture = false;
     app.live_project.reset();
     app.preview_stale = true;
+    refresh_handles(app);
+  }
+
+  // Typing on the picture ends with its field, however the field went: OK and
+  // Cancel say so themselves, but a click elsewhere closes the popup with
+  // neither, and the picture must not go on showing words nobody kept.
+  if (app.typing_on_picture && app.main.host != nullptr && app.main.host->popup() == nullptr) {
+    app.typing_on_picture = false;
+    app.live_project.reset();
+    invalidate_preview(app);
     refresh_handles(app);
   }
 

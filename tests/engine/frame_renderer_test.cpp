@@ -459,6 +459,20 @@ TEST_F(TitleRendererTest, AGraphicDrawsEachLayerWhereItIsPut) {
   EXPECT_EQ(pixel_at(image, 48, 16).a, 0) << "nothing was put there";
 }
 
+TEST_F(TitleRendererTest, AShapeIsTheColourItWasGivenNotWhite) {
+  // A new shape is a mid grey. Found looking white on screen, which was the
+  // HDR display's capture clipping it; this is what says the render itself
+  // is right.
+  Project p = canvas_project();
+  p.media = {graphic("g", {square("grey", "#a0a0a0", 32.0, 32.0, 40.0)})};
+  p.sequence().tracks = {video_track("v1", {clip("c", "g", 0.0, 5.0)})};
+
+  const Rgba centre = pixel_at(render(p, 1.0), 32, 32);
+  EXPECT_NEAR(centre.r, 0xa0, 3);
+  EXPECT_NEAR(centre.g, 0xa0, 3);
+  EXPECT_NEAR(centre.b, 0xa0, 3);
+}
+
 TEST_F(TitleRendererTest, TheTopLayerOfAGraphicIsDrawnOverTheOthers) {
   Project p = canvas_project();
   // Top first, as the panel lists them.

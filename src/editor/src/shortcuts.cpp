@@ -112,6 +112,9 @@ constexpr std::array kActions{
     Action{"tool.rate_stretch", "Rate Stretch Tool", "Tools", Scope::Bare},
     Action{"tool.slip", "Slip Tool", "Tools", Scope::Bare},
     Action{"tool.slide", "Slide Tool", "Tools", Scope::Bare},
+    Action{"tool.type", "Type Tool", "Tools", Scope::Bare},
+    Action{"tool.rectangle", "Rectangle Tool", "Tools", Scope::Bare},
+    Action{"tool.ellipse", "Ellipse Tool", "Tools", Scope::Bare},
 
     // -- Window
     Action{"window.maximise_frame", "Maximize or Restore Frame", "Window", Scope::Bare},
@@ -199,6 +202,7 @@ constexpr std::array kPremiereKeys{
     Default{"tool.rate_stretch", bare(Key::R)},
     Default{"tool.slip", bare(Key::Y)},
     Default{"tool.slide", bare(Key::U)},
+    Default{"tool.type", bare(Key::T)},
     Default{"window.maximise_frame", bare(Key::Backtick)},
     Default{"window.float_panel", ctrl_shift(Key::F)},
     Default{"view.theme.slate", bare(Key::Digit1)},

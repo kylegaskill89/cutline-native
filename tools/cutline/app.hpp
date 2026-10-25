@@ -649,6 +649,10 @@ struct App {
   /// Set when the panel needs rebuilding for something that is not a change
   /// to the document: a layer chosen. Deferred, as the inspector is.
   bool graphics_stale = false;
+  /// Text is being typed onto the picture: `live_project` is the document with
+  /// the words so far, kept until the typing is accepted or given up -- which
+  /// is longer than any drag, so it cannot ride on `live_gesture`.
+  bool typing_on_picture = false;
   std::vector<std::string> history_shown;
   std::size_t history_at = static_cast<std::size_t>(-1);
   /// The picture the program monitor was last given, kept so a monitor made
@@ -1228,6 +1232,12 @@ constexpr std::array kTools{
               "Rate Stretch"},
     ToolEntry{cutline::ui::Tool::Slip, IconButton::Icon::Slip, "tool.slip", "Slip"},
     ToolEntry{cutline::ui::Tool::Slide, IconButton::Icon::Slide, "tool.slide", "Slide"},
+    // Premiere's tools for the picture: the Type tool on T, and the two shapes
+    // that sit under its pen.
+    ToolEntry{cutline::ui::Tool::Type, IconButton::Icon::Type, "tool.type", "Type"},
+    ToolEntry{cutline::ui::Tool::Rectangle, IconButton::Icon::Rectangle, "tool.rectangle",
+              "Rectangle"},
+    ToolEntry{cutline::ui::Tool::Ellipse, IconButton::Icon::Ellipse, "tool.ellipse", "Ellipse"},
 };
 
 /// Where a popup opens under the menu bar, at its left edge.
@@ -1503,6 +1513,11 @@ void refresh_graphics_panel(App& app);
 /// text library to do it with: what the panel pins by and the monitor puts
 /// handles round.
 [[nodiscard]] cutline::core::LayerMeasurer layer_measurer();
+/// A press on the Program Monitor's picture that nothing on it took, in frame
+/// fractions: the Type tool's click, or the selection tool choosing a layer.
+[[nodiscard]] bool press_on_picture(App& app, double x, double y, int clicks);
+/// A box drawn out on the picture by the Rectangle or Ellipse tool.
+void box_drawn_on_picture(App& app, const cutline::ui::MonitorBox& box, bool done);
 [[nodiscard]] std::optional<std::filesystem::path> choose_folder(HWND owner);
 void take_snapshot(App& app);
 void check_for_updates(App& app);

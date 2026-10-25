@@ -458,6 +458,14 @@ enum class Tool {
   Slip,
   /// The body moves the clip, taking the length out of its neighbours.
   Slide,
+  // The three that work on the Program Monitor rather than here, as
+  // Premiere's do. On the timeline each behaves as the selection tool.
+  /// A click on the picture starts a text layer there, and typing fills it.
+  Type,
+  /// A drag on the picture draws a rectangle.
+  Rectangle,
+  /// A drag on the picture draws an ellipse.
+  Ellipse,
 };
 
 [[nodiscard]] std::string_view to_string(Tool tool) noexcept;

@@ -296,6 +296,32 @@ class MonitorView : public Widget {
     return mask_drawing_;
   }
 
+  // -------------------------------------------------------- picture tools --
+
+  /// A press on the picture that no handle or mask took, at a place given in
+  /// fractions of the frame, with how many clicks it was. Return true when it
+  /// was used; false lets the press go on to move the selected layer.
+  ///
+  /// How a graphic's layer is chosen by clicking it on the picture, and where
+  /// the Type tool starts its text. The monitor knows where on the frame the
+  /// press was and nothing about graphics, as with every other gesture here.
+  /// Asked before the press becomes a move, and the handles looked at again
+  /// after: a click on another layer chooses it, and the same press drags it.
+  void set_on_picture_press(std::function<bool(double x, double y, int clicks)> on_press) {
+    on_picture_press_ = std::move(on_press);
+  }
+
+  /// While on, a drag on the picture draws out a box, ahead of every other
+  /// gesture -- the Rectangle and Ellipse tools, which are a mode as placing a
+  /// path is.
+  void set_box_drawing(bool drawing) noexcept;
+  [[nodiscard]] bool box_drawing() const noexcept { return box_drawing_; }
+  /// The box as it is drawn out, and once more when let go, in fractions of
+  /// the frame and unturned. Shift keeps it square.
+  void set_on_box_drawn(std::function<void(const MonitorBox& box, bool done)> on_drawn) {
+    on_box_drawn_ = std::move(on_drawn);
+  }
+
   // ---------------------------------------------------------- dragging out --
 
   /// A drag that began on the picture and was released, at a point in the same
@@ -454,6 +480,15 @@ class MonitorView : public Widget {
   /// one; `dragging_out_` is one that has travelled far enough to be a drag
   /// rather than a click, which is the same threshold the media pool uses.
   std::function<void(double, double)> on_drag_out_;
+  std::function<bool(double, double, int)> on_picture_press_;
+  std::function<void(const MonitorBox&, bool)> on_box_drawn_;
+  bool box_drawing_ = false;
+  /// The box being drawn out: where the press was, in frame fractions, and
+  /// the box it makes with the pointer now.
+  bool drawing_box_ = false;
+  double box_from_x_ = 0.0;
+  double box_from_y_ = 0.0;
+  MonitorBox drawn_box_;
   bool pressed_out_ = false;
   bool dragging_out_ = false;
   double drag_x_ = 0.0;

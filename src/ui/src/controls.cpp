@@ -2537,6 +2537,24 @@ void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const 
       line(cx + reach * 0.55, cy, cx + reach * 0.2, cy - reach * 0.35);
       line(cx + reach * 0.55, cy, cx + reach * 0.2, cy + reach * 0.35);
       break;
+
+    case Icon::Type:
+      line(cx - reach * 0.8, cy - reach * 0.85, cx + reach * 0.8, cy - reach * 0.85);
+      line(cx, cy - reach * 0.85, cx, cy + reach * 0.9);
+      line(cx - reach * 0.35, cy + reach * 0.9, cx + reach * 0.35, cy + reach * 0.9);
+      break;
+
+    case Icon::Rectangle:
+      painter.stroke(Rect{snap(cx - reach), snap(cy - reach * 0.7), edge(reach * 2.0),
+                          edge(reach * 1.4)},
+                     1.0, style.text, width);
+      break;
+
+    case Icon::Ellipse:
+      painter.stroke(Rect{snap(cx - reach), snap(cy - reach * 0.75), edge(reach * 2.0),
+                          edge(reach * 1.5)},
+                     reach, style.text, width);
+      break;
   }
 
 }

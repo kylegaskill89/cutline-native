@@ -839,7 +839,224 @@ void build_animation(App& app, Box& body, const GraphicLayer& layer) {
   reveal_row("Out", layer.reveal_out, &GraphicLayer::reveal_out);
 }
 
+// ------------------------------------------------------ on the picture --
+
+/// The graphic clip a new layer drawn on the picture goes into: the selected
+/// one, when it is a graphic on screen; otherwise a new graphic at the
+/// playhead, made in `project`, as Premiere's tools make one.
+[[nodiscard]] std::pair<std::string, std::string> graphic_to_draw_in(
+    const App& app, cutline::core::Project& project) {
+  const auto selection = app.session.selection();
+  const double t = app.session.playhead();
+  if (!selection.empty()) {
+    const cutline::core::Clip* clip = cutline::core::find_clip(project, selection.front());
+    if (clip != nullptr && t >= clip->start && t < cutline::core::clip_end(*clip) &&
+        cutline::editor::graphic_of(project, clip->media_id) != nullptr) {
+      return {clip->id, clip->media_id};
+    }
+  }
+  std::string clip_id;
+  project = cutline::editor::add_graphic_at(std::move(project), Graphic{}, t, {}, &clip_id);
+  const cutline::core::Clip* clip = cutline::core::find_clip(project, clip_id);
+  return {clip_id, clip != nullptr ? clip->media_id : std::string{}};
+}
+
+/// After a layer is made or edited on the picture: the clip selected, the
+/// layer chosen, and everything showing it told.
+void settle_on_layer(App& app, const std::string& clip_id, const std::string& layer_id) {
+  app.session.select_one(clip_id);
+  app.graphic_layer = layer_id;
+  refresh_all(app);
+  refresh_handles(app);
+}
+
+/// The project with one text layer's words replaced.
+[[nodiscard]] cutline::core::Project with_text(cutline::core::Project project,
+                                               const std::string& media_id,
+                                               const std::string& layer_id, std::string text) {
+  const Graphic* graphic = cutline::editor::graphic_of(project, media_id);
+  if (graphic == nullptr) return project;
+  Graphic changed = *graphic;
+  if (GraphicLayer* layer = cutline::core::find_layer(changed, layer_id); layer != nullptr) {
+    layer->text = std::move(text);
+  }
+  return cutline::editor::set_graphic(std::move(project), media_id, std::move(changed));
+}
+
+/// Types into a text layer, in a field over it on the picture, the picture
+/// following every keystroke. `base` is the project the typing is done in,
+/// which for a layer the Type tool has just made is one the session has not
+/// seen yet: the making and the typing are one undo step, and typing nothing
+/// leaves nothing behind.
+void type_into(App& app, cutline::core::Project base, const std::string& clip_id,
+               const std::string& layer_id, bool made) {
+  if (app.main.host == nullptr || app.monitor == nullptr) return;
+  const cutline::core::Clip* clip = cutline::core::find_clip(base, clip_id);
+  if (clip == nullptr) return;
+  const std::string media_id = clip->media_id;
+  const Graphic* graphic = cutline::editor::graphic_of(base, media_id);
+  const GraphicLayer* layer =
+      graphic == nullptr ? nullptr : cutline::core::find_layer(*graphic, layer_id);
+  if (layer == nullptr) return;
+
+  app.live_gesture = false;
+  app.typing_on_picture = true;
+  app.live_project = base;
+  app.graphic_layer = layer_id;
+  invalidate_preview(app);
+
+  auto dialog = std::make_unique<cutline::ui::Dialog>("Text");
+  auto& field = dialog->body().emplace<TextField>(layer->text);
+  field.set_multiline(true);
+  field.set_min_lines(2);
+  field.set_columns(24);
+  field.set_placeholder("Type here");
+  field.set_on_change([&app, base, media_id, layer_id](const std::string& text) {
+    app.live_project = with_text(base, media_id, layer_id, text);
+    invalidate_preview(app);
+    refresh_handles(app);
+  });
+  dialog->set_accept("OK", [&app, base, clip_id, media_id, layer_id, made,
+                            words = &field]() -> std::optional<std::string> {
+    app.typing_on_picture = false;
+    app.live_project.reset();
+    const std::string text = words->text();
+    if (text.empty()) {
+      // A text layer with nothing in it is no layer, as in Premiere. One made
+      // by this gesture simply never happens.
+      if (!made) {
+        const Graphic* now = cutline::editor::graphic_of(app.session.project(), media_id);
+        if (now != nullptr) {
+          app.session.apply(cutline::editor::set_graphic(
+              app.session.project(), media_id, cutline::editor::remove_layer(*now, layer_id)));
+        }
+      }
+      app.graphic_layer.clear();
+      refresh_all(app);
+      return std::nullopt;
+    }
+    app.session.apply(with_text(base, media_id, layer_id, text));
+    settle_on_layer(app, clip_id, layer_id);
+    return std::nullopt;
+  });
+  dialog->set_cancel("Cancel", [&app] {
+    app.typing_on_picture = false;
+    app.live_project.reset();
+    invalidate_preview(app);
+    refresh_handles(app);
+  });
+
+  // Under the picture, level with the layer: near enough to read as the
+  // layer's, and clear of the frame so what is typed can be seen arriving in
+  // it. Over the picture, where the first attempt put it, it covered the very
+  // words it was for.
+  Rect anchor = settings_anchor();
+  const Rect picture = app.monitor->picture();
+  if (const auto box = cutline::editor::graphic_layer_box(base, clip_id, layer_id,
+                                                          app.session.playhead(), layer_measurer());
+      box.has_value() && !picture.empty()) {
+    anchor = Rect{picture.x + (box->x - box->width / 2.0) * picture.width,
+                  picture.bottom() + 4.0, 0.0, 0.0};
+  }
+  app.main.host->open_popup(std::move(dialog), anchor);
+  app.main.host->set_focus(&field);
+  refresh_handles(app);
+}
+
 }  // namespace
+
+bool press_on_picture(App& app, double x, double y, int clicks) {
+  const double t = app.session.playhead();
+  const std::optional<cutline::editor::LayerHit> hit = cutline::editor::graphic_layer_at(
+      app.session.project(), t, x, y, layer_measurer());
+  const auto is_text = [&app](const cutline::editor::LayerHit& at) {
+    const Graphic* graphic = cutline::editor::clip_graphic(app.session.project(), at.clip_id);
+    const GraphicLayer* layer =
+        graphic == nullptr ? nullptr : cutline::core::find_layer(*graphic, at.layer_id);
+    return layer != nullptr && layer->kind == GraphicKind::Text;
+  };
+
+  if (app.tool == cutline::ui::Tool::Type) {
+    // On existing text, the Type tool edits it; anywhere else it starts new.
+    if (hit.has_value() && is_text(*hit)) {
+      type_into(app, app.session.project(), hit->clip_id, hit->layer_id, false);
+      return true;
+    }
+    cutline::core::Project project = app.session.project();
+    const auto [clip_id, media_id] = graphic_to_draw_in(app, project);
+    if (clip_id.empty()) return true;
+    const auto at = cutline::editor::frame_to_graphic(project, clip_id, t, x, y);
+    const Graphic* graphic = cutline::editor::graphic_of(project, media_id);
+    if (!at.has_value() || graphic == nullptr) return true;
+    // Point text, starting where the click was, as Premiere's Type tool puts
+    // it: left-aligned, with the click on its left edge.
+    GraphicLayer layer = cutline::editor::text_layer("");
+    layer.style.align = cutline::core::TextAlign::Left;
+    layer.anchor_x = 0.0;
+    layer.x = at->first / project.sequence().canvas_w;
+    layer.y = at->second / project.sequence().canvas_h;
+    std::string layer_id;
+    project = cutline::editor::set_graphic(
+        std::move(project), media_id, cutline::editor::add_layer(*graphic, std::move(layer), &layer_id));
+    type_into(app, std::move(project), clip_id, layer_id, true);
+    return true;
+  }
+
+  if (app.tool != cutline::ui::Tool::Selection) return false;
+  if (!hit.has_value()) {
+    // A click off every layer goes back to the graphic as a whole.
+    if (app.graphic_layer.empty()) return false;
+    app.graphic_layer.clear();
+    app.graphics_stale = true;
+    refresh_handles(app);
+    return true;
+  }
+  const auto selection = app.session.selection();
+  const bool chosen = !selection.empty() && selection.front() == hit->clip_id &&
+                      app.graphic_layer == hit->layer_id;
+  if (chosen && clicks >= 2 && is_text(*hit)) {
+    type_into(app, app.session.project(), hit->clip_id, hit->layer_id, false);
+    return true;
+  }
+  if (!chosen) {
+    app.session.select_one(hit->clip_id);
+    app.graphic_layer = hit->layer_id;
+    refresh_timeline(app);
+    app.inspector_stale = true;
+    refresh_handles(app);
+  }
+  // Not taken: the same press goes on to move the layer just chosen.
+  return false;
+}
+
+void box_drawn_on_picture(App& app, const cutline::ui::MonitorBox& box, bool done) {
+  if (!done) return;
+  const cutline::core::Sequence& sequence = app.session.project().sequence();
+  // A click rather than a drag draws nothing.
+  if (box.width * sequence.canvas_w < 4.0 || box.height * sequence.canvas_h < 4.0) return;
+
+  cutline::core::Project project = app.session.project();
+  const auto [clip_id, media_id] = graphic_to_draw_in(app, project);
+  const double t = app.session.playhead();
+  const auto from = cutline::editor::frame_to_graphic(project, clip_id, t, box.x - box.width / 2.0,
+                                                      box.y - box.height / 2.0);
+  const auto to = cutline::editor::frame_to_graphic(project, clip_id, t, box.x + box.width / 2.0,
+                                                    box.y + box.height / 2.0);
+  const Graphic* graphic = cutline::editor::graphic_of(project, media_id);
+  if (!from.has_value() || !to.has_value() || graphic == nullptr) return;
+
+  GraphicLayer layer = cutline::editor::shape_layer(
+      app.tool == cutline::ui::Tool::Ellipse ? GraphicKind::Ellipse : GraphicKind::Rectangle);
+  layer.width = std::abs(to->first - from->first);
+  layer.height = std::abs(to->second - from->second);
+  layer.x = (from->first + to->first) / 2.0 / sequence.canvas_w;
+  layer.y = (from->second + to->second) / 2.0 / sequence.canvas_h;
+  std::string layer_id;
+  project = cutline::editor::set_graphic(
+      std::move(project), media_id, cutline::editor::add_layer(*graphic, std::move(layer), &layer_id));
+  app.session.apply(std::move(project));
+  settle_on_layer(app, clip_id, layer_id);
+}
 
 cutline::core::LayerMeasurer layer_measurer() {
 #if CUTLINE_HAVE_TEXT

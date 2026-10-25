@@ -807,7 +807,9 @@ void invalidate_preview(App& app) {
   // document no longer has, and looks merely out of date. Anything asking for
   // a fresh picture while no handle is being dragged is asking for the
   // document's.
-  if (!app.dragging_handle && !app.live_gesture) app.live_project.reset();
+  if (!app.dragging_handle && !app.live_gesture && !app.typing_on_picture) {
+    app.live_project.reset();
+  }
 
   app.preview_stale = true;
   // The scopes measure the picture, so anything that changes the picture
