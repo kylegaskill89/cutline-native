@@ -864,7 +864,7 @@ void open_float_window(App& app, const cutline::ui::FloatingDock& floating) {
   // resized by its edges, which is what a drawn caption needs. Owned by the
   // main window so it stays above it and goes away with it.
   const HWND window = CreateWindowExW(
-      WS_EX_TOOLWINDOW, kWindowClass, L"Cutline", WS_POPUP | WS_THICKFRAME,
+      WS_EX_TOOLWINDOW | kWindowExStyle, kWindowClass, L"Cutline", WS_POPUP | WS_THICKFRAME,
       static_cast<int>(floating.bounds.x), static_cast<int>(floating.bounds.y),
       static_cast<int>(floating.bounds.width), static_cast<int>(floating.bounds.height),
       app.main.window, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -1113,6 +1113,38 @@ void resize_surface(Shell& shell, int width, int height) {
   shell.surface = std::move(*made);
   // A new surface starts SDR; the display decides.
   refresh_hdr(*shell.app);
+  apply_backdrop(shell, shell.app->current());
+}
+
+void apply_backdrop(Shell& shell, const Theme& theme) {
+  if (shell.window == nullptr) return;
+  // Spelled out, for an SDK older than the Windows 11 that added them.
+  constexpr DWORD kSystemBackdropType = 38;  // DWMWA_SYSTEMBACKDROP_TYPE
+  constexpr int kNoBackdrop = 1;             // DWMSBT_NONE
+  constexpr int kAcrylic = 3;                // DWMSBT_TRANSIENTWINDOW
+  constexpr DWORD kDarkMode = 20;            // DWMWA_USE_IMMERSIVE_DARK_MODE
+
+  // The glass is tinted to match: light acrylic under a light theme.
+  const BOOL dark = theme.dark ? TRUE : FALSE;
+  DwmSetWindowAttribute(shell.window, kDarkMode, &dark, sizeof dark);
+
+  const bool wanted = theme.metrics.frame_glass && shell.surface != nullptr &&
+                      shell.surface->translucent();
+  const int backdrop = wanted ? kAcrylic : kNoBackdrop;
+  // Fails where the system has no backdrops to give, before Windows 11's
+  // second year; the window then stays opaque and the title bar's own fill
+  // stands in for the glass.
+  const bool given = SUCCEEDED(
+      DwmSetWindowAttribute(shell.window, kSystemBackdropType, &backdrop, sizeof backdrop));
+  shell.glass = wanted && given;
+
+  // The glass covers the whole window, under everything the frame paints; a
+  // frame that paints all of it opaque hides it everywhere but where it
+  // leaves clear. Otherwise one pixel of frame handed back to the compositor,
+  // which is enough to keep the drop shadow and the rounded corners.
+  const MARGINS margins = shell.glass ? MARGINS{-1, -1, -1, -1} : MARGINS{0, 0, 1, 0};
+  DwmExtendFrameIntoClientArea(shell.window, &margins);
+  shell.dirty = true;
 }
 
 /// The work that belongs to the document rather than to any one window.
@@ -1207,11 +1239,18 @@ void render(Shell& shell) {
   }
 
   // Through the painter rather than a canvas clear, so a themed background
-  // that is a gradient stays one.
-  canvas->clear(SK_ColorBLACK);
+  // that is a gradient stays one. With the system's glass behind the window,
+  // the frame starts clear and the background stops short of the title bar,
+  // so the glass shows through the bar's tint and nowhere else.
+  canvas->clear(shell.glass ? SK_ColorTRANSPARENT : SK_ColorBLACK);
   canvas->save();
   canvas->scale(static_cast<SkScalar>(shell.scale), static_cast<SkScalar>(shell.scale));
-  paint_surface(*painter, client, theme.style(cutline::ui::Part::Window));
+  Rect background = client;
+  if (shell.glass && shell.title_bar != nullptr) {
+    const double below = shell.title_bar->bounds().bottom();
+    background = Rect{client.x, below, client.width, std::max(0.0, client.bottom() - below)};
+  }
+  paint_surface(*painter, background, theme.style(cutline::ui::Part::Window));
   shell.host->paint(*painter, theme);
   canvas->restore();
 
@@ -1222,6 +1261,7 @@ void set_theme(App& app, std::size_t index) {
   if (index >= built_in_themes().size() || index == app.theme) return;
   app.theme = index;
   save_settings(app);
+  for (Shell* shell : app.shells()) apply_backdrop(*shell, app.current());
 
   // Metrics change with the theme, so everything has to be measured again —
   // in every window, not only the one whose button was pressed.
@@ -2142,7 +2182,7 @@ int main(int argc, char** argv) {
 
   const HINSTANCE instance = GetModuleHandleW(nullptr);
   const HWND window =
-      CreateWindowExW(0, kWindowClass, L"Cutline", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+      CreateWindowExW(kWindowExStyle, kWindowClass, L"Cutline", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
                       CW_USEDEFAULT, 1280, 800, nullptr, nullptr, instance, nullptr);
   if (window == nullptr) {
     std::println("could not create a window");

@@ -447,7 +447,7 @@ void open_export_dialog(App& app) {
   const int y = owner.top + ((owner.bottom - owner.top) - kHeight) / 2;
 
   const HWND window =
-      CreateWindowExW(WS_EX_TOOLWINDOW, kWindowClass, L"Export Settings",
+      CreateWindowExW(WS_EX_TOOLWINDOW | kWindowExStyle, kWindowClass, L"Export Settings",
                       WS_POPUP | WS_THICKFRAME, x, y, kWidth, kHeight, app.main.window, nullptr,
                       GetModuleHandleW(nullptr), nullptr);
   if (window == nullptr) return;

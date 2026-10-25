@@ -342,6 +342,9 @@ struct Shell {
   /// Rebuilt whenever the window changes size. Skia's raster surface owns the
   /// pixels; the blit reads them straight out.
   std::unique_ptr<cutline::ui::SkiaWindow> surface;
+  /// Whether the system's glass is behind the window, so a frame leaves the
+  /// title bar clear for it rather than painting the background under it.
+  bool glass = false;
   int width = 0;
   int height = 0;
   bool dirty = true;
@@ -1152,6 +1155,12 @@ constexpr std::array kTools{
 
 // The window's own helpers, defined in `main.cpp`.
 [[nodiscard]] double scale_of(HWND window);
+/// Asks the system for its glass behind a window when the theme's frame is
+/// glass and the window can show it, and for none otherwise.
+void apply_backdrop(Shell& shell, const Theme& theme);
+/// What every window of the application is made with: no redirection bitmap,
+/// so what a frame leaves clear reaches the screen clear.
+constexpr DWORD kWindowExStyle = WS_EX_NOREDIRECTIONBITMAP;
 [[nodiscard]] int to_pixels(double units, double scale);
 [[nodiscard]] DockLayout& layout_of(App& app);
 void mark_dirty(App& app);

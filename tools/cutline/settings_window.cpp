@@ -787,7 +787,8 @@ void open_settings_dialog(App& app, SettingsKind kind) {
   const std::wstring title =
       kind == SettingsKind::Project ? L"Project Settings" : L"Preferences";
   const HWND window =
-      CreateWindowExW(WS_EX_TOOLWINDOW, kWindowClass, title.c_str(), WS_POPUP | WS_THICKFRAME, x,
+      CreateWindowExW(WS_EX_TOOLWINDOW | kWindowExStyle, kWindowClass, title.c_str(),
+                      WS_POPUP | WS_THICKFRAME, x,
                       y, width, height, app.main.window, nullptr, GetModuleHandleW(nullptr),
                       nullptr);
   shell->size_key = kind == SettingsKind::Project ? "Project Settings" : "Preferences";

@@ -621,6 +621,7 @@ namespace {
   t.metrics.caption_close_width = 43.0;
   t.metrics.caption_hangs = true;
   t.metrics.caption_glyphs = CaptionGlyphs::Vista;
+  t.metrics.frame_glass = true;
   t.metrics.dropdown_is_button = true;
   t.metrics.default_pulse = 2.0;
   t.metrics.progress_shine = 3.0;

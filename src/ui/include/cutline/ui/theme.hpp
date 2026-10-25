@@ -359,6 +359,11 @@ struct Metrics {
   double caption_close_width = 0.0;
   double caption_gap = 0.0;
   bool caption_hangs = false;
+  /// Whether the window's frame is the system's own glass, where the platform
+  /// has it: the desktop and the windows behind, blurred, through the title
+  /// bar's tint. Vista's. Where it cannot be had, the title bar's own fill
+  /// stands in, over the window's background.
+  bool frame_glass = false;
   /// A progress bar drawn as blocks this wide, `progress_gap` apart, inside
   /// its trough, as XP drew it; zero fills it continuously.
   double progress_block = 0.0;

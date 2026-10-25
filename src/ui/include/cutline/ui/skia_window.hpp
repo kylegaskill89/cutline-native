@@ -110,6 +110,15 @@ class SkiaWindow {
   [[nodiscard]] std::expected<void, std::string> set_hdr(std::optional<float> sdr_white_nits);
   [[nodiscard]] std::optional<float> hdr() const noexcept;
 
+  /// Whether what a frame leaves clear reaches the screen clear, so whatever
+  /// is behind the window -- the system's glass, when it is asked for -- shows
+  /// there. True when the swapchain went through the compositor; false on a
+  /// system where only the window's own, opaque, swapchain could be made.
+  ///
+  /// The window has to have been made without a redirection bitmap for this to
+  /// mean anything: with one, Windows keeps an opaque copy behind it.
+  [[nodiscard]] bool translucent() const noexcept;
+
   /// Whether the display `hwnd` is mostly on is showing HDR, and if so where
   /// its SDR white is in nits -- the brightness Windows' own slider sets for
   /// SDR content. Nothing for an SDR display, or when it cannot be told.

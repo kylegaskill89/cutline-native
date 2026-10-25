@@ -388,6 +388,15 @@ TEST(ThemeChrome, AeroUsesGlassAndNoOtherThemeDoes) {
   EXPECT_FALSE(uses_glass(*built_in_theme("xp")));
 }
 
+TEST(ThemeChrome, OnlyAerosFrameIsTheSystemsGlass) {
+  // Vista's frame was see-through; nothing else of the four was.
+  for (const Theme& theme : built_in_themes()) {
+    EXPECT_EQ(theme.metrics.frame_glass, theme.id == "aero") << theme.id;
+  }
+  // And its tint has to let the glass through.
+  EXPECT_LT(built_in_theme("aero")->style(Part::TitleBar).fill.color.a, 1.0f);
+}
+
 TEST(ThemeChrome, AeroGlassActuallyBlurs) {
   const Fill& fill = built_in_theme("aero")->style(Part::TitleBar).fill;
   ASSERT_EQ(fill.kind, FillKind::Glass);

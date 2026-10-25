@@ -23,6 +23,7 @@
 
 #include <d3d12.h>
 #include <d3dcompiler.h>
+#include <dcomp.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
@@ -142,6 +143,14 @@ struct SkiaWindow::Impl {
   ComPtr<ID3D12CommandQueue> queue;
   ComPtr<IDXGISwapChain3> swapchain;
   sk_sp<GrDirectContext> context;
+
+  /// What puts the swapchain on the window when it is one whose transparency
+  /// reaches the screen. A swapchain made for a window directly is always
+  /// opaque -- Windows ignores its alpha -- so a frame that leaves somewhere
+  /// clear for the glass behind it has to go through the compositor instead.
+  ComPtr<IDCompositionDevice> composition;
+  ComPtr<IDCompositionTarget> composition_target;
+  ComPtr<IDCompositionVisual> composition_visual;
 
   /// One per swapchain buffer. `retired` is the fence value that will be
   /// signalled once the GPU has finished the frame drawn into it, which is
@@ -349,8 +358,10 @@ struct SkiaWindow::Impl {
     rtv.ptr += static_cast<SIZE_T>(which) *
                device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     device->CreateRenderTargetView(buffer.resource.Get(), nullptr, rtv);
-    const float black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-    list->ClearRenderTargetView(rtv, black, 0, nullptr);
+    // Clear rather than black: where the interface leaves the frame clear, the
+    // glass behind the window is what shows.
+    const float clear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    list->ClearRenderTargetView(rtv, clear, 0, nullptr);
     list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
 
     ID3D12DescriptorHeap* heaps[] = {resolve_heap.Get()};
@@ -568,13 +579,36 @@ std::expected<std::unique_ptr<SkiaWindow>, std::string> SkiaWindow::create(
   description.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
   description.BufferCount = kBufferCount;
   description.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-  description.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
 
+  // Through the compositor, premultiplied, so a frame can leave somewhere
+  // clear and the glass behind the window shows there. Every theme but Aero
+  // draws every pixel opaque, and looks exactly as it did; on a system where
+  // the compositor will not have it, the window's own swapchain, opaque.
   ComPtr<IDXGISwapChain1> chain;
-  if (const HRESULT result = impl->factory->CreateSwapChainForHwnd(
-          impl->queue.Get(), impl->window, &description, nullptr, nullptr, &chain);
-      FAILED(result)) {
-    return std::unexpected("could not make a swapchain: " + described(result));
+  description.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
+  description.Scaling = DXGI_SCALING_STRETCH;
+  if (SUCCEEDED(impl->factory->CreateSwapChainForComposition(impl->queue.Get(), &description,
+                                                             nullptr, &chain)) &&
+      SUCCEEDED(DCompositionCreateDevice(nullptr, IID_PPV_ARGS(&impl->composition))) &&
+      SUCCEEDED(impl->composition->CreateTargetForHwnd(impl->window, TRUE,
+                                                       &impl->composition_target)) &&
+      SUCCEEDED(impl->composition->CreateVisual(&impl->composition_visual)) &&
+      SUCCEEDED(impl->composition_visual->SetContent(chain.Get())) &&
+      SUCCEEDED(impl->composition_target->SetRoot(impl->composition_visual.Get())) &&
+      SUCCEEDED(impl->composition->Commit())) {
+    // Bound to the window through the compositor.
+  } else {
+    chain.Reset();
+    impl->composition_visual.Reset();
+    impl->composition_target.Reset();
+    impl->composition.Reset();
+    description.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    description.Scaling = DXGI_SCALING_STRETCH;
+    if (const HRESULT result = impl->factory->CreateSwapChainForHwnd(
+            impl->queue.Get(), impl->window, &description, nullptr, nullptr, &chain);
+        FAILED(result)) {
+      return std::unexpected("could not make a swapchain: " + described(result));
+    }
   }
   if (FAILED(chain.As(&impl->swapchain))) {
     return std::unexpected("this DXGI is too old for a flip-model swapchain");
@@ -639,6 +673,8 @@ std::expected<void, std::string> SkiaWindow::set_hdr(std::optional<float> sdr_wh
 }
 
 std::optional<float> SkiaWindow::hdr() const noexcept { return impl_->hdr_white; }
+
+bool SkiaWindow::translucent() const noexcept { return impl_->composition != nullptr; }
 
 std::optional<float> SkiaWindow::hdr_white_for(void* hwnd) {
   HMONITOR monitor = MonitorFromWindow(static_cast<HWND>(hwnd), MONITOR_DEFAULTTONEAREST);
