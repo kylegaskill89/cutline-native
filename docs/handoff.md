@@ -157,8 +157,14 @@ break would be silly.
   the resolved result is unchanged, which is what catches a mistyped key.
 - A new *control* → `ui/controls.hpp`. Themeable, tested with `RecordingPainter`.
 - *What a panel shows* → `editor/*_binding.hpp`, as plain data.
-- *Wiring* → `tools/cutline/main.cpp`. It is large; that is fine, it is the
-  composition root.
+- *Wiring* → `tools/cutline/`, the composition root, one file per part of the
+  window: `app.hpp` declares `App`, `Shell` and every call one part makes on
+  another; `main.cpp` is the window itself -- building it, its messages, keys
+  and frames; and beside it `panels`, `inspector`, `playback`, `pool`, `dock`,
+  `menus`, `document`, `audio_panel`, `clip_dialogs`, `export_window`,
+  `settings_window` and `check` (the headless check and the benchmarks). A
+  function another part calls is declared in `app.hpp`; one nothing else calls
+  stays in its own file.
 - *Something the interface needs but must not wait for* → `app`, as a cache with
   a worker behind it. `WaveformCache` is the one to copy; `ThumbnailCache` is
   what copying it looks like, and `ProxyBuilder` is what copying it looks like
@@ -167,7 +173,8 @@ break would be silly.
   `app/media_cache.hpp`, which both of those caches consult before they decode.
   Read §5.8 of the gaps document before adding a third kind: the key and the
   unit are the two decisions that go wrong.
-- *A preference* → `editor/settings.hpp` and a row on a page in `main.cpp`. §9
+- *A preference* → `editor/settings.hpp` and a row on a page in
+  `settings_window.cpp`. §9
   has the recipe and the rule for deciding whether it is a preference at all.
 - *A per-sequence setting* → `core::Project`, serialised, with a control in
   Project Settings. `drop_frame` is the most recent one and the shortest to
@@ -801,7 +808,7 @@ thing of its kind should take.
   index** (the list is ordered for reading, so an index would quietly mean
   another theme the first time one was inserted).
 
-- **The settings windows** — `open_settings_dialog` in `tools/cutline/main.cpp`.
+- **The settings windows** — `open_settings_dialog` in `tools/cutline/settings_window.cpp`.
   Two windows, not one: preferences belong to the person and project settings
   travel with the cut, and a single window would write half its contents to a
   different place from the other half. Each page fills a container the dialog
@@ -1242,7 +1249,7 @@ Twenty minutes, and every step has a reason:
 2. **Read and write it** in `settings_from_json` / `to_json`, clamping on the way
    in. A hand-edited file is not hostile, but it is not careful either — every
    number in there is clamped and the enums are read by name.
-3. **A row on a page** in `tools/cutline/main.cpp` — `build_*_page`. Use
+3. **A row on a page** in `tools/cutline/settings_window.cpp` — `build_*_page`. Use
    `duration_row` for a number; a `Dropdown` for an exclusive choice of more than
    three; a `TextField` with `set_columns` when several must line up.
 4. **Call `save_settings(app)`** from the control's `on_commit`, not
