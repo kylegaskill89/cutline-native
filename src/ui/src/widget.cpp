@@ -256,6 +256,11 @@ void WidgetHost::arrange_popup(const LayoutContext& context) {
     y = popup_anchor_.y - height;
   }
 
+  // Too tall for either side of the anchor: moved up until its foot is on the
+  // window's, as Windows moves a menu that cannot hang from where it was asked
+  // for. Left hanging, the rows past the edge could not be reached at all.
+  if (y + height > bounds_.bottom()) y = bounds_.bottom() - height;
+
   double x = popup_anchor_.x;
   if (x + width > bounds_.right()) x = bounds_.right() - width;
 

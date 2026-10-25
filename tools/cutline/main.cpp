@@ -1227,7 +1227,6 @@ void add_bin(App& app);
 void toggle_bin(App& app, std::size_t row);
 void file_into_bin(App& app, std::size_t from, std::size_t onto);
 void open_pool_menu(App& app, double x, double y);
-void open_media_label_menu(App& app, double x, double y);
 [[nodiscard]] cutline::core::Project labelled_new_media(const App& app,
                                                         cutline::core::Project project,
                                                         std::span<const std::string> media_ids);
@@ -1297,6 +1296,28 @@ void check_for_updates(App& app);
 void settle_update(App& app);
 [[nodiscard]] bool confirm_discard(App& app);
 bool save_project(App& app, bool ask_where);
+
+/// A menu row that runs something, with the keys that do the same written
+/// beside it. Only words: whoever handles the keys is elsewhere.
+[[nodiscard]] MenuEntry action_entry(std::string label, std::function<void()> act,
+                                     std::string keys = {}, bool enabled = true) {
+  return MenuEntry{.label = std::move(label), .shortcut = std::move(keys), .enabled = enabled,
+                   .act = std::move(act)};
+}
+
+/// A menu row that is a switch, ticked when it is on.
+[[nodiscard]] MenuEntry switch_entry(std::string label, bool on, std::function<void()> act,
+                                     std::string keys = {}, bool enabled = true) {
+  return MenuEntry{.label = std::move(label), .shortcut = std::move(keys), .enabled = enabled,
+                   .checked = on, .act = std::move(act)};
+}
+
+/// A menu row that opens another beside it, greyed when that would be empty.
+[[nodiscard]] MenuEntry submenu_entry(std::string label, std::vector<MenuEntry> rows) {
+  const bool any = !rows.empty();
+  return MenuEntry{.label = std::move(label), .enabled = any, .submenu = std::move(rows)};
+}
+
 
 /// The scale axis tied to this one by the aspect lock, if it is a scale at all.
 [[nodiscard]] std::optional<cutline::editor::ClipParam> other_scale_axis(
@@ -3940,36 +3961,35 @@ cutline::core::Project labelled_new_media(const App& app, cutline::core::Project
 /// The same palette a clip's label uses, because a label put on the source is
 /// the one that ends up on every clip cut from it — two palettes would mean two
 /// meanings for the same colour.
-void open_media_label_menu(App& app, double x, double y) {
-  if (app.main.host == nullptr || app.browser == nullptr) return;
-  const cutline::ui::MediaItem* chosen = app.browser->selected();
-  if (chosen == nullptr) return;
+/// The colours a pool entry can be labelled, with the one it has ticked.
+[[nodiscard]] std::vector<MenuEntry> media_label_entries(App& app,
+                                                         const cutline::ui::MediaItem& chosen) {
+  const auto choose = [&app, media_id = chosen.id](std::string color) {
+    return [&app, media_id, color = std::move(color)] {
+      app.session.apply(cutline::core::set_media_label(app.session.project(), media_id, color));
+      // Only the pool. Clips already on the timeline keep whatever they were
+      // given, which is the point of them taking a copy at placement.
+      refresh_browser(app);
+    };
+  };
 
-  const std::string media_id = chosen->id;
-  const std::string current = chosen->label_color;
-
-  std::vector<std::string> labels{"None"};
-  std::vector<bool> ticks{current.empty()};
-  std::vector<std::string> colors{std::string{}};
+  std::vector<MenuEntry> rows;
+  rows.push_back(switch_entry("None", chosen.label_color.empty(), choose({})));
   const std::span<const cutline::editor::ClipLabel> palette = cutline::editor::clip_labels();
   for (std::size_t i = 0; i < palette.size(); ++i) {
-    labels.emplace_back(cutline::editor::label_name(app.settings, i));
-    colors.emplace_back(palette[i].color);
-    ticks.push_back(current == palette[i].color);
+    rows.push_back(switch_entry(std::string(cutline::editor::label_name(app.settings, i)),
+                                chosen.label_color == palette[i].color,
+                                choose(std::string(palette[i].color))));
   }
+  return rows;
+}
 
-  auto list = std::make_unique<MenuList>(std::move(labels));
-  list->set_checked(std::move(ticks));
-  list->set_on_choose([&app, colors, media_id](std::size_t index) {
-    if (app.main.host != nullptr) app.main.host->close_popup();
-    if (index >= colors.size()) return;
-    app.session.apply(
-        cutline::core::set_media_label(app.session.project(), media_id, colors[index]));
-    // Only the pool. Clips already on the timeline keep whatever they were
-    // given, which is the point of them taking a copy at placement.
-    refresh_browser(app);
-  });
-  app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
+/// An empty sequence beside the open one, taking its canvas and rate.
+/// Not opened: adding and switching are two decisions — see `add_sequence`.
+void new_sequence(App& app) {
+  app.session.apply(cutline::core::add_sequence(app.session.project()));
+  refresh_all(app);
+  app.dock_stale = true;
 }
 
 /// The pool's own menu, from a right-click.
@@ -3981,17 +4001,9 @@ void open_media_label_menu(App& app, double x, double y) {
 void open_pool_menu(App& app, double x, double y) {
   if (app.main.host == nullptr || app.browser == nullptr) return;
 
-  struct Item {
-    std::string label;
-    std::function<void()> act;
-  };
-  std::vector<Item> items;
-  items.push_back(Item{"New Bin", [&app] { add_bin(app); }});
-  items.push_back(Item{"New Sequence", [&app] {
-                         app.session.apply(cutline::core::add_sequence(app.session.project()));
-                         refresh_all(app);
-                         app.dock_stale = true;
-                       }});
+  std::vector<MenuEntry> rows;
+  rows.push_back(action_entry("New Bin", [&app] { add_bin(app); }));
+  rows.push_back(action_entry("New Sequence", [&app] { new_sequence(app); }));
 
   if (const cutline::ui::MediaItem* chosen = app.browser->selected(); chosen != nullptr) {
     const bool is_bin = !cutline::editor::bin_of_row(chosen->id).empty();
@@ -3999,54 +4011,41 @@ void open_pool_menu(App& app, double x, double y) {
       // Premiere's New Sequence From Clip: a cut shaped to that footage, with
       // the clip already on it. It is not opened — see `add_sequence` — so this
       // does not take somebody away from what they were cutting.
-      items.push_back(Item{"New Sequence From Clip", [&app, id = chosen->id] {
-                             app.session.apply(cutline::core::sequence_from_clip(
-                                 app.session.project(), id));
-                             refresh_all(app);
-                             app.dock_stale = true;
-                           }});
+      rows.push_back(action_entry("New Sequence From Clip", [&app, id = chosen->id] {
+        app.session.apply(cutline::core::sequence_from_clip(app.session.project(), id));
+        refresh_all(app);
+        app.dock_stale = true;
+      }));
     }
-    items.push_back(Item{"Rename...", [&app] { rename_pool_entry(app); }});
-    items.push_back(Item{is_bin ? "Delete Bin" : "Remove", [&app] { remove_from_pool(app); }});
+    rows.push_back(MenuEntry::divider());
+    rows.push_back(action_entry("Rename...", [&app] { rename_pool_entry(app); }));
+    rows.push_back(action_entry(is_bin ? "Delete Bin" : "Remove", [&app] { remove_from_pool(app); }));
     if (!is_bin) {
-      items.push_back(Item{"Label", [&app, x, y] { open_media_label_menu(app, x, y); }});
-      items.push_back(Item{"Relink Media...", [&app] { relink_pool_entry(app); }});
+      rows.push_back(submenu_entry("Label", media_label_entries(app, *chosen)));
+      rows.push_back(MenuEntry::divider());
+      rows.push_back(action_entry("Link Media...", [&app] { relink_pool_entry(app); }));
       // Only for footage with a rate to conform *from*. A still has no frames
       // to re-time and a file whose rate never probed has no ratio to form —
       // offering it there would be offering a box that can only be cancelled.
       const auto asset = std::ranges::find(app.session.project().media, chosen->id,
                                            &cutline::core::Media::id);
-      if (asset != app.session.project().media.end() &&
-          cutline::core::can_interpret(*asset)) {
-        items.push_back(Item{"Interpret Footage...",
-                             [&app, id = chosen->id] { open_interpret_dialog(app, id); }});
-      }
-      // Only where a row is already inside one. "Move to Top Level" on
-      // something already there is an entry that cannot do anything.
-      const auto media = std::ranges::find(app.session.project().media, chosen->id,
-                                           &cutline::core::Media::id);
-      const bool filed = media != app.session.project().media.end() &&
-                         cutline::core::find_bin(app.session.project(), media->bin) != nullptr;
-      if (filed) {
-        items.push_back(Item{"Move to Top Level", [&app, id = chosen->id] {
-                               app.session.apply(
-                                   cutline::core::file_media(app.session.project(), id, ""));
-                               refresh_browser(app);
-                             }});
-      }
+      const bool interpretable = asset != app.session.project().media.end() &&
+                                 cutline::core::can_interpret(*asset);
+      rows.push_back(action_entry("Interpret Footage...",
+                                  [&app, id = chosen->id] { open_interpret_dialog(app, id); },
+                                  {}, interpretable));
+      // Greyed where a row is not inside a bin: there is nothing to move it out
+      // of.
+      const bool filed = asset != app.session.project().media.end() &&
+                         cutline::core::find_bin(app.session.project(), asset->bin) != nullptr;
+      rows.push_back(action_entry("Move to Top Level", [&app, id = chosen->id] {
+        app.session.apply(cutline::core::file_media(app.session.project(), id, ""));
+        refresh_browser(app);
+      }, {}, filed));
     }
   }
 
-  std::vector<std::string> labels;
-  labels.reserve(items.size());
-  for (const Item& item : items) labels.push_back(item.label);
-
-  auto list = std::make_unique<MenuList>(std::move(labels));
-  list->set_on_choose([&app, items](std::size_t index) {
-    if (app.main.host != nullptr) app.main.host->close_popup();
-    if (index < items.size() && items[index].act) items[index].act();
-  });
-  app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
+  app.main.host->open_popup(std::make_unique<MenuList>(std::move(rows)), Rect{x, y, 0.0, 0.0});
 }
 
 /// Points a pool entry at a file somewhere else.
@@ -7626,46 +7625,172 @@ void set_pool_view(App& app, cutline::ui::BrowserView view) {
 /// Its own popup rather than eight more rows on the clip menu, which is long
 /// enough already. Ticked where the selection already carries one, and "None"
 /// first because getting a label off is as ordinary as putting one on.
-void open_label_menu(App& app, std::span<const std::string> clips, double x, double y) {
-  if (app.main.host == nullptr || clips.empty()) return;
-
-  // What they are now. A mixed selection ticks nothing, which is honest: there
-  // is no one answer to what colour these are.
+/// The colours clips can be labelled. A mixed selection ticks nothing, which
+/// is honest: there is no one answer to what colour these are.
+[[nodiscard]] std::vector<MenuEntry> clip_label_entries(App& app,
+                                                        const std::vector<std::string>& clips) {
   std::string current;
   bool agreed = true;
+  bool first = true;
   for (const std::string& id : clips) {
     const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), id);
     if (clip == nullptr) continue;
-    if (current.empty() && agreed) {
+    if (first) {
       current = clip->label_color;
+      first = false;
     } else if (clip->label_color != current) {
       agreed = false;
     }
   }
 
-  std::vector<std::string> labels{"None"};
-  std::vector<bool> ticks{agreed && current.empty()};
-  std::vector<std::string> colors{std::string{}};
+  const auto choose = [&app, clips](std::string color) {
+    return [&app, clips, color = std::move(color)] {
+      app.session.apply(cutline::core::set_clips_label(app.session.project(), clips, color));
+      refresh_timeline(app);
+      mark_dirty(app);
+    };
+  };
+
+  std::vector<MenuEntry> rows;
+  rows.push_back(switch_entry("None", agreed && current.empty(), choose({})));
   const std::span<const cutline::editor::ClipLabel> palette = cutline::editor::clip_labels();
   for (std::size_t i = 0; i < palette.size(); ++i) {
-    labels.emplace_back(cutline::editor::label_name(app.settings, i));
-    colors.emplace_back(palette[i].color);
-    ticks.push_back(agreed && current == palette[i].color);
+    rows.push_back(switch_entry(std::string(cutline::editor::label_name(app.settings, i)),
+                                agreed && current == palette[i].color, choose(std::string(palette[i].color))));
   }
+  return rows;
+}
 
-  auto list = std::make_unique<MenuList>(std::move(labels));
-  list->set_checked(std::move(ticks));
-  list->set_on_choose([&app, colors, chosen = std::vector<std::string>(clips.begin(),
-                                                                      clips.end())](
-                          std::size_t index) {
-    if (app.main.host != nullptr) app.main.host->close_popup();
-    if (index >= colors.size()) return;
-    app.session.apply(
-        cutline::core::set_clips_label(app.session.project(), chosen, colors[index]));
-    refresh_timeline(app);
-    mark_dirty(app);
+/// Whether any of the clips is held on one frame.
+[[nodiscard]] bool any_held(const App& app, const std::vector<std::string>& clips) {
+  return std::ranges::any_of(clips, [&](const std::string& id) {
+    const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), id);
+    return clip != nullptr && clip->hold.has_value();
   });
-  app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
+}
+
+/// Holds the clips on the frame under the playhead, or lets them go when any
+/// of them is held already.
+///
+/// At the playhead, which is Premiere's default and the only choice that means
+/// anything: the frame you are looking at is the one you want held. Each clip
+/// clamps it into its own trim, so a selection spread across the sequence
+/// still freezes on a frame it owns.
+void toggle_frame_hold(App& app, const std::vector<std::string>& clips) {
+  app.session.apply(cutline::core::set_clips_hold(
+      app.session.project(), clips,
+      any_held(app, clips) ? std::nullopt : std::optional<double>{app.session.playhead()}));
+  refresh_timeline(app);
+  invalidate_preview(app);
+  app.inspector_stale = true;
+  mark_dirty(app);
+}
+
+/// Scales the clips to fit inside the frame, or to cover it.
+void frame_clips(App& app, const std::vector<std::string>& clips, cutline::editor::FrameFit fit) {
+  app.session.apply(cutline::editor::scale_to_frame(app.session.project(), clips, fit,
+                                                    app.session.playhead()));
+  refresh_timeline(app);
+  invalidate_preview(app);
+  app.inspector_stale = true;
+  mark_dirty(app);
+}
+
+/// Whether every one of the clips is switched on.
+[[nodiscard]] bool all_enabled(const App& app, const std::vector<std::string>& clips) {
+  return std::ranges::all_of(clips, [&](const std::string& id) {
+    const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), id);
+    return clip != nullptr && !clip->disabled;
+  });
+}
+
+/// Switches the clips off when they are all on, and on otherwise.
+void toggle_clips_enabled(App& app, const std::vector<std::string>& clips) {
+  app.session.apply(
+      cutline::core::set_clips_enabled(app.session.project(), clips, !all_enabled(app, clips)));
+  refresh_timeline(app);
+  invalidate_preview(app);
+  app.inspector_stale = true;
+  stop_playback(app);
+  mark_dirty(app);
+}
+
+void open_speed_dialog(App& app, std::span<const std::string> clips);
+
+/// What can be done to the clips selected: Premiere's Clip menu, less the
+/// editing that lives under Edit and Sequence.
+///
+/// One function for the menu bar and the timeline's right-click, so the two
+/// cannot drift. Greyed rather than left out when nothing is selected, so the
+/// menu keeps its shape and says what it would do.
+[[nodiscard]] std::vector<MenuEntry> clip_entries(App& app) {
+  using cutline::editor::Command;
+  const std::vector<std::string> selected = app.session.selected_group();
+  const bool any = !selected.empty();
+
+  std::vector<MenuEntry> rows;
+  rows.push_back(action_entry("Speed/Duration...",
+                              [&app, selected] { open_speed_dialog(app, selected); }, {}, any));
+  // Ticked, because a hold is a state a clip is in rather than something to do
+  // to it — and the row that turns it off has to be the same row.
+  rows.push_back(switch_entry("Frame Hold", any && any_held(app, selected),
+                              [&app, selected] { toggle_frame_hold(app, selected); }, {}, any));
+  rows.push_back(action_entry("Fit to Frame", [&app, selected] {
+    frame_clips(app, selected, cutline::editor::FrameFit::Fit);
+  }, {}, any));
+  rows.push_back(action_entry("Fill Frame", [&app, selected] {
+    frame_clips(app, selected, cutline::editor::FrameFit::Fill);
+  }, {}, any));
+  rows.push_back(MenuEntry::divider());
+  // Premiere's Modify ▸ Audio Channels, and the answer to a camera with a
+  // lapel on one channel and a shotgun on the other.
+  rows.push_back(action_entry("Audio Channels...",
+                              [&app, selected] { open_channel_dialog(app, selected); }, {}, any));
+  rows.push_back(action_entry("Essential Sound...",
+                              [&app, selected] { open_essential_sound(app, selected); }, {}, any));
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(switch_entry("Enable", any && all_enabled(app, selected),
+                              [&app, selected] { toggle_clips_enabled(app, selected); }, {}, any));
+  rows.push_back(command_entry(app, "Link", Command::LinkClips));
+  rows.push_back(command_entry(app, "Unlink", Command::UnlinkClips));
+  rows.push_back(command_entry(app, "Nest...", Command::Nest));
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(submenu_entry("Label", any ? clip_label_entries(app, selected)
+                                            : std::vector<MenuEntry>{}));
+  return rows;
+}
+
+/// The timeline's right-click: the clipboard and the cuts, then the Clip menu.
+///
+/// Over empty track there is no clip, and the clip rows are left off rather
+/// than greyed: a right-click is about what is under the pointer, and a column
+/// of greyed clip commands over a gap says nothing. The tracks are offered
+/// there instead.
+[[nodiscard]] std::vector<MenuEntry> timeline_context_entries(App& app) {
+  using cutline::editor::Command;
+  const bool any = !app.session.selected_group().empty();
+
+  std::vector<MenuEntry> rows;
+  if (any) {
+    rows.push_back(command_entry(app, "Cut", Command::Cut));
+    rows.push_back(command_entry(app, "Copy", Command::Copy));
+  }
+  rows.push_back(command_entry(app, "Paste", Command::Paste));
+  rows.push_back(command_entry(app, "Paste Insert", Command::PasteInsert));
+  if (any) rows.push_back(command_entry(app, "Paste Attributes...", Command::PasteAttributes));
+  rows.push_back(MenuEntry::divider());
+  if (any) rows.push_back(command_entry(app, "Clear", Command::Delete));
+  rows.push_back(command_entry(app, "Ripple Delete", Command::RippleDelete));
+  rows.push_back(command_entry(app, "Add Edit", Command::Split));
+  rows.push_back(command_entry(app, "Add Edit to All Tracks", Command::SplitAllTracks));
+  rows.push_back(MenuEntry::divider());
+  if (any) {
+    for (MenuEntry& row : clip_entries(app)) rows.push_back(std::move(row));
+  } else {
+    rows.push_back(command_entry(app, "Add Video Track", Command::AddVideoTrack));
+    rows.push_back(command_entry(app, "Add Audio Track", Command::AddAudioTrack));
+  }
+  return rows;
 }
 
 /// Speed and duration, Premiere's box, on the selection.
@@ -8533,16 +8658,10 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
 
   // The right-click. Premiere's clip menu, which is where most of what can be
   // done to a clip is actually reached from — the toolbar holds the handful of
-  // things that are worth a permanent button and nothing else fits there.
-  //
-  // Nothing is offered that would do nothing: every entry answers `can_run`
-  // first, so the menu over a clip and the menu over empty track differ by
-  // themselves rather than by a switch here deciding which menu to build. The
-  // one exception is Enable, which is a state rather than an action and so is
-  // ticked rather than hidden.
+  // things that are worth a permanent button and nothing else fits there. The
+  // rows are the Clip menu's own; see `timeline_context_entries`.
   tracks.set_on_context_menu([app](double x, double y) {
     if (app == nullptr || app->main.host == nullptr || app->timeline == nullptr) return;
-    using cutline::editor::Command;
 
     // A right-click on a header is about the *track*, not about a clip. It used
     // to open the clip menu, which offered Cut and Copy over a place where
@@ -8552,157 +8671,10 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
       return;
     }
 
-    struct Entry {
-      const char* label;
-      Command command;
-    };
-    constexpr std::array kEntries{
-        Entry{"Cut", Command::Cut},
-        Entry{"Copy", Command::Copy},
-        Entry{"Paste", Command::Paste},
-        Entry{"Paste Insert", Command::PasteInsert},
-        Entry{"Paste Attributes...", Command::PasteAttributes},
-        Entry{"Clear", Command::Delete},
-        Entry{"Ripple Delete", Command::RippleDelete},
-        Entry{"Split at Playhead", Command::Split},
-        Entry{"Split All Tracks", Command::SplitAllTracks},
-        Entry{"Nest...", Command::Nest},
-        Entry{"Link", Command::LinkClips},
-        Entry{"Unlink", Command::UnlinkClips},
-        Entry{"Add Video Track", Command::AddVideoTrack},
-        Entry{"Add Audio Track", Command::AddAudioTrack},
-        Entry{"Remove Track", Command::RemoveTrack},
-    };
-
-    std::vector<std::string> labels;
-    std::vector<Command> commands;
-    for (const Entry& entry : kEntries) {
-      if (!cutline::editor::can_run(app->session, entry.command)) continue;
-      labels.emplace_back(entry.label);
-      commands.push_back(entry.command);
-    }
-
-    // The framing pair and Enable, which are about the clips rather than about
-    // the sequence and so are not commands. Offered only when something is
-    // selected, since all three act on it.
-    const std::vector<std::string> selected = app->session.selected_group();
-    std::vector<bool> ticks(labels.size(), false);
-    if (!selected.empty()) {
-      labels.emplace_back("Label...");
-      ticks.push_back(false);
-      labels.emplace_back("Speed / Duration...");
-      ticks.push_back(false);
-      // Ticked, because a hold is a state a clip is in rather than something
-      // to do to it — and the row that turns it off has to be the same row.
-      labels.emplace_back("Frame Hold");
-      ticks.push_back(std::ranges::any_of(selected, [&](const std::string& id) {
-        const cutline::core::Clip* clip = cutline::core::find_clip(app->session.project(), id);
-        return clip != nullptr && clip->hold.has_value();
-      }));
-      labels.emplace_back("Fit to Frame");
-      ticks.push_back(false);
-      labels.emplace_back("Fill Frame");
-      ticks.push_back(false);
-      // Premiere's Modify ▸ Audio Channels, and the answer to a camera with a
-      // lapel on one channel and a shotgun on the other.
-      labels.emplace_back("Audio Channels...");
-      ticks.push_back(false);
-      // Premiere's Essential Sound: what the clip is, the processing that
-      // usually goes with it, and ducking.
-      labels.emplace_back("Essential Sound...");
-      ticks.push_back(false);
-    }
-    if (!selected.empty()) {
-      const bool enabled = std::ranges::all_of(selected, [&](const std::string& id) {
-        const cutline::core::Clip* clip = cutline::core::find_clip(app->session.project(), id);
-        return clip != nullptr && !clip->disabled;
-      });
-      labels.emplace_back("Enable");
-      ticks.push_back(enabled);
-    }
-    if (labels.empty()) return;
-
-    // Last, and past the end of the commands, which is how it is recognised
-    // without a sentinel command standing in for something that is not one.
-    auto list = std::make_unique<MenuList>(std::move(labels));
-    // Only when there is a tick to draw, so every other menu keeps its own
-    // indent rather than gaining a gutter it never uses.
-    if (!selected.empty()) list->set_checked(std::move(ticks));
-
-    list->set_on_choose([app, commands, selected, x, y](std::size_t index) {
-      if (app->main.host != nullptr) app->main.host->close_popup();
-      if (index < commands.size()) {
-        run_command(*app, commands[index]);
-        return;
-      }
-      if (selected.empty()) return;
-
-      // The trailing rows, in the order they were added: the label menu, the
-      // speed box, the frame hold, the two framing rows, then Enable.
-      if (index == commands.size()) {
-        open_label_menu(*app, selected, x, y);
-        return;
-      }
-      if (index == commands.size() + 1) {
-        open_speed_dialog(*app, selected);
-        return;
-      }
-      if (index == commands.size() + 2) {
-        // At the playhead when it is over the clip, which is Premiere's default
-        // and the only choice that means anything: the frame you are looking at
-        // is the one you want held. Each clip clamps it into its own trim, so a
-        // selection spread across the sequence still freezes on a frame it owns.
-        const bool held = std::ranges::any_of(selected, [&](const std::string& id) {
-          const cutline::core::Clip* clip =
-              cutline::core::find_clip(app->session.project(), id);
-          return clip != nullptr && clip->hold.has_value();
-        });
-        app->session.apply(cutline::core::set_clips_hold(
-            app->session.project(), selected,
-            held ? std::nullopt : std::optional<double>{app->session.playhead()}));
-        refresh_timeline(*app);
-        invalidate_preview(*app);
-        app->inspector_stale = true;
-        mark_dirty(*app);
-        return;
-      }
-      if (index == commands.size() + 3 || index == commands.size() + 4) {
-        const auto fit = index == commands.size() + 3 ? cutline::editor::FrameFit::Fit
-                                                      : cutline::editor::FrameFit::Fill;
-        app->session.apply(cutline::editor::scale_to_frame(
-            app->session.project(), selected, fit, app->session.playhead()));
-        refresh_timeline(*app);
-        invalidate_preview(*app);
-        app->inspector_stale = true;
-        mark_dirty(*app);
-        return;
-      }
-      if (index == commands.size() + 5) {
-        open_channel_dialog(*app, selected);
-        return;
-      }
-      if (index == commands.size() + 6) {
-        open_essential_sound(*app, selected);
-        return;
-      }
-      {
-        const bool enabled = std::ranges::all_of(selected, [&](const std::string& id) {
-          const cutline::core::Clip* clip = cutline::core::find_clip(app->session.project(), id);
-          return clip != nullptr && !clip->disabled;
-        });
-        app->session.apply(
-            cutline::core::set_clips_enabled(app->session.project(), selected, !enabled));
-        refresh_timeline(*app);
-        invalidate_preview(*app);
-        app->inspector_stale = true;
-        stop_playback(*app);
-        mark_dirty(*app);
-      }
-    });
-
     // At the pointer: there is no widget under a right-click to hang a menu
     // from, only a place.
-    app->main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
+    app->main.host->open_popup(std::make_unique<MenuList>(timeline_context_entries(*app)),
+                               Rect{x, y, 0.0, 0.0});
   });
 
   // A lane dragged taller or shorter. The view has already resized itself so
@@ -10600,12 +10572,7 @@ void open_panel_menu(App& app, Shell& shell, const PanelId& panel, const Rect& a
 std::vector<MenuEntry> panel_menu_extras(App& app, const PanelId& panel) {
   using cutline::editor::Command;
   const auto plain = [](std::string label, std::function<void()> act, std::string keys = {}) {
-    return MenuEntry{.label = std::move(label), .shortcut = std::move(keys), .act = std::move(act)};
-  };
-  const auto switch_entry = [](std::string label, bool on, std::function<void()> act,
-                               std::string keys = {}) {
-    return MenuEntry{.label = std::move(label), .shortcut = std::move(keys), .checked = on,
-                     .act = std::move(act)};
+    return action_entry(std::move(label), std::move(act), std::move(keys));
   };
 
   std::vector<MenuEntry> rows;
@@ -10797,26 +10764,6 @@ void toggle_panel(App& app, const PanelId& panel) {
   if (cutline::ui::close_panel(layout, panel)) app.dock_stale = true;
 }
 
-/// The Window menu: every panel this build has, ticked where it is open.
-///
-/// Made on the click rather than kept, because what it says is a reading of the
-/// arrangement at that moment and the arrangement changes under it constantly.
-[[nodiscard]] std::unique_ptr<Widget> build_window_menu(App& app) {
-  std::vector<std::string> labels;
-  std::vector<bool> open;
-  for (const auto& [id, title] : kPanels) {
-    labels.emplace_back(title);
-    open.push_back(panel_is_open(app, PanelId(id)));
-  }
-
-  auto list = std::make_unique<MenuList>(std::move(labels));
-  list->set_checked(std::move(open));
-  list->set_on_choose([&app](std::size_t index) {
-    if (app.main.host != nullptr) app.main.host->close_popup();
-    if (index < kPanels.size()) toggle_panel(app, PanelId(kPanels[index].first));
-  });
-  return list;
-}
 
 /// Moves to another named arrangement.
 ///
@@ -10950,6 +10897,264 @@ void refresh_dock(App& app) {
   refresh_float_titles(app);
 }
 
+// ------------------------------------------------------------- the menus --
+//
+// Premiere's menu bar, in Premiere's order, and every command the editor has
+// somewhere on it: a command reachable only from a key or a button is one
+// nobody finds. Each menu is built as it drops, so what is greyed and what is
+// ticked is what is true at that moment rather than what was true at startup.
+//
+// The keys written beside the rows are the ones the window actually handles —
+// read from the command tables where there is one, and written out here where
+// the key is handled by the window itself.
+
+[[nodiscard]] std::vector<MenuEntry> file_menu(App& app) {
+  std::vector<MenuEntry> rows;
+  rows.push_back(submenu_entry("New", {
+      action_entry("Project", [&app] { new_project(app); }, "Ctrl+N"),
+      action_entry("Sequence", [&app] { new_sequence(app); }),
+      MenuEntry::divider(),
+      action_entry("Bin", [&app] { add_bin(app); }),
+      action_entry("Title", [&app] { add_title(app); }),
+      action_entry("Colour Matte", [&app] { add_matte(app); }),
+      action_entry("Adjustment Layer", [&app] { add_adjustment(app); }),
+  }));
+  rows.push_back(action_entry("Open Project...", [&app] { open_project(app); }, "Ctrl+O"));
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(action_entry("Save", [&app] { save_project(app, false); }, "Ctrl+S"));
+  rows.push_back(action_entry("Save As...", [&app] { save_project(app, true); }, "Ctrl+Shift+S"));
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(action_entry("Import...", [&app] { import_media(app); }, "Ctrl+I"));
+  // Premiere's name for it. On the pool's selection, like Premiere's.
+  rows.push_back(action_entry("Link Media...", [&app] { relink_pool_entry(app); }));
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(submenu_entry("Export", {
+      action_entry("Media...", [&app] { open_export_dialog(app); }),
+      action_entry("Frame", [&app] { take_snapshot(app); }),
+  }));
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(action_entry("Project Settings...", [&app] {
+    open_settings_dialog(app, SettingsKind::Project);
+  }));
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(action_entry("Exit", [&app] {
+    if (app.main.window != nullptr) PostMessageW(app.main.window, WM_CLOSE, 0, 0);
+  }, "Alt+F4"));
+  return rows;
+}
+
+[[nodiscard]] std::vector<MenuEntry> edit_menu(App& app) {
+  using cutline::editor::Command;
+  std::vector<MenuEntry> rows;
+  rows.push_back(command_entry(app, "Undo", Command::Undo));
+  rows.push_back(command_entry(app, "Redo", Command::Redo));
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(command_entry(app, "Cut", Command::Cut));
+  rows.push_back(command_entry(app, "Copy", Command::Copy));
+  rows.push_back(command_entry(app, "Paste", Command::Paste));
+  rows.push_back(command_entry(app, "Paste Insert", Command::PasteInsert));
+  rows.push_back(command_entry(app, "Paste Attributes...", Command::PasteAttributes));
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(command_entry(app, "Clear", Command::Delete));
+  rows.push_back(command_entry(app, "Ripple Delete", Command::RippleDelete));
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(command_entry(app, "Select All", Command::SelectAll));
+  rows.push_back(command_entry(app, "Deselect All", Command::SelectNone));
+  rows.push_back(MenuEntry::divider());
+  // Where Premiere keeps it on Windows.
+  rows.push_back(action_entry("Preferences...", [&app] {
+    open_settings_dialog(app, SettingsKind::Application);
+  }));
+  return rows;
+}
+
+[[nodiscard]] std::vector<MenuEntry> clip_menu(App& app) {
+  using cutline::editor::Command;
+  std::vector<MenuEntry> rows = clip_entries(app);
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(command_entry(app, "Insert", Command::Insert));
+  rows.push_back(command_entry(app, "Overwrite", Command::Overwrite));
+  // It opens the box rather than acting, because the answer is a judgement
+  // about the cut — Fit to Fill is only the first of five.
+  rows.push_back(action_entry("Fit Clip...", [&app] { open_fit_dialog(app); }, {},
+                              cutline::editor::can_run(app.session, Command::FitToFill)));
+  rows.push_back(MenuEntry::divider());
+  // The two halves kept apart, as Premiere keeps them: making proxies is a job
+  // that runs for minutes, and reading from them is a switch.
+  rows.push_back(submenu_entry("Proxy", {
+      action_entry("Make Proxies", [&app] { make_proxies(app); }),
+      // A tick rather than a label that changes, so the row says both what it
+      // is and what it is set to.
+      switch_entry("Use Proxies", app.session.project().use_proxies,
+                   [&app] { toggle_use_proxies(app); }),
+      // Reachable at all, which matters more than where: a transcode queued
+      // over a card of footage is an hour of the machine.
+      action_entry("Stop Making Proxies", [&app] { stop_making_proxies(app); }),
+  }));
+  return rows;
+}
+
+[[nodiscard]] std::vector<MenuEntry> sequence_menu(App& app) {
+  using cutline::editor::Command;
+  std::vector<MenuEntry> rows;
+  rows.push_back(command_entry(app, "Add Edit", Command::Split));
+  rows.push_back(command_entry(app, "Add Edit to All Tracks", Command::SplitAllTracks));
+  rows.push_back(command_entry(app, "Trim Previous Edit to Playhead",
+                               Command::TrimPreviousToPlayhead));
+  rows.push_back(command_entry(app, "Trim Next Edit to Playhead", Command::TrimNextToPlayhead));
+  rows.push_back(command_entry(app, "Nudge Left One Frame", Command::NudgeLeft));
+  rows.push_back(command_entry(app, "Nudge Right One Frame", Command::NudgeRight));
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(switch_entry("Snap in Timeline", app.snapping, [&app] { toggle_snapping(app); },
+                              "S"));
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(command_entry(app, "Add Video Track", Command::AddVideoTrack));
+  rows.push_back(command_entry(app, "Add Audio Track", Command::AddAudioTrack));
+  rows.push_back(command_entry(app, "Remove Track", Command::RemoveTrack));
+  rows.push_back(MenuEntry::divider());
+  // The programme as a whole is what has a delivery number, so loudness is a
+  // property of the sequence rather than of a clip.
+  rows.push_back(action_entry("Normalise Loudness...", [&app] { open_loudness_dialog(app); }));
+  rows.push_back(MenuEntry::divider());
+  // Every cut, with the open one ticked. The strip of tabs over the timeline
+  // only appears once there are two, so this is the one place that always
+  // says which is open.
+  std::vector<MenuEntry> cuts;
+  const cutline::core::Project& document = app.session.project();
+  for (std::size_t i = 0; i < document.sequences.size(); ++i) {
+    const cutline::core::Sequence& sequence = document.sequences[i];
+    cuts.push_back(switch_entry(sequence.name.empty() ? std::string("Sequence") : sequence.name,
+                                i == document.open, [&app, id = sequence.id] {
+      if (!app.session.open_sequence(id)) return;
+      refresh_all(app);
+      app.dock_stale = true;
+    }));
+  }
+  rows.push_back(submenu_entry("Sequences", std::move(cuts)));
+  return rows;
+}
+
+[[nodiscard]] std::vector<MenuEntry> markers_menu(App& app) {
+  using cutline::editor::Command;
+  std::vector<MenuEntry> rows;
+  rows.push_back(command_entry(app, "Mark In", Command::MarkIn));
+  rows.push_back(command_entry(app, "Mark Out", Command::MarkOut));
+  rows.push_back(command_entry(app, "Clear In and Out", Command::ClearMarks));
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(command_entry(app, "Add Marker", Command::AddMarker));
+  rows.push_back(command_entry(app, "Go to Next Marker", Command::NextMarker));
+  rows.push_back(command_entry(app, "Go to Previous Marker", Command::PreviousMarker));
+  rows.push_back(command_entry(app, "Clear All Markers", Command::ClearMarkers));
+  return rows;
+}
+
+[[nodiscard]] std::vector<MenuEntry> view_menu(App& app) {
+  using cutline::editor::Command;
+  std::vector<MenuEntry> rows;
+
+  std::vector<MenuEntry> resolutions;
+  for (const auto& [scale, name] : kPreviewScales) {
+    resolutions.push_back(switch_entry(std::string(name), scale == app.preview_scale,
+                                       [&app, scale] { choose_preview_scale(app, scale); }));
+  }
+  rows.push_back(submenu_entry("Playback Resolution", std::move(resolutions)));
+  rows.push_back(switch_entry("Loop", app.looping, [&app] { toggle_looping(app); }));
+  rows.push_back(MenuEntry::divider());
+
+  // The transport. Premiere leaves these to the keys alone; here they are on
+  // the menu as well, so that every one of them can be found.
+  rows.push_back(action_entry("Play/Pause", [&app] { toggle_playback(app); }, "Space"));
+  rows.push_back(action_entry("Shuttle Backward", [&app] {
+    set_shuttle(app, next_shuttle(app.shuttle, -1.0));
+  }, "J"));
+  rows.push_back(action_entry("Stop", [&app] {
+    set_shuttle(app, 0.0);
+    if (app.playing()) stop_playback(app);
+  }, "K"));
+  rows.push_back(action_entry("Shuttle Forward", [&app] {
+    set_shuttle(app, app.playing() ? next_shuttle(1.0, 1.0) : next_shuttle(app.shuttle, 1.0));
+  }, "L"));
+  rows.push_back(command_entry(app, "Go to Start", Command::GoToStart));
+  rows.push_back(command_entry(app, "Go to End", Command::GoToEnd));
+  rows.push_back(command_entry(app, "Previous Frame", Command::PreviousFrame));
+  rows.push_back(command_entry(app, "Next Frame", Command::NextFrame));
+  rows.push_back(MenuEntry::divider());
+
+  const bool timeline = app.timeline != nullptr;
+  rows.push_back(action_entry("Zoom In", [&app] {
+    if (app.timeline == nullptr) return;
+    app.timeline->zoom_about_playhead(true);
+    mark_dirty(app);
+  }, "=", timeline));
+  rows.push_back(action_entry("Zoom Out", [&app] {
+    if (app.timeline == nullptr) return;
+    app.timeline->zoom_about_playhead(false);
+    mark_dirty(app);
+  }, "-", timeline));
+  rows.push_back(action_entry("Zoom to Sequence", [&app] {
+    if (app.timeline == nullptr) return;
+    app.timeline->zoom_to_fit();
+    mark_dirty(app);
+  }, "\\", timeline));
+  rows.push_back(MenuEntry::divider());
+
+  // The tools by name, with the one in hand ticked. The hint carries the key
+  // in brackets for the tooltip; the menu has a column for it.
+  std::vector<MenuEntry> tools;
+  for (const ToolEntry& entry : kTools) {
+    std::string name(entry.hint);
+    if (const auto bracket = name.find(" ("); bracket != std::string::npos) name.resize(bracket);
+    tools.push_back(switch_entry(std::move(name), app.tool == entry.tool,
+                                 [&app, tool = entry.tool] { choose_tool(app, tool); },
+                                 key_label(entry.key)));
+  }
+  rows.push_back(submenu_entry("Tools", std::move(tools)));
+
+  std::vector<MenuEntry> themes;
+  const std::span<const Theme> all = built_in_themes();
+  for (std::size_t i = 0; i < all.size(); ++i) {
+    themes.push_back(switch_entry(std::string(all[i].name), i == app.theme,
+                                  [&app, i] { set_theme(app, i); },
+                                  i < 9 ? std::to_string(i + 1) : std::string{}));
+  }
+  rows.push_back(submenu_entry("Theme", std::move(themes)));
+  return rows;
+}
+
+[[nodiscard]] std::vector<MenuEntry> window_menu(App& app) {
+  std::vector<MenuEntry> rows;
+
+  // The named arrangements, the one in use ticked, and Premiere's way back to
+  // how the one in use was defined.
+  std::vector<MenuEntry> spaces;
+  for (const cutline::editor::Workspace& workspace : app.workspaces.named) {
+    spaces.push_back(switch_entry(workspace.name, workspace.name == app.workspaces.active,
+                                  [&app, name = workspace.name] { set_workspace(app, name); }));
+  }
+  spaces.push_back(MenuEntry::divider());
+  spaces.push_back(action_entry("Reset to Saved Layout", [&app] { reset_workspace(app); }));
+  rows.push_back(submenu_entry("Workspaces", std::move(spaces)));
+  rows.push_back(MenuEntry::divider());
+
+  // Every panel this build has, ticked where it is open. This is the only way
+  // back to a panel whose tab has been closed; without it closing one is
+  // permanent short of resetting the whole workspace.
+  for (const auto& [id, title] : kPanels) {
+    rows.push_back(switch_entry(std::string(title), panel_is_open(app, PanelId(id)),
+                                [&app, panel = PanelId(id)] { toggle_panel(app, panel); }));
+  }
+  return rows;
+}
+
+[[nodiscard]] std::vector<MenuEntry> help_menu(App& app) {
+  return {action_entry("Check for Updates...", [&app] { check_for_updates(app); })};
+}
+
+/// The Window menu on its own, for `--check`, which measures its ticks.
+[[nodiscard]] std::unique_ptr<Widget> build_window_menu(App& app) {
+  return std::make_unique<MenuList>(window_menu(app));
+}
+
 /// The window's own widget tree: a caption, a theme switcher, and the dock.
 ///
 /// `app` may be null, so the headless check can build the same tree with no
@@ -10988,18 +11193,8 @@ void refresh_dock(App& app) {
   auto& bar = shell->emplace<Box>(Axis::Horizontal);
   bar.set_padding(Space::Tight);
 
-  /// One top-level menu: a button, and the list it drops.
-  struct MenuEntry {
-    const char* label;
-    std::function<void()> act;
-    /// Whether the thing this entry turns on is on, for the entries that are
-    /// switches rather than actions. Asked at the moment the menu drops, since
-    /// that is the only moment the answer is worth anything — a menu built once
-    /// at startup would show the state the application began with for ever.
-    std::function<bool()> ticked;
-  };
   if (app != nullptr) app->menu_buttons.clear();
-  const auto menu = [app, &bar](const char* title, std::vector<MenuEntry> entries) {
+  const auto menu = [app, &bar](const char* title, std::vector<MenuEntry> (*build)(App&)) {
     auto& button = bar.emplace<Button>(title);
     button.set_mnemonic(true);
     const std::size_t index = app != nullptr ? app->menu_buttons.size() : 0;
@@ -11008,30 +11203,16 @@ void refresh_dock(App& app) {
     // which is what every menu bar on the platform looks like and what
     // Premiere's looks like too.
     button.set_part(cutline::ui::Part::MenuItem);
-    button.set_on_click([app, index, control = &button, entries = std::move(entries)] {
+    button.set_on_click([app, index, control = &button, build] {
       if (app == nullptr || app->main.host == nullptr) return;
 
-      std::vector<std::string> labels;
-      std::vector<bool> checked;
-      bool any_switches = false;
-      labels.reserve(entries.size());
-      for (const MenuEntry& entry : entries) {
-        labels.emplace_back(entry.label);
-        checked.push_back(entry.ticked && entry.ticked());
-        if (entry.ticked) any_switches = true;
-      }
-
-      auto list = std::make_unique<MenuList>(std::move(labels));
-      // Only for menus that have a switch in them. A menu of plain actions
-      // would otherwise hold a column open for ticks none of them can have.
-      if (any_switches) list->set_checked(std::move(checked));
-      list->set_on_choose([app, entries](std::size_t chosen) {
+      auto list = std::make_unique<MenuList>(build(*app));
+      list->set_on_dismiss([app] {
         if (WidgetHost* host = app->main.host.get(); host != nullptr) {
           // Out of the menus altogether when they were opened from the bar on
           // the keyboard, as Windows leaves them, rather than back onto the bar.
           host->close_popup(!std::ranges::contains(app->menu_buttons, host->focus_before_popup()));
         }
-        if (chosen < entries.size() && entries[chosen].act) entries[chosen].act();
       });
       // Opened from the keyboard, it starts on its first entry, so Enter does
       // something at once; opened by the mouse it starts on none.
@@ -11044,107 +11225,14 @@ void refresh_dock(App& app) {
     });
   };
 
-  menu("File", {
-      {"New Project", [app] { if (app != nullptr) new_project(*app); }},
-      {"Open Project...", [app] { if (app != nullptr) open_project(*app); }},
-      {"Save Project", [app] { if (app != nullptr) save_project(*app, false); }},
-      {"Save Project As...", [app] { if (app != nullptr) save_project(*app, true); }},
-      {"Import Media...", [app] { if (app != nullptr) import_media(*app); }},
-      {"Export...", [app] { if (app != nullptr) open_export_dialog(*app); }},
-      {"Exit", [app] {
-         if (app != nullptr && app->main.window != nullptr) {
-           PostMessageW(app->main.window, WM_CLOSE, 0, 0);
-         }
-       }},
-  });
-
-  menu("Edit", {
-      {"Undo", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Undo); }},
-      {"Redo", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Redo); }},
-      {"Cut", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Cut); }},
-      {"Copy", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Copy); }},
-      {"Paste", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Paste); }},
-      {"Paste Insert",
-       [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::PasteInsert); }},
-      {"Paste Attributes...", [app] {
-         if (app != nullptr) run_command(*app, cutline::editor::Command::PasteAttributes);
-       }},
-      {"Nest...", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Nest); }},
-      // Premiere keeps these on the Clip menu, which this has no equivalent of;
-      // the timeline's right-click is where a clip's own commands live, and
-      // these act on the *source* rather than on a clip.
-      {"Trim Previous Edit to Playhead", [app] {
-         if (app != nullptr) run_command(*app, cutline::editor::Command::TrimPreviousToPlayhead);
-       }},
-      {"Trim Next Edit to Playhead", [app] {
-         if (app != nullptr) run_command(*app, cutline::editor::Command::TrimNextToPlayhead);
-       }},
-      {"Insert", [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Insert); }},
-      {"Overwrite",
-       [app] { if (app != nullptr) run_command(*app, cutline::editor::Command::Overwrite); }},
-      // Greyed unless all four marks are set and disagree, which is the only
-      // time there is anything to fit. It opens the box rather than acting,
-      // because the answer is a judgement about the cut — Fit to Fill is only
-      // the first of five, and the one it lands on if nothing else is chosen.
-      {"Fit Clip...", [app] { if (app != nullptr) open_fit_dialog(*app); }},
-  });
-
-  menu("Project", {
-      // Premiere's "Link Media...", under the same menu and acting on what the
-      // pool has selected. Not a button on the project panel's row: that row is
-      // four controls wide already, and this is a thing wanted rarely and
-      // urgently rather than often.
-      {"Relink Media...", [app] { if (app != nullptr) relink_pool_entry(*app); }},
-      // The two halves kept apart, as Premiere keeps them: making proxies is a
-      // job that runs for minutes, and reading from them is a switch. Somebody
-      // who has made them once will use the second of these all week and the
-      // first only when new footage arrives.
-      {"Make Proxies", [app] { if (app != nullptr) make_proxies(*app); }},
-      // A tick rather than a label that changes, so the entry says both what it
-      // is and what it is set to. "Use Proxies" that became "Stop Using
-      // Proxies" would make somebody read it twice to find out which.
-      {"Use Proxies", [app] { if (app != nullptr) toggle_use_proxies(*app); },
-       [app] { return app != nullptr && app->session.project().use_proxies; }},
-      // Reachable at all, which matters more than where it is: a transcode
-      // queued over a card of footage is an hour of the machine, and without
-      // this the only way to stop it is to close the application.
-      {"Stop Making Proxies", [app] { if (app != nullptr) stop_making_proxies(*app); }},
-      // Premiere keeps loudness in the Essential Sound panel, applied per role.
-      // With no roles yet, the programme as a whole is the thing that has a
-      // delivery number attached to it, and the master fader is where a
-      // programme's level is set — so it goes here, next to the other things
-      // that are about the project rather than about a clip.
-      {"Normalise Loudness...", [app] { if (app != nullptr) open_loudness_dialog(*app); }},
-      {"Project Settings...", [app] {
-         if (app != nullptr) open_settings_dialog(*app, SettingsKind::Project);
-       }},
-  });
-
-  menu("Settings", {
-      {"Preferences...", [app] {
-         if (app != nullptr) open_settings_dialog(*app, SettingsKind::Application);
-       }},
-  });
-
-  // The Window menu, which is not built from a fixed list of entries like the
-  // others: what it says depends on which panels are open at the moment it is
-  // dropped, so it is made on the click rather than at startup.
-  //
-  // This is the only way back to a panel whose tab has been closed. Without it
-  // closing one is permanent short of resetting the whole workspace, and a
-  // close button that can throw a panel away for good is a trap.
-  {
-    auto& windows = bar.emplace<Button>("Window");
-    windows.set_part(cutline::ui::Part::MenuItem);
-    windows.set_on_click([app, control = &windows] {
-      if (app == nullptr || app->main.host == nullptr) return;
-      app->main.host->open_popup(build_window_menu(*app), control->bounds());
-    });
-  }
-
-  menu("Help", {
-      {"Check for Updates...", [app] { if (app != nullptr) check_for_updates(*app); }},
-  });
+  menu("File", file_menu);
+  menu("Edit", edit_menu);
+  menu("Clip", clip_menu);
+  menu("Sequence", sequence_menu);
+  menu("Markers", markers_menu);
+  menu("View", view_menu);
+  menu("Window", window_menu);
+  menu("Help", help_menu);
 
   bar.emplace<Spacer>();
 
@@ -13579,20 +13667,47 @@ template <typename T>
         ++failures;
       }
 
-      // The Window menu, which is the one menu whose rows carry ticks — a tick
-      // gutter that a theme's wider font pushes the labels out of would show up
-      // nowhere else.
-      app.main.host->close_popup();
-      app.main.host->open_popup(build_window_menu(app), settings_anchor());
-      app.main.host->update_layout(context);
-      app.main.host->paint(*painter, theme);
-      if (Widget* menu = app.main.host->popup(); menu != nullptr) {
-        walk(*menu);
-      } else {
-        std::println("{}: the window menu did not open", theme.id);
-        ++failures;
+      // Every menu on the bar, and every submenu in each of them. Their rows
+      // carry ticks, shortcuts and arrows in columns of their own, and a theme
+      // whose wider font pushed a label into its shortcut would show up
+      // nowhere else. A submenu opens only when its row is pointed at, so each
+      // one is pointed at in turn — measuring the bar's menus closed would
+      // have measured none of the cascades.
+      {
+        constexpr std::array kMenus{
+            std::pair{"File", &file_menu},         std::pair{"Edit", &edit_menu},
+            std::pair{"Clip", &clip_menu},         std::pair{"Sequence", &sequence_menu},
+            std::pair{"Markers", &markers_menu},   std::pair{"View", &view_menu},
+            std::pair{"Window", &window_menu},     std::pair{"Help", &help_menu},
+        };
+        for (const auto& [name, build] : kMenus) {
+          app.main.host->close_popup();
+          app.main.host->open_popup(std::make_unique<MenuList>(build(app)), settings_anchor());
+          app.main.host->update_layout(context);
+          app.main.host->paint(*painter, theme);
+          auto* menu = dynamic_cast<MenuList*>(app.main.host->popup());
+          if (menu == nullptr) {
+            std::println("{}: the {} menu did not open", theme.id, name);
+            ++failures;
+            continue;
+          }
+          walk(*menu);
+          for (std::size_t row = 0; row < menu->entries().size(); ++row) {
+            if (menu->entries()[row].submenu.empty() || !menu->entries()[row].enabled) continue;
+            const Rect at = menu->row_rect(row);
+            app.main.host->mouse_move(MouseEvent{.x = at.x + 8.0, .y = at.y + at.height * 0.5});
+            app.main.host->update_layout(context);
+            app.main.host->paint(*painter, theme);
+            if (menu->submenu() == nullptr) {
+              std::println("{}: {} > {} did not open", theme.id, name, menu->entries()[row].label);
+              ++failures;
+              continue;
+            }
+            walk(*menu->submenu());
+          }
+        }
+        app.main.host->close_popup();
       }
-      app.main.host->close_popup();
 
       // The dialogues — and none of them had ever been laid out in any theme.
       //

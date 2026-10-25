@@ -1637,6 +1637,20 @@ TEST(MenuEntries, ASubmenuOpensLeftwardsWhenThereIsNoRoomToTheRight) {
   EXPECT_GE(sub->bounds().x, 0.0);
 }
 
+TEST(MenuEntries, AMenuTooTallForEitherSideOfItsAnchorIsMovedUpToFit) {
+  // A right-click low in the window with a long menu: there is no room below
+  // the pointer and not enough above it either. Left hanging from the pointer,
+  // the bottom rows ran off the window and could not be reached.
+  std::vector<MenuEntry> rows;
+  for (int i = 0; i < 8; ++i) rows.push_back(command("Row " + std::to_string(i)));
+  Menued test(std::move(rows), Rect{20.0, 180.0, 0.0, 0.0}, Rect{0.0, 0.0, 600.0, 300.0});
+
+  const Rect placed = test.list->bounds();
+  ASSERT_LE(placed.height, 300.0);
+  EXPECT_LE(placed.bottom(), 300.0 + 1e-9);
+  EXPECT_GE(placed.y, 0.0);
+}
+
 TEST(MenuEntries, ALetterOnlyOneRowStartsWithTakesThatRow) {
   bool ran = false;
   Menued test({command("Copy"), command("Undock Panel", [&] { ran = true; })});
