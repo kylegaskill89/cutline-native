@@ -1516,6 +1516,9 @@ void give_sounds(App& app, WidgetHost& host);
 [[nodiscard]] std::optional<std::filesystem::path> choose_image_file(HWND owner);
 /// A picture to put in a graphic: PNG or JPEG.
 [[nodiscard]] std::optional<std::filesystem::path> choose_picture_to_open(HWND owner);
+[[nodiscard]] std::optional<std::filesystem::path> choose_template_to_open(HWND owner);
+/// Installs a template file so Browse lists it, saying why when it cannot.
+void install_template_file(App& app, const std::filesystem::path& file);
 
 // The Essential Graphics panel, in `graphics_panel.cpp`.
 [[nodiscard]] std::unique_ptr<Widget> make_graphics_panel(App* app);

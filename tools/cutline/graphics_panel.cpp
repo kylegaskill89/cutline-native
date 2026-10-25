@@ -362,6 +362,17 @@ void build_browse(App& app, Box& body) {
   } else {
     list(*app.saved_templates);
   }
+  auto& install_row = body.emplace<Box>(Axis::Horizontal);
+  install_row
+      .emplace<Button>("Install Template...",
+                       [&app] {
+                         if (const auto chosen = choose_template_to_open(app.main.window);
+                             chosen.has_value()) {
+                           install_template_file(app, *chosen);
+                         }
+                       })
+      .set_tooltip("Add a template file, of Cutline's or a Motion Graphics template, to this list");
+  install_row.emplace<Spacer>();
 }
 
 void build_graphic_timing(App& app, Box& body, const Target& target) {

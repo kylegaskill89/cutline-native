@@ -5,10 +5,12 @@
 
 #include "cutline/core/query.hpp"
 #include "cutline/editor/graphics.hpp"
+#include "cutline/editor/zip.hpp"
 
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <process.h>
 #include <set>
@@ -166,6 +168,95 @@ TEST(Templates, ATemplateIsPlacedAsLongAsItSays) {
   ASSERT_NE(clip, nullptr);
   EXPECT_DOUBLE_EQ(core::clip_duration(*clip), roll.length);
   EXPECT_DOUBLE_EQ(clip->start, 1.0);
+}
+
+/// A Motion Graphics template as each application packs one: the definition,
+/// a thumbnail, and the graphic, itself an archive, under the name that says
+/// who made it. What is inside that graphic does not matter to these.
+[[nodiscard]] std::filesystem::path write_mogrt(const std::filesystem::path& folder,
+                                                std::string_view author, std::string_view graphic,
+                                                std::string_view name = "Lowerthird_01") {
+  const std::string definition = std::format(
+      R"({{"apiVersion":"1.4","authorApp":"{}","capsuleName":"{}","clientControls":[]}})", author,
+      name);
+  const std::string inner = write_zip({{.name = "Lower Third 01.aep", .contents = "RIFX"}});
+  const std::filesystem::path path = folder / (std::string(name) + ".mogrt");
+  std::ofstream(path, std::ios::binary)
+      << write_zip({{.name = "definition.json", .contents = definition},
+                    {.name = std::string(graphic), .contents = inner},
+                    {.name = "thumb.png", .contents = "png"}});
+  return path;
+}
+
+TEST(Mogrt, OneMadeInAfterEffectsIsRefusedNamingTheTemplateAndWhy) {
+  const Folder folder;
+  const auto read = read_mogrt(write_mogrt(folder.path(), "aefx", "project.aegraphic"));
+  ASSERT_FALSE(read.has_value());
+  EXPECT_NE(read.error().find("Lowerthird_01"), std::string::npos);
+  EXPECT_NE(read.error().find("After Effects"), std::string::npos);
+}
+
+TEST(Mogrt, TheGraphicInsideSaysAfterEffectsEvenWhenTheDefinitionDoesNot) {
+  const Folder folder;
+  const auto read = read_mogrt(write_mogrt(folder.path(), "", "project.aegraphic"));
+  ASSERT_FALSE(read.has_value());
+  EXPECT_NE(read.error().find("After Effects"), std::string::npos);
+}
+
+TEST(Mogrt, OneMadeInPremiereIsRefusedForNowSayingSo) {
+  const Folder folder;
+  const auto read = read_mogrt(write_mogrt(folder.path(), "ppro", "project.prgraphic", "premiere"));
+  ASSERT_FALSE(read.has_value());
+  EXPECT_NE(read.error().find("\u201cpremiere\u201d"), std::string::npos);
+  EXPECT_NE(read.error().find("Premiere Pro"), std::string::npos);
+}
+
+TEST(Mogrt, AFileThatIsNotATemplateIsSaidToBeNotOne) {
+  const Folder folder;
+  const std::filesystem::path junk = folder.path() / "junk.mogrt";
+  std::ofstream(junk, std::ios::binary) << "not an archive";
+  const auto read = read_mogrt(junk);
+  ASSERT_FALSE(read.has_value());
+  EXPECT_NE(read.error().find("is not a Motion Graphics template"), std::string::npos);
+
+  const std::filesystem::path bare = folder.path() / "bare.mogrt";
+  std::ofstream(bare, std::ios::binary) << write_zip({{.name = "thumb.png", .contents = "png"}});
+  EXPECT_FALSE(read_mogrt(bare).has_value());
+}
+
+TEST(Install, ATemplateOfOursIsCopiedInAndListed) {
+  const Folder from;
+  const Folder to;
+  const auto saved = save_template(from.path(), "Lower", saying("hello"), 4.0);
+  ASSERT_TRUE(saved.has_value());
+  const auto installed = install_template(to.path(), *saved);
+  ASSERT_TRUE(installed.has_value()) << installed.error();
+  const std::vector<GraphicTemplate> listed = read_templates(to.path());
+  ASSERT_EQ(listed.size(), 1u);
+  EXPECT_EQ(listed[0].name, "Lower");
+  EXPECT_DOUBLE_EQ(listed[0].length, 4.0);
+  // Still where it was: installing copies.
+  EXPECT_TRUE(std::filesystem::exists(*saved));
+}
+
+TEST(Install, ARefusedTemplateLeavesNothingBehind) {
+  const Folder from;
+  const Folder to;
+  EXPECT_FALSE(install_template(to.path(), write_mogrt(from.path(), "aefx", "project.aegraphic"))
+                   .has_value());
+  const std::filesystem::path broken = from.path() / "Broken.cutgfx";
+  std::ofstream(broken, std::ios::binary) << "{ not json";
+  EXPECT_FALSE(install_template(to.path(), broken).has_value());
+  EXPECT_TRUE(std::filesystem::is_empty(to.path()));
+}
+
+TEST(Install, OnlyTemplateFilesAreTakenAndCaseDoesNotMatter) {
+  EXPECT_TRUE(is_template_file("a.cutgfx"));
+  EXPECT_TRUE(is_template_file("C:/Downloads/Lower Third.MOGRT"));
+  EXPECT_FALSE(is_template_file("clip.mp4"));
+  EXPECT_FALSE(is_template_file("mogrt"));
+  const Folder to;
+  EXPECT_FALSE(install_template(to.path(), "clip.mp4").has_value());
 }
 
 }  // namespace

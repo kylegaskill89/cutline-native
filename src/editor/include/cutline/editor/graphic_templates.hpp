@@ -55,6 +55,25 @@ struct GraphicTemplate {
 /// passed over rather than costing the rest.
 [[nodiscard]] std::vector<GraphicTemplate> read_templates(const std::filesystem::path& folder);
 
+/// Whether a file is a template by its name: this application's own, or a
+/// Motion Graphics template.
+[[nodiscard]] bool is_template_file(const std::filesystem::path& file);
+
+/// Reads a Motion Graphics template (.mogrt). One made in After Effects is
+/// refused for good, because it is an After Effects project that only After
+/// Effects can draw. One made in Premiere is refused for now, as its layers are
+/// kept in a form nobody outside Adobe has written down. Either way the
+/// message names the template and says which.
+[[nodiscard]] std::expected<GraphicTemplate, std::string> read_mogrt(
+    const std::filesystem::path& file);
+
+/// Puts a template file into `folder` so Browse lists it, as Premiere's
+/// Install Motion Graphics Template does, replacing one of the same name. A
+/// file that cannot be read as a template is refused, saying why, and nothing
+/// is left behind.
+[[nodiscard]] std::expected<std::filesystem::path, std::string> install_template(
+    const std::filesystem::path& folder, const std::filesystem::path& file);
+
 /// Takes a saved template away. False when there was none.
 bool delete_template(const std::filesystem::path& file);
 

@@ -29,11 +29,14 @@ add_library(cutline_editor
   src/transitions.cpp
   src/updates.cpp
   src/presets.cpp
-  src/workspace.cpp)
+  src/workspace.cpp
+  src/zip.cpp)
 add_library(cutline::editor ALIAS cutline_editor)
 
 target_include_directories(cutline_editor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 find_package(nlohmann_json CONFIG REQUIRED)
+# zlib for ZIP archives, which is what a Motion Graphics template is.
+find_package(ZLIB REQUIRED)
 
 # `render` for the visual effect catalogue and `audio` for the audio registry:
 # what effects exist and what they take is part of the effects themselves, and
@@ -43,4 +46,4 @@ target_link_libraries(cutline_editor
   # bcrypt for SHA-256: the update check decides whether to run a downloaded
   # executable, and a hash function is exactly the kind of thing that is subtly
   # wrong in a way no ordinary test finds. The system ships a correct one.
-  PRIVATE nlohmann_json::nlohmann_json bcrypt)
+  PRIVATE nlohmann_json::nlohmann_json ZLIB::ZLIB bcrypt)

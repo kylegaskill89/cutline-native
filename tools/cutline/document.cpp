@@ -25,6 +25,7 @@ void import_media(App& app) {
   dialog.hwndOwner = app.main.window;
   dialog.lpstrFilter =
       L"Media\0*.mp4;*.mov;*.mkv;*.avi;*.webm;*.wav;*.mp3;*.flac;*.png;*.jpg\0"
+      L"Graphics templates\0*.cutgfx;*.mogrt\0"
       L"All files\0*.*\0";
   dialog.lpstrFile = buffer.data();
   dialog.nMaxFile = static_cast<DWORD>(buffer.size());
@@ -45,6 +46,20 @@ void import_media(App& app) {
   sources.reserve(paths.size());
   std::vector<std::string> refused;
   for (const std::filesystem::path& path : paths) {
+    // A template is not media: it goes where templates are kept, and Browse
+    // lists it, as one dropped on Premiere's Essential Graphics panel does.
+    if (cutline::editor::is_template_file(path)) {
+      const auto installed =
+          cutline::editor::install_template(cutline::editor::default_templates_folder(), path);
+      if (installed.has_value()) {
+        app.saved_templates.reset();
+        app.graphics_browsing = true;
+        app.graphics_stale = true;
+      } else {
+        refused.push_back(path.filename().string() + " — " + installed.error());
+      }
+      continue;
+    }
     auto source = cutline::app::probe_source(path.string());
     if (source.has_value()) {
       sources.push_back(std::move(*source));
@@ -251,6 +266,32 @@ void add_adjustment(App& app) {
   return std::filesystem::path(buffer.data());
 }
 
+[[nodiscard]] std::optional<std::filesystem::path> choose_template_to_open(HWND owner) {
+  std::array<wchar_t, MAX_PATH> buffer{};
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = owner;
+  dialog.lpstrFilter =
+      L"Graphics templates\0*.cutgfx;*.mogrt\0All files\0*.*\0";
+  dialog.lpstrFile = buffer.data();
+  dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+  dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+  if (GetOpenFileNameW(&dialog) == FALSE) return std::nullopt;
+  return std::filesystem::path(buffer.data());
+}
+
+void install_template_file(App& app, const std::filesystem::path& file) {
+  const auto installed =
+      cutline::editor::install_template(cutline::editor::default_templates_folder(), file);
+  if (!installed.has_value()) {
+    complain(app.main.window, "Could not install that template.\n\n" + installed.error());
+    return;
+  }
+  app.saved_templates.reset();
+  app.graphics_browsing = true;
+  app.graphics_stale = true;
+}
+
 /// Where a snapshot should go. A third dialog for the same reason the second
 /// exists: the filter and the default extension are the whole of what these
 /// functions do.
@@ -271,7 +312,14 @@ void add_adjustment(App& app) {
 }
 
 void complain(HWND owner, const std::string& message) {
-  MessageBoxA(owner, message.c_str(), "Cutline", MB_OK | MB_ICONWARNING);
+  // Widened from UTF-8 rather than handed to MessageBoxA, which reads the
+  // system code page and turns every dash and quote mark into mojibake.
+  const int length = MultiByteToWideChar(CP_UTF8, 0, message.data(),
+                                         static_cast<int>(message.size()), nullptr, 0);
+  std::wstring wide(static_cast<std::size_t>(std::max(length, 0)), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, message.data(), static_cast<int>(message.size()), wide.data(),
+                      length);
+  MessageBoxW(owner, wide.c_str(), L"Cutline", MB_OK | MB_ICONWARNING);
 }
 
 /// Plays what the person's Windows sound scheme says an event sounds like,

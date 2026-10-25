@@ -3,11 +3,13 @@
 #include "cutline/core/graphic.hpp"
 #include "cutline/core/serialize.hpp"
 #include "cutline/editor/graphics.hpp"
+#include "cutline/editor/zip.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <format>
@@ -27,6 +29,7 @@ using core::GraphicLayer;
 
 constexpr int kSchemaVersion = 1;
 constexpr std::string_view kExtension = ".cutgfx";
+constexpr std::string_view kMogrtExtension = ".mogrt";
 constexpr std::string_view kAlphabet =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -48,6 +51,14 @@ constexpr std::string_view kAlphabet =
     hash *= 1099511628211ull;
   }
   return std::format("{:016x}", hash);
+}
+
+/// A file's extension in lower case, as Windows does not mind which.
+[[nodiscard]] std::string lower_extension(const std::filesystem::path& file) {
+  std::string extension = file.extension().string();
+  std::ranges::transform(extension, extension.begin(),
+                         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return extension;
 }
 
 /// Characters a Windows file name cannot have, which a template's name is.
@@ -250,6 +261,90 @@ std::vector<GraphicTemplate> read_templates(const std::filesystem::path& folder)
   }
   std::ranges::sort(out, {}, &GraphicTemplate::name);
   return out;
+}
+
+bool is_template_file(const std::filesystem::path& file) {
+  const std::string extension = lower_extension(file);
+  return extension == kExtension || extension == kMogrtExtension;
+}
+
+std::expected<GraphicTemplate, std::string> read_mogrt(const std::filesystem::path& file) {
+  const std::string shown = file.filename().string();
+  auto bytes = read_file(file);
+  if (!bytes.has_value()) return std::unexpected(bytes.error());
+  auto archive = read_zip(*bytes);
+  if (!archive.has_value()) {
+    return std::unexpected(shown + " is not a Motion Graphics template: " + archive.error());
+  }
+  const auto definition = archive->find("definition.json");
+  if (definition == archive->end()) {
+    return std::unexpected(shown + " is not a Motion Graphics template: it has no definition in it");
+  }
+  const json described = json::parse(definition->second, nullptr, false);
+  if (described.is_discarded() || !described.is_object()) {
+    return std::unexpected(shown + " is not a Motion Graphics template: its definition is damaged");
+  }
+
+  const std::string name = described.value("capsuleName", file.stem().string());
+  const std::string author = described.value("authorApp", std::string{});
+  // The graphic inside says which application made it as surely as the
+  // definition does, so either is taken.
+  const auto holds = [&archive](std::string_view extension) {
+    return std::ranges::any_of(*archive, [extension](const auto& entry) {
+      return entry.first.ends_with(extension);
+    });
+  };
+  if (author == "aefx" || holds(".aegraphic")) {
+    return std::unexpected(std::format(
+        "“{}” was made in After Effects. Cutline cannot play After Effects templates: "
+        "each is an After Effects project, and only After Effects can draw one.",
+        name));
+  }
+  if (author == "ppro" || holds(".prgraphic")) {
+    return std::unexpected(std::format(
+        "“{}” was made in Premiere Pro. Cutline cannot read Premiere's templates yet: "
+        "Premiere keeps their text and shapes in a form Adobe has not published.",
+        name));
+  }
+  return std::unexpected(std::format(
+      "“{}” was made by an application Cutline does not know{}.", name,
+      author.empty() ? std::string{} : " (" + author + ")"));
+}
+
+std::expected<std::filesystem::path, std::string> install_template(
+    const std::filesystem::path& folder, const std::filesystem::path& file) {
+  if (!is_template_file(file)) {
+    return std::unexpected(file.filename().string() + " is not a graphics template");
+  }
+  if (lower_extension(file) == kMogrtExtension) {
+    auto made = read_mogrt(file);
+    if (!made.has_value()) return std::unexpected(made.error());
+    return save_template(folder, made->name, made->graphic, made->length);
+  }
+
+  // Copied in and then read where it landed, so its pictures are put beside
+  // the other templates' rather than beside wherever it was downloaded to.
+  std::error_code error;
+  std::filesystem::create_directories(folder, error);
+  if (error) return std::unexpected("could not make " + folder.string() + ": " + error.message());
+  const std::filesystem::path path = folder / file.filename();
+  if (std::filesystem::equivalent(file, path, error)) return path;
+  std::filesystem::path staging = path;
+  staging += ".installing";
+  std::filesystem::copy_file(file, staging, std::filesystem::copy_options::overwrite_existing,
+                             error);
+  if (error) return std::unexpected("could not copy " + file.string() + ": " + error.message());
+  if (auto made = read_template(staging); !made.has_value()) {
+    std::filesystem::remove(staging, error);
+    return std::unexpected(made.error());
+  }
+  std::filesystem::rename(staging, path, error);
+  if (error) {
+    std::error_code ignored;
+    std::filesystem::remove(staging, ignored);
+    return std::unexpected("could not replace " + path.string() + ": " + error.message());
+  }
+  return path;
 }
 
 bool delete_template(const std::filesystem::path& file) {
