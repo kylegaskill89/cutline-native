@@ -1077,6 +1077,71 @@ constexpr std::array<std::pair<double, std::string_view>, 3> kPreviewScales{{
 constexpr std::array<double, 7> kFrameRates{23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 60.0};
 
 
+/// The panels the window can show, and what their tabs say.
+///
+/// A panel is a name from here plus whatever `make_panel` builds for it. The
+/// layout only ever moves the name around, which is what lets an arrangement be
+/// saved and restored without saving any widgets.
+constexpr std::array<std::pair<std::string_view, std::string_view>, 9> kPanels{{
+    {"project", "Project"},
+    {"effects", "Effect Controls"},
+    // Premiere's own two names, which are confusingly similar on purpose: this
+    // one holds the things you can apply and "Effect Controls" holds what the
+    // one you applied is doing. "Effects Library" was clearer and half a tab
+    // too wide — three titles and three close buttons did not fit the panel,
+    // and the buttons ended up drawn over the last letter of each label.
+    {"library", "Effects"},
+    {"monitor", "Program Monitor"},
+    // The other half of Premiere's two-monitor workflow: what is about to be
+    // used, on its own time, beside what the sequence currently is. An editor
+    // with only the program monitor makes you do on the timeline what should
+    // have been decided before anything was placed.
+    {"source", "Source Monitor"},
+    {"timeline", "Timeline"},
+    {"audio", "Audio Master"},
+    // A panel rather than the overlay on the monitor the spec describes. The
+    // overlay was the right answer for an application with one fixed layout;
+    // this one has dockable panels that tear out into windows of their own, so
+    // a scope can sit beside the picture, or on another screen, or be closed —
+    // none of which an overlay offers. It costs the picture no room either way.
+    {"scopes", "Scopes"},
+    // Premiere's undo list, every step by name. Undo and redo walk it one step
+    // at a time; this is for going back ten, or for seeing what the last few
+    // presses actually did.
+    {"history", "History"},
+}};
+
+/// The tool palette, in the order it is drawn and offered.
+///
+/// The keys are Premiere's, which is the point of choosing them: anybody who
+/// has used one of these reaches for V and C without thinking, and a shortcut
+/// somebody has to learn is one they will not use.
+struct ToolEntry {
+  cutline::ui::Tool tool;
+  IconButton::Icon icon;
+  Key key;
+  /// What it says when the pointer rests on it. The name and the key, because
+  /// an icon button has no words at all and a shortcut nobody can discover is
+  /// one nobody uses.
+  const char* hint;
+};
+
+constexpr std::array kTools{
+    ToolEntry{cutline::ui::Tool::Selection, IconButton::Icon::Pointer, Key::V,
+              "Selection (V)"},
+    // Premiere's B and N, in Premiere's order: the two edge tools sit together
+    // between the pointer and the razor, because they are variations on the
+    // trim the pointer already does.
+    ToolEntry{cutline::ui::Tool::Ripple, IconButton::Icon::Ripple, Key::B,
+              "Ripple Edit (B)"},
+    ToolEntry{cutline::ui::Tool::Roll, IconButton::Icon::Roll, Key::N, "Rolling Edit (N)"},
+    ToolEntry{cutline::ui::Tool::Razor, IconButton::Icon::Razor, Key::C, "Razor (C)"},
+    ToolEntry{cutline::ui::Tool::RateStretch, IconButton::Icon::RateStretch, Key::R,
+              "Rate Stretch (R)"},
+    ToolEntry{cutline::ui::Tool::Slip, IconButton::Icon::Slip, Key::Y, "Slip (Y)"},
+    ToolEntry{cutline::ui::Tool::Slide, IconButton::Icon::Slide, Key::U, "Slide (U)"},
+};
+
 // ----------------------------------------------- calls between the parts --
 
 // The window's own helpers, defined in `main.cpp`.
@@ -1098,6 +1163,46 @@ void close_export_dialog(App& app);
 /// it once left its own Export button below its bottom edge.
 constexpr int kExportWindowWidth = 460;
 constexpr int kExportWindowHeight = 520;
+
+// Menu rows, defined in `main.cpp`.
+/// A row that runs something, with the keys that do the same written beside
+/// it. Only words: whoever handles the keys is elsewhere.
+[[nodiscard]] MenuEntry action_entry(std::string label, std::function<void()> act,
+                                     std::string keys = {}, bool enabled = true);
+/// A row that is a switch, ticked when it is on.
+[[nodiscard]] MenuEntry switch_entry(std::string label, bool on, std::function<void()> act,
+                                     std::string keys = {}, bool enabled = true);
+/// A row that opens another beside it, greyed when that would be empty.
+[[nodiscard]] MenuEntry submenu_entry(std::string label, std::vector<MenuEntry> rows);
+[[nodiscard]] MenuEntry command_entry(App& app, std::string label,
+                                      cutline::editor::Command command);
+[[nodiscard]] std::string key_label(Key key);
+[[nodiscard]] std::string shortcut_for(cutline::editor::Command command);
+[[nodiscard]] std::vector<MenuEntry> clip_entries(App& app);
+
+// What the menus run, defined in `main.cpp`.
+[[nodiscard]] double next_shuttle(double current, double direction) noexcept;
+void choose_tool(App& app, cutline::ui::Tool tool);
+void set_workspace(App& app, std::string_view name);
+void reset_workspace(App& app);
+void open_project(App& app);
+void open_fit_dialog(App& app);
+void new_sequence(App& app);
+void new_project(App& app);
+[[nodiscard]] bool panel_is_open(App& app, const PanelId& panel);
+void toggle_panel(App& app, const PanelId& panel);
+
+// The menu bar's menus, in `menus.cpp`.
+[[nodiscard]] std::vector<MenuEntry> file_menu(App& app);
+[[nodiscard]] std::vector<MenuEntry> edit_menu(App& app);
+[[nodiscard]] std::vector<MenuEntry> clip_menu(App& app);
+[[nodiscard]] std::vector<MenuEntry> sequence_menu(App& app);
+[[nodiscard]] std::vector<MenuEntry> markers_menu(App& app);
+[[nodiscard]] std::vector<MenuEntry> view_menu(App& app);
+[[nodiscard]] std::vector<MenuEntry> window_menu(App& app);
+[[nodiscard]] std::vector<MenuEntry> help_menu(App& app);
+/// The Window menu on its own, for `--check`, which measures its ticks.
+[[nodiscard]] std::unique_ptr<Widget> build_window_menu(App& app);
 
 // The settings windows, in `settings_window.cpp`.
 [[nodiscard]] std::vector<SettingsPage> pages_for(SettingsKind kind);
