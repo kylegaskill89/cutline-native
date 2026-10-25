@@ -18,6 +18,7 @@
 #include "cutline/ui/theme.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -121,6 +122,13 @@ struct TextRun {
   double glow = 0.0;
   TextAlign align = TextAlign::Left;
   bool bold = false;
+  /// A typeface for this run alone, by family name; empty for the one the
+  /// painter was given. XP set its captions in Trebuchet and the rest in
+  /// Tahoma.
+  std::string family;
+  /// A copy of the text drawn behind it, offset and in its own colour. XP's
+  /// captions had a hard navy one a pixel down and to the right.
+  std::optional<Shadow> shadow;
 
   friend bool operator==(const TextRun&, const TextRun&) = default;
 };

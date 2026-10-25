@@ -483,6 +483,40 @@ TEST(TitleBar, DrawsItsSurfaceAndItsTitle) {
   EXPECT_EQ(text->run->text, "Cutline");
 }
 
+TEST(TitleBar, LunasTitleIsTrebuchetWithAHardShadow) {
+  const Theme& xp = *built_in_theme("xp");
+  TitleBar bar("Untitled - Notepad");
+  bar.arrange(Rect{0.0, 0.0, 600.0, 30.0}, context_for(xp));
+
+  RecordingPainter painter;
+  bar.paint(painter, xp);
+  const DrawCall* text = painter.first(DrawCall::Kind::Text);
+  ASSERT_NE(text, nullptr);
+  EXPECT_EQ(text->run->family, "Trebuchet MS");
+  EXPECT_DOUBLE_EQ(text->run->size, 13.0);
+  ASSERT_TRUE(text->run->shadow.has_value());
+  EXPECT_DOUBLE_EQ(text->run->shadow->offset_x, 1.0);
+  EXPECT_DOUBLE_EQ(text->run->shadow->blur, 0.0);
+}
+
+TEST(TitleBar, IsRoundedAtTheTopAndSquareWhereItMeetsTheWindow) {
+  // Drawn taller by its radius and clipped back, so only its top corners
+  // round, as every caption on the platform does.
+  const Theme& xp = *built_in_theme("xp");
+  TitleBar bar("Cutline");
+  bar.arrange(Rect{0.0, 0.0, 600.0, 30.0}, context_for(xp));
+
+  RecordingPainter painter;
+  bar.paint(painter, xp);
+  const DrawCall* clip = painter.first(DrawCall::Kind::PushClip);
+  ASSERT_NE(clip, nullptr);
+  EXPECT_DOUBLE_EQ(clip->bounds.height, 30.0);
+  const DrawCall* fill = painter.first(DrawCall::Kind::Fill);
+  ASSERT_NE(fill, nullptr);
+  EXPECT_GT(fill->bounds.height, 30.0);
+  EXPECT_TRUE(painter.clips_balanced());
+}
+
 // The application's mark, drawn from primitives like every other glyph in the
 // caption: an icon file would have to be decoded, scaled and themed, and this
 // is five rectangles that are sharp at any size and wear the theme's accent.

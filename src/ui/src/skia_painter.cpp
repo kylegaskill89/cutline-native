@@ -102,6 +102,10 @@ struct PixelGrid {
 
 /// Skia's blur takes a standard deviation; themes are written in the radius a
 /// designer thinks in. This is the usual conversion between them.
+/// The size from which XP's Standard smoothing smoothed: its captions, not
+/// its body text.
+constexpr double kLargeType = 13.0;
+
 [[nodiscard]] SkScalar sigma_for(double radius) {
   return static_cast<SkScalar>(std::max(radius, 0.0) * 0.5);
 }
@@ -141,9 +145,35 @@ struct SkiaPainter::Impl {
   /// twice.
   mutable std::map<std::string, std::pair<sk_sp<SkTypeface>, sk_sp<SkTypeface>>> faces;
 
-  [[nodiscard]] SkFont font_for(double size, bool want_bold) const {
-    SkFont font(want_bold ? bold : regular, static_cast<SkScalar>(size));
-    if (smoothing == TextSmoothing::Standard) {
+  /// The regular and bold faces of a family, looked up once.
+  const std::pair<sk_sp<SkTypeface>, sk_sp<SkTypeface>>& faces_for(const std::string& name) const {
+    auto found = faces.find(name);
+    if (found == faces.end()) {
+      // A family the system does not have falls back to its default, which is
+      // the right answer for a font that is never bundled.
+      const char* family_name = name.empty() ? nullptr : name.c_str();
+      found = faces
+                  .emplace(name,
+                           std::pair{fonts->legacyMakeTypeface(family_name, SkFontStyle::Normal()),
+                                     fonts->legacyMakeTypeface(family_name, SkFontStyle::Bold())})
+                  .first;
+    }
+    return found->second;
+  }
+
+  [[nodiscard]] SkFont font_for(double size, bool want_bold, const std::string& other = {}) const {
+    sk_sp<SkTypeface> face = want_bold ? bold : regular;
+    if (!other.empty() && fonts != nullptr) {
+      const auto& pair = faces_for(other);
+      face = want_bold ? pair.second : pair.first;
+    }
+    SkFont font(face, static_cast<SkScalar>(size));
+    if (smoothing == TextSmoothing::Standard && size >= kLargeType) {
+      // XP's Standard smoothing left body text alone and smoothed large type
+      // in grey -- never in colour, which was ClearType's.
+      font.setSubpixel(false);
+      font.setEdging(SkFont::Edging::kAntiAlias);
+    } else if (smoothing == TextSmoothing::Standard) {
       // Whole pixels and full hinting, as GDI drew Tahoma at 8 points.
       font.setSubpixel(false);
       font.setEdging(SkFont::Edging::kAlias);
@@ -163,18 +193,9 @@ void SkiaPainter::set_typeface(std::string_view family) const {
   Impl& d = *impl_;
   if (d.fonts == nullptr || family == d.family) return;
   d.family = std::string(family);
-  auto found = d.faces.find(d.family);
-  if (found == d.faces.end()) {
-    // A family the system does not have falls back to its default, which is
-    // the right answer for a font that is never bundled.
-    const char* name = d.family.empty() ? nullptr : d.family.c_str();
-    found = d.faces
-                .emplace(d.family, std::pair{d.fonts->legacyMakeTypeface(name, SkFontStyle::Normal()),
-                                             d.fonts->legacyMakeTypeface(name, SkFontStyle::Bold())})
-                .first;
-  }
-  d.regular = found->second.first;
-  d.bold = found->second.second;
+  const auto& faces = d.faces_for(d.family);
+  d.regular = faces.first;
+  d.bold = faces.second;
 }
 
 void SkiaPainter::set_text_smoothing(TextSmoothing smoothing) const {
@@ -468,7 +489,7 @@ void SkiaPainter::backdrop_blur(const Rect& bounds, double corner_radius, double
 void SkiaPainter::text(const TextRun& run) {
   if (run.text.empty()) return;
 
-  const SkFont font = impl_->font_for(run.size, run.bold);
+  const SkFont font = impl_->font_for(run.size, run.bold, run.family);
   const auto width = static_cast<double>(
       font.measureText(run.text.data(), run.text.size(), SkTextEncoding::kUTF8));
 
@@ -500,6 +521,20 @@ void SkiaPainter::text(const TextRun& run) {
     impl_->canvas->drawSimpleText(run.text.data(), run.text.size(), SkTextEncoding::kUTF8,
                                   static_cast<SkScalar>(x), static_cast<SkScalar>(baseline),
                                   font, halo);
+  }
+
+  if (run.shadow) {
+    SkPaint behind;
+    behind.setAntiAlias(true);
+    behind.setColor4f(to_sk(run.shadow->color));
+    if (run.shadow->blur > 0.0) {
+      behind.setMaskFilter(
+          SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, sigma_for(run.shadow->blur)));
+    }
+    impl_->canvas->drawSimpleText(run.text.data(), run.text.size(), SkTextEncoding::kUTF8,
+                                  static_cast<SkScalar>(x + run.shadow->offset_x),
+                                  static_cast<SkScalar>(baseline + run.shadow->offset_y), font,
+                                  behind);
   }
 
   paint.setColor4f(to_sk(run.color));

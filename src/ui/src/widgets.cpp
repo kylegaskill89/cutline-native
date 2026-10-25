@@ -296,9 +296,24 @@ LayoutItem TitleBar::sizing(Axis axis, const LayoutContext& context) const {
 }
 
 void TitleBar::paint_content(Painter& painter, const Theme& theme) const {
-  if (title_.empty()) return;
-
   const SurfaceStyle& style = theme.style(Part::TitleBar, state());
+
+  // Rounded at the top and square where it meets the window below, as every
+  // caption on the platform is: drawn taller by its radius and cut back to its
+  // bounds, with the gradient's stops drawn in so each colour stays on its row.
+  if (const double radius = style.corner_radius; radius > 0.0) {
+    SurfaceStyle taller = style;
+    const auto scale = static_cast<float>(bounds().height / (bounds().height + radius));
+    for (GradientStop& stop : taller.fill.stops) stop.at *= scale;
+    painter.push_clip(bounds(), 0.0);
+    paint_surface(painter, Rect{bounds().x, bounds().y, bounds().width, bounds().height + radius},
+                  taller);
+    painter.pop_clip();
+  } else {
+    paint_surface(painter, bounds(), style);
+  }
+
+  if (title_.empty()) return;
   Rect area = inset(bounds(), Edges::symmetric(theme.metrics.padding_x, 0.0));
 
   if (mark_) {
@@ -339,7 +354,13 @@ void TitleBar::paint_content(Painter& painter, const Theme& theme) const {
     area = Rect{area.x + taken, area.y, std::max(0.0, area.width - taken), area.height};
   }
 
-  painter.text(text_run(area, title_, style, theme.metrics.font_size, TextAlign::Left, true));
+  const Metrics& metrics = theme.metrics;
+  TextRun run = text_run(area, title_, style,
+                         metrics.caption_font_size > 0.0 ? metrics.caption_font_size
+                                                         : metrics.font_size,
+                         TextAlign::Left, true);
+  run.family = metrics.caption_font_family;
+  painter.text(run);
 }
 
 // ---------------------------------------------------------- caption button --

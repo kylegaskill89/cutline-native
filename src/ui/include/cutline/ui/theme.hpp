@@ -155,6 +155,8 @@ struct SurfaceStyle {
   /// A soft halo behind text, which is what keeps Aero's labels legible over
   /// glass. Zero means none.
   double text_glow = 0.0;
+  /// A hard copy of the text behind it, offset; XP's caption had one.
+  std::optional<Shadow> text_shadow;
 
   friend bool operator==(const SurfaceStyle&, const SurfaceStyle&) = default;
 };
@@ -222,7 +224,8 @@ enum class TextSmoothing {
   /// pixels. Vista's default, and what a modern interface expects.
   ClearType,
   /// XP's "Standard": no smoothing at body sizes, each glyph hinted onto whole
-  /// pixels. Crisp black stems, which is half of why XP looks like XP.
+  /// pixels. Crisp black stems, which is half of why XP looks like XP. Large
+  /// type -- a caption -- was smoothed in grey, and is here too.
   Standard,
 };
 
@@ -342,6 +345,10 @@ struct Metrics {
   /// How much shorter a tab that is not showing stands than the one that is.
   /// XP's showing tab rose two pixels above the others.
   double tab_rise = 0.0;
+  /// The typeface and size of a window's title, or empty and zero for the
+  /// body's. XP set its captions in Trebuchet MS, a step larger.
+  std::string caption_font_family;
+  double caption_font_size = 0.0;
   /// Whether the showing tab's title is bold. XP's was not.
   bool bold_active_tab = true;
   /// How long the lines of a grip across a scrollbar's thumb are, drawn in

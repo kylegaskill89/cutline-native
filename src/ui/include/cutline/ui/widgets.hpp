@@ -302,7 +302,8 @@ class TitleBar : public Box {
   [[nodiscard]] bool mark() const noexcept { return mark_; }
 
   [[nodiscard]] Part part() const noexcept override { return Part::TitleBar; }
-  [[nodiscard]] bool paints_surface() const noexcept override { return true; }
+  /// Painted in `paint_content`, rounded at the top only.
+  [[nodiscard]] bool paints_surface() const noexcept override { return false; }
 
   [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
   void paint_content(Painter& painter, const Theme& theme) const override;

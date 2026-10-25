@@ -76,20 +76,31 @@ namespace {
   t.set(Part::Window, State::Normal, SurfaceStyle{.fill = Fill::solid(hex("#ece9d8")),
                                                   .text = hex("#000000")});
 
-  // The Luna title bar: blue, glossy, with the highlight in the top third.
+  // The Luna title bar, measured from XP's: a bright line under its top
+  // edge, a flat dark middle, light again near the bottom and a dark last
+  // row. The title is Trebuchet in white with a hard navy shadow.
+  t.metrics.caption_font_family = "Trebuchet MS";
+  t.metrics.caption_font_size = 13.0;
   t.set(Part::TitleBar, State::Normal,
         SurfaceStyle{
-            .fill = Fill::gradient({{0.00f, hex("#0058e6")},
-                                    {0.09f, hex("#3593ff")},
-                                    {0.18f, hex("#288eff")},
-                                    {0.25f, hex("#127dff")},
-                                    {0.50f, hex("#036ffc")},
-                                    {0.75f, hex("#0262ee")},
-                                    {0.90f, hex("#0057e5")},
-                                    {1.00f, hex("#0054e3")}}),
+            .fill = Fill::gradient({{0.02f, hex("#0058eb")},
+                                    {0.05f, hex("#3d95ff")},
+                                    {0.08f, hex("#2b90ff")},
+                                    {0.12f, hex("#0372ff")},
+                                    {0.15f, hex("#0365f1")},
+                                    {0.22f, hex("#0058e6")},
+                                    {0.25f, hex("#0055e5")},
+                                    {0.48f, hex("#0055e5")},
+                                    {0.60f, hex("#0058ee")},
+                                    {0.68f, hex("#0060f9")},
+                                    {0.82f, hex("#036eff")},
+                                    {0.88f, hex("#0368fa")},
+                                    {0.92f, hex("#0060f9")},
+                                    {0.95f, hex("#004de3")},
+                                    {0.98f, hex("#0144d0")}}),
             .corner_radius = 8.0,
             .text = hex("#ffffff"),
-            .text_glow = 2.0,
+            .text_shadow = Shadow{.offset_x = 1.0, .offset_y = 1.0, .color = hex("#0a1883")},
         });
 
   t.set(Part::Panel, State::Normal,

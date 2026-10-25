@@ -168,6 +168,7 @@ TextRun text_run(const Rect& bounds, std::string text, const SurfaceStyle& style
       .glow = style.text_glow,
       .align = align,
       .bold = bold,
+      .shadow = style.text_shadow,
   };
 }
 
