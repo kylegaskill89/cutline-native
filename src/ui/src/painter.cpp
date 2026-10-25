@@ -21,6 +21,14 @@ Rect Rect::inset(double amount) const noexcept {
               std::max(0.0, height - 2.0 * shrink)};
 }
 
+Rect Rect::intersect(const Rect& other) const noexcept {
+  const double left = std::max(x, other.x);
+  const double top = std::max(y, other.y);
+  const double right = std::min(x + width, other.x + other.width);
+  const double bottom = std::min(y + height, other.y + other.height);
+  return Rect{left, top, std::max(0.0, right - left), std::max(0.0, bottom - top)};
+}
+
 void paint_surface(Painter& painter, const Rect& bounds, const SurfaceStyle& style) {
   if (bounds.empty()) return;
 

@@ -893,5 +893,90 @@ TEST(Cursor, WithThePointerOffTheWindowThereIsNoCursorToAskAbout) {
   EXPECT_EQ(host.cursor(), Cursor::Arrow);
 }
 
+// ------------------------------------------------------- the keyboard's way --
+
+/// A window with one button in it, focused, as the timeline would be.
+struct KeyboardFixture {
+  KeyboardFixture() {
+    auto owned = std::make_unique<Panel>();
+    button = &owned->emplace<Button>("File");
+    host = std::make_unique<WidgetHost>(std::move(owned));
+    host->resize(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());
+    host->set_focus(button);
+  }
+
+  MenuList& open_menu() {
+    auto list = std::make_unique<MenuList>(std::vector<std::string>{"New", "Open"});
+    MenuList& opened = *list;
+    host->open_popup(std::move(list), button->bounds());
+    (void)host->update_layout(flat_context());
+    return opened;
+  }
+
+  std::unique_ptr<WidgetHost> host;
+  Button* button = nullptr;
+};
+
+TEST(PopupFocus, AnOpenMenuHasTheKeyboard) {
+  KeyboardFixture fixture;
+  MenuList& menu = fixture.open_menu();
+  EXPECT_EQ(fixture.host->focused(), &menu) << "the arrows would go behind it";
+
+  (void)fixture.host->key_down(KeyEvent{.key = Key::Down});
+  EXPECT_EQ(menu.highlighted(), 0u);
+}
+
+TEST(PopupFocus, ClosingItGivesTheKeyboardBack) {
+  KeyboardFixture fixture;
+  fixture.open_menu();
+  fixture.host->close_popup();
+  (void)fixture.host->update_layout(flat_context());
+  EXPECT_EQ(fixture.host->focused(), fixture.button)
+      << "a menu used in passing must not leave the timeline without its keys";
+}
+
+TEST(PopupFocus, AMenuReplacedByAnotherStillGivesBackTheFirstOwner) {
+  KeyboardFixture fixture;
+  fixture.open_menu();
+  fixture.open_menu();
+  fixture.host->close_popup();
+  (void)fixture.host->update_layout(flat_context());
+  EXPECT_EQ(fixture.host->focused(), fixture.button);
+}
+
+TEST(PopupFocus, AChoiceCanLeaveTheKeyboardWithNobody) {
+  KeyboardFixture fixture;
+  fixture.open_menu();
+  fixture.host->close_popup(false);
+  (void)fixture.host->update_layout(flat_context());
+  EXPECT_EQ(fixture.host->focused(), nullptr);
+}
+
+TEST(Mnemonic, TheAccessLetterIsUnderlinedOnlyWhileTheKeyboardIsInUse) {
+  KeyboardFixture fixture;
+  fixture.button->set_mnemonic(true);
+
+  RecordingPainter before;
+  fixture.host->paint(before, default_theme());
+  EXPECT_EQ(before.count(DrawCall::Kind::Line), 0u);
+
+  fixture.host->show_keyboard_cues();
+  RecordingPainter after;
+  fixture.host->paint(after, default_theme());
+  const DrawCall* under = after.first(DrawCall::Kind::Line);
+  ASSERT_NE(under, nullptr);
+  // Under the first letter only: the line is shorter than the word.
+  const double word = measurer().measure("File", default_theme().metrics.font_size, false);
+  EXPECT_GT(under->bounds.width, 0.0);
+  EXPECT_LT(under->bounds.width, word / 2.0);
+  EXPECT_GT(under->bounds.y, fixture.button->bounds().y + fixture.button->bounds().height / 2.0)
+      << "under the text, not through it";
+
+  fixture.host->mouse_down(MouseEvent{.x = 390.0, .y = 290.0, .button = MouseButton::Left});
+  RecordingPainter clicked;
+  fixture.host->paint(clicked, default_theme());
+  EXPECT_EQ(clicked.count(DrawCall::Kind::Line), 0u) << "a click puts them away again";
+}
+
 }  // namespace
 }  // namespace cutline::ui

@@ -97,8 +97,18 @@ State Button::state() const noexcept {
 void Button::paint_content(Painter& painter, const Theme& theme) const {
   if (text_.empty()) return;
   const SurfaceStyle style = surface_style(theme);
-  painter.text(
-      text_run(bounds(), text_, style, theme.metrics.font_size, TextAlign::Center, false));
+  const double size = theme.metrics.font_size;
+  painter.text(text_run(bounds(), text_, style, size, TextAlign::Center, false));
+
+  // Under the first letter, where the eye looks for it, and only while the
+  // keyboard is being used -- the way Windows has hidden these since 2000.
+  if (mnemonic_ && host() != nullptr && host()->keyboard_cues()) {
+    const double whole = painter.measure(text_, size, false);
+    const double first = painter.measure(text_.substr(0, 1), size, false);
+    const double left = bounds().x + (bounds().width - whole) / 2.0;
+    const double under = bounds().y + bounds().height / 2.0 + size * 0.5;
+    painter.line(left, under, left + first, under, style.text, 1.0);
+  }
 }
 
 bool Button::on_mouse_down(const MouseEvent& event) {

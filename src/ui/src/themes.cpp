@@ -58,6 +58,7 @@ namespace {
   // XP's controls changed state in a single frame.
   t.metrics.hover_in = 0.0;
   t.metrics.hover_out = 0.0;
+  t.metrics.focus_cue = FocusCue::Dotted;
   t.metrics.audio_track_height = 48.0;
   t.metrics.ruler_height = 22.0;
 
@@ -380,6 +381,7 @@ namespace {
   // Vista's buttons glowed in quickly and let go slowly.
   t.metrics.hover_in = 0.15;
   t.metrics.hover_out = 0.5;
+  t.metrics.focus_cue = FocusCue::Dotted;  // Vista kept XP's
   t.metrics.audio_track_height = 46.0;
 
   t.fallback = SurfaceStyle{

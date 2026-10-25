@@ -465,6 +465,9 @@ struct Shell {
   /// not in the layout, and closing it throws nothing away.
   bool is_dialog = false;
   [[nodiscard]] bool is_main() const noexcept { return floating_id.empty() && !is_dialog; }
+  /// Alt has gone down and nothing else has yet. Released like that, it
+  /// moves the keyboard to the menu bar, as it does in every Windows program.
+  bool alt_alone = false;
 
   std::unique_ptr<WidgetHost> host;
   DockView* dock = nullptr;
@@ -560,6 +563,13 @@ struct App {
   /// the row — which would destroy the button whose click is still running, the
   /// same trap the theme switcher has.
   std::vector<IconButton*> tool_buttons;
+  /// The menu bar's titles, in order, for the keyboard: Alt and a letter,
+  /// and the arrows from one menu to the next.
+  std::vector<Button*> menu_buttons;
+  /// The list the menu bar last dropped, and whose it is. For comparing with
+  /// the host's open popup, never for following.
+  const Widget* open_menu_list = nullptr;
+  std::size_t open_menu = 0;
 
   /// The two whose usefulness depends on what is selected, so they can be
   /// greyed out. Held rather than rebuilt for the same reason as the palette,
@@ -10704,13 +10714,17 @@ void refresh_dock(App& app) {
     /// at startup would show the state the application began with for ever.
     std::function<bool()> ticked;
   };
+  if (app != nullptr) app->menu_buttons.clear();
   const auto menu = [app, &bar](const char* title, std::vector<MenuEntry> entries) {
     auto& button = bar.emplace<Button>(title);
+    button.set_mnemonic(true);
+    const std::size_t index = app != nullptr ? app->menu_buttons.size() : 0;
+    if (app != nullptr) app->menu_buttons.push_back(&button);
     // A menu bar, not a row of buttons: words until the pointer is over one,
     // which is what every menu bar on the platform looks like and what
     // Premiere's looks like too.
     button.set_part(cutline::ui::Part::MenuItem);
-    button.set_on_click([app, control = &button, entries = std::move(entries)] {
+    button.set_on_click([app, index, control = &button, entries = std::move(entries)] {
       if (app == nullptr || app->main.host == nullptr) return;
 
       std::vector<std::string> labels;
@@ -10727,10 +10741,19 @@ void refresh_dock(App& app) {
       // Only for menus that have a switch in them. A menu of plain actions
       // would otherwise hold a column open for ticks none of them can have.
       if (any_switches) list->set_checked(std::move(checked));
-      list->set_on_choose([app, entries](std::size_t index) {
-        if (app->main.host != nullptr) app->main.host->close_popup();
-        if (index < entries.size() && entries[index].act) entries[index].act();
+      list->set_on_choose([app, entries](std::size_t chosen) {
+        if (WidgetHost* host = app->main.host.get(); host != nullptr) {
+          // Out of the menus altogether when they were opened from the bar on
+          // the keyboard, as Windows leaves them, rather than back onto the bar.
+          host->close_popup(!std::ranges::contains(app->menu_buttons, host->focus_before_popup()));
+        }
+        if (chosen < entries.size() && entries[chosen].act) entries[chosen].act();
       });
+      // Opened from the keyboard, it starts on its first entry, so Enter does
+      // something at once; opened by the mouse it starts on none.
+      if (app->main.host->keyboard_cues()) list->set_highlighted(0);
+      app->open_menu_list = list.get();
+      app->open_menu = index;
       // Under the button rather than at the pointer, which is where a menu bar
       // drops its menus and what makes two of them line up.
       app->main.host->open_popup(std::move(list), control->bounds());
@@ -11894,6 +11917,47 @@ constexpr int kCursorSize = 32;
   return drawn != nullptr ? drawn : LoadCursorW(nullptr, IDC_ARROW);
 }
 
+/// The arrows and Escape on the menu bar, and the arrows across an open menu:
+/// Left and Right move from one menu to the next, Down opens the one with the
+/// keyboard, and Escape leaves the bar.
+[[nodiscard]] bool menu_bar_key(App& app, Key key) {
+  WidgetHost* host = app.main.host.get();
+  const std::size_t count = app.menu_buttons.size();
+  if (host == nullptr || count == 0) return false;
+  const auto step = [count](std::size_t from, Key towards) {
+    return towards == Key::Right ? (from + 1) % count : (from + count - 1) % count;
+  };
+
+  // A menu the bar dropped is open: the next one drops in its place.
+  if (host->popup() != nullptr && host->popup() == app.open_menu_list &&
+      (key == Key::Left || key == Key::Right) && app.open_menu < count) {
+    // The title first, so closing the new menu with Escape comes back to it
+    // rather than to the one the keyboard started on.
+    Button* next = app.menu_buttons[step(app.open_menu, key)];
+    if (std::ranges::contains(app.menu_buttons, host->focus_before_popup())) host->set_focus(next);
+    next->fire();
+    return true;
+  }
+
+  const auto on_bar = std::ranges::find(app.menu_buttons, host->focused());
+  if (on_bar == app.menu_buttons.end()) return false;
+  const auto at = static_cast<std::size_t>(on_bar - app.menu_buttons.begin());
+  switch (key) {
+    case Key::Left:
+    case Key::Right:
+      host->set_focus(app.menu_buttons[step(at, key)]);
+      return true;
+    case Key::Down:
+      app.menu_buttons[at]->fire();
+      return true;
+    case Key::Escape:
+      host->set_focus(nullptr);
+      return true;
+    default:
+      return false;
+  }
+}
+
 /// Everything a message does. Wrapped by `window_proc`, which is the boundary
 /// an exception must not cross.
 LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -12288,6 +12352,10 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       // After the tree, and only if it did not want the key. A focused slider
       // owns the arrows before the playhead does.
       if (!shell->host->key_down(event)) {
+        if (shell->is_main() && menu_bar_key(*app, event.key)) {
+          mark_dirty(*app);
+          return 0;
+        }
         // Premiere sends the transport and the marking keys to whichever
         // monitor is focused, and the source is a monitor. Before the sequence
         // bindings, because these are the same keys meaning the same thing
@@ -12300,6 +12368,64 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       mark_dirty(*app);
       return 0;
     }
+
+    case WM_SYSKEYDOWN: {
+      // Alt shows the menus' access letters straight away, as Windows does,
+      // and only the menus' own letters are taken: Alt+F4 and Alt+Space go on
+      // to Windows.
+      if (wparam == VK_MENU) {
+        if ((lparam & (1 << 30)) == 0) shell->alt_alone = true;
+        shell->host->show_keyboard_cues();
+        mark_dirty(*app);
+        return 0;
+      }
+      shell->alt_alone = false;
+      if (shell->is_main() && wparam == VK_F10 && !app->menu_buttons.empty()) {
+        shell->host->show_keyboard_cues();
+        shell->host->set_focus(app->menu_buttons.front());
+        mark_dirty(*app);
+        return 0;
+      }
+      if (shell->is_main() && wparam >= 'A' && wparam <= 'Z') {
+        for (Button* title : app->menu_buttons) {
+          if (title->text().empty() ||
+              std::toupper(static_cast<unsigned char>(title->text().front())) !=
+                  static_cast<int>(wparam)) {
+            continue;
+          }
+          shell->host->show_keyboard_cues();
+          title->fire();
+          mark_dirty(*app);
+          return 0;
+        }
+      }
+      break;
+    }
+
+    case WM_SYSKEYUP:
+      // Without this, Windows takes a lone Alt as the start of its own menu
+      // loop, and the next key pressed is quietly eaten by a menu that is not
+      // there.
+      if (wparam == VK_MENU || wparam == VK_F10) {
+        if (wparam == VK_MENU && shell->alt_alone && shell->is_main() &&
+            !app->menu_buttons.empty()) {
+          // Again leaves the bar, which is the other half of what Alt does.
+          const bool on_bar =
+              std::ranges::contains(app->menu_buttons, shell->host->focused());
+          shell->host->set_focus(on_bar ? nullptr : app->menu_buttons.front());
+          mark_dirty(*app);
+        }
+        shell->alt_alone = false;
+        return 0;
+      }
+      break;
+
+    case WM_SYSCHAR:
+      // The letter of an Alt combination, which Windows would otherwise answer
+      // with a beep for a menu bar it cannot see. Alt+Space is left for the
+      // window menu.
+      if (wparam != VK_SPACE) return 0;
+      break;
 
     case WM_ERASEBKGND:
       return 1;  // every pixel is painted, so erasing only causes a flash

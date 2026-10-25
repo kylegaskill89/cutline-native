@@ -143,6 +143,8 @@ class TextField : public Widget {
  public:
   explicit TextField(std::string text = {});
 
+  [[nodiscard]] bool shows_caret() const noexcept override { return true; }
+
   [[nodiscard]] const std::string& text() const noexcept { return text_; }
   /// Replaces the contents. The caret and selection are clamped to fit, so a
   /// field whose value is refreshed from elsewhere cannot end up pointing past
@@ -701,6 +703,9 @@ class MenuList : public Widget {
 
   /// The row under the pointer or the keyboard, and what Enter would take.
   [[nodiscard]] std::size_t highlighted() const noexcept { return highlighted_; }
+  /// A menu opened from the keyboard starts on its first row, as Windows'
+  /// do; one opened by the mouse starts on none.
+  void set_highlighted(std::size_t index) noexcept { highlighted_ = index; }
 
   void set_on_choose(std::function<void(std::size_t)> on_choose) {
     on_choose_ = std::move(on_choose);

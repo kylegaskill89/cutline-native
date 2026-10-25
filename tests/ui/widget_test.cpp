@@ -435,6 +435,118 @@ TEST(Focus, PressingAFocusableWidgetFocusesIt) {
   EXPECT_EQ(fixture.host->focused(), fixture.left);
 }
 
+// --------------------------------------------------------------- focus cue --
+
+/// The cue strokes in a picture, around `widget` in the ring style.
+[[nodiscard]] std::size_t rings_around(const RecordingPainter& painter, const Widget& widget) {
+  std::size_t found = 0;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::Stroke && call.bounds == widget.bounds().inset(-2.0)) ++found;
+  }
+  return found;
+}
+
+TEST(FocusCue, AClickedControlShowsNoCue) {
+  const Theme& slate = *built_in_theme("flat");
+  Fixture fixture;
+  fixture.left->takes_mouse = true;
+  fixture.left->set_focusable(true);
+  fixture.host->mouse_down(press(50.0, 50.0));
+  ASSERT_EQ(fixture.host->focused(), fixture.left);
+
+  RecordingPainter painter;
+  fixture.host->paint(painter, slate);
+  EXPECT_EQ(rings_around(painter, *fixture.left), 0u)
+      << "a ring round every button that was ever clicked is noise";
+}
+
+TEST(FocusCue, TabShowsWhereTheKeyboardWent) {
+  const Theme& slate = *built_in_theme("flat");
+  Fixture fixture;
+  fixture.left->set_focusable(true);
+  fixture.right->set_focusable(true);
+  fixture.host->focus_next();
+  fixture.host->focus_next();
+
+  RecordingPainter painter;
+  fixture.host->paint(painter, slate);
+  EXPECT_EQ(rings_around(painter, *fixture.right), 1u);
+  EXPECT_EQ(rings_around(painter, *fixture.left), 0u) << "only where it is now";
+}
+
+TEST(FocusCue, AClickTakesTheCueAwayAgain) {
+  const Theme& slate = *built_in_theme("flat");
+  Fixture fixture;
+  fixture.left->set_focusable(true);
+  fixture.host->focus_next();
+  fixture.host->mouse_down(press(150.0, 50.0));
+
+  RecordingPainter painter;
+  fixture.host->paint(painter, slate);
+  EXPECT_EQ(rings_around(painter, *fixture.left), 0u);
+}
+
+TEST(FocusCue, LunaAndAeroDotTheInsideOfTheControl) {
+  for (const char* id : {"xp", "aero"}) {
+    const Theme& theme = *built_in_theme(id);
+    Fixture fixture;
+    fixture.left->set_focusable(true);
+    fixture.host->focus_next();
+
+    RecordingPainter painter;
+    fixture.host->paint(painter, theme);
+    std::size_t dots = 0;
+    for (const DrawCall& call : painter.calls()) {
+      if (call.kind != DrawCall::Kind::Fill) continue;
+      ++dots;
+      EXPECT_TRUE(call.bounds.width <= 1.0 && call.bounds.height <= 1.0) << id;
+      EXPECT_GE(call.bounds.x, fixture.left->bounds().x) << id << ": inside, not around";
+      EXPECT_LE(call.bounds.x + call.bounds.width, fixture.left->bounds().right()) << id;
+    }
+    // A hundred-unit square, inset and dotted every other pixel on each side.
+    EXPECT_GT(dots, 150u) << id;
+    EXPECT_EQ(rings_around(painter, *fixture.left), 0u) << id;
+  }
+}
+
+/// A control with a caret of its own, as a text field has.
+class Caret : public Probe {
+ public:
+  using Probe::Probe;
+  [[nodiscard]] bool shows_caret() const noexcept override { return true; }
+};
+
+TEST(FocusCue, TheDottedCueLeavesAFieldWithACaretAlone) {
+  Fixture fixture;
+  auto& field = fixture.root().emplace<Caret>("field");
+  field.arrange(Rect{0.0, 0.0, 100.0, 30.0}, layout_context());
+  field.set_focusable(true);
+  fixture.host->focus_next();
+  ASSERT_EQ(fixture.host->focused(), &field);
+
+  RecordingPainter dotted;
+  fixture.host->paint(dotted, *built_in_theme("xp"));
+  EXPECT_EQ(dotted.count(DrawCall::Kind::Fill), 0u) << "the caret already says where it is";
+
+  RecordingPainter ringed;
+  fixture.host->paint(ringed, *built_in_theme("flat"));
+  EXPECT_EQ(rings_around(ringed, field), 1u) << "a ring frames a field too";
+}
+
+TEST(FocusCue, AControlScrolledOutOfItsPanelHasNoCue) {
+  Fixture fixture;
+  fixture.left->set_clips_children(true);
+  auto& away = fixture.left->emplace<Probe>("away");
+  away.arrange(Rect{0.0, 300.0, 50.0, 20.0}, layout_context());
+  away.set_focusable(true);
+  fixture.host->focus_next();
+  ASSERT_EQ(fixture.host->focused(), &away);
+
+  RecordingPainter painter;
+  fixture.host->paint(painter, *built_in_theme("flat"));
+  EXPECT_EQ(rings_around(painter, away), 0u);
+}
+
 TEST(Focus, PressingSomethingUnfocusableLeavesTheKeyboardWhereItWas) {
   // Clicking a toolbar button must not strand the keyboard, or the transport
   // shortcuts stop working until you click back into the timeline.

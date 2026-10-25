@@ -118,6 +118,10 @@ class Button : public Widget {
   /// focused style while nothing else has the look.
   void set_default(bool on) noexcept { default_ = on; }
   [[nodiscard]] bool is_default() const noexcept { return default_; }
+  /// Whether the first letter is the button's access key: underlined while
+  /// the keyboard is in use, as a menu bar's titles are once Alt is down.
+  void set_mnemonic(bool on) noexcept { mnemonic_ = on; }
+  [[nodiscard]] bool mnemonic() const noexcept { return mnemonic_; }
   [[nodiscard]] State state() const noexcept override;
 
   /// Everything except a resting menu item, which draws nothing at all.
@@ -136,14 +140,17 @@ class Button : public Widget {
   bool on_mouse_up(const MouseEvent& event) override;
   bool on_key_down(const KeyEvent& event) override;
 
- private:
+  /// Presses it, as a click or Space would. For keys that reach a button from
+  /// outside it -- Alt and a menu's letter.
   void fire();
 
+ private:
   std::string text_;
   std::function<void()> on_click_;
   Part part_ = Part::Button;
   double min_width_ = 0.0;
   bool default_ = false;
+  bool mnemonic_ = false;
 };
 
 /// A row or column of children.

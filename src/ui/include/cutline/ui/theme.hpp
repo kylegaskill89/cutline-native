@@ -188,6 +188,15 @@ enum class State {
 [[nodiscard]] std::string_view to_string(State state) noexcept;
 [[nodiscard]] std::optional<State> state_from_string(std::string_view name) noexcept;
 
+/// How a theme shows where the keyboard is.
+enum class FocusCue {
+  /// A dotted rectangle just inside the control, one pixel on and one off --
+  /// what XP and Vista drew, and only once the keyboard had been used.
+  Dotted,
+  /// A ring in the accent just outside it, the way a flat interface does.
+  Ring,
+};
+
 /// Sizes and spacing. Owned by the theme because chrome and spacing are not
 /// independent: a bevelled button needs room for its bevel, and flat chrome
 /// looks wrong with the padding XP needs.
@@ -249,6 +258,8 @@ struct Metrics {
   /// arrived quickly and left slowly.
   double hover_in = 0.0;
   double hover_out = 0.0;
+
+  FocusCue focus_cue = FocusCue::Ring;
 
   friend bool operator==(const Metrics&, const Metrics&) = default;
 };

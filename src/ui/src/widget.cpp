@@ -278,6 +278,13 @@ bool WidgetHost::update_layout(const LayoutContext& context) {
       popup_.reset();
     }
     popup_closing_ = false;
+    // Back where it was, so a menu used in passing does not leave the
+    // timeline without its keys.
+    if (focused_ == nullptr && focus_before_popup_ != nullptr && return_focus_) {
+      set_focus(focus_before_popup_);
+    }
+    focus_before_popup_ = nullptr;
+    return_focus_ = true;
     paint_dirty_ = true;
     // What the pointer is over has changed, and the pointer has not moved.
     if (has_mouse_ && captured_ == nullptr) set_hovered(root_->at(mouse_x_, mouse_y_));
@@ -286,14 +293,20 @@ bool WidgetHost::update_layout(const LayoutContext& context) {
   if (!layout_dirty_) return false;
   resize(bounds_, context);
 
-  // A dialog just opened starts with its first control in hand, so it can be
-  // typed into straight away -- and so Tab goes round it rather than behind it.
+  // A popup just opened takes the keyboard: a dialog starts with its first
+  // control in hand, so it can be typed into straight away and Tab goes round
+  // it rather than behind it, and a menu answers the arrows and Enter.
   if (popup_fresh_ && popup_ != nullptr && !popup_closing_) {
     popup_fresh_ = false;
-    if (dynamic_cast<Dialog*>(popup_.get()) != nullptr) {
-      std::vector<Widget*> order;
-      collect_focusable(*popup_, order);
-      if (!order.empty()) set_focus(order.front());
+    std::vector<Widget*> order;
+    collect_focusable(*popup_, order);
+    if (!order.empty()) {
+      // Not when one popup replaced another: where it was before is still
+      // where it was before the first.
+      if (focused_ != nullptr && !focused_->descends_from(popup_.get())) {
+        focus_before_popup_ = focused_;
+      }
+      set_focus(order.front());
     }
   }
   return true;
@@ -317,9 +330,10 @@ void WidgetHost::open_popup(std::unique_ptr<Widget> content, const Rect& anchor)
   request_layout();
 }
 
-void WidgetHost::close_popup() noexcept {
+void WidgetHost::close_popup(bool return_focus) noexcept {
   if (popup_ == nullptr) return;
   popup_closing_ = true;
+  return_focus_ = return_focus;
   paint_dirty_ = true;
 }
 
@@ -393,6 +407,10 @@ bool WidgetHost::mouse_down(const MouseEvent& event) {
   mouse_x_ = event.x;
   mouse_y_ = event.y;
   has_mouse_ = true;
+  if (keyboard_cues_) {
+    keyboard_cues_ = false;
+    paint_dirty_ = true;
+  }
 
   // A press outside an open popup dismisses it and stops there. Letting it
   // through as well would mean closing a menu also pressed whatever happened
@@ -618,6 +636,8 @@ bool WidgetHost::focus_next(bool backwards) {
     const auto current = static_cast<std::size_t>(found - order.begin());
     next = backwards ? (current + order.size() - 1) % order.size() : (current + 1) % order.size();
   }
+  keyboard_cues_ = true;
+  paint_dirty_ = true;
   return set_focus(order[next]);
 }
 
@@ -630,6 +650,9 @@ void WidgetHost::forget(Widget* widget) {
   if (hovered_ != nullptr && hovered_->descends_from(widget)) set_hovered(nullptr);
   if (pressed_ != nullptr && pressed_->descends_from(widget)) set_pressed(nullptr);
   if (focused_ != nullptr && focused_->descends_from(widget)) set_focus(nullptr);
+  if (focus_before_popup_ != nullptr && focus_before_popup_->descends_from(widget)) {
+    focus_before_popup_ = nullptr;
+  }
   if (captured_ != nullptr && captured_->descends_from(widget)) release_capture();
 }
 
@@ -637,10 +660,57 @@ void WidgetHost::paint(Painter& painter, const Theme& theme) const {
   painter.set_typeface(theme.metrics.font_family);
   animator_.begin_frame();
   root_->paint(painter, theme);
+  paint_focus_cue(painter, theme, *root_);
   // After everything, and outside every clip the tree set up. That is the
   // entire reason this is not a widget in the tree.
-  if (popup_ != nullptr && !popup_closing_) popup_->paint(painter, theme);
+  if (popup_ != nullptr && !popup_closing_) {
+    popup_->paint(painter, theme);
+    paint_focus_cue(painter, theme, *popup_);
+  }
   paint_tooltip(painter, theme);
+}
+
+void WidgetHost::paint_focus_cue(Painter& painter, const Theme& theme,
+                                 const Widget& under) const {
+  if (!keyboard_cues_ || focused_ == nullptr || !focused_->descends_from(&under)) return;
+  if (!focused_->visible() || focused_->bounds().empty()) return;
+  const bool dotted = theme.metrics.focus_cue == FocusCue::Dotted;
+  if (dotted && focused_->shows_caret()) return;
+
+  // Inside whatever clips the control, so a field scrolled half out of its
+  // list does not have its cue drawn over the panel below it.
+  Rect visible = bounds_;
+  for (const Widget* up = focused_->parent(); up != nullptr; up = up->parent()) {
+    if (up->clips_children()) visible = visible.intersect(up->bounds());
+  }
+  if (visible.intersect(focused_->bounds()).empty()) return;
+  painter.push_clip(visible, 0.0);
+
+  const Rect& at = focused_->bounds();
+  if (dotted) {
+    // Every other device pixel, which is what made the period's cue read as
+    // dotted rather than as a grey line at any scale.
+    const double pixel = 1.0 / std::max(painter.device_scale(), 1.0);
+    const double inset = std::min(3.0, std::min(at.width, at.height) / 4.0);
+    const Rect box = at.inset(inset);
+    const Color ink = focused_->surface_style(theme).text;
+    const Fill dot = Fill::solid(ink);
+    for (double x = box.x; x < box.right(); x += 2.0 * pixel) {
+      painter.fill(Rect{x, box.y, pixel, pixel}, 0.0, dot);
+      painter.fill(Rect{x, box.bottom() - pixel, pixel, pixel}, 0.0, dot);
+    }
+    for (double y = box.y; y < box.bottom(); y += 2.0 * pixel) {
+      painter.fill(Rect{box.x, y, pixel, pixel}, 0.0, dot);
+      painter.fill(Rect{box.right() - pixel, y, pixel, pixel}, 0.0, dot);
+    }
+  } else {
+    // Just outside, so it frames the control rather than drawing over its own
+    // border, and rounded to match.
+    constexpr double kWidth = 2.0;
+    const double radius = focused_->surface_style(theme).corner_radius;
+    painter.stroke(at.inset(-kWidth), radius + kWidth, theme.accent, kWidth);
+  }
+  painter.pop_clip();
 }
 
 void WidgetHost::paint_tooltip(Painter& painter, const Theme& theme) const {

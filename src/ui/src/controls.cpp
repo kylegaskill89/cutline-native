@@ -1067,7 +1067,11 @@ namespace {
 constexpr std::size_t kNone = static_cast<std::size_t>(-1);
 }  // namespace
 
-MenuList::MenuList(std::vector<std::string> items) : items_(std::move(items)) {}
+MenuList::MenuList(std::vector<std::string> items) : items_(std::move(items)) {
+  // So an open menu answers the arrows and Enter, and the settings window's
+  // categories can be reached with Tab.
+  set_focusable(true);
+}
 
 void MenuList::set_items(std::vector<std::string> items) {
   items_ = std::move(items);

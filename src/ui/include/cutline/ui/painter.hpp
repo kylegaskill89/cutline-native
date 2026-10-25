@@ -40,6 +40,8 @@ struct Rect {
 
   /// Shrunk on every side, never past zero.
   [[nodiscard]] Rect inset(double amount) const noexcept;
+  /// What this and `other` have in common, or an empty rectangle.
+  [[nodiscard]] Rect intersect(const Rect& other) const noexcept;
 
   friend bool operator==(const Rect&, const Rect&) = default;
 };

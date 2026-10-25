@@ -136,6 +136,10 @@ class Widget {
   [[nodiscard]] bool focusable() const noexcept { return focusable_; }
   void set_focusable(bool focusable) noexcept { focusable_ = focusable; }
 
+  /// Whether a blinking caret already says the keyboard is here. The dotted
+  /// cue leaves such a control alone, as Windows did an edit box.
+  [[nodiscard]] virtual bool shows_caret() const noexcept { return false; }
+
   /// Whether children are clipped to these bounds when painting.
   [[nodiscard]] bool clips_children() const noexcept { return clips_children_; }
   void set_clips_children(bool clips) noexcept { clips_children_ = clips; }
@@ -415,7 +419,24 @@ class WidgetHost {
   /// button *inside* the popup, running its own click handler, so freeing it
   /// now would return into freed memory. It goes at the next `update_layout`
   /// — the same deferral the dock rearrangement uses, for the same reason.
-  void close_popup() noexcept;
+  ///
+  /// The keyboard goes back to wherever it was before the popup took it,
+  /// unless `return_focus` says not -- a choice from a menu the keyboard
+  /// opened leaves the menu bar rather than going back to it.
+  void close_popup(bool return_focus = true) noexcept;
+
+  /// Where the keyboard was before the open popup took it. For comparing, not
+  /// for following: it may be a widget a rebuild has since replaced.
+  [[nodiscard]] const Widget* focus_before_popup() const noexcept { return focus_before_popup_; }
+
+  /// Whether focus and access keys are being shown: once the keyboard has
+  /// been used to move about, until the next click.
+  [[nodiscard]] bool keyboard_cues() const noexcept { return keyboard_cues_; }
+  /// Alt shows them, before anything has moved.
+  void show_keyboard_cues() noexcept {
+    keyboard_cues_ = true;
+    paint_dirty_ = true;
+  }
 
   [[nodiscard]] bool popup_open() const noexcept {
     return popup_ != nullptr && !popup_closing_;
@@ -450,6 +471,9 @@ class WidgetHost {
 
   void set_hovered(Widget* widget);
   void paint_tooltip(Painter& painter, const Theme& theme) const;
+  /// The cue around the focused control, if it is in `under` and the
+  /// keyboard has been used.
+  void paint_focus_cue(Painter& painter, const Theme& theme, const Widget& under) const;
   void set_pressed(Widget* widget);
   void collect_focusable(Widget& widget, std::vector<Widget*>& out) const;
 
@@ -462,6 +486,13 @@ class WidgetHost {
   /// Set when a popup opens and cleared when it is first laid out, which is
   /// when a dialog's first control is given focus.
   bool popup_fresh_ = false;
+  /// Whether focus is being shown. Windows shows where the keyboard is only
+  /// once the keyboard has been used to move it, and stops at the next click:
+  /// a ring left round every button that was ever clicked is noise.
+  bool keyboard_cues_ = false;
+  /// Taken when a popup takes the keyboard and given back when it goes.
+  Widget* focus_before_popup_ = nullptr;
+  bool return_focus_ = true;
   Rect bounds_;
   bool layout_dirty_ = false;
   bool paint_dirty_ = true;
