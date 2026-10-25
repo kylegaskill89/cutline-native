@@ -23,6 +23,12 @@ using detail::av_error_string;
   std::vector<const char*> hardware;
   std::vector<const char*> software;
 
+  if (codec == VideoCodec::ProRes) {
+    // FFmpeg's own, the encoder with the profiles; nothing encodes it in
+    // hardware on Windows.
+    return {"prores_ks"};
+  }
+  if (codec == VideoCodec::DnxHr) return {"dnxhd"};
   if (codec == VideoCodec::Hevc) {
     hardware = {"hevc_nvenc", "hevc_qsv", "hevc_amf"};
     software = {"libx265"};
@@ -45,7 +51,13 @@ using detail::av_error_string;
 }
 
 [[nodiscard]] AVCodecID codec_id(VideoCodec codec) noexcept {
-  return codec == VideoCodec::Hevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
+  switch (codec) {
+    case VideoCodec::Hevc: return AV_CODEC_ID_HEVC;
+    case VideoCodec::ProRes: return AV_CODEC_ID_PRORES;
+    case VideoCodec::DnxHr: return AV_CODEC_ID_DNXHD;
+    case VideoCodec::H264: break;
+  }
+  return AV_CODEC_ID_H264;
 }
 
 /// The pixel format to give an encoder, from its own list rather than guessed,
@@ -55,7 +67,11 @@ using detail::av_error_string;
 /// converts to on the card and an encoder that takes it takes the frame as it
 /// is. Planar 4:2:0 for one that does not, which costs a shuffle of planes.
 [[nodiscard]] std::optional<AVPixelFormat> preferred_format(const AVCodec* encoder,
-                                                            int bit_depth) {
+                                                            int bit_depth, VideoCodec codec) {
+  // The intermediates are 4:2:2 by definition: chroma at full height, which is
+  // most of why somebody grading wants one.
+  if (codec == VideoCodec::ProRes) return AV_PIX_FMT_YUV422P10LE;
+  if (codec == VideoCodec::DnxHr) return AV_PIX_FMT_YUV422P;
   const bool ten = bit_depth > 8;
   const AVPixelFormat* formats = nullptr;
   int count = 0;
@@ -180,7 +196,13 @@ using detail::av_error_string;
 }  // namespace
 
 std::string_view to_string(VideoCodec codec) noexcept {
-  return codec == VideoCodec::Hevc ? "hevc" : "h264";
+  switch (codec) {
+    case VideoCodec::Hevc: return "hevc";
+    case VideoCodec::ProRes: return "prores";
+    case VideoCodec::DnxHr: return "dnxhr";
+    case VideoCodec::H264: break;
+  }
+  return "h264";
 }
 
 struct MediaWriter::Impl {
@@ -421,8 +443,20 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
   if (settings.bit_depth != 8 && settings.bit_depth != 10) {
     return std::unexpected("the bit depth must be 8 or 10");
   }
-  if (settings.bit_depth == 10 && settings.codec != VideoCodec::Hevc) {
-    return std::unexpected("ten bits needs HEVC");
+  if (settings.bit_depth == 10 && settings.codec != VideoCodec::Hevc &&
+      settings.codec != VideoCodec::ProRes) {
+    return std::unexpected("ten bits needs HEVC or ProRes");
+  }
+  if (settings.codec == VideoCodec::ProRes && settings.bit_depth != 10) {
+    return std::unexpected("ProRes 422 HQ is ten bits");
+  }
+  if (settings.codec == VideoCodec::DnxHr && settings.bit_depth != 8) {
+    return std::unexpected("DNxHR HQ is eight bits");
+  }
+  // Said here rather than left to the encoder, whose own word for it is
+  // "Invalid argument".
+  if (settings.codec == VideoCodec::DnxHr && (settings.width < 256 || settings.height < 120)) {
+    return std::unexpected("DNxHR needs a picture at least 256 by 120");
   }
   if (settings.colour != VideoColour::Bt709 && settings.bit_depth != 10) {
     return std::unexpected("HDR needs ten bits");
@@ -470,7 +504,7 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
                             static_cast<std::int64_t>(impl->width) * impl->height >=
                                 std::int64_t{3840} * 2160;
 
-    const auto pixel_format = preferred_format(encoder, settings.bit_depth);
+    const auto pixel_format = preferred_format(encoder, settings.bit_depth, settings.codec);
     if (!pixel_format) {
       if (!attempts.empty()) attempts += ", ";
       attempts += std::format("{} (no {}-bit input)", name, settings.bit_depth);
@@ -507,7 +541,14 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
       }
 
       AVDictionary* options = nullptr;
-      if (settings.bitrate > 0) {
+      if (settings.codec == VideoCodec::ProRes) {
+        // HQ, and Apple's vendor tag, which some players check before
+        // trusting the profile.
+        av_dict_set(&options, "profile", "hq", 0);
+        av_dict_set(&options, "vendor", "apl0", 0);
+      } else if (settings.codec == VideoCodec::DnxHr) {
+        av_dict_set(&options, "profile", "dnxhr_hq", 0);
+      } else if (settings.bitrate > 0) {
         context->bit_rate = settings.bitrate;
       } else {
         // Quality-targeted. The option name differs by encoder family, and

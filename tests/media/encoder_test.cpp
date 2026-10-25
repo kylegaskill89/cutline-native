@@ -430,6 +430,64 @@ TEST(Encoder, HevcAlsoRoundTrips) {
   EXPECT_EQ(round_trip(file.string(), 30, hevc), 30);
 }
 
+TEST(Encoder, ProResIsWrittenAsFourTwoTwoAtTenBits) {
+  // The intermediate a cut goes to a grade in. Ten-bit frames in, as the
+  // export sends them, and every one back out.
+  const TempFile file(".mov");
+  VideoEncodeSettings prores = settings();
+  prores.codec = VideoCodec::ProRes;
+  prores.bit_depth = 10;
+  auto writer = MediaWriter::create(file.string(), prores);
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+  EXPECT_EQ((*writer)->encoder_name(), "prores_ks");
+  const TenBitFrame frame(513);
+  for (int i = 0; i < 5; ++i) ASSERT_TRUE((*writer)->write_frame(frame.planes()).has_value());
+  ASSERT_TRUE((*writer)->finish().has_value());
+
+  const auto info = probe(file.string());
+  ASSERT_TRUE(info.has_value()) << info.error();
+  ASSERT_NE(info->primary_video(), nullptr);
+  EXPECT_EQ(info->primary_video()->codec, "prores");
+  EXPECT_EQ(info->primary_video()->color.bits_per_component, 10);
+  EXPECT_NEAR(centre_luma_10(file.string()), 513, 2);
+}
+
+TEST(Encoder, DnxhrIsWrittenAtEightBits) {
+  // At 256 by 144, since DNxHR takes nothing smaller than 256 by 120.
+  const TempFile file(".mov");
+  VideoEncodeSettings dnxhr = settings();
+  dnxhr.codec = VideoCodec::DnxHr;
+  dnxhr.width = 256;
+  dnxhr.height = 144;
+  auto writer = MediaWriter::create(file.string(), dnxhr);
+  ASSERT_TRUE(writer.has_value()) << writer.error();
+  const std::vector<std::uint8_t> rgba(static_cast<std::size_t>(256) * 144 * 4, 128);
+  for (int i = 0; i < 10; ++i) ASSERT_TRUE((*writer)->write_frame(rgba).has_value());
+  ASSERT_TRUE((*writer)->finish().has_value());
+
+  const auto info = probe(file.string());
+  ASSERT_TRUE(info.has_value()) << info.error();
+  EXPECT_EQ(info->primary_video()->codec, "dnxhd");
+  EXPECT_EQ(info->primary_video()->width, 256);
+
+  VideoEncodeSettings small = dnxhr;
+  small.width = kWidth;
+  const auto refused = MediaWriter::create(file.string() + ".small.mov", small);
+  ASSERT_FALSE(refused.has_value());
+  EXPECT_NE(refused.error().find("256 by 120"), std::string::npos);
+}
+
+TEST(Encoder, TheIntermediatesHoldTheirOwnDepth) {
+  const TempFile file(".mov");
+  VideoEncodeSettings prores = settings();
+  prores.codec = VideoCodec::ProRes;
+  EXPECT_FALSE(MediaWriter::create(file.string(), prores).has_value()) << "ProRes HQ at eight bits";
+  VideoEncodeSettings dnxhr = settings();
+  dnxhr.codec = VideoCodec::DnxHr;
+  dnxhr.bit_depth = 10;
+  EXPECT_FALSE(MediaWriter::create(file.string(), dnxhr).has_value()) << "DNxHR HQ at ten bits";
+}
+
 TEST(Encoder, OddDimensionsAreAcceptedByRoundingDown) {
   // 4:2:0 chroma needs even dimensions, and failing deep inside the encoder
   // would be a confusing way to learn that.

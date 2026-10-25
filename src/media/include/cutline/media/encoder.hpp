@@ -34,7 +34,18 @@ enum class EncoderPreference {
 enum class VideoCodec {
   H264,
   Hevc,
+  /// Apple ProRes 422 HQ: an intermediate, every frame a keyframe, 4:2:2 at
+  /// ten bits, for handing a cut on to be graded or finished. In a .mov.
+  ProRes,
+  /// Avid DNxHR HQ: the same kind of intermediate, at eight bits. In a .mov.
+  DnxHr,
 };
+
+/// Whether a codec is an intermediate rather than a delivery format: no
+/// quality to choose, and a .mov to put it in.
+[[nodiscard]] constexpr bool is_intermediate(VideoCodec codec) noexcept {
+  return codec == VideoCodec::ProRes || codec == VideoCodec::DnxHr;
+}
 
 [[nodiscard]] std::string_view to_string(VideoCodec codec) noexcept;
 

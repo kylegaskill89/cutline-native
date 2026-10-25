@@ -191,10 +191,15 @@ std::expected<ExportResult, std::string> export_project(
   // says otherwise.
   const core::WorkingColour colour = settings.colour.value_or(project.sequence().colour);
   const bool hdr = colour != core::WorkingColour::Rec709;
-  if (hdr && settings.codec != media::VideoCodec::Hevc) {
-    return std::unexpected("HDR is written as HEVC; H.264 has no HDR here, as in Premiere");
+  if (hdr && settings.codec != media::VideoCodec::Hevc &&
+      settings.codec != media::VideoCodec::ProRes) {
+    return std::unexpected("HDR is written as HEVC or ProRes; H.264 and DNxHR HQ have no HDR "
+                           "here, as in Premiere");
   }
-  const int bit_depth = settings.bit_depth != 0 ? settings.bit_depth : (hdr ? 10 : 8);
+  // ProRes 422 HQ is ten bits whatever was asked; DNxHR HQ eight.
+  int bit_depth = settings.bit_depth != 0 ? settings.bit_depth : (hdr ? 10 : 8);
+  if (settings.codec == media::VideoCodec::ProRes) bit_depth = 10;
+  if (settings.codec == media::VideoCodec::DnxHr) bit_depth = 8;
 
   media::VideoEncodeSettings encode;
   encode.width = width;

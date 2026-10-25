@@ -563,6 +563,25 @@ TEST_F(ExportTest, AnHdrSequenceCanBeWrittenToAnSdrFile) {
   EXPECT_LT(low, high - 8);
 }
 
+// An HDR sequence handed on as ProRes keeps its light: ten bits, PQ, and the
+// same codes the HEVC file holds.
+TEST_F(ExportTest, AnHdrSequenceCanBeHandedOnAsProRes) {
+  const TempFile file(".mov");
+  ExportSettings settings;
+  settings.audio = false;
+  settings.path = file.string();
+  settings.codec = media::VideoCodec::ProRes;
+  auto exported = export_project(device_, pq_patches(core::WorkingColour::Rec2100Pq), settings);
+  ASSERT_TRUE(exported.has_value()) << exported.error();
+  EXPECT_EQ(exported->encoder, "prores_ks");
+
+  const auto info = media::probe(file.string());
+  ASSERT_TRUE(info.has_value()) << info.error();
+  EXPECT_EQ(info->video[0].codec, "prores");
+  EXPECT_EQ(info->video[0].color.transfer, media::TransferCharacteristic::Smpte2084);
+  EXPECT_NEAR(first_frame_luma_10(file.string(), 40, 64), 573, 3);
+}
+
 TEST_F(ExportTest, HdrIsNotWrittenAsH264) {
   const TempFile file(".mp4");
   ExportSettings settings;
