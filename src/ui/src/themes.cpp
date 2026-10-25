@@ -449,15 +449,41 @@ namespace {
                      .bevel = raised("#ffffff", "#aca899"),
                      .text = hex("#000000")});
 
-  t.set(Part::Scrollbar, State::Normal, SurfaceStyle{.fill = Fill::solid(hex("#f1efe2"))});
+  // The scroll bar, measured from XP's: a track lit from one side between two
+  // beige lines, and a lavender thumb with a white edge, a blue line below and
+  // to the right of it, and a grip of four lines across its middle. Under the
+  // pointer, and held, it brightens; XP drew the two alike.
+  t.metrics.scroll_grip = 6.0;
+  t.set(Part::Scrollbar, State::Normal,
+        SurfaceStyle{.fill = Fill::gradient({{0.00f, hex("#eeede5")},
+                                             {0.06f, hex("#f3f1ec")},
+                                             {0.50f, hex("#f9f9f7")},
+                                             {0.94f, hex("#fefefb")},
+                                             {1.00f, hex("#eeede5")}},
+                                            90.0)});
+  const auto scroll_thumb = [](std::string_view edge, std::string_view light,
+                               std::string_view middle, std::string_view shade,
+                               std::string_view grip) {
+    return SurfaceStyle{
+        .fill = Fill::gradient({{0.10f, hex(edge)},
+                                {0.17f, hex(light)},
+                                {0.45f, hex(middle)},
+                                {0.83f, hex(shade)},
+                                {0.90f, hex(edge)}},
+                               90.0),
+        .shadow = Shadow{.offset_x = 1.0, .offset_y = 1.0, .color = hex("#9fb5d2")},
+        .border = hex("#ffffff"),
+        .border_width = 1.0,
+        .corner_radius = 2.0,
+        .text = hex(grip),
+    };
+  };
   t.set(Part::ScrollThumb, State::Normal,
-        SurfaceStyle{
-            .fill = Fill::gradient({{0.0f, hex("#ffffff")}, {0.5f, hex("#e3e1d2")},
-                                    {1.0f, hex("#f5f4ec")}}),
-            .bevel = raised("#ffffff", "#9d9a8f"),
-            .border = hex("#7b7a70"),
-            .border_width = 1.0,
-        });
+        scroll_thumb("#b7caf5", "#c8d6fb", "#c6d6fd", "#b6cdfb", "#8cb0f8"));
+  const SurfaceStyle scroll_hot =
+      scroll_thumb("#acceff", "#d8e8ff", "#d6e7ff", "#cce1ff", "#9cc5ff");
+  t.set(Part::ScrollThumb, State::Hover, scroll_hot);
+  t.set(Part::ScrollThumb, State::Pressed, scroll_hot);
 
   t.set(Part::Menu, State::Normal,
         SurfaceStyle{.fill = Fill::solid(hex("#ffffff")),

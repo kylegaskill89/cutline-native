@@ -271,6 +271,36 @@ TEST(PaintSurface, ACapIsDrawnAcrossTheTopOverTheBorder) {
   EXPECT_TRUE(painter.clips_balanced());
 }
 
+TEST(PaintScrollThumb, LunasCarriesAGripAndOtherThemesDoNot) {
+  // Four lines and their highlights across the middle, as XP drew them.
+  const Rect tall{0.0, 0.0, 15.0, 120.0};
+  const Theme& xp = *built_in_theme("xp");
+  RecordingPainter luna;
+  paint_scroll_thumb(luna, tall, xp, State::Normal);
+  RecordingPainter plain;
+  paint_surface(plain, tall, xp.style(Part::ScrollThumb, State::Normal));
+  EXPECT_EQ(luna.count(Kind::Fill), plain.count(Kind::Fill) + 8u);
+
+  RecordingPainter flat;
+  const Theme& slate = *built_in_theme("flat");
+  paint_scroll_thumb(flat, tall, slate, State::Normal);
+  RecordingPainter flat_plain;
+  paint_surface(flat_plain, tall, slate.style(Part::ScrollThumb, State::Normal));
+  EXPECT_EQ(flat.count(Kind::Fill), flat_plain.count(Kind::Fill));
+}
+
+TEST(PaintScrollThumb, ALyingThumbTurnsItsLightAQuarter) {
+  // Styled standing up, lit across its width; lying down, the same light runs
+  // down its height instead.
+  const Theme& xp = *built_in_theme("xp");
+  const double standing = xp.style(Part::ScrollThumb, State::Normal).fill.angle_deg;
+  RecordingPainter painter;
+  paint_scroll_thumb(painter, Rect{0.0, 0.0, 120.0, 15.0}, xp, State::Normal);
+  const DrawCall* body = painter.first(Kind::Fill);
+  ASSERT_NE(body, nullptr);
+  EXPECT_DOUBLE_EQ(body->fill.angle_deg, standing - 90.0);
+}
+
 TEST(PaintSurface, AnAeroPanelBlursWhatIsBehindIt) {
   RecordingPainter painter;
   paint_surface(painter, kBounds, built_in_theme("aero")->style(Part::Panel));

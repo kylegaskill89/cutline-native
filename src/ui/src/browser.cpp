@@ -486,9 +486,9 @@ void MediaBrowser::paint_tiles(Painter& painter, const Theme& theme) const {
 
   const Rect bar = scrollbar();
   if (!bar.empty()) {
-    paint_surface(painter, bar, theme.style(Part::Scrollbar, State::Normal));
-    paint_surface(painter, scroll_thumb(),
-                  theme.style(Part::ScrollThumb, scrolling_ ? State::Pressed : State::Normal));
+    paint_scroll_track(painter, bar, theme);
+    paint_scroll_thumb(painter, scroll_thumb(), theme,
+                       scrolling_ ? State::Pressed : State::Normal);
   }
 
   if (items_.empty()) {
@@ -617,9 +617,9 @@ void MediaBrowser::paint_content(Painter& painter, const Theme& theme) const {
 
   const Rect bar = scrollbar();
   if (!bar.empty()) {
-    paint_surface(painter, bar, theme.style(Part::Scrollbar, State::Normal));
-    paint_surface(painter, scroll_thumb(),
-                  theme.style(Part::ScrollThumb, scrolling_ ? State::Pressed : State::Normal));
+    paint_scroll_track(painter, bar, theme);
+    paint_scroll_thumb(painter, scroll_thumb(), theme,
+                       scrolling_ ? State::Pressed : State::Normal);
   }
 
   // The header last, over the rows rather than under them: `list_area` already

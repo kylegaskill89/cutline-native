@@ -1,6 +1,7 @@
 #include "cutline/ui/painter.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace cutline::ui {
@@ -106,6 +107,54 @@ void paint_surface(Painter& painter, const Rect& bounds, const SurfaceStyle& sty
     painter.fill(Rect{bounds.x, bounds.y, bounds.width, std::min(bounds.height, style.cap->width)},
                  0.0, style.cap->fill);
     painter.pop_clip();
+  }
+}
+
+namespace {
+
+/// `style` as it looks lying down rather than standing up.
+[[nodiscard]] SurfaceStyle lying_down(SurfaceStyle style, const Rect& bounds) {
+  if (bounds.width > bounds.height && style.fill.kind == FillKind::Gradient) {
+    style.fill.angle_deg -= 90.0;
+  }
+  return style;
+}
+
+}  // namespace
+
+void paint_scroll_track(Painter& painter, const Rect& bounds, const Theme& theme) {
+  paint_surface(painter, bounds, lying_down(theme.style(Part::Scrollbar, State::Normal), bounds));
+}
+
+void paint_scroll_thumb(Painter& painter, const Rect& bounds, const Theme& theme, State state) {
+  const SurfaceStyle style = lying_down(theme.style(Part::ScrollThumb, state), bounds);
+  paint_surface(painter, bounds, style);
+
+  // XP's grip: four lines in the thumb's ink, each with a line of its edge's
+  // colour beside it, six pixels long and a pixel apart, across the middle.
+  const double length = theme.metrics.scroll_grip;
+  if (length <= 0.0) return;
+  const bool across = bounds.width > bounds.height;
+  const double along = across ? bounds.width : bounds.height;
+  const double breadth = across ? bounds.height : bounds.width;
+  constexpr double kLines = 4.0;
+  if (along < kLines * 2.0 + 8.0 || breadth < length + 4.0) return;
+
+  const double cx = bounds.x + bounds.width / 2.0;
+  const double cy = bounds.y + bounds.height / 2.0;
+  for (int i = 0; i < static_cast<int>(kLines); ++i) {
+    const double offset = -kLines + 2.0 * i;
+    if (across) {
+      const double x = std::floor(cx + offset);
+      const double y = std::floor(cy - length / 2.0);
+      painter.fill(Rect{x, y, 1.0, length}, 0.0, Fill::solid(style.border));
+      painter.fill(Rect{x + 1.0, y + 1.0, 1.0, length}, 0.0, Fill::solid(style.text));
+    } else {
+      const double x = std::floor(cx - length / 2.0);
+      const double y = std::floor(cy + offset);
+      painter.fill(Rect{x, y, length, 1.0}, 0.0, Fill::solid(style.border));
+      painter.fill(Rect{x + 1.0, y + 1.0, length, 1.0}, 0.0, Fill::solid(style.text));
+    }
   }
 }
 

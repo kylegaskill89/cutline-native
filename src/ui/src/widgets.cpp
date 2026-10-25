@@ -683,9 +683,8 @@ void ScrollView::paint_overlay(Painter& painter, const Theme& theme) const {
   const Rect bar = track();
   if (bar.empty()) return;
 
-  paint_surface(painter, bar, theme.style(Part::Scrollbar, State::Normal));
-  paint_surface(painter, thumb(),
-                theme.style(Part::ScrollThumb, dragging_ ? State::Pressed : State::Normal));
+  paint_scroll_track(painter, bar, theme);
+  paint_scroll_thumb(painter, thumb(), theme, dragging_ ? State::Pressed : State::Normal);
 }
 
 bool ScrollView::on_wheel(const WheelEvent& event) {

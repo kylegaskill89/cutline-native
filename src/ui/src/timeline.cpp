@@ -1696,7 +1696,7 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
   // which part. Without either of them a long sequence gives no clue where the
   // view sits in it — the wheel moved, and that was the whole of the answer.
   if (const Rect bar = scroll_area(); !bar.empty()) {
-    paint_surface(painter, bar, theme.style(Part::Scrollbar, State::Normal));
+    paint_scroll_track(painter, bar, theme);
 
     const Rect thumb = scroll_thumb();
     const State state = mode_ == DragMode::ScrollTime || mode_ == DragMode::ZoomStart ||
@@ -1704,7 +1704,7 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
                             ? State::Pressed
                             : State::Normal;
     const SurfaceStyle& style = theme.style(Part::ScrollThumb, state);
-    paint_surface(painter, thumb.inset(1.0), style);
+    paint_scroll_thumb(painter, thumb.inset(1.0), theme, state);
 
     // A notch on each grip, so the ends read as ends rather than as the edge of
     // the thumb. Two lines is what every resize grip in the system is.
@@ -1719,11 +1719,9 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
   }
 
   if (const Rect bar = track_scroll_area(); !bar.empty()) {
-    paint_surface(painter, bar, theme.style(Part::Scrollbar, State::Normal));
-    paint_surface(painter, track_scroll_thumb().inset(1.0),
-                  theme.style(Part::ScrollThumb, mode_ == DragMode::ScrollTracks
-                                                     ? State::Pressed
-                                                     : State::Normal));
+    paint_scroll_track(painter, bar, theme);
+    paint_scroll_thumb(painter, track_scroll_thumb().inset(1.0), theme,
+                       mode_ == DragMode::ScrollTracks ? State::Pressed : State::Normal);
   }
 
   // ---- the playhead, last and over everything, clipped to the time area so

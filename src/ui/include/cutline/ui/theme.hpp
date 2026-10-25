@@ -344,6 +344,9 @@ struct Metrics {
   double tab_rise = 0.0;
   /// Whether the showing tab's title is bold. XP's was not.
   bool bold_active_tab = true;
+  /// How long the lines of a grip across a scrollbar's thumb are, drawn in
+  /// the thumb's text colour beside lines of its border's; zero for none.
+  double scroll_grip = 0.0;
 
   /// How long a view takes to get where it was sent -- a zoom, a scroll by
   /// the wheel -- and how long a popup takes to arrive, in seconds. Zero

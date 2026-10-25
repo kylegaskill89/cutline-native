@@ -219,6 +219,15 @@ class Painter : public TextMeasurer {
 /// lives in one function with tests on it.
 void paint_surface(Painter& painter, const Rect& bounds, const SurfaceStyle& style);
 
+/// A scrollbar's track and its thumb, wherever one is drawn.
+///
+/// A theme styles both as they look standing up; lying down, the light runs
+/// the other way, so a gradient is turned a quarter for a bar wider than it is
+/// tall. The thumb carries a grip across its middle where the theme asks for
+/// one and the thumb is long enough to hold it.
+void paint_scroll_track(Painter& painter, const Rect& bounds, const Theme& theme);
+void paint_scroll_thumb(Painter& painter, const Rect& bounds, const Theme& theme, State state);
+
 /// What a drag would land on: an existing thing -- a panel to dock beside, a
 /// clip to put an effect on, a bin or a folder to file into. The accent washed
 /// over it and drawn round it.
