@@ -89,7 +89,6 @@ constexpr std::array kExportMixdowns{
   return {even(project.sequence().canvas_w * scale), even(project.sequence().canvas_h * scale)};
 }
 
-
 /// Where the export writes to by default: beside the project, named after it.
 [[nodiscard]] std::filesystem::path default_export_path(const App& app) {
   const std::filesystem::path& project = app.session.path();
@@ -259,7 +258,6 @@ void settle_export(App& app) {
   if (app.export_job.running.load()) app.export_job.cancel = true;
   if (app.export_job.worker.joinable()) app.export_job.worker.join();
 }
-
 
 [[nodiscard]] std::unique_ptr<Widget> build_export_interface(App* app, Shell* shell) {
   auto root = std::make_unique<Box>(Axis::Vertical);
@@ -492,6 +490,5 @@ void open_export_dialog(App&) {}
 void poll_export(App&) {}
 void settle_export(App&) {}
 #endif
-
 
 }  // namespace cutline::tool

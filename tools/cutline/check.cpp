@@ -917,7 +917,6 @@ template <typename T>
 #endif
     }
 
-
     // And the theme has to reach the pixels. Sampling a scatter of points
     // rather than one keeps a theme that happens to share a background colour
     // from looking like a theme that never got applied.

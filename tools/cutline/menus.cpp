@@ -265,5 +265,4 @@ namespace cutline::tool {
   return std::make_unique<MenuList>(window_menu(app));
 }
 
-
 }  // namespace cutline::tool

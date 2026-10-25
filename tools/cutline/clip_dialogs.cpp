@@ -211,7 +211,6 @@ void open_interpret_dialog(App& app, const std::string& media_id) {
     return std::nullopt;
   });
 
-
   app.main.host->open_popup(std::move(dialog), settings_anchor());
 }
 
@@ -307,7 +306,6 @@ void open_paste_attributes_dialog(App& app) {
     return std::nullopt;
   });
 
-
   app.main.host->open_popup(std::move(dialog), settings_anchor());
 }
 
@@ -368,7 +366,6 @@ void open_fit_dialog(App& app) {
     mark_dirty(app);
     return std::nullopt;
   });
-
 
   app.main.host->open_popup(std::move(dialog), settings_anchor());
 }

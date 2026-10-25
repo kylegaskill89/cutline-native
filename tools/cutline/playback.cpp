@@ -566,7 +566,6 @@ void take_snapshot([[maybe_unused]] App& app) {
 /// finer than a pixel of graph.
 constexpr int kScopeWidth = 320;
 
-
 /// A sequence size in words: the preset's name when it is one of them, and the
 /// plain numbers when it is not. A sequence somebody typed a size into should
 /// show that size rather than the word "Custom", which says nothing.
@@ -578,7 +577,6 @@ constexpr int kScopeWidth = 320;
   }
   return std::to_string(project.sequence().canvas_w) + "x" + std::to_string(project.sequence().canvas_h);
 }
-
 
 /// What a monitor zoom level is called. Fit is a word rather than a percentage
 /// because it is not one: it is whatever percentage the panel happens to be.
@@ -642,7 +640,6 @@ void apply_fps(App& app, double fps) {
     app.settings_page_stale = true;
   }
 }
-
 
 /// A frame rate written the way a rate is written: 23.976 keeps its decimals
 /// and 30 does not get three zeroes it never had.

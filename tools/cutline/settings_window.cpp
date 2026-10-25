@@ -831,4 +831,49 @@ void close_settings_dialog(App& app) {
   mark_dirty(app);
 }
 
+/// Points both derived-media caches at wherever the preference says.
+///
+/// One function rather than two calls at each site, because the two must never
+/// disagree: a waveform found in one place and a filmstrip written to another
+/// is a cache somebody empties and finds still full.
+void apply_media_cache([[maybe_unused]] App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  const std::filesystem::path dir =
+      cutline::app::media_cache_dir(app.settings.media_cache_folder);
+  app.waveforms.set_cache_dir(dir);
+  app.filmstrips.set_cache_dir(dir);
+#endif
+}
+
+/// Gathers what the person has chosen, and writes it.
+///
+/// Called from every place that changes one of these rather than on a timer or
+/// at shutdown. A setting written only on a clean exit is a setting lost by
+/// every crash, and the file is a few hundred bytes — the cost of writing it on
+/// each change is nothing next to a preference that does not stick.
+void save_settings(App& app) {
+  // Started from what is already held rather than from a fresh struct, so a
+  // setting with no live field of its own — the labels, the durations — is
+  // carried through instead of being dropped. Building this from scratch and
+  // naming the fields to copy back is a bug waiting for the next setting: the
+  // labels were wiped on every save for exactly that reason until it was found
+  // by renaming one and watching it not stick.
+  cutline::editor::Settings settings = app.settings;
+  settings.theme = std::string(built_in_themes()[app.theme].name);
+  settings.snapping = app.snapping;
+  settings.looping = app.looping;
+  settings.aspect_locked = app.aspect_locked;
+  settings.preview_scale = app.preview_scale;
+  settings.pool_sort = app.browser_sort;
+  settings.pool_descending = app.browser_descending;
+  settings.pool_view =
+      app.browser == nullptr ? cutline::ui::BrowserView::List : app.browser->view();
+  app.settings = settings;
+
+  // Quietly. Losing a preference is not worth a dialog in the middle of an
+  // edit, and the one place it would matter — a settings directory that cannot
+  // be written at all — would complain once per keystroke.
+  (void)cutline::editor::write_settings(app.settings_file, settings);
+}
+
 }  // namespace cutline::tool

@@ -77,8 +77,6 @@ void open_loudness_dialog(App& app) {
   // Nothing to normalise, so the button says so rather than doing nothing.
   ok.set_enabled(measurable);
 
-
-
   app.main.host->open_popup(std::move(dialog), settings_anchor());
 #else
   complain(app.main.window, "This build has no media layer, so there is nothing to measure.");
@@ -150,7 +148,6 @@ void open_channel_dialog(App& app, std::span<const std::string> clips) {
         mark_dirty(app);
     return std::nullopt;
   });
-
 
   app.main.host->open_popup(std::move(dialog), settings_anchor());
 }
@@ -273,7 +270,6 @@ void open_essential_sound(App& app, std::span<const std::string> clips) {
     mark_dirty(app);
     return std::nullopt;
   });
-
 
   app.main.host->open_popup(std::move(dialog), settings_anchor());
 }

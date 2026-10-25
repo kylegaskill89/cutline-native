@@ -1263,6 +1263,17 @@ void poll_autosave(App& app);
 void clear_autosave(App& app, const std::filesystem::path& document);
 [[nodiscard]] bool offer_recovery(App& app, const std::filesystem::path& document);
 
+// The dock and the workspaces, in `dock.cpp`.
+void wire_dock(App* app, Shell* shell, DockView& dock);
+void return_panels_home(App& app, const std::string& window_id);
+void float_panel_under_cursor(App& app, Shell& shell);
+void next_workspace(App& app);
+void save_workspaces(App& app, bool complain_on_failure);
+
+// Defined in `main.cpp`, for the dock.
+[[nodiscard]] std::string panel_title(const PanelId& id);
+[[nodiscard]] std::pair<double, double> to_units(const Shell& shell, POINT local);
+
 // The headless check and the benchmarks, in `check.cpp`.
 [[nodiscard]] int self_check(std::string_view shots = {});
 [[nodiscard]] int benchmark();

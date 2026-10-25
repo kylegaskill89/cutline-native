@@ -52,7 +52,6 @@ namespace cutline::tool {
   });
   view_choice.set_tooltip("Show the pool as pictures or as a list");
 
-
   auto& pool = panel->emplace<MediaBrowser>();
 
   // Double-click or Enter drops it at the playhead; dragging it out puts it
@@ -481,7 +480,6 @@ void open_speed_dialog(App& app, std::span<const std::string> clips);
   }
   return rows;
 }
-
 
 /// Renaming a track: a popup with a field in it, hung under the header.
 ///
@@ -1396,7 +1394,6 @@ void open_library_menu(App& app, double x, double y) {
   }
   return panel;
 }
-
 
 /// The scopes, with a row of tabs to choose between them.
 /// Goes to the state after `steps` edits, as a click in the History panel does,
