@@ -1812,18 +1812,6 @@ void drop_effect(App& app, std::size_t index, double y) {
   app.inspector_stale = true;
 }
 
-/// The menu a right-click on an effect card offers.
-void open_effect_row_menu(App& app, const std::function<void()>& copy, double x, double y) {
-  if (app.main.host == nullptr) return;
-
-  auto list = std::make_unique<MenuList>(std::vector<std::string>{"Copy Effect"});
-  list->set_on_choose([&app, copy](std::size_t index) {
-    if (app.main.host != nullptr) app.main.host->close_popup();
-    if (index == 0) copy();
-  });
-  app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
-}
-
 /// The row an effect card starts with: its name as an on/off checkbox, then
 /// move up, move down and remove.
 ///
@@ -1858,11 +1846,32 @@ void build_effect_header(App& app, const cutline::editor::EffectRow& row, std::s
   line.set_on_drop([&app, index = row.index](double, double y) {
     drop_effect(app, index, y);
   });
-  if (on_copy) {
-    line.set_on_context_menu([&app, copy = std::move(on_copy)](double x, double y) {
-      open_effect_row_menu(app, copy, x, y);
-    });
-  }
+  // Everything the card's own controls do, and Copy, which has no control on
+  // the card. Premiere's right-click on an effect is the same list.
+  line.set_on_context_menu([&app, applied, on_toggle, on_move, on_remove, on_reset, on_copy,
+                            enabled = row.enabled, first = row.index == 0,
+                            last = row.index + 1 >= count](double x, double y) {
+    if (app.main.host == nullptr) return;
+    std::vector<MenuEntry> rows;
+    if (on_copy) {
+      rows.push_back(action_entry("Copy", on_copy));
+      rows.push_back(MenuEntry::divider());
+    }
+    rows.push_back(switch_entry("Effect Enabled", enabled, [applied, on_toggle] {
+      applied(on_toggle());
+    }));
+    if (on_reset) {
+      rows.push_back(action_entry("Reset Parameters", [applied, on_reset] { applied(on_reset()); }));
+    }
+    rows.push_back(MenuEntry::divider());
+    rows.push_back(action_entry("Move Up", [applied, on_move] { applied(on_move(-1)); }, {},
+                                !first));
+    rows.push_back(action_entry("Move Down", [applied, on_move] { applied(on_move(1)); }, {},
+                                !last));
+    rows.push_back(MenuEntry::divider());
+    rows.push_back(action_entry("Clear", [applied, on_remove] { applied(on_remove()); }));
+    app.main.host->open_popup(std::make_unique<MenuList>(std::move(rows)), Rect{x, y, 0.0, 0.0});
+  });
 
   // The checkbox is the name as well: a disabled effect stays in the stack and
   // stays visible, which is the whole point of disabling rather than removing.
@@ -8318,10 +8327,11 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
 
   const bool audio = held->kind == cutline::core::TrackKind::Audio;
 
-  /// One row: what it says, whether it is ticked, and what taking it does.
+  /// One row: what it says, whether it is a switch and on, and what taking it
+  /// does. A row with no label is a rule between groups.
   struct Row {
     std::string label;
-    bool ticked = false;
+    std::optional<bool> ticked;
     std::function<void()> act;
   };
 
@@ -8364,12 +8374,14 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
                            .act = [patched, was = held->hidden] { patched({.hidden = !was}); }});
   }
 
+  rows_out.push_back(Row{});
   rows_out.push_back(Row{.label = "Reset Height", .act = [&app, id] {
                            app.session.apply(cutline::core::set_track_height(
                                app.session.project(), id, std::nullopt));
                            refresh_timeline(app);
                            mark_dirty(app);
                          }});
+  rows_out.push_back(Row{});
   rows_out.push_back(Row{.label = "Add Video Track", .act = [&app] {
                            run_command(app, cutline::editor::Command::AddVideoTrack);
                          }});
@@ -8396,6 +8408,7 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
                            stop_playback(app);
                            mark_dirty(app);
                          }});
+  rows_out.push_back(Row{});
   rows_out.push_back(Row{.label = "Delete Track", .act = [&app, id] {
                            app.session.apply(
                                cutline::core::remove_track(app.session.project(), id));
@@ -8405,22 +8418,17 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
                            mark_dirty(app);
                          }});
 
-  std::vector<std::string> labels;
-  std::vector<bool> ticks;
-  std::vector<std::function<void()>> acts;
+  std::vector<MenuEntry> entries;
   for (Row& row : rows_out) {
-    labels.push_back(std::move(row.label));
-    ticks.push_back(row.ticked);
-    acts.push_back(std::move(row.act));
+    if (row.label.empty()) {
+      entries.push_back(MenuEntry::divider());
+      continue;
+    }
+    entries.push_back(MenuEntry{.label = std::move(row.label), .checked = row.ticked,
+                                .act = std::move(row.act)});
   }
 
-  auto list = std::make_unique<MenuList>(std::move(labels));
-  list->set_checked(std::move(ticks));
-  list->set_on_choose([&app, acts](std::size_t index) {
-    if (app.main.host != nullptr) app.main.host->close_popup();
-    if (index < acts.size() && acts[index]) acts[index]();
-  });
-  app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
+  app.main.host->open_popup(std::make_unique<MenuList>(std::move(entries)), Rect{x, y, 0.0, 0.0});
 }
 
 [[nodiscard]] std::unique_ptr<Widget> make_timeline_panel(App* app) {
@@ -9036,16 +9044,13 @@ void open_library_menu(App& app, double x, double y) {
     }
   }
 
-  std::vector<std::string> labels;
-  labels.reserve(items.size());
-  for (const Item& item : items) labels.push_back(item.label);
-
-  auto list = std::make_unique<MenuList>(std::move(labels));
-  list->set_on_choose([&app, acts = std::move(items)](std::size_t index) {
-    if (app.main.host != nullptr) app.main.host->close_popup();
-    if (index < acts.size()) acts[index].act();
-  });
-  app.main.host->open_popup(std::move(list), Rect{x, y, 0.0, 0.0});
+  std::vector<MenuEntry> entries;
+  for (Item& item : items) {
+    entries.push_back(action_entry(std::move(item.label), std::move(item.act)));
+    // New Bin apart from what acts on the bin under the pointer.
+    if (entries.size() == 1 && items.size() > 1) entries.push_back(MenuEntry::divider());
+  }
+  app.main.host->open_popup(std::make_unique<MenuList>(std::move(entries)), Rect{x, y, 0.0, 0.0});
 }
 
 /// The effects library: everything that can be applied, searchable.
