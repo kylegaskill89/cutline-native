@@ -746,6 +746,12 @@ class MenuList : public Widget {
   /// end means none, which is what a menu wants.
   [[nodiscard]] std::size_t current() const noexcept { return current_; }
   void set_current(std::size_t index) noexcept { current_ = index; }
+  /// Whether it makes a menu's sounds as it opens and as a command is chosen.
+  /// A dropdown's list does not: Windows' combo boxes were silent.
+  void set_sounds(bool on) noexcept { sounds_ = on; }
+  [[nodiscard]] std::optional<Sound> arrival_sound() const noexcept override {
+    return sounds_ ? std::optional<Sound>{Sound::MenuPopup} : std::nullopt;
+  }
 
   /// Which rows carry a tick, one flag per item.
   ///
@@ -826,6 +832,7 @@ class MenuList : public Widget {
   std::vector<std::string> items_;
   std::vector<bool> checked_;
   std::size_t current_ = static_cast<std::size_t>(-1);
+  bool sounds_ = true;
   std::size_t highlighted_ = static_cast<std::size_t>(-1);
   /// Taken at layout, where the metrics are, because painting and hit-testing
   /// both need it and neither has them.

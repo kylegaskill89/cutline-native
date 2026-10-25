@@ -28,7 +28,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -37,6 +39,20 @@
 namespace cutline::ui {
 
 class WidgetHost;
+
+/// The sounds the interface can make, by what happened rather than by file.
+///
+/// The interface only says something happened; the host decides what that
+/// sounds like, if anything. On Windows that is the system's own sound scheme
+/// -- the sounds XP and Vista made were the scheme's, never an application's
+/// -- and with sounds off, which is the default, it is nothing.
+enum class Sound {
+  MenuPopup,    ///< a menu or a list opening
+  MenuCommand,  ///< a command chosen from one
+  Refused,      ///< an answer that cannot be taken: the default beep
+  Done,         ///< something long finishing, such as an export
+  Failed,       ///< something long failing
+};
 
 class Widget {
  public:
@@ -162,6 +178,12 @@ class Widget {
   /// what a bare container should do.
   [[nodiscard]] virtual Part part() const noexcept { return Part::Panel; }
   [[nodiscard]] virtual bool paints_surface() const noexcept { return false; }
+
+  /// What it sounds like to open this as a popup: a menu's sound for a menu,
+  /// nothing for most things.
+  [[nodiscard]] virtual std::optional<Sound> arrival_sound() const noexcept {
+    return std::nullopt;
+  }
 
   /// Draws this widget and then its children, clipping if asked to.
   ///
@@ -460,6 +482,14 @@ class WidgetHost {
   /// The clock fades are kept against. Mutable through a const host because
   /// painting is const and painting is when a fade moves.
   [[nodiscard]] Animator& animator() const noexcept { return animator_; }
+
+  /// What makes a sound, when the interface asks for one. None by default,
+  /// which is silence: a host that has not been told how to play anything
+  /// plays nothing.
+  void set_sound_player(std::function<void(Sound)> player) { sound_ = std::move(player); }
+  void play(Sound sound) const {
+    if (sound_) sound_(sound);
+  }
   /// Whether something is still fading, in which case the host wants painting
   /// again even though nothing else has changed.
   [[nodiscard]] bool animating() const noexcept { return animator_.running(); }
@@ -490,6 +520,7 @@ class WidgetHost {
   void collect_focusable(Widget& widget, std::vector<Widget*>& out) const;
 
   std::unique_ptr<Widget> root_;
+  std::function<void(Sound)> sound_;
   /// Drawn after the root and offered input before it. Null when none is open.
   std::unique_ptr<Widget> popup_;
   Rect popup_anchor_;

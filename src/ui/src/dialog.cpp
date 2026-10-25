@@ -95,6 +95,8 @@ void Dialog::accept() {
     error_->set_text(*wrong);
     error_->set_visible(true);
     invalidate_layout();
+    // The beep Windows gave an answer it would not take.
+    if (WidgetHost* owner = host(); owner != nullptr) owner->play(Sound::Refused);
     return;
   }
   // Answered, so whatever it said before is gone.

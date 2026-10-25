@@ -103,6 +103,7 @@ std::string to_json(const Settings& settings, int indent) {
   out["preroll"] = settings.preroll;
   out["postroll"] = settings.postroll;
   out["software_renderer"] = settings.software_renderer;
+  out["sounds"] = settings.sounds;
   // Only when somebody has changed one. A fresh file saying "every label is
   // called what it is already called" is eight lines of nothing.
   if (std::ranges::any_of(settings.label_names, [](const std::string& n) { return !n.empty(); })) {
@@ -178,6 +179,7 @@ std::expected<Settings, std::string> settings_from_json(std::string_view text) {
       std::clamp(document.value("postroll", settings.postroll), kMinRoll, kMaxRoll);
   settings.software_renderer =
       document.value("software_renderer", settings.software_renderer);
+  settings.sounds = document.value("sounds", settings.sounds);
 
   // Sized to what this build has rather than to what the file says. A file from
   // a version with one more label would otherwise reach past the palette, and

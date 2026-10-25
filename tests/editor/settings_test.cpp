@@ -74,6 +74,7 @@ class TempSettings {
   settings.preroll = 1.5;
   settings.postroll = 2.5;
   settings.software_renderer = true;
+  settings.sounds = true;
   return settings;
 }
 
@@ -101,6 +102,7 @@ TEST(Settings, TheDefaultsAreWhatTheApplicationAlreadyDid) {
   EXPECT_DOUBLE_EQ(settings.preroll, 0.0) << "no run-up is what looping did before";
   EXPECT_DOUBLE_EQ(settings.postroll, 0.0);
   EXPECT_FALSE(settings.software_renderer) << "the GPU is the whole point of this application";
+  EXPECT_FALSE(settings.sounds) << "an editor is quiet unless asked";
 }
 
 // ------------------------------------------------------------------ labels --

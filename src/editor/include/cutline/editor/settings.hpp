@@ -58,6 +58,15 @@ struct Settings {
   /// is what a fresh install gets anyway.
   std::string theme;
 
+  /// Whether the interface plays the system's sounds -- a menu opening, a
+  /// command chosen, an export finishing -- as XP and Vista did.
+  ///
+  /// Off, which is what this did before, and what most people want of an
+  /// editor whose own sound is the point. The sounds are Windows' scheme, never
+  /// recordings shipped with this: what plays is whatever the person's scheme
+  /// says, and nothing where it says nothing.
+  bool sounds = false;
+
   /// Whether an edge being dragged jumps to the things near it.
   bool snapping = true;
 

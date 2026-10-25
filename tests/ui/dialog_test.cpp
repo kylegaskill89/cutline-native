@@ -114,6 +114,22 @@ TEST(Dialog, AWrongAnswerKeepsItOpenAndSaysWhy) {
   EXPECT_EQ(fixture.dialog->error(), "Speed has to be a number above zero.");
 }
 
+TEST(Dialog, AWrongAnswerBeepsAsWindowsDid) {
+  Asked asked;
+  asked.answer = "Speed has to be a number above zero.";
+  Fixture fixture(asked.make());
+  std::vector<Sound> heard;
+  fixture.host->set_sound_player([&heard](Sound sound) { heard.push_back(sound); });
+  fixture.key(Key::Enter);
+  EXPECT_EQ(heard, (std::vector<Sound>{Sound::Refused}));
+
+  // A good answer is taken without a sound.
+  asked.answer.reset();
+  heard.clear();
+  fixture.key(Key::Enter);
+  EXPECT_TRUE(heard.empty());
+}
+
 TEST(Dialog, EscapeCancelsAndTellsTheDialog) {
   Asked asked;
   Fixture fixture(asked.make());

@@ -1541,6 +1541,48 @@ TEST(MenuEntries, ARuleIsShorterThanARowAndTheRowsAfterItFollowOn) {
   EXPECT_EQ(test.list->row_at(after.y + 1.0), 2u);
 }
 
+TEST(MenuSounds, AMenuSoundsAsItOpensAndAsACommandIsChosen) {
+  // The interface says what happened; the host decides what that sounds like.
+  std::vector<Sound> heard;
+  WidgetHost host(std::make_unique<Widget>());
+  host.set_sound_player([&heard](Sound sound) { heard.push_back(sound); });
+  host.resize(Rect{0.0, 0.0, 600.0, 400.0}, flat_context());
+  bool ran = false;
+  auto owned = std::make_unique<MenuList>(std::vector<MenuEntry>{command("Cut", [&] { ran = true; })});
+  MenuList* list = owned.get();
+  host.open_popup(std::move(owned), Rect{10.0, 10.0, 0.0, 0.0});
+  (void)host.update_layout(flat_context());
+  EXPECT_EQ(heard, (std::vector<Sound>{Sound::MenuPopup}));
+
+  const Rect row = list->row_rect(0);
+  host.mouse_down(press(row.x + 8.0, row.y + row.height * 0.5));
+  host.mouse_up(press(row.x + 8.0, row.y + row.height * 0.5));
+  EXPECT_TRUE(ran);
+  EXPECT_EQ(heard, (std::vector<Sound>{Sound::MenuPopup, Sound::MenuCommand}));
+}
+
+TEST(MenuSounds, ADropdownsListIsSilentAsWindowsComboBoxesWere) {
+  std::vector<Sound> heard;
+  auto root = std::make_unique<Box>(Axis::Vertical);
+  Dropdown* box = &root->emplace<Dropdown>(std::vector<std::string>{"H.264", "HEVC"}, 0u);
+  WidgetHost host(std::move(root));
+  host.set_sound_player([&heard](Sound sound) { heard.push_back(sound); });
+  host.resize(Rect{0.0, 0.0, 400.0, 300.0}, flat_context());
+  const Rect area = box->bounds();
+  host.mouse_down(press(area.x + 5.0, area.y + area.height * 0.5));
+  host.mouse_up(press(area.x + 5.0, area.y + area.height * 0.5));
+  (void)host.update_layout(flat_context());
+  ASSERT_TRUE(host.popup_open());
+
+  auto* list = dynamic_cast<MenuList*>(host.popup());
+  ASSERT_NE(list, nullptr);
+  const Rect row = list->row_rect(1);
+  host.mouse_down(press(row.x + 5.0, row.y + row.height * 0.5));
+  host.mouse_up(press(row.x + 5.0, row.y + row.height * 0.5));
+  EXPECT_EQ(box->selected(), 1u);
+  EXPECT_TRUE(heard.empty());
+}
+
 TEST(MenuEntries, LunasMenusAreAsTightAsXPs) {
   // Seventeen-pixel rows, nine between groups and two pixels inside the edge,
   // measured from XP's; tighter than its lists, which are twenty.

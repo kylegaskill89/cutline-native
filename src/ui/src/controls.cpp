@@ -1531,8 +1531,10 @@ void MenuList::open_submenu(std::size_t index) {
 
   auto list = std::make_unique<MenuList>(entries_[index].submenu);
   list->parent_list_ = this;
+  list->sounds_ = sounds_;
   sub_ = &static_cast<MenuList&>(add(std::move(list)));
   sub_row_ = index;
+  if (WidgetHost* owner = host(); owner != nullptr && sounds_) owner->play(Sound::MenuPopup);
   invalidate_layout();
 }
 
@@ -1566,6 +1568,11 @@ void MenuList::choose(std::size_t index) {
     return;
   }
   const auto act = entry.act;
+  // A menu's sound, only from a menu: a list on a page choosing a row is a
+  // selection, and selecting was silent.
+  if (WidgetHost* owner = host(); owner != nullptr && sounds_ && owner->popup() == &top()) {
+    owner->play(Sound::MenuCommand);
+  }
   if (const auto dismiss = top().on_dismiss_; dismiss) {
     dismiss();
   } else if (WidgetHost* owner = host(); owner != nullptr) {
@@ -1771,6 +1778,7 @@ void Dropdown::open() {
 
   auto list = std::make_unique<MenuList>(options_);
   list->set_current(selected_);
+  list->set_sounds(false);
   list->set_on_choose([this](std::size_t index) {
     selected_ = index;
     open_ = false;

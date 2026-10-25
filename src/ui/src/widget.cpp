@@ -344,6 +344,7 @@ void WidgetHost::open_popup(std::unique_ptr<Widget> content, const Rect& anchor)
 
   popup_ = std::move(content);
   popup_->host_ = this;
+  if (const auto sound = popup_->arrival_sound()) play(*sound);
   popup_anchor_ = anchor;
   popup_closing_ = false;
   popup_fresh_ = true;

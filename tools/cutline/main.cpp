@@ -101,6 +101,8 @@
 // For `timeBeginPeriod`: the default 15.6 ms scheduler tick is most of a frame
 // at 60 Hz, and the playback loop cannot pace itself with one that coarse.
 #include <timeapi.h>
+// For `PlaySoundW`: the interface's sounds, played from the system's scheme.
+#include <mmsystem.h>
 #include <windowsx.h>
 
 #if defined(_MSC_VER)
@@ -1300,6 +1302,8 @@ void add_title(App& app);
 void add_matte(App& app);
 void add_adjustment(App& app);
 void complain(HWND owner, const std::string& message);
+void play_sound(const App& app, cutline::ui::Sound sound);
+void give_sounds(App& app, WidgetHost& host);
 [[nodiscard]] std::optional<std::filesystem::path> choose_image_file(HWND owner);
 [[nodiscard]] std::optional<std::filesystem::path> choose_folder(HWND owner);
 void take_snapshot(App& app);
@@ -5108,6 +5112,14 @@ void build_appearance_page(App& app, cutline::ui::Form& into) {
 
   auto& choice = row.emplace<Dropdown>(std::move(names), app.theme);
   choice.set_on_change([&app](std::size_t index) { set_theme(app, index); });
+
+  // The period's sounds, which were the system's rather than any one
+  // application's, so they are played from the person's own Windows scheme.
+  auto& sounds = into.row("Sounds").emplace<Checkbox>("Play Windows' sounds", app.settings.sounds);
+  sounds.set_on_change([&app](bool on) {
+    app.settings.sounds = on;
+    save_settings(app);
+  });
 }
 
 /// One labelled number on a settings page.
@@ -5691,6 +5703,7 @@ void open_settings_dialog(App& app, SettingsKind kind) {
   app.settings_kind = kind;
   app.settings_page = 0;
   shell->host = std::make_unique<WidgetHost>(build_settings_interface(app, shell.get(), kind));
+  give_sounds(app, *shell->host);
 
   // Centred on the main window, which is where a dialog belongs and where the
   // eye already is.
@@ -6684,6 +6697,30 @@ void add_adjustment(App& app) {
 
 void complain(HWND owner, const std::string& message) {
   MessageBoxA(owner, message.c_str(), "Cutline", MB_OK | MB_ICONWARNING);
+}
+
+/// Plays what the person's Windows sound scheme says an event sounds like,
+/// when they have asked for sounds at all.
+///
+/// By alias, and with no default: an event the scheme leaves silent stays
+/// silent rather than falling back to the default beep, and nothing Microsoft
+/// recorded is shipped with this. Asynchronous, so a menu never waits on a
+/// sound to open.
+void play_sound(const App& app, cutline::ui::Sound sound) {
+  if (!app.settings.sounds) return;
+  const wchar_t* alias = nullptr;
+  switch (sound) {
+    case cutline::ui::Sound::MenuPopup: alias = L"MenuPopup"; break;
+    case cutline::ui::Sound::MenuCommand: alias = L"MenuCommand"; break;
+    case cutline::ui::Sound::Refused: alias = L".Default"; break;
+    case cutline::ui::Sound::Done: alias = L"SystemNotification"; break;
+    case cutline::ui::Sound::Failed: alias = L"SystemHand"; break;
+  }
+  if (alias != nullptr) PlaySoundW(alias, nullptr, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
+}
+
+void give_sounds(App& app, WidgetHost& host) {
+  host.set_sound_player([&app](cutline::ui::Sound sound) { play_sound(app, sound); });
 }
 
 /// Writes a recovery copy if one is due. Called from the autosave timer.
@@ -11584,6 +11621,11 @@ void poll_export(App& app) {
   job.finished = false;
   if (job.worker.joinable()) job.worker.join();
   job.fraction = job.failed ? 0.0 : 1.0;
+  // A long job ending is worth hearing about from across the room; one that
+  // was cancelled was ended by the person, who knows.
+  if (!job.cancel.load()) {
+    play_sound(app, job.failed ? cutline::ui::Sound::Failed : cutline::ui::Sound::Done);
+  }
   refresh_export_dialog(app);
 }
 
@@ -11772,6 +11814,7 @@ void open_export_dialog(App& app) {
   shell->app = &app;
   shell->is_dialog = true;
   shell->host = std::make_unique<WidgetHost>(build_export_interface(&app, shell.get()));
+  give_sounds(app, *shell->host);
 
   // Centred on the main window, which is where a dialog belongs and where the
   // eye already is.
@@ -11856,6 +11899,7 @@ void open_float_window(App& app, const cutline::ui::FloatingDock& floating) {
   shell->app = &app;
   shell->floating_id = floating.id;
   shell->host = std::make_unique<WidgetHost>(build_floating_interface(&app, shell.get()));
+  give_sounds(app, *shell->host);
   shell->dock->set_node(floating.root);
 
   // `WS_POPUP | WS_THICKFRAME` is a window with no caption that can still be
@@ -14120,6 +14164,7 @@ int main(int argc, char** argv) {
   }
 
   app.main.host = std::make_unique<WidgetHost>(build_interface(&app));
+  give_sounds(app, *app.main.host);
 
   const HINSTANCE instance = GetModuleHandleW(nullptr);
   const HWND window =
