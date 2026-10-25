@@ -12,7 +12,7 @@ namespace cutline::tool {
   auto& tools = panel->emplace<Box>(Axis::Horizontal);
   tools.emplace<Button>("Import", [app] {
     if (app != nullptr) import_media(*app);
-  }).set_tooltip("Bring media into the project (Ctrl+I)");
+  }).set_tooltip(with_keys(app, "Bring media into the project", "file.import"));
   tools.emplace<Button>("Remove", [app] {
     if (app != nullptr) remove_from_pool(*app);
   }).set_tooltip("Take the selected media out, and every clip of it");
@@ -237,10 +237,10 @@ namespace cutline::tool {
   // two. `run` is what decides that, so the button and the I key cannot drift.
   transport.emplace<Button>("Mark In", [app] {
     if (app != nullptr) run_command(*app, cutline::editor::Command::MarkIn);
-  }).set_tooltip("Mark in at the playhead, or clear it (I)");
+  }).set_tooltip(with_keys(app, "Mark in at the playhead, or clear it", "markers.mark_in"));
   transport.emplace<Button>("Mark Out", [app] {
     if (app != nullptr) run_command(*app, cutline::editor::Command::MarkOut);
-  }).set_tooltip("Mark out at the playhead, or clear it (O)");
+  }).set_tooltip(with_keys(app, "Mark out at the playhead, or clear it", "markers.mark_out"));
   // The frame at the playhead, written out as a PNG. Under the monitor rather
   // than in the project panel, which the spec suggests: that row is already
   // full, and `--check` said so by finding two controls cut in half by the edge
@@ -294,7 +294,7 @@ namespace cutline::tool {
   auto& play = transport.emplace<Button>("Play", [app] {
     if (app != nullptr) toggle_playback(*app);
   });
-  play.set_tooltip("Play or pause (Space)");
+  play.set_tooltip(with_keys(app, "Play or pause", "playback.play"));
   if (app != nullptr) {
     app->play_button = &play;
     // The panel may have been rebuilt mid-playback — a rearrangement, a theme
@@ -651,10 +651,10 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
   // reach it needs one place that does it.
   tools.emplace<Button>("Undo", [app] {
     if (app != nullptr) run_command(*app, cutline::editor::Command::Undo);
-  }).set_tooltip("Undo (Ctrl+Z)");
+  }).set_tooltip(with_keys(app, "Undo", "edit.undo"));
   tools.emplace<Button>("Redo", [app] {
     if (app != nullptr) run_command(*app, cutline::editor::Command::Redo);
-  }).set_tooltip("Redo (Ctrl+Y)");
+  }).set_tooltip(with_keys(app, "Redo", "edit.redo"));
   // The tool palette, between the history buttons and the timecode. Premiere
   // floats it over the timeline; a row in the toolbar is the same thing without
   // a second window to keep track of, and it cannot be lost behind anything.
@@ -666,7 +666,7 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
       if (app != nullptr) choose_tool(*app, tool);
     });
     button.set_name(std::string("tool.") + std::string(cutline::ui::to_string(entry.tool)));
-    button.set_tooltip(entry.hint);
+    button.set_tooltip(with_keys(app, entry.name, entry.action));
     if (app != nullptr) {
       button.set_selected(app->tool == entry.tool);
       app->tool_buttons.push_back(&button);
@@ -680,11 +680,11 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
   auto& link = tools.emplace<Button>("Link", [app] {
     if (app != nullptr) run_command(*app, cutline::editor::Command::LinkClips);
   });
-  link.set_tooltip("Link the selected clips (Ctrl+L)");
+  link.set_tooltip(with_keys(app, "Link the selected clips", "clip.link"));
   auto& unlink = tools.emplace<Button>("Unlink", [app] {
     if (app != nullptr) run_command(*app, cutline::editor::Command::UnlinkClips);
   });
-  unlink.set_tooltip("Unlink them (Ctrl+Shift+L)");
+  unlink.set_tooltip(with_keys(app, "Unlink them", "clip.unlink"));
   if (app != nullptr) {
     app->link_button = &link;
     app->unlink_button = &unlink;
@@ -719,7 +719,7 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
   auto& snap = tools.emplace<Button>("Snap", [app] {
     if (app != nullptr) toggle_snapping(*app);
   });
-  snap.set_tooltip("Snap edges together (S)");
+  snap.set_tooltip(with_keys(app, "Snap edges together", "sequence.snap"));
   if (app != nullptr) app->snap_button = &snap;
 
   tools.emplace<Button>("Fit", [app] {
@@ -1576,12 +1576,12 @@ void refresh_history(App& app) {
   auto& back = row.emplace<IconButton>(IconButton::Icon::ArrowLeft, [app] {
     if (app != nullptr) step_source(*app, -1.0);
   });
-  back.set_tooltip("Back one frame (Left)");
+  back.set_tooltip(with_keys(app, "Back one frame", "playback.step_back"));
   back.set_narrow(true);
   auto& forward = row.emplace<IconButton>(IconButton::Icon::ArrowRight, [app] {
     if (app != nullptr) step_source(*app, 1.0);
   });
-  forward.set_tooltip("On one frame (Right)");
+  forward.set_tooltip(with_keys(app, "On one frame", "playback.step_forward"));
   // A pair that belongs together, so they take about the room one control
   // would — which is what buys the Play button its place on the row.
   forward.set_narrow(true);
@@ -1589,7 +1589,7 @@ void refresh_history(App& app) {
   auto& play = row.emplace<Button>("Play", [app] {
     if (app != nullptr) toggle_source_playback(*app);
   });
-  play.set_tooltip("Play the source, with its sound (Space)");
+  play.set_tooltip(with_keys(app, "Play the source, with its sound", "playback.play"));
   if (app != nullptr) app->source_play_button = &play;
 
   // "In" and "Out" rather than "Mark In" and "Mark Out": this panel is a third
@@ -1599,11 +1599,11 @@ void refresh_history(App& app) {
   auto& mark_in = row.emplace<Button>("In", [app] {
     if (app != nullptr) mark_source(*app, false);
   });
-  mark_in.set_tooltip("Mark in on the source (I)");
+  mark_in.set_tooltip(with_keys(app, "Mark in on the source", "markers.mark_in"));
   auto& mark_out = row.emplace<Button>("Out", [app] {
     if (app != nullptr) mark_source(*app, true);
   });
-  mark_out.set_tooltip("Mark out on the source (O)");
+  mark_out.set_tooltip(with_keys(app, "Mark out on the source", "markers.mark_out"));
   // A cross rather than the word, which is the last thing Aero's roomier chrome
   // had room for — spelled out it was fourteen controls squeezed, in that theme
   // alone. Taking both marks away is a rarer thing to want than setting either.

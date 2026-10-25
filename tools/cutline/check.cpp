@@ -894,6 +894,28 @@ template <typename T>
       app.settings.proxy_folder.clear();
       app.settings_body = nullptr;
       app.settings_tabs = nullptr;
+
+      // The Keyboard Shortcuts window: as it opens, with a command waiting
+      // for its key, and with Ctrl's layer of the keyboard drawn.
+      app.keyboard_window = std::make_unique<Shell>();
+      for (int pass = 0; pass < 3; ++pass) {
+        app.keyboard_capturing = pass == 1 ? "edit.undo" : "";
+        app.keyboard_modifiers = cutline::ui::Modifiers{.control = pass == 2};
+        WidgetHost keys(build_keyboard_interface(app, nullptr));
+        refresh_keyboard_dialog(app);
+        frame = Rect{0.0, 0.0, 820.0, 660.0};
+        keys.resize(frame, context);
+        keys.paint(*painter, theme);
+        walk(keys.root());
+      }
+      app.keyboard_window.reset();
+      app.keyboard_view = nullptr;
+      app.keyboard_list = nullptr;
+      app.keyboard_custom = nullptr;
+      app.keyboard_note_label = nullptr;
+      app.keyboard_search_field = nullptr;
+      app.keyboard_capturing.clear();
+      app.keyboard_modifiers = {};
       frame = Rect{0.0, 0.0, static_cast<double>(kWidth), static_cast<double>(kHeight)};
 
 #if CUTLINE_HAVE_PREVIEW

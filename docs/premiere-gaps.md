@@ -1300,7 +1300,7 @@ Settings — and are not gaps. What is left, with an honest size on each:
 | Memory / RAM reserved | Memory | none — the caches have fixed budgets | **won't do**, see §5.6 |
 | ~~Renderer choice~~ | Graphics ▸ GPU or software | **done** — Settings ▸ Graphics, read at startup | — |
 | Appearance brightness | Appearance ▸ a slider | four discrete themes | **won't do**, see §5.6 |
-| Keyboard shortcuts | fully editable, with presets | `kApplicationKeys` and `kTransportKeys`, fixed | **machinery** |
+| ~~Keyboard shortcuts~~ | fully editable, with presets | **done** — see §10 | — |
 | ~~Timecode display format~~ | Project Settings ▸ display format | **done** — drop-frame, and the counting under it fixed | — |
 | Scratch disks | Project Settings ▸ Scratch Disks | proxies go beside the footage, nothing else is written | **won't do yet**, see §5.6 |
 
@@ -2315,11 +2315,11 @@ commands.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| A command table with stable names | yes | two `constexpr` tables, `kApplicationKeys` and `kTransportKeys`, matched by hand | machinery |
-| Rebinding, saved | per person, carried between machines | **none** | machinery |
-| Conflict check | yes | **none** | wiring |
-| Presets | Premiere's default and others | **none** | wiring |
-| The visual keyboard panel | yes | **none** | control |
+| A command table with stable names | yes | **done** — `editor/shortcuts`: every action a key can run, seventy of them, with a stable id ("tool.razor"), its label and heading, the editing command it runs where it is one, and a scope saying when it is offered: always (undo, save), on a bare key before the focused control but never while typing (the tools, J/K/L, Space), or only once the focused control has declined it (the arrows, the marks). One resolver in the window procedure replaces the two tables and the dozen keys it tested one by one, and every menu row and tooltip reads its key from the keymap, so neither can claim a key that does something else. Making it found three keys that never worked: Alt+Left and Alt+Right never nudged, because Windows sends Alt chords as system keys and nothing listened; Space with the Source Monitor in hand played the sequence instead; and F1–F12, Insert, `;`, `/`, `[` and `]` were translated as no key at all | machinery |
+| Rebinding, saved | per person, carried between machines | **done** — `%APPDATA%\Cutline\keys.json`, holding the preset and only what was changed, so a preset that gains a key in a later version gives it to everybody who did not change that action. A file from a newer build costs an older one only what it cannot read. Driven: Razor given F5, closed, F5 picked the razor, and after a restart F5 still did | machinery |
+| Conflict check | yes | **done** — a chord runs one action only; giving it to another takes it away, and the window says which ("Ctrl+K was Add Edit, and now runs …") | wiring |
+| Presets | Premiere's default and others | **done** — Premiere Pro, and Avid Media Composer's splice-in and overwrite on V and B, lift and extract on Z and X, Add Edit on H, marks on E and R as well as I and O, G to clear them. Choosing one, or Reset to Preset, starts from it again | wiring |
+| The visual keyboard panel | yes | **done** — Edit ▸ Keyboard Shortcuts (Ctrl+Alt+K), modal as Premiere's is: a drawn keyboard with each bound key tinted -- the accent for what works everywhere, green for what a panel is offered -- and the command's name on it; Ctrl, Shift and Alt on the drawing show their layer; a key clicked shows what it runs or that it is free. Below it every command, searchable by name, heading or key, with its keys, Add (press the key; Esc leaves it) and Clear. Changes save as they are made | control |
 
 ## 11. Export presets and queue
 

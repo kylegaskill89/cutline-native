@@ -414,115 +414,30 @@ void refresh_all(App& app) {
   if (app.main.host != nullptr) app.main.host->request_layout();
 }
 
-/// A key bound to an editing command.
-struct Binding {
-  Key key;
-  bool control = false;
-  bool shift = false;
-  cutline::editor::Command command;
-  /// Rarely set, and last so the common bindings stay readable. What it is for
-  /// is the destructive twin of a harmless key: M drops a marker and
-  /// Ctrl+Alt+M throws every one of them away, which is Premiere's arrangement
-  /// and a good one — the awkward chord is the point.
-  bool alt = false;
-};
-
-/// Taken before the widget tree sees them. Nothing should be able to swallow
-/// undo, and a control-modified key is never something a control wants.
-constexpr std::array kApplicationKeys{
-    Binding{Key::Z, true, false, cutline::editor::Command::Undo},
-    Binding{Key::Z, true, true, cutline::editor::Command::Redo},
-    Binding{Key::Y, true, false, cutline::editor::Command::Redo},
-    Binding{Key::A, true, false, cutline::editor::Command::SelectAll},
-    Binding{Key::K, true, false, cutline::editor::Command::Split},
-    // Premiere's Add Edit to All Tracks.
-    Binding{Key::K, true, true, cutline::editor::Command::SplitAllTracks},
-};
-
-/// Offered only after the widget tree has declined them.
-///
-/// These are unmodified keys that a control may legitimately want — the arrows
-/// belong to a focused slider before they belong to the playhead, and taking
-/// them first would make the inspector unusable from the keyboard.
-constexpr std::array kTransportKeys{
-    // Premiere's I and O, and its Ctrl+Shift+X to throw both away.
-    Binding{Key::I, false, false, cutline::editor::Command::MarkIn},
-    Binding{Key::O, false, false, cutline::editor::Command::MarkOut},
-    Binding{Key::X, true, true, cutline::editor::Command::ClearMarks},
-    // And Premiere's markers: M drops one, shift walks to the next, control
-    // and shift together walk back.
-    Binding{Key::M, false, false, cutline::editor::Command::AddMarker},
-    Binding{Key::M, false, true, cutline::editor::Command::NextMarker},
-    Binding{Key::M, true, true, cutline::editor::Command::PreviousMarker},
-    Binding{Key::M, true, false, cutline::editor::Command::ClearMarkers, true},
-    Binding{Key::Left, false, false, cutline::editor::Command::PreviousFrame},
-    Binding{Key::Right, false, false, cutline::editor::Command::NextFrame},
-    Binding{Key::Home, false, false, cutline::editor::Command::GoToStart},
-    Binding{Key::End, false, false, cutline::editor::Command::GoToEnd},
-    // Premiere's comma and full stop, which are insert and overwrite there and
-    // were nudge here. Nudge moves to alt and the arrows, which is where
-    // Premiere keeps it — the two keys next to each other on the bottom row are
-    // worth more to the edit that needs a hand on the keyboard.
-    Binding{Key::Comma, false, false, cutline::editor::Command::Insert},
-    Binding{Key::Period, false, false, cutline::editor::Command::Overwrite},
-    Binding{Key::Left, false, false, cutline::editor::Command::NudgeLeft, true},
-    Binding{Key::Right, false, false, cutline::editor::Command::NudgeRight, true},
-    // Premiere's Q and W: trim the edit point before the playhead up to it, and
-    // the one after it back. Both ripple, which is what makes them the fastest
-    // way to tighten a cut — the sequence closes over what went.
-    Binding{Key::Q, false, false, cutline::editor::Command::TrimPreviousToPlayhead},
-    Binding{Key::W, false, false, cutline::editor::Command::TrimNextToPlayhead},
-    Binding{Key::Delete, false, false, cutline::editor::Command::Delete},
-    Binding{Key::Delete, false, true, cutline::editor::Command::RippleDelete},
-    Binding{Key::Escape, false, false, cutline::editor::Command::SelectNone},
-    // Premiere's Ctrl+L, and shift for the other direction. Not one key that
-    // toggles: a selection with some clips linked and some not has no honest
-    // answer to which way it is going, and guessing would quietly unlink what
-    // somebody meant to gather up.
-    Binding{Key::L, true, false, cutline::editor::Command::LinkClips},
-    Binding{Key::L, true, true, cutline::editor::Command::UnlinkClips},
-    // The clipboard. Here rather than among the application keys on purpose:
-    // the keyframe lanes have their own Ctrl+C and Ctrl+V for the keyframes in
-    // them, and taking these first would mean the panel you are working in
-    // could never have a clipboard of its own.
-    Binding{Key::C, true, false, cutline::editor::Command::Copy},
-    Binding{Key::X, true, false, cutline::editor::Command::Cut},
-    Binding{Key::V, true, false, cutline::editor::Command::Paste},
-    Binding{Key::V, true, true, cutline::editor::Command::PasteInsert},
-    // Premiere's Paste Attributes, on Premiere's chord.
-    Binding{Key::V, true, false, cutline::editor::Command::PasteAttributes, true},
-};
-
-/// How a key is written in a menu: the character itself where it has one, as
-/// Windows writes "Ctrl+," rather than "Ctrl+Comma".
-[[nodiscard]] std::string key_label(Key key) {
-  const auto value = static_cast<std::uint16_t>(key);
-  if (value > ' ' && value < 127) return std::string(1, static_cast<char>(value));
-  if (key == Key::Escape) return "Esc";
-  if (key == Key::Delete) return "Del";
-  return std::string(cutline::ui::to_string(key));
+std::string shortcut_of(const App* app, std::string_view action) {
+  static const cutline::editor::Keymap premiere =
+      cutline::editor::preset_keymap(cutline::editor::kPremierePreset);
+  const cutline::editor::Keymap& keys = app != nullptr ? app->keys : premiere;
+  const auto chords = keys.chords(action);
+  return chords.empty() ? std::string{} : cutline::editor::to_text(chords.front());
 }
 
-/// The shortcut a command is bound to, written as a menu shows it, or empty.
-///
-/// Read from the same tables the keys are handled from, so a menu can never
-/// claim a key that does something else.
-[[nodiscard]] std::string shortcut_for(cutline::editor::Command command) {
-  const auto written = [](const Binding& binding) {
-    std::string text;
-    // Windows' order, which is the order its own menus write them in.
-    if (binding.control) text += "Ctrl+";
-    if (binding.alt) text += "Alt+";
-    if (binding.shift) text += "Shift+";
-    return text + key_label(binding.key);
-  };
-  for (const Binding& binding : kApplicationKeys) {
-    if (binding.command == command) return written(binding);
+std::string shortcut_for(const App* app, cutline::editor::Command command) {
+  const cutline::editor::Action* action = cutline::editor::action_for(command);
+  return action == nullptr ? std::string{} : shortcut_of(app, action->id);
+}
+
+std::string with_keys(const App* app, std::string text, std::string_view action) {
+  const std::string keys = shortcut_of(app, action);
+  return keys.empty() ? text : text + " (" + keys + ")";
+}
+
+void save_keys(App& app) {
+  if (const auto written = cutline::editor::write_keymap(cutline::editor::default_keys_path(),
+                                                         app.keys);
+      !written.has_value()) {
+    complain(app.main.window, "Could not save the keyboard shortcuts.\n\n" + written.error());
   }
-  for (const Binding& binding : kTransportKeys) {
-    if (binding.command == command) return written(binding);
-  }
-  return {};
 }
 
 void run_command(App& app, cutline::editor::Command command);
@@ -532,7 +447,7 @@ void run_command(App& app, cutline::editor::Command command);
 [[nodiscard]] MenuEntry command_entry(App& app, std::string label,
                                       cutline::editor::Command command) {
   return MenuEntry{.label = std::move(label),
-                   .shortcut = shortcut_for(command),
+                   .shortcut = shortcut_for(&app, command),
                    .enabled = cutline::editor::can_run(app.session, command),
                    .act = [&app, command] { run_command(app, command); }};
 }
@@ -640,67 +555,132 @@ void go_to_time(App& app, double at) {
   mark_dirty(app);
 }
 
-/// The transport and marking keys, when the source monitor is the one in hand.
+/// What a key's action does.
 ///
-/// Reports whether it took the key, so the sequence's own bindings see only
-/// what this did not want. The set is deliberately the same as the sequence's —
-/// these are the keys everybody's fingers already know, and which of the two
-/// monitors they act on is the whole question a focused panel answers.
-bool handle_source_key(App& app, Key key, const Modifiers& modifiers) {
-  if (!source_has_focus(app)) return false;
-  if (source_media_of(app) == nullptr) return false;
-  if (modifiers.control || modifiers.alt) return false;
+/// The editing commands go through `run_command`, like their buttons and menu
+/// rows; the rest -- the file, the transport, the tools, the view -- are here.
+/// The transport and marking keys go to the source monitor when it is the one
+/// in hand, as Premiere sends them to whichever monitor is focused: an `I`
+/// with the source in hand is a mark on the source, not on the timeline
+/// behind it.
+void run_action(App& app, Shell& shell, std::string_view id) {
+  const cutline::editor::Action* action = cutline::editor::find_action(id);
+  if (action == nullptr) return;
 
-  const cutline::core::Media* media = source_media_of(app);
-  switch (key) {
-    case Key::I:
-      if (modifiers.shift) return false;
-      mark_source(app, false);
-      return true;
-    case Key::O:
-      if (modifiers.shift) return false;
-      mark_source(app, true);
-      return true;
-    case Key::Left:
-      // Shift for a bigger step, as the sequence's nudge does.
-      step_source(app, modifiers.shift ? -5.0 : -1.0);
-      return true;
-    case Key::Right:
-      step_source(app, modifiers.shift ? 5.0 : 1.0);
-      return true;
-    case Key::Home:
-      app.source_playhead = 0.0;
-      refresh_source(app);
-      return true;
-    case Key::End:
-      app.source_playhead = std::max(0.0, media->duration);
-      refresh_source(app);
-      return true;
-    case Key::Space:
-      if (modifiers.shift) return false;
-      toggle_source_playback(app);
-      return true;
-    case Key::K:
-      stop_source_playback(app);
-      return true;
-    default:
-      return false;
-  }
-}
-
-/// Runs whichever command the key is bound to, if any.
-bool run_binding(App& app, std::span<const Binding> bindings, Key key,
-                 const Modifiers& modifiers) {
-  for (const Binding& binding : bindings) {
-    if (binding.key != key) continue;
-    if (binding.control != modifiers.control || binding.shift != modifiers.shift ||
-        binding.alt != modifiers.alt) {
-      continue;
+  if (source_has_focus(app)) {
+    if (const cutline::core::Media* media = source_media_of(app); media != nullptr) {
+      bool taken = true;
+      if (id == "markers.mark_in") {
+        mark_source(app, false);
+      } else if (id == "markers.mark_out") {
+        mark_source(app, true);
+      } else if (id == "playback.step_back") {
+        step_source(app, -1.0);
+      } else if (id == "playback.step_forward") {
+        step_source(app, 1.0);
+      } else if (id == "playback.step_back_five") {
+        step_source(app, -5.0);
+      } else if (id == "playback.step_forward_five") {
+        step_source(app, 5.0);
+      } else if (id == "playback.go_to_start") {
+        app.source_playhead = 0.0;
+        refresh_source(app);
+      } else if (id == "playback.go_to_end") {
+        app.source_playhead = std::max(0.0, media->duration);
+        refresh_source(app);
+      } else if (id == "playback.play") {
+        toggle_source_playback(app);
+      } else if (id == "playback.stop") {
+        stop_source_playback(app);
+      } else {
+        taken = false;
+      }
+      if (taken) {
+        mark_dirty(app);
+        return;
+      }
     }
-    run_command(app, binding.command);
-    return true;
   }
-  return false;
+
+  if (action->command.has_value()) {
+    run_command(app, *action->command);
+    return;
+  }
+
+  const auto zoom = [&app](auto&& change) {
+    if (app.timeline == nullptr) return;
+    change(*app.timeline);
+  };
+  const auto step = [&app](double frames) {
+    const double fps = app.session.project().sequence().fps;
+    if (fps <= 0.0) return;
+    go_to_time(app, std::max(0.0, app.session.playhead() + frames / fps));
+  };
+
+  if (id == "file.new") {
+    new_project(app);
+  } else if (id == "file.open") {
+    open_project(app);
+  } else if (id == "file.save") {
+    save_project(app, false);
+  } else if (id == "file.save_as") {
+    save_project(app, true);
+  } else if (id == "file.import") {
+    import_media(app);
+  } else if (id == "file.export") {
+    open_export_dialog(app);
+  } else if (id == "edit.keyboard_shortcuts") {
+    open_keyboard_dialog(app);
+  } else if (id == "sequence.snap") {
+    toggle_snapping(app);
+  } else if (id == "sequence.zoom_in") {
+    // Premiere's keys: `=` and `-` about the playhead, and `\` for the whole.
+    zoom([](TimelineView& view) { view.zoom_about_playhead(true); });
+  } else if (id == "sequence.zoom_out") {
+    zoom([](TimelineView& view) { view.zoom_about_playhead(false); });
+  } else if (id == "sequence.zoom_fit") {
+    zoom([](TimelineView& view) { view.zoom_to_fit(); });
+  } else if (id == "playback.play") {
+    toggle_playback(app);
+  } else if (id == "playback.shuttle_left") {
+    // J, K and L: back, stop, forward, pressing again to go faster.
+    set_shuttle(app, next_shuttle(app.shuttle, -1.0));
+  } else if (id == "playback.stop") {
+    set_shuttle(app, 0.0);
+    if (app.playing()) stop_playback(app);
+  } else if (id == "playback.shuttle_right") {
+    set_shuttle(app, app.playing() ? next_shuttle(1.0, 1.0) : next_shuttle(app.shuttle, 1.0));
+  } else if (id == "playback.step_back_five") {
+    step(-5.0);
+  } else if (id == "playback.step_forward_five") {
+    step(5.0);
+  } else if (id == "window.float_panel") {
+    float_panel_under_cursor(app, shell);
+  } else if (id == "window.maximise_frame") {
+    // Premiere's `~`: the panel under the pointer fills the window, and again
+    // puts it back. Under the *pointer* rather than whatever has the keyboard,
+    // because it is used to get a closer look at something being watched, and
+    // watching a panel does not focus it.
+    if (shell.is_main() && shell.dock != nullptr) {
+      POINT at{};
+      GetCursorPos(&at);
+      ScreenToClient(shell.window, &at);
+      const auto [ux, uy] = to_units(shell, at);
+      const auto over = shell.dock->panel_at(ux, uy);
+      const PanelId panel = over.value_or(layout_of(app).maximised);
+      if (cutline::ui::toggle_maximised(layout_of(app), panel)) app.dock_stale = true;
+    }
+  } else if (id.starts_with("tool.")) {
+    const auto tool = std::ranges::find(kTools, id, &ToolEntry::action);
+    if (tool != kTools.end()) choose_tool(app, tool->tool);
+  } else if (id.starts_with("view.theme.")) {
+    // In the order the themes are built: Slate, Luna, Aero, Phosphor.
+    constexpr std::array<std::string_view, 4> kThemes{"view.theme.slate", "view.theme.luna",
+                                                       "view.theme.aero", "view.theme.phosphor"};
+    const auto at = std::ranges::find(kThemes, id);
+    if (at != kThemes.end()) set_theme(app, static_cast<std::size_t>(at - kThemes.begin()));
+  }
+  mark_dirty(app);
 }
 
 // ------------------------------------------------------------------ panels --
@@ -966,8 +946,19 @@ void refresh_float_titles(App& app) {
     // binding was written, the key was pressed, and nothing happened because
     // the backtick arrives as `VK_OEM_3` rather than as its character.
     case VK_OEM_3: return Key::Backtick;
-    default: return Key::None;
+    // And the rest of the keys a shortcut can be put on, which the keyboard in
+    // the shortcuts window offers and which would otherwise arrive as nothing.
+    case VK_INSERT: return Key::Insert;
+    case VK_OEM_1: return Key::Semicolon;
+    case VK_OEM_2: return Key::Slash;
+    case VK_OEM_4: return Key::LeftBracket;
+    case VK_OEM_6: return Key::RightBracket;
+    default: break;
   }
+  if (vk >= VK_F1 && vk <= VK_F12) {
+    return static_cast<Key>(static_cast<int>(Key::F1) + static_cast<int>(vk - VK_F1));
+  }
+  return Key::None;
 }
 
 [[nodiscard]] Modifiers modifiers_now() {
@@ -1181,6 +1172,10 @@ void settle(App& app) {
   if (app.settings_page_stale) {
     app.settings_page_stale = false;
     refresh_settings_page(app);
+  }
+  if (app.keyboard_stale) {
+    app.keyboard_stale = false;
+    refresh_keyboard_dialog(app);
   }
   // Compared rather than flagged: there are well over a hundred places that
   // apply an edit, and a flag set at each would be a list that has to stay
@@ -1724,129 +1719,37 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
         }
       }
 
-      if (!editing && wparam >= '1' && wparam <= '9') {
-        set_theme(*app, static_cast<std::size_t>(wparam - '1'));
-        return 0;
-      }
-
-      // Application shortcuts, taken before the widget tree sees them: undo is
-      // not something any one control should be able to swallow.
       const Modifiers held = modifiers_now();
-
-      // The tools, on bare letters. Before the tree for the same reason the
-      // theme digits are: no control wants a V, and a tool that only works when
-      // nothing happens to be focused is a tool nobody trusts.
-      if (!editing && held.none()) {
-        const Key pressed = key_from_win32(wparam);
-        const auto tool = std::ranges::find(kTools, pressed, &ToolEntry::key);
-        if (tool != kTools.end()) {
-          choose_tool(*app, tool->tool);
-          return 0;
-        }
-        // The zoom, with the tools and for the same reason: it changes the
-        // view rather than the document. Premiere's keys — `=` and `-` about
-        // the playhead, and `\` for the whole sequence.
-        if (app->timeline != nullptr &&
-            (pressed == Key::Equal || pressed == Key::Minus || pressed == Key::Backslash)) {
-          if (pressed == Key::Backslash) {
-            app->timeline->zoom_to_fit();
-          } else {
-            app->timeline->zoom_about_playhead(pressed == Key::Equal);
-          }
-          mark_dirty(*app);
-          return 0;
-        }
-
-        // Premiere's S. Here with the tools rather than in the command table
-        // because it changes the view and not the document, so there is nothing
-        // for `run` to report and nothing for undo to put back.
-        if (pressed == Key::S) {
-          toggle_snapping(*app);
-          return 0;
-        }
-
-        // J, K and L: back, stop, forward, pressing again to go faster. The
-        // same reasoning as the tool keys — these are muscle memory from every
-        // editor there has ever been, and one that only worked when nothing
-        // happened to be focused would be one nobody trusted.
-        if (pressed == Key::J) {
-          set_shuttle(*app, next_shuttle(app->shuttle, -1.0));
-          return 0;
-        }
-        if (pressed == Key::K) {
-          set_shuttle(*app, 0.0);
-          if (app->playing()) stop_playback(*app);
-          return 0;
-        }
-        if (pressed == Key::L) {
-          set_shuttle(*app, app->playing() ? next_shuttle(1.0, 1.0)
-                                           : next_shuttle(app->shuttle, 1.0));
-          return 0;
-        }
-      }
-      if (held.control && wparam == 'O') {
-        open_project(*app);
-        return 0;
-      }
-      if (held.control && wparam == 'S') {
-        save_project(*app, held.shift);
-        return 0;
-      }
-      if (held.control && wparam == 'N') {
-        new_project(*app);
-        return 0;
-      }
-      if (held.control && wparam == 'I') {
-        import_media(*app);
-        return 0;
-      }
-      if (held.control && held.shift && wparam == 'F') {
-        float_panel_under_cursor(*app, *shell);
-        return 0;
-      }
-      // Space, before the tree sees it, because a focused button would
-      // otherwise take it as a press. Every editor in the world plays with it.
-      if (!editing && wparam == VK_SPACE && !held.control && !held.alt) {
-        toggle_playback(*app);
-        return 0;
-      }
-      const KeyEvent event{.key = key_from_win32(wparam),
+      const cutline::editor::Chord chord{.key = key_from_win32(wparam), .control = held.control,
+                                         .shift = held.shift, .alt = held.alt};
+      const KeyEvent event{.key = chord.key,
                            .modifiers = held,
                            .repeat = (lparam & (1 << 30)) != 0};
+      using cutline::editor::Scope;
 
-      // While typing, the tree goes first. Ctrl+A means every clip normally and
-      // every character inside a field, and a shortcut that reaches past the
-      // keyboard focus to select the timeline instead is simply wrong there.
-      // Undo still works: a field does not handle Ctrl+Z, so it falls through.
+      // The keymap's three moments. Before the tree: what nothing should be
+      // able to swallow -- undo, save -- and the bare keys no control wants,
+      // the tools and the transport. While somebody is typing the field goes
+      // first, so Ctrl+A selects its text rather than every clip, and the bare
+      // keys are not offered at all: there they are letters and a space.
       if (editing && shell->host->key_down(event)) {
         mark_dirty(*app);
         return 0;
       }
-
-      // Before the tree: nothing should be able to swallow undo.
-      if (run_binding(*app, kApplicationKeys, event.key, held)) return 0;
+      if (const auto* action = app->keys.resolve(chord, Scope::Always); action != nullptr) {
+        run_action(*app, *shell, action->id);
+        return 0;
+      }
+      if (!editing) {
+        if (const auto* action = app->keys.resolve(chord, Scope::Bare); action != nullptr) {
+          run_action(*app, *shell, action->id);
+          return 0;
+        }
+      }
 
       if (event.key == Key::Tab) {
         shell->host->focus_next(event.modifiers.shift);
         mark_dirty(*app);
-        return 0;
-      }
-
-      // Premiere's `~`: the panel under the pointer fills the window, and again
-      // puts it back. Under the *pointer* rather than whatever has the keyboard,
-      // because it is used to get a closer look at something being watched, and
-      // watching a panel does not focus it.
-      if (event.key == Key::Backtick && held.none() && shell->is_main()) {
-        if (shell->dock != nullptr) {
-          POINT at{};
-          GetCursorPos(&at);
-          ScreenToClient(window, &at);
-          const auto [ux, uy] = to_units(*shell, at);
-          const auto over = shell->dock->panel_at(ux, uy);
-          const PanelId panel =
-              over.value_or(layout_of(*app).maximised);
-          if (cutline::ui::toggle_maximised(layout_of(*app), panel)) app->dock_stale = true;
-        }
         return 0;
       }
 
@@ -1857,13 +1760,8 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
           mark_dirty(*app);
           return 0;
         }
-        // Premiere sends the transport and the marking keys to whichever
-        // monitor is focused, and the source is a monitor. Before the sequence
-        // bindings, because these are the same keys meaning the same thing
-        // about a different thing — an `I` with the source in hand is a mark on
-        // the source, not on the timeline behind it.
-        if (!handle_source_key(*app, event.key, held)) {
-          run_binding(*app, kTransportKeys, event.key, held);
+        if (const auto* action = app->keys.resolve(chord, Scope::Fallback); action != nullptr) {
+          run_action(*app, *shell, action->id);
         }
       }
       mark_dirty(*app);
@@ -1897,6 +1795,25 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
           shell->host->show_keyboard_cues();
           title->fire();
           mark_dirty(*app);
+          return 0;
+        }
+      }
+      // Any other chord with Alt in it is the keymap's, wherever it is offered:
+      // no control takes Alt, and Windows sends these here rather than as key
+      // presses, which is why Alt+Left never nudged until this did. A control
+      // taking text goes first -- the shortcuts window waiting for a key.
+      {
+        const Modifiers held = modifiers_now();
+        if (const Widget* typing = shell->host->focused();
+            typing != nullptr && typing->wants_text() &&
+            shell->host->key_down(KeyEvent{.key = key_from_win32(wparam), .modifiers = held})) {
+          mark_dirty(*app);
+          return 0;
+        }
+        const cutline::editor::Chord chord{.key = key_from_win32(wparam), .control = held.control,
+                                           .shift = held.shift, .alt = true};
+        if (const auto* action = app->keys.holder(chord); action != nullptr) {
+          run_action(*app, *shell, action->id);
           return 0;
         }
       }
@@ -2013,6 +1930,8 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       if (shell->is_dialog) {
         if (app->settings_window.get() == shell) {
           close_settings_dialog(*app);
+        } else if (app->keyboard_window.get() == shell) {
+          close_keyboard_dialog(*app);
         } else {
           close_export_dialog(*app);
         }
@@ -2157,6 +2076,13 @@ int main(int argc, char** argv) {
   // After the settings are read and before anything asks for a waveform, so the
   // first request of the session already looks on disk.
   apply_media_cache(app);
+
+  // Before the tree is built, so the first menu and the first tooltip already
+  // say the person's own keys.
+  if (auto read = cutline::editor::read_keymap(cutline::editor::default_keys_path());
+      read.has_value()) {
+    app.keys = std::move(*read);
+  }
 
   // Read before the tree is built, so the window opens in the arrangement it
   // was last left in rather than flashing the default and then moving.

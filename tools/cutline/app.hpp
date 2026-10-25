@@ -39,6 +39,7 @@
 #include "cutline/editor/monitor_binding.hpp"
 #include "cutline/editor/session.hpp"
 #include "cutline/editor/settings.hpp"
+#include "cutline/editor/shortcuts.hpp"
 #include "cutline/editor/timeline_binding.hpp"
 #include "cutline/editor/titles.hpp"
 #include "cutline/editor/transitions.hpp"
@@ -51,6 +52,7 @@
 #include "cutline/ui/dock.hpp"
 #include "cutline/ui/dock_view.hpp"
 #include "cutline/ui/effects_browser.hpp"
+#include "cutline/ui/keyboard_view.hpp"
 #include "cutline/ui/keyframe_view.hpp"
 #include "cutline/ui/meter_view.hpp"
 #include "cutline/ui/monitor.hpp"
@@ -587,6 +589,23 @@ struct App {
   /// control while its own callback was still running.
   bool settings_page_stale = false;
 
+  /// The Keyboard Shortcuts window, when it is open, and its parts.
+  std::unique_ptr<Shell> keyboard_window;
+  cutline::ui::KeyboardView* keyboard_view = nullptr;
+  Box* keyboard_list = nullptr;
+  Label* keyboard_custom = nullptr;
+  Label* keyboard_note_label = nullptr;
+  TextField* keyboard_search_field = nullptr;
+  /// What the list is narrowed to, which layer of the keyboard is drawn, the
+  /// command waiting for its key, and what the last change did.
+  std::string keyboard_search;
+  cutline::ui::Modifiers keyboard_modifiers;
+  std::string keyboard_capturing;
+  std::string keyboard_note;
+  /// Deferred for the reason the settings page is: what asks is a button in
+  /// the list being rebuilt.
+  bool keyboard_stale = false;
+
   /// The preferences, as read and as written.
   ///
   /// The ones with a live field of their own — snapping, the theme, the pool's
@@ -594,6 +613,9 @@ struct App {
   /// because those fields are what the rest of the application already asks.
   /// The durations have no such field and live here alone.
   cutline::editor::Settings settings;
+  /// Which keys run which actions: a preset with the person's changes over
+  /// it, from keys.json.
+  cutline::editor::Keymap keys = cutline::editor::preset_keymap(cutline::editor::kPremierePreset);
   Button* workspace_button = nullptr;
   /// Set when the arrangement has changed and the views need rebuilding.
   ///
@@ -1037,6 +1059,7 @@ struct App {
     // and then never again: its category buttons worked, and nothing on screen
     // ever said so.
     if (settings_window != nullptr) all.push_back(settings_window.get());
+    if (keyboard_window != nullptr) all.push_back(keyboard_window.get());
 #if CUTLINE_HAVE_PREVIEW
     if (export_window != nullptr) all.push_back(export_window.get());
 #endif
@@ -1114,35 +1137,30 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 9> kPanels{{
     {"history", "History"},
 }};
 
-/// The tool palette, in the order it is drawn and offered.
-///
-/// The keys are Premiere's, which is the point of choosing them: anybody who
-/// has used one of these reaches for V and C without thinking, and a shortcut
-/// somebody has to learn is one they will not use.
+/// The tool palette, in the order it is drawn and offered, and the action in
+/// the keymap that picks each -- whose keys are Premiere's unless somebody
+/// changes them.
 struct ToolEntry {
   cutline::ui::Tool tool;
   IconButton::Icon icon;
-  Key key;
-  /// What it says when the pointer rests on it. The name and the key, because
-  /// an icon button has no words at all and a shortcut nobody can discover is
-  /// one nobody uses.
-  const char* hint;
+  std::string_view action;
+  /// What it is called, in the menu and in its tooltip beside its key.
+  const char* name;
 };
 
 constexpr std::array kTools{
-    ToolEntry{cutline::ui::Tool::Selection, IconButton::Icon::Pointer, Key::V,
-              "Selection (V)"},
+    ToolEntry{cutline::ui::Tool::Selection, IconButton::Icon::Pointer, "tool.selection",
+              "Selection"},
     // Premiere's B and N, in Premiere's order: the two edge tools sit together
     // between the pointer and the razor, because they are variations on the
     // trim the pointer already does.
-    ToolEntry{cutline::ui::Tool::Ripple, IconButton::Icon::Ripple, Key::B,
-              "Ripple Edit (B)"},
-    ToolEntry{cutline::ui::Tool::Roll, IconButton::Icon::Roll, Key::N, "Rolling Edit (N)"},
-    ToolEntry{cutline::ui::Tool::Razor, IconButton::Icon::Razor, Key::C, "Razor (C)"},
-    ToolEntry{cutline::ui::Tool::RateStretch, IconButton::Icon::RateStretch, Key::R,
-              "Rate Stretch (R)"},
-    ToolEntry{cutline::ui::Tool::Slip, IconButton::Icon::Slip, Key::Y, "Slip (Y)"},
-    ToolEntry{cutline::ui::Tool::Slide, IconButton::Icon::Slide, Key::U, "Slide (U)"},
+    ToolEntry{cutline::ui::Tool::Ripple, IconButton::Icon::Ripple, "tool.ripple", "Ripple Edit"},
+    ToolEntry{cutline::ui::Tool::Roll, IconButton::Icon::Roll, "tool.roll", "Rolling Edit"},
+    ToolEntry{cutline::ui::Tool::Razor, IconButton::Icon::Razor, "tool.razor", "Razor"},
+    ToolEntry{cutline::ui::Tool::RateStretch, IconButton::Icon::RateStretch, "tool.rate_stretch",
+              "Rate Stretch"},
+    ToolEntry{cutline::ui::Tool::Slip, IconButton::Icon::Slip, "tool.slip", "Slip"},
+    ToolEntry{cutline::ui::Tool::Slide, IconButton::Icon::Slide, "tool.slide", "Slide"},
 };
 
 /// Where a popup opens under the menu bar, at its left edge.
@@ -1191,8 +1209,22 @@ constexpr int kExportWindowHeight = 520;
 [[nodiscard]] MenuEntry submenu_entry(std::string label, std::vector<MenuEntry> rows);
 [[nodiscard]] MenuEntry command_entry(App& app, std::string label,
                                       cutline::editor::Command command);
-[[nodiscard]] std::string key_label(Key key);
-[[nodiscard]] std::string shortcut_for(cutline::editor::Command command);
+/// The key an action is on, as a menu writes it, or empty. Premiere's keys
+/// when there is no application, which is the headless check building panels.
+[[nodiscard]] std::string shortcut_of(const App* app, std::string_view action);
+[[nodiscard]] std::string shortcut_for(const App* app, cutline::editor::Command command);
+/// A tooltip's text with the action's key after it in brackets, when it has
+/// one -- so the tooltip says what the key is now, not what it was.
+[[nodiscard]] std::string with_keys(const App* app, std::string text, std::string_view action);
+/// Runs what a key's action does. `shell` is the window the key arrived in.
+void run_action(App& app, Shell& shell, std::string_view action);
+/// Writes the keymap to keys.json.
+void save_keys(App& app);
+/// Premiere's Keyboard Shortcuts window, in `keyboard_window.cpp`.
+void open_keyboard_dialog(App& app);
+void close_keyboard_dialog(App& app);
+void refresh_keyboard_dialog(App& app);
+[[nodiscard]] std::unique_ptr<Widget> build_keyboard_interface(App& app, Shell* shell);
 [[nodiscard]] std::vector<MenuEntry> clip_entries(App& app);
 
 // What the menus run, defined in `main.cpp`.

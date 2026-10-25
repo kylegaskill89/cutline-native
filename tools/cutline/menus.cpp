@@ -14,14 +14,13 @@ namespace cutline::tool {
 // nobody finds. Each menu is built as it drops, so what is greyed and what is
 // ticked is what is true at that moment rather than what was true at startup.
 //
-// The keys written beside the rows are the ones the window actually handles —
-// read from the command tables where there is one, and written out here where
-// the key is handled by the window itself.
+// The keys written beside the rows are read from the keymap, so a menu always
+// says the key that runs it now -- including one somebody changed.
 
 [[nodiscard]] std::vector<MenuEntry> file_menu(App& app) {
   std::vector<MenuEntry> rows;
   rows.push_back(submenu_entry("New", {
-      action_entry("Project", [&app] { new_project(app); }, "Ctrl+N"),
+      action_entry("Project", [&app] { new_project(app); }, shortcut_of(&app, "file.new")),
       action_entry("Sequence", [&app] { new_sequence(app); }),
       MenuEntry::divider(),
       action_entry("Bin", [&app] { add_bin(app); }),
@@ -29,17 +28,22 @@ namespace cutline::tool {
       action_entry("Colour Matte", [&app] { add_matte(app); }),
       action_entry("Adjustment Layer", [&app] { add_adjustment(app); }),
   }));
-  rows.push_back(action_entry("Open Project...", [&app] { open_project(app); }, "Ctrl+O"));
+  rows.push_back(action_entry("Open Project...", [&app] { open_project(app); },
+                              shortcut_of(&app, "file.open")));
   rows.push_back(MenuEntry::divider());
-  rows.push_back(action_entry("Save", [&app] { save_project(app, false); }, "Ctrl+S"));
-  rows.push_back(action_entry("Save As...", [&app] { save_project(app, true); }, "Ctrl+Shift+S"));
+  rows.push_back(action_entry("Save", [&app] { save_project(app, false); },
+                              shortcut_of(&app, "file.save")));
+  rows.push_back(action_entry("Save As...", [&app] { save_project(app, true); },
+                              shortcut_of(&app, "file.save_as")));
   rows.push_back(MenuEntry::divider());
-  rows.push_back(action_entry("Import...", [&app] { import_media(app); }, "Ctrl+I"));
+  rows.push_back(action_entry("Import...", [&app] { import_media(app); },
+                              shortcut_of(&app, "file.import")));
   // Premiere's name for it. On the pool's selection, like Premiere's.
   rows.push_back(action_entry("Link Media...", [&app] { relink_pool_entry(app); }));
   rows.push_back(MenuEntry::divider());
   rows.push_back(submenu_entry("Export", {
-      action_entry("Media...", [&app] { open_export_dialog(app); }),
+      action_entry("Media...", [&app] { open_export_dialog(app); },
+                   shortcut_of(&app, "file.export")),
       action_entry("Frame", [&app] { take_snapshot(app); }),
   }));
   rows.push_back(MenuEntry::divider());
@@ -71,7 +75,9 @@ namespace cutline::tool {
   rows.push_back(command_entry(app, "Select All", Command::SelectAll));
   rows.push_back(command_entry(app, "Deselect All", Command::SelectNone));
   rows.push_back(MenuEntry::divider());
-  // Where Premiere keeps it on Windows.
+  // Where Premiere keeps both on Windows.
+  rows.push_back(action_entry("Keyboard Shortcuts...", [&app] { open_keyboard_dialog(app); },
+                              shortcut_of(&app, "edit.keyboard_shortcuts")));
   rows.push_back(action_entry("Preferences...", [&app] {
     open_settings_dialog(app, SettingsKind::Application);
   }));
@@ -116,7 +122,7 @@ namespace cutline::tool {
   rows.push_back(command_entry(app, "Nudge Right One Frame", Command::NudgeRight));
   rows.push_back(MenuEntry::divider());
   rows.push_back(switch_entry("Snap in Timeline", app.snapping, [&app] { toggle_snapping(app); },
-                              "S"));
+                              shortcut_of(&app, "sequence.snap")));
   rows.push_back(MenuEntry::divider());
   rows.push_back(command_entry(app, "Add Video Track", Command::AddVideoTrack));
   rows.push_back(command_entry(app, "Add Audio Track", Command::AddAudioTrack));
@@ -173,17 +179,18 @@ namespace cutline::tool {
 
   // The transport. Premiere leaves these to the keys alone; here they are on
   // the menu as well, so that every one of them can be found.
-  rows.push_back(action_entry("Play/Pause", [&app] { toggle_playback(app); }, "Space"));
+  rows.push_back(action_entry("Play/Pause", [&app] { toggle_playback(app); },
+                              shortcut_of(&app, "playback.play")));
   rows.push_back(action_entry("Shuttle Backward", [&app] {
     set_shuttle(app, next_shuttle(app.shuttle, -1.0));
-  }, "J"));
+  }, shortcut_of(&app, "playback.shuttle_left")));
   rows.push_back(action_entry("Stop", [&app] {
     set_shuttle(app, 0.0);
     if (app.playing()) stop_playback(app);
-  }, "K"));
+  }, shortcut_of(&app, "playback.stop")));
   rows.push_back(action_entry("Shuttle Forward", [&app] {
     set_shuttle(app, app.playing() ? next_shuttle(1.0, 1.0) : next_shuttle(app.shuttle, 1.0));
-  }, "L"));
+  }, shortcut_of(&app, "playback.shuttle_right")));
   rows.push_back(command_entry(app, "Go to Start", Command::GoToStart));
   rows.push_back(command_entry(app, "Go to End", Command::GoToEnd));
   rows.push_back(command_entry(app, "Previous Frame", Command::PreviousFrame));
@@ -195,37 +202,37 @@ namespace cutline::tool {
     if (app.timeline == nullptr) return;
     app.timeline->zoom_about_playhead(true);
     mark_dirty(app);
-  }, "=", timeline));
+  }, shortcut_of(&app, "sequence.zoom_in"), timeline));
   rows.push_back(action_entry("Zoom Out", [&app] {
     if (app.timeline == nullptr) return;
     app.timeline->zoom_about_playhead(false);
     mark_dirty(app);
-  }, "-", timeline));
+  }, shortcut_of(&app, "sequence.zoom_out"), timeline));
   rows.push_back(action_entry("Zoom to Sequence", [&app] {
     if (app.timeline == nullptr) return;
     app.timeline->zoom_to_fit();
     mark_dirty(app);
-  }, "\\", timeline));
+  }, shortcut_of(&app, "sequence.zoom_fit"), timeline));
   rows.push_back(MenuEntry::divider());
 
-  // The tools by name, with the one in hand ticked. The hint carries the key
-  // in brackets for the tooltip; the menu has a column for it.
+  // The tools by name, with the one in hand ticked.
   std::vector<MenuEntry> tools;
   for (const ToolEntry& entry : kTools) {
-    std::string name(entry.hint);
-    if (const auto bracket = name.find(" ("); bracket != std::string::npos) name.resize(bracket);
-    tools.push_back(switch_entry(std::move(name), app.tool == entry.tool,
+    tools.push_back(switch_entry(entry.name, app.tool == entry.tool,
                                  [&app, tool = entry.tool] { choose_tool(app, tool); },
-                                 key_label(entry.key)));
+                                 shortcut_of(&app, entry.action)));
   }
   rows.push_back(submenu_entry("Tools", std::move(tools)));
 
   std::vector<MenuEntry> themes;
   const std::span<const Theme> all = built_in_themes();
+  constexpr std::array<std::string_view, 4> kThemeActions{"view.theme.slate", "view.theme.luna",
+                                                           "view.theme.aero", "view.theme.phosphor"};
   for (std::size_t i = 0; i < all.size(); ++i) {
     themes.push_back(switch_entry(std::string(all[i].name), i == app.theme,
                                   [&app, i] { set_theme(app, i); },
-                                  i < 9 ? std::to_string(i + 1) : std::string{}));
+                                  i < kThemeActions.size() ? shortcut_of(&app, kThemeActions[i])
+                                                           : std::string{}));
   }
   rows.push_back(submenu_entry("Theme", std::move(themes)));
   return rows;

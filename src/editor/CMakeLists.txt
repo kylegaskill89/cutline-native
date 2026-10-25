@@ -21,6 +21,7 @@ add_library(cutline_editor
   src/monitor_binding.cpp
   src/session.cpp
   src/settings.cpp
+  src/shortcuts.cpp
   src/timeline_binding.cpp
   src/titles.cpp
   src/transitions.cpp

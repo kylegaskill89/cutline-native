@@ -248,7 +248,8 @@ std::vector<MenuEntry> panel_menu_extras(App& app, const PanelId& panel) {
     rows.push_back(plain("New Colour Matte", [&app] { add_matte(app); }));
     rows.push_back(plain("New Adjustment Layer", [&app] { add_adjustment(app); }));
     rows.push_back(MenuEntry::divider());
-    rows.push_back(plain("Import...", [&app] { import_media(app); }, "Ctrl+I"));
+    rows.push_back(plain("Import...", [&app] { import_media(app); },
+                         shortcut_of(&app, "file.import")));
     rows.push_back(plain("Remove from Project", [&app] { remove_from_pool(app); }));
     rows.push_back(plain("Link Media...", [&app] { relink_pool_entry(app); }));
     rows.push_back(MenuEntry::divider());
@@ -277,8 +278,10 @@ std::vector<MenuEntry> panel_menu_extras(App& app, const PanelId& panel) {
     rows.push_back(plain("Export Frame", [&app] { take_snapshot(app); }));
   } else if (panel == "source") {
     const bool has_source = source_media_of(app) != nullptr;
-    MenuEntry in = plain("Mark In", [&app] { mark_source(app, false); }, "I");
-    MenuEntry out = plain("Mark Out", [&app] { mark_source(app, true); }, "O");
+    MenuEntry in = plain("Mark In", [&app] { mark_source(app, false); },
+                         shortcut_of(&app, "markers.mark_in"));
+    MenuEntry out = plain("Mark Out", [&app] { mark_source(app, true); },
+                          shortcut_of(&app, "markers.mark_out"));
     MenuEntry clear = plain("Clear In and Out", [&app] {
       if (const cutline::core::Media* media = source_media_of(app); media != nullptr) {
         app.session.apply(cutline::core::clear_source_marks(app.session.project(), media->id));

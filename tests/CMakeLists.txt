@@ -40,6 +40,7 @@ add_executable(cutline_core_tests
   editor/presets_test.cpp
   editor/session_test.cpp
   editor/settings_test.cpp
+  editor/shortcuts_test.cpp
   editor/timeline_binding_test.cpp
   editor/titles_test.cpp
   editor/transitions_test.cpp
@@ -61,6 +62,7 @@ add_executable(cutline_core_tests
   ui/dock_test.cpp
   ui/dock_view_test.cpp
   ui/effects_browser_test.cpp
+  ui/keyboard_view_test.cpp
   ui/keyframe_view_test.cpp
   ui/layout_test.cpp
   ui/meter_view_test.cpp
