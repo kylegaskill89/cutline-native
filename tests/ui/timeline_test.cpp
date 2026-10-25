@@ -65,7 +65,20 @@ struct Fixture {
     view->set_model(sample_model());
     view->set_scale(TimeScale{.pixels_per_second = 100.0, .start = 0.0});
     host->resize(Rect{0.0, 0.0, 1000.0, 400.0}, flat_context());
+    host->animator().set_clock([this] { return now; });
   }
+
+  /// Lets anything on its way arrive: the clock moved on a second at a time,
+  /// a frame for each.
+  void settle() {
+    for (int i = 0; i < 4; ++i) {
+      now += 1.0;
+      (void)host->update_layout(flat_context());
+    }
+  }
+
+  /// The host's clock, which only moves when a test moves it.
+  double now = 0.0;
 
   std::unique_ptr<WidgetHost> host;
   TimelineView* view = nullptr;
@@ -438,9 +451,74 @@ TEST(Zoom, AStepInKeepsThePlayheadWhereItIsOnScreen) {
   const double at = fixture.view->playhead_x();
 
   fixture.view->zoom_about_playhead(true);
+  fixture.settle();
 
   EXPECT_GT(fixture.view->scale().pixels_per_second, 100.0);
   EXPECT_NEAR(fixture.view->playhead_x(), at, 1.0);
+}
+
+TEST(Zoom, OnTheWayThePlayheadStaysPut) {
+  // The zoom glides, and what it holds still has to hold still the whole way,
+  // not only at the two ends of it.
+  Fixture fixture;
+  fixture.view->set_playhead(6.0);
+  const double at = fixture.view->playhead_x();
+
+  fixture.view->zoom_about_playhead(true);
+  (void)fixture.host->update_layout(flat_context());
+  fixture.now += default_theme().metrics.motion * 0.4;
+  (void)fixture.host->update_layout(flat_context());
+
+  const double part = fixture.view->scale().pixels_per_second;
+  EXPECT_GT(part, 100.0);
+  EXPECT_LT(part, 100.0 * 1.2) << "part of the way, not all of it";
+  EXPECT_NEAR(fixture.view->playhead_x(), at, 1.0);
+}
+
+TEST(Zoom, ItGetsThereWithTheTimelineBeingDrawnOnTheWay) {
+  // The app draws every frame of a zoom, and drawing asks the same clock about
+  // the timeline's own hover. The two once shared a clock, and the drawing put
+  // the zoom back to its start every frame: it worked in every test, which
+  // never drew, and never moved on screen.
+  Fixture fixture;
+  fixture.view->set_playhead(6.0);
+  fixture.view->zoom_about_playhead(true);
+  for (int frame = 0; frame < 6; ++frame) {
+    (void)fixture.host->update_layout(flat_context());
+    RecordingPainter painter;
+    fixture.host->paint(painter, default_theme());
+    fixture.now += default_theme().metrics.motion / 4.0;
+  }
+  EXPECT_GT(fixture.view->scale().pixels_per_second, 100.0 * 1.2);
+}
+
+TEST(Zoom, PressingTwiceGoesTwiceAsFar) {
+  Fixture once;
+  once.view->set_playhead(6.0);
+  once.view->zoom_about_playhead(true);
+  once.view->zoom_about_playhead(true);
+  once.settle();
+
+  Fixture slowly;
+  slowly.view->set_playhead(6.0);
+  slowly.view->zoom_about_playhead(true);
+  slowly.settle();
+  slowly.view->zoom_about_playhead(true);
+  slowly.settle();
+
+  EXPECT_DOUBLE_EQ(once.view->scale().pixels_per_second,
+                   slowly.view->scale().pixels_per_second)
+      << "a second press while the first is on its way builds on where it is going";
+}
+
+TEST(Zoom, APressTakesHoldOfWhereTheZoomIsGoing) {
+  Fixture fixture;
+  fixture.view->set_playhead(6.0);
+  fixture.view->zoom_about_playhead(true);
+  (void)fixture.host->update_layout(flat_context());
+  fixture.host->mouse_down(press(500.0, 390.0));
+  EXPECT_GT(fixture.view->scale().pixels_per_second, 100.0 * 1.2)
+      << "a drag starting part way through a zoom would start from the wrong place";
 }
 
 TEST(Zoom, AStepOutShowsMoreOfTheSequence) {
@@ -450,6 +528,7 @@ TEST(Zoom, AStepOutShowsMoreOfTheSequence) {
       fixture.view->scale().visible_duration(fixture.view->time_area().width);
 
   fixture.view->zoom_about_playhead(false);
+  fixture.settle();
   EXPECT_GT(fixture.view->scale().visible_duration(fixture.view->time_area().width),
             before);
 }
@@ -573,6 +652,7 @@ TEST(Scrollbars, ZoomingInFromTheLeftEndKeepsTheRightWhereItWas) {
 TEST(Scrollbars, ThereIsNoBarWhenItWouldHaveNothingToSay) {
   Fixture fixture;
   fixture.view->zoom_to_fit();
+  fixture.settle();
   EXPECT_TRUE(fixture.view->scroll_area().empty());
   EXPECT_TRUE(fixture.view->scroll_thumb().empty());
   EXPECT_TRUE(fixture.view->zoom_grip(false).empty());
@@ -1166,6 +1246,7 @@ TEST(Timeline, WithTheWholeSequenceOnScreenTheTracksReachTheBottom) {
   // of pixels is better spent on the tracks.
   Fixture fixture;
   fixture.view->zoom_to_fit();
+  fixture.settle();
 
   EXPECT_TRUE(fixture.view->scroll_area().empty());
   EXPECT_DOUBLE_EQ(fixture.view->tracks_area().bottom(), 400.0);
@@ -1602,6 +1683,7 @@ TEST(Timeline, ControlWheelZoomsAboutThePointer) {
 
   fixture.host->wheel(WheelEvent{
       .x = x, .y = 200.0, .delta_y = -1.0, .modifiers = Modifiers{.control = true}});
+  fixture.settle();
 
   EXPECT_GT(fixture.view->scale().pixels_per_second, 100.0);
   EXPECT_NEAR(fixture.view->scale().to_time(300.0), under, 1e-9);
@@ -1646,6 +1728,7 @@ TEST(Timeline, TheWheelBubblesOnceItCannotMoveFurther) {
 TEST(Timeline, FittingPutsTheWholeProjectOnScreen) {
   Fixture fixture;
   fixture.view->zoom_to_fit();
+  fixture.settle();
 
   const double width = fixture.view->time_area().width;
   EXPECT_NEAR(fixture.view->scale().to_x(12.0), width, 1e-6);

@@ -28,6 +28,10 @@ std::string_view to_string(DrawCall::Kind kind) noexcept {
       return "backdrop_blur";
     case DrawCall::Kind::Text:
       return "text";
+    case DrawCall::Kind::PushOpacity:
+      return "push_opacity";
+    case DrawCall::Kind::PopOpacity:
+      return "pop_opacity";
   }
   return "unknown";
 }
@@ -39,6 +43,14 @@ void RecordingPainter::push_clip(const Rect& bounds, double corner_radius) {
 }
 
 void RecordingPainter::pop_clip() { calls_.push_back({.kind = DrawCall::Kind::PopClip}); }
+
+void RecordingPainter::push_opacity(float opacity) {
+  calls_.push_back({.kind = DrawCall::Kind::PushOpacity, .width = opacity});
+}
+
+void RecordingPainter::pop_opacity() {
+  calls_.push_back({.kind = DrawCall::Kind::PopOpacity});
+}
 
 void RecordingPainter::fill(const Rect& bounds, double corner_radius, const Fill& value) {
   calls_.push_back({.kind = DrawCall::Kind::Fill,

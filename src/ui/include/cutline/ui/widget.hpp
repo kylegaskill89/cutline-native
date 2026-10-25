@@ -27,6 +27,7 @@
 #include "cutline/ui/theme.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
@@ -195,6 +196,11 @@ class Widget {
   virtual bool on_key_up(const KeyEvent& event);
   /// A typed character, already through the keyboard layout and any IME.
   virtual bool on_text(char32_t codepoint);
+
+  /// A frame is about to be drawn, for a widget that asked with
+  /// `WidgetHost::tick_me` because something of its is on its way somewhere --
+  /// a zoom, a scroll. Moves it on; asks again if it has not arrived.
+  virtual void tick() {}
 
   /// Whether this widget is being typed into.
   ///
@@ -395,6 +401,12 @@ class WidgetHost {
   /// subtree is cleared; call it directly before removing a widget by hand.
   void forget(Widget* widget);
 
+  /// Asks for `widget->tick()` before the next frame, and for that frame.
+  /// Ticks run in `update_layout`, before anything is measured or drawn, so a
+  /// view on its way somewhere is moved once a frame in the one place the
+  /// tree may be changed.
+  void tick_me(Widget* widget);
+
   // ---------------------------------------------------------------- popups --
 
   /// Shows `content` above everything else, near `anchor`.
@@ -492,6 +504,10 @@ class WidgetHost {
   bool keyboard_cues_ = false;
   /// Taken when a popup takes the keyboard and given back when it goes.
   Widget* focus_before_popup_ = nullptr;
+  /// Widgets with something on its way, due a tick before the next frame.
+  std::vector<Widget*> ticking_;
+  /// Which popup this is, so the clock can fade each one in from nothing.
+  std::uint64_t popups_opened_ = 0;
   bool return_focus_ = true;
   Rect bounds_;
   bool layout_dirty_ = false;

@@ -284,6 +284,7 @@ void TimelineView::settle_model() {
 }
 
 void TimelineView::set_scale(const TimeScale& scale) {
+  glide_.reset();
   scale_ = scale;
   scale_.pixels_per_second =
       std::clamp(scale_.pixels_per_second, kMinPixelsPerSecond, kMaxPixelsPerSecond);
@@ -291,7 +292,9 @@ void TimelineView::set_scale(const TimeScale& scale) {
 }
 
 void TimelineView::zoom_to_fit() {
-  scale_.fit(model_.content_duration(), time_area().width);
+  TimeScale to = zoom_target();
+  to.fit(model_.content_duration(), time_area().width);
+  glide_to(to);
 }
 
 void TimelineView::zoom_about_playhead(bool closer) {
@@ -299,16 +302,83 @@ void TimelineView::zoom_about_playhead(bool closer) {
   if (area.width <= 0.0) return;
 
   // Where on screen to hold still: the playhead, or the middle of the view when
-  // it is not on screen to hold.
-  const double at = scale_.to_x(playhead_);
+  // it is not on screen to hold. From where a zoom already on its way is
+  // going, so pressing twice goes twice as far rather than restarting.
+  TimeScale to = zoom_target();
+  const double at = to.to_x(playhead_);
   const double anchor = at >= 0.0 && at <= area.width ? at : area.width * 0.5;
 
-  scale_.zoom_about(anchor, closer ? kZoomStep : 1.0 / kZoomStep);
-  scale_.clamp_start(model_.content_duration());
+  to.zoom_about(anchor, closer ? kZoomStep : 1.0 / kZoomStep);
+  to.pixels_per_second = std::clamp(to.pixels_per_second, kMinPixelsPerSecond, kMaxPixelsPerSecond);
+  to.clamp_start(model_.content_duration());
   // Anchored on the playhead, so this is a statement that the playhead is what
   // is being looked at — following it again is what was asked for.
   scrolled_by_hand_ = false;
+  glide_to(to);
+}
+
+const TimeScale& TimelineView::zoom_target() const noexcept {
+  return glide_.has_value() ? glide_->to : scale_;
+}
+
+void TimelineView::glide_to(TimeScale to) {
+  if (metrics_.motion <= 0.0 || host() == nullptr) {
+    glide_.reset();
+    scale_ = to;
+    refresh_bounds();
+    return;
+  }
+  glide_ = ZoomGlide{.from = scale_, .to = to, .change = ++glides_};
+  host()->tick_me(this);
+}
+
+void TimelineView::settle_glide() {
+  if (!glide_.has_value()) return;
+  scale_ = glide_->to;
+  glide_.reset();
   refresh_bounds();
+}
+
+namespace {
+
+/// A scale part of the way from `a` to `b`.
+///
+/// The zoom moves evenly in proportion rather than in pixels per second, so
+/// each frame of it is the same step to the eye whether it is going from a
+/// minute to a second or a second to a frame. And it holds still the one point
+/// both scales put in the same place -- the playhead for a key, the pointer for
+/// the wheel -- so the thing being zoomed about does not drift on the way and
+/// come back at the end.
+[[nodiscard]] TimeScale between(const TimeScale& a, const TimeScale& b, double t) {
+  TimeScale out = b;
+  out.pixels_per_second =
+      std::exp(std::lerp(std::log(a.pixels_per_second), std::log(b.pixels_per_second), t));
+  const double apart = 1.0 / a.pixels_per_second - 1.0 / b.pixels_per_second;
+  if (std::abs(apart) > 1e-12) {
+    const double x = (b.start - a.start) / apart;
+    const double held = a.start + x / a.pixels_per_second;
+    out.start = std::max(0.0, held - x / out.pixels_per_second);
+  } else {
+    out.start = std::lerp(a.start, b.start, t);
+  }
+  return out;
+}
+
+}  // namespace
+
+void TimelineView::tick() {
+  if (!glide_.has_value()) return;
+  WidgetHost* owner = host();
+  const float t = owner == nullptr
+                      ? 1.0F
+                      : owner->animator().progress(this, channel::kZoom, glide_->change,
+                                                   metrics_.motion);
+  if (t >= 1.0F) {
+    settle_glide();
+    return;
+  }
+  scale_ = between(glide_->from, glide_->to, t);
+  owner->tick_me(this);
 }
 
 void TimelineView::set_playhead(double seconds) {
@@ -316,6 +386,8 @@ void TimelineView::set_playhead(double seconds) {
 }
 
 bool TimelineView::follow_playhead() {
+  // A zoom on its way is already holding the playhead where it should be.
+  if (glide_.has_value()) return false;
   const double width = time_area().width;
   if (width <= 0.0) return false;
 
@@ -2362,6 +2434,9 @@ void TimelineView::on_mouse_leave() {
 }
 
 bool TimelineView::on_mouse_down(const MouseEvent& event) {
+  // Whatever the press is about to take hold of -- a scrollbar, a clip, the
+  // ruler -- it takes hold of the view where it is going, not part way there.
+  settle_glide();
   if (event.button == MouseButton::Right) {
     // Over a clip that is not already selected, the right-click selects it
     // first: a menu that acted on something other than what was clicked would
@@ -3032,11 +3107,16 @@ bool TimelineView::on_wheel(const WheelEvent& event) {
     // Zoom about the pointer. Anywhere else and every notch has to be undone
     // by scrolling back to what you were looking at.
     const double factor = event.delta_y > 0.0 ? 1.0 / kZoomStep : kZoomStep;
-    scale_.zoom_about(event.x - area.x, factor);
-    scale_.clamp_start(model_.content_duration());
+    TimeScale to = zoom_target();
+    to.zoom_about(event.x - area.x, factor);
+    to.pixels_per_second =
+        std::clamp(to.pixels_per_second, kMinPixelsPerSecond, kMaxPixelsPerSecond);
+    to.clamp_start(model_.content_duration());
     scrolled_by_hand_ = true;
+    glide_to(to);
     return true;
   }
+  settle_glide();
 
   // A plain wheel scrolls the tracks where there are more than fit, and moves
   // through time where there are not — so the gesture always does something.

@@ -523,6 +523,7 @@ void ScrollView::layout(const LayoutContext& context) {
   bar_width_ = metrics.scrollbar_width;
   // Three lines a notch, which is what every other application does.
   step_ = metrics.font_size * metrics.line_height * 3.0;
+  motion_ = metrics.motion;
 
   const bool vertical = axis_ == Axis::Vertical;
   const double visible = vertical ? bounds().height : bounds().width;
@@ -575,6 +576,13 @@ LayoutItem ScrollView::sizing(Axis axis, const LayoutContext& context) const {
 }
 
 void ScrollView::scroll_to(double offset) {
+  // Anything that sends the view somewhere outright -- the thumb, a jump to
+  // a row -- overrules a wheel scroll still on its way.
+  glide_.reset();
+  place(offset);
+}
+
+void ScrollView::place(double offset) {
   const double before = view_.offset;
   view_.scroll_to(offset);
   const double moved = before - view_.offset;
@@ -620,11 +628,37 @@ bool ScrollView::on_wheel(const WheelEvent& event) {
   const double delta = axis_ == Axis::Vertical ? event.delta_y : event.delta_x;
   if (delta == 0.0) return false;
 
-  const double before = view_.offset;
-  scroll_by(delta * step_);
+  // From where a scroll already on its way is going, so notches add up.
+  const double from = glide_.has_value() ? glide_->to : view_.offset;
+  Viewport aimed = view_;
+  aimed.scroll_to(from + delta * step_);
   // Unhandled at the ends, so the wheel keeps bubbling to whatever is outside
   // rather than dying against a view that cannot move any further.
-  return view_.offset != before;
+  if (aimed.offset == from) return false;
+
+  if (motion_ <= 0.0 || host() == nullptr) {
+    place(aimed.offset);
+    return true;
+  }
+  glide_ = Glide{.from = view_.offset, .to = aimed.offset, .change = ++glides_};
+  host()->tick_me(this);
+  return true;
+}
+
+void ScrollView::tick() {
+  if (!glide_.has_value()) return;
+  WidgetHost* owner = host();
+  // A wheel scroll is a shorter move than a zoom and takes a shorter time:
+  // half the theme's, which is about what a notch takes on the platform.
+  const float t = owner == nullptr ? 1.0F
+                                   : owner->animator().progress(this, channel::kScroll, glide_->change,
+                                                                motion_ * 0.5);
+  place(std::lerp(glide_->from, glide_->to, static_cast<double>(t)));
+  if (t >= 1.0F) {
+    glide_.reset();
+    return;
+  }
+  owner->tick_me(this);
 }
 
 bool ScrollView::on_mouse_down(const MouseEvent& event) {

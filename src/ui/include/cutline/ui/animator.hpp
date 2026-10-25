@@ -15,11 +15,24 @@
 /// Nothing runs between paints and nothing is scheduled: an interface at rest
 /// does no work at all, which the frame loop depends on.
 
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <utility>
 
 namespace cutline::ui {
+
+/// What each of a widget's clocks is for. One list, so two things timed on one
+/// widget cannot share a clock by accident: the timeline's zoom and its own
+/// hover fade once did, and the fade put the zoom back to its start every
+/// frame, so it never got anywhere.
+namespace channel {
+inline constexpr int kHover = 0;
+inline constexpr int kPress = 1;
+inline constexpr int kZoom = 2;
+inline constexpr int kScroll = 3;
+inline constexpr int kArrive = 4;
+}  // namespace channel
 
 class Animator {
  public:
@@ -40,6 +53,15 @@ class Animator {
   /// going: nothing fades in merely by being drawn for the first time.
   [[nodiscard]] float toward(const void* owner, int channel, bool on, double in, double out);
 
+  /// How far `owner`'s change number `change` on `channel` has got, from 0 to
+  /// 1, eased, over `duration` seconds.
+  ///
+  /// For a move between two states that are not on and off -- a zoom from one
+  /// scale to another, a popup arriving. A new `change` starts again from 0;
+  /// asking again about the same one carries on. Zero snaps to 1.
+  [[nodiscard]] float progress(const void* owner, int channel, std::uint64_t change,
+                               double duration);
+
   /// Whether anything asked about in the last paint had not yet arrived, which
   /// is what keeps the frame loop painting.
   [[nodiscard]] bool running() const noexcept;
@@ -58,6 +80,7 @@ class Animator {
     bool on = false;
     double when = 0.0;
     bool touched = true;
+    std::uint64_t change = 0;
   };
   Clock clock_;
   std::map<std::pair<const void*, int>, Entry> entries_;

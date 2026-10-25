@@ -159,10 +159,10 @@ SurfaceStyle Widget::surface_style(const Theme& theme) const {
   if (owner == nullptr) return theme.style(part(), now);
 
   Animator& clock = owner->animator();
-  const float hover = clock.toward(this, 0, hovered_ || pressed_, in, out);
+  const float hover = clock.toward(this, channel::kHover, hovered_ || pressed_, in, out);
   // A press lands at once -- a button that is slow to look pressed feels
   // broken -- and lets go as a hover does.
-  const float press = clock.toward(this, 1, pressed_, 0.0, out);
+  const float press = clock.toward(this, channel::kPress, pressed_, 0.0, out);
   SurfaceStyle style = mix(theme.style(part(), State::Normal), theme.style(part(), State::Hover), hover);
   if (press > 0.0f) style = mix(style, theme.style(part(), State::Pressed), press);
   return style;
@@ -267,8 +267,23 @@ void WidgetHost::arrange_popup(const LayoutContext& context) {
   popup_->arrange(Rect{x, y, width, height}, context);
 }
 
+void WidgetHost::tick_me(Widget* widget) {
+  if (widget == nullptr || std::ranges::contains(ticking_, widget)) return;
+  ticking_.push_back(widget);
+  paint_dirty_ = true;
+}
+
 bool WidgetHost::update_layout(const LayoutContext& context) {
   context.text.set_typeface(context.theme.metrics.font_family);
+  // Moved on first, so what is laid out and drawn this frame is where each
+  // has got to. Taken from the list before any runs: one that has not
+  // arrived asks again, for the frame after.
+  if (!ticking_.empty()) {
+    std::vector<Widget*> due;
+    due.swap(ticking_);
+    for (Widget* widget : due) widget->tick();
+    paint_dirty_ = true;
+  }
   // Before the early return: a popup closes whether or not anything asked for
   // layout, and this is the one point in the frame where destroying it cannot
   // land inside the click handler that asked for it.
@@ -325,6 +340,7 @@ void WidgetHost::open_popup(std::unique_ptr<Widget> content, const Rect& anchor)
   popup_anchor_ = anchor;
   popup_closing_ = false;
   popup_fresh_ = true;
+  ++popups_opened_;
   // Placed at the next layout, where a theme and a text measurer are in hand.
   // Nothing that opens a popup — a click handler — has either.
   request_layout();
@@ -653,6 +669,7 @@ void WidgetHost::forget(Widget* widget) {
   if (focus_before_popup_ != nullptr && focus_before_popup_->descends_from(widget)) {
     focus_before_popup_ = nullptr;
   }
+  std::erase_if(ticking_, [widget](const Widget* due) { return due->descends_from(widget); });
   if (captured_ != nullptr && captured_->descends_from(widget)) release_capture();
 }
 
@@ -664,8 +681,15 @@ void WidgetHost::paint(Painter& painter, const Theme& theme) const {
   // After everything, and outside every clip the tree set up. That is the
   // entire reason this is not a widget in the tree.
   if (popup_ != nullptr && !popup_closing_) {
+    // Arriving rather than appearing, at the theme's pace: XP and Vista both
+    // faded their menus in.
+    const float arrived =
+        animator_.progress(this, channel::kArrive, popups_opened_, theme.metrics.popup_fade);
+    const bool fading = arrived < 1.0F;
+    if (fading) painter.push_opacity(arrived);
     popup_->paint(painter, theme);
     paint_focus_cue(painter, theme, *popup_);
+    if (fading) painter.pop_opacity();
   }
   paint_tooltip(painter, theme);
 }

@@ -45,6 +45,30 @@ float Animator::toward(const void* owner, int channel, bool on, double in, doubl
   return t * t * (3.0f - 2.0f * t);
 }
 
+float Animator::progress(const void* owner, int channel, std::uint64_t change,
+                         double duration) {
+  const double now = clock_();
+  const auto key = std::pair{owner, channel};
+  auto found = entries_.find(key);
+  // Unlike a fade, a change starts at its beginning: it is asked about only
+  // once it has been asked for, so the first sight of it is its first frame.
+  if (found == entries_.end() || found->second.change != change) {
+    found = entries_.insert_or_assign(key, Entry{.value = 0.0f, .on = true, .when = now,
+                                                 .change = change})
+                .first;
+  }
+  Entry& entry = found->second;
+  entry.touched = true;
+
+  const double elapsed = std::max(0.0, now - entry.when);
+  entry.when = now;
+  entry.value = duration <= 0.0
+                    ? 1.0f
+                    : std::min(1.0f, entry.value + static_cast<float>(elapsed / duration));
+  const float t = entry.value;
+  return t * t * (3.0f - 2.0f * t);
+}
+
 bool Animator::running() const noexcept {
   return std::ranges::any_of(entries_, [](const auto& pair) {
     const Entry& entry = pair.second;

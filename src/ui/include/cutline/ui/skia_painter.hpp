@@ -42,6 +42,8 @@ class SkiaPainter final : public Painter {
   [[nodiscard]] double device_scale() const noexcept override;
   void push_clip(const Rect& bounds, double corner_radius) override;
   void pop_clip() override;
+  void push_opacity(float opacity) override;
+  void pop_opacity() override;
   void fill(const Rect& bounds, double corner_radius, const Fill& fill) override;
   void stroke(const Rect& bounds, double corner_radius, const Color& color,
               double width) override;

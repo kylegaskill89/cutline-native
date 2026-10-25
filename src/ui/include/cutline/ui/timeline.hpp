@@ -1066,6 +1066,7 @@ class TimelineView : public Widget {
   bool on_mouse_move(const MouseEvent& event) override;
   bool on_mouse_up(const MouseEvent& event) override;
   bool on_wheel(const WheelEvent& event) override;
+  void tick() override;
 
  private:
   [[nodiscard]] double track_height(std::size_t track) const noexcept;
@@ -1197,6 +1198,23 @@ class TimelineView : public Widget {
   TimelineModel model_;
   TimeScale scale_;
   Viewport vertical_;
+
+  /// A zoom on its way: the scale it left, the one it is going to, and which
+  /// zoom this is, so the host's clock can say how far it has got.
+  struct ZoomGlide {
+    TimeScale from;
+    TimeScale to;
+    std::uint64_t change = 0;
+  };
+  std::optional<ZoomGlide> glide_;
+  std::uint64_t glides_ = 0;
+  /// Where a zoom is going, or the scale on screen when none is.
+  [[nodiscard]] const TimeScale& zoom_target() const noexcept;
+  /// Sets off towards `to`, or goes there at once when the theme says so.
+  void glide_to(TimeScale to);
+  /// Arrives at once: for anything that takes hold of the view directly.
+  void settle_glide();
+
 
   /// What a scroll or zoom drag started from: where along the bar the press
   /// landed, and the view as it was. Worked from these rather than from the

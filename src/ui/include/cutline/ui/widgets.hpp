@@ -418,14 +418,30 @@ class ScrollView : public Widget {
   bool on_mouse_down(const MouseEvent& event) override;
   bool on_mouse_move(const MouseEvent& event) override;
   bool on_mouse_up(const MouseEvent& event) override;
+  void tick() override;
 
  private:
+  /// Moves the view and the content with it, without touching a glide.
+  void place(double offset);
+
   Axis axis_;
   Viewport view_;
   /// Taken from the theme during layout, because input arrives without one.
   double bar_width_ = 12.0;
   double step_ = 40.0;
+  double motion_ = 0.0;
   bool has_bar_ = false;
+
+  /// A wheel scroll on its way. Notches that arrive while it is add to where
+  /// it is going, so a fast spin goes as far as it would have and arrives
+  /// smoothly rather than in jumps.
+  struct Glide {
+    double from = 0.0;
+    double to = 0.0;
+    std::uint64_t change = 0;
+  };
+  std::optional<Glide> glide_;
+  std::uint64_t glides_ = 0;
 
   /// Where in the thumb it was grabbed, so it does not jump under the cursor.
   double grab_ = 0.0;

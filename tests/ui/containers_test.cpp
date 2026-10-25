@@ -220,7 +220,20 @@ struct Scrolled {
     content = static_cast<Box*>(&view->set_content(std::move(column)));
 
     host->resize(Rect{0.0, 0.0, 300.0, 120.0}, flat_context());
+    host->animator().set_clock([this] { return now; });
   }
+
+  /// Lets anything on its way arrive: the clock moved on a second at a time,
+  /// a frame for each.
+  void settle() {
+    for (int i = 0; i < 4; ++i) {
+      now += 1.0;
+      (void)host->update_layout(flat_context());
+    }
+  }
+
+  /// The host's clock, which only moves when a test moves it.
+  double now = 0.0;
 
   std::unique_ptr<WidgetHost> host;
   ScrollView* view = nullptr;
@@ -250,9 +263,54 @@ TEST(ScrollView, TheWheelMovesTheContentAndHitTestingFollows) {
   const double before = first->bounds().y;
 
   ASSERT_TRUE(test.host->wheel(WheelEvent{.x = 100.0, .y = 60.0, .delta_y = 1.0}));
+  test.settle();
 
   EXPECT_LT(first->bounds().y, before) << "the content did not move";
   EXPECT_DOUBLE_EQ(before - first->bounds().y, test.view->viewport().offset);
+}
+
+TEST(ScrollView, AWheelScrollGlidesThereRatherThanJumping) {
+  Scrolled test;
+  ASSERT_GT(default_theme().metrics.motion, 0.0) << "this theme is meant to glide";
+  ASSERT_TRUE(test.host->wheel(WheelEvent{.x = 100.0, .y = 60.0, .delta_y = 1.0}));
+
+  // The first frame of it, and one part of the way through.
+  (void)test.host->update_layout(flat_context());
+  EXPECT_DOUBLE_EQ(test.view->viewport().offset, 0.0);
+  test.now += default_theme().metrics.motion * 0.25;
+  (void)test.host->update_layout(flat_context());
+  const double part = test.view->viewport().offset;
+  EXPECT_GT(part, 0.0);
+
+  test.settle();
+  EXPECT_GT(test.view->viewport().offset, part) << "and it arrives";
+}
+
+TEST(ScrollView, NotchesThatArriveOnTheWayAddUp) {
+  Scrolled one;
+  ASSERT_TRUE(one.host->wheel(WheelEvent{.x = 100.0, .y = 60.0, .delta_y = 1.0}));
+  one.settle();
+
+  Scrolled two;
+  ASSERT_TRUE(two.host->wheel(WheelEvent{.x = 100.0, .y = 60.0, .delta_y = 1.0}));
+  (void)two.host->update_layout(flat_context());
+  ASSERT_TRUE(two.host->wheel(WheelEvent{.x = 100.0, .y = 60.0, .delta_y = 1.0}));
+  two.settle();
+  EXPECT_DOUBLE_EQ(two.view->viewport().offset, 2.0 * one.view->viewport().offset)
+      << "a fast spin goes as far as two slow notches";
+}
+
+TEST(ScrollView, InXpTheWheelJumpsAsItDid) {
+  WidgetHost host(std::make_unique<ScrollView>(Axis::Vertical));
+  auto& view = static_cast<ScrollView&>(host.root());
+  auto column = std::make_unique<Box>(Axis::Vertical);
+  for (int i = 0; i < 12; ++i) column->emplace<Button>("Row");
+  view.set_content(std::move(column));
+  const LayoutContext xp{*built_in_theme("xp"), measurer()};
+  host.resize(Rect{0.0, 0.0, 300.0, 120.0}, xp);
+
+  ASSERT_TRUE(host.wheel(WheelEvent{.x = 100.0, .y = 60.0, .delta_y = 1.0}));
+  EXPECT_GT(view.viewport().offset, 0.0) << "there at once, with no frame needed";
 }
 
 TEST(ScrollView, ScrollingStopsAtBothEnds) {

@@ -194,6 +194,12 @@ void SkiaPainter::push_clip(const Rect& bounds, double corner_radius) {
 
 void SkiaPainter::pop_clip() { impl_->canvas->restore(); }
 
+void SkiaPainter::push_opacity(float opacity) {
+  impl_->canvas->saveLayerAlphaf(nullptr, std::clamp(opacity, 0.0F, 1.0F));
+}
+
+void SkiaPainter::pop_opacity() { impl_->canvas->restore(); }
+
 double SkiaPainter::device_scale() const noexcept {
   // The window scales the whole tree once, so the matrix's scale is the
   // display's. Nothing here rotates or skews.

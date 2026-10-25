@@ -158,6 +158,12 @@ class Painter : public TextMeasurer {
   virtual void push_clip(const Rect& bounds, double corner_radius) = 0;
   virtual void pop_clip() = 0;
 
+  /// Draws what follows at `opacity`, as one picture, until `pop_opacity`:
+  /// the whole of a popup fading in, rather than each of its pieces at once
+  /// with the ones underneath showing through the ones on top.
+  virtual void push_opacity(float opacity) { (void)opacity; }
+  virtual void pop_opacity() {}
+
   virtual void fill(const Rect& bounds, double corner_radius, const Fill& fill) = 0;
 
   /// Stroked on the inside of `bounds`, so a border never grows a control.

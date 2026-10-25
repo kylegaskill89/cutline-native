@@ -59,6 +59,7 @@ namespace {
   t.metrics.hover_in = 0.0;
   t.metrics.hover_out = 0.0;
   t.metrics.focus_cue = FocusCue::Dotted;
+  t.metrics.popup_fade = 0.12;  // XP faded its menus in, and nothing else
   t.metrics.audio_track_height = 48.0;
   t.metrics.ruler_height = 22.0;
 
@@ -382,6 +383,8 @@ namespace {
   t.metrics.hover_in = 0.15;
   t.metrics.hover_out = 0.5;
   t.metrics.focus_cue = FocusCue::Dotted;  // Vista kept XP's
+  t.metrics.motion = 0.25;
+  t.metrics.popup_fade = 0.15;
   t.metrics.audio_track_height = 46.0;
 
   t.fallback = SurfaceStyle{
@@ -688,6 +691,8 @@ namespace {
   t.metrics.track_height = 56.0;
   t.metrics.hover_in = 0.1;
   t.metrics.hover_out = 0.2;
+  t.metrics.motion = 0.18;
+  t.metrics.popup_fade = 0.1;
   t.metrics.audio_track_height = 44.0;
 
   t.fallback = SurfaceStyle{

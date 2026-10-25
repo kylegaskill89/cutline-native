@@ -952,6 +952,40 @@ TEST(PopupFocus, AChoiceCanLeaveTheKeyboardWithNobody) {
   EXPECT_EQ(fixture.host->focused(), nullptr);
 }
 
+TEST(PopupArrival, AMenuFadesInAtTheThemesPace) {
+  KeyboardFixture fixture;
+  double now = 0.0;
+  fixture.host->animator().set_clock([&now] { return now; });
+  const Theme& aero = *built_in_theme("aero");
+  ASSERT_GT(aero.metrics.popup_fade, 0.0);
+  fixture.open_menu();
+
+  const auto opacity = [&] {
+    RecordingPainter painter;
+    fixture.host->paint(painter, aero);
+    const DrawCall* layer = painter.first(DrawCall::Kind::PushOpacity);
+    return layer == nullptr ? 1.0 : layer->width;
+  };
+  const double first = opacity();
+  now += aero.metrics.popup_fade * 0.5;
+  const double half = opacity();
+  now += aero.metrics.popup_fade;
+  const double arrived = opacity();
+
+  EXPECT_LT(first, 0.05) << "it starts from nothing";
+  EXPECT_GT(half, first);
+  EXPECT_LT(half, 1.0);
+  EXPECT_DOUBLE_EQ(arrived, 1.0) << "and once there it is drawn as it is, with no layer";
+}
+
+TEST(PopupArrival, PhosphorsMenusAreThereAtOnce) {
+  KeyboardFixture fixture;
+  fixture.open_menu();
+  RecordingPainter painter;
+  fixture.host->paint(painter, *built_in_theme("terminal"));
+  EXPECT_EQ(painter.first(DrawCall::Kind::PushOpacity), nullptr);
+}
+
 TEST(Mnemonic, TheAccessLetterIsUnderlinedOnlyWhileTheKeyboardIsInUse) {
   KeyboardFixture fixture;
   fixture.button->set_mnemonic(true);

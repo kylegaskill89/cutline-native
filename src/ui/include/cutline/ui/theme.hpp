@@ -261,6 +261,12 @@ struct Metrics {
 
   FocusCue focus_cue = FocusCue::Ring;
 
+  /// How long a view takes to get where it was sent -- a zoom, a scroll by
+  /// the wheel -- and how long a popup takes to arrive, in seconds. Zero
+  /// jumps, which is what XP's timelines did.
+  double motion = 0.0;
+  double popup_fade = 0.0;
+
   friend bool operator==(const Metrics&, const Metrics&) = default;
 };
 
