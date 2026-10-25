@@ -1241,6 +1241,13 @@ void place_from_pool(App& app, std::size_t index,
 void place_media_from(App& app, const std::string& media_id,
                       std::optional<cutline::ui::DropPoint> where = std::nullopt);
 
+// The monitors and playback, in `playback.cpp`.
+void refresh_preview(App& app);
+void advance_playback(App& app);
+/// The zoom dropdown that goes under a monitor's picture.
+void add_zoom_control(Box& transport, MonitorView& picture, double chosen,
+                      std::function<void(double)> on_choose);
+
 // The headless check and the benchmarks, in `check.cpp`.
 [[nodiscard]] int self_check(std::string_view shots = {});
 [[nodiscard]] int benchmark();
