@@ -778,6 +778,16 @@ struct FrameRenderer::Impl {
   /// lock, and the second decoder already open.
   void post_before(Source& source, double meet);
 
+  /// A renderer per track used as a matte, keyed by track id, for the same
+  /// reason a nest has one: a compositor holds one picture.
+  std::map<std::string, std::unique_ptr<FrameRenderer>> mattes;
+
+  /// The picture of one video track on its own, numbered up from V1, for a
+  /// Track Matte Key to read: drawn whether or not the track is showing, which
+  /// is how a matte track is usually left. Empty when there is no such track.
+  [[nodiscard]] gpu::SceneTexture matte_picture(const core::Project& project, int track_number,
+                                                double t);
+
   /// Composites a nested sequence and hands back the picture, still on the
   /// card. Empty when there is nothing to draw, or the nesting is too deep.
   [[nodiscard]] gpu::SceneTexture nested_picture(const core::Project& project,
@@ -1562,6 +1572,42 @@ gpu::SceneTexture FrameRenderer::Impl::nested_picture(const core::Project& proje
   return picture.has_value() ? *picture : gpu::SceneTexture{};
 }
 
+gpu::SceneTexture FrameRenderer::Impl::matte_picture(const core::Project& project,
+                                                     int track_number, double t) {
+  if (depth >= kMaxNestDepth) return {};
+  const core::Sequence& sequence = project.sequence();
+  std::vector<std::size_t> video;
+  for (std::size_t i = 0; i < sequence.tracks.size(); ++i) {
+    if (sequence.tracks[i].kind == core::TrackKind::Video) video.push_back(i);
+  }
+  // Stored top first, numbered from the bottom.
+  if (track_number < 1 || static_cast<std::size_t>(track_number) > video.size()) return {};
+  const std::size_t index = video[video.size() - static_cast<std::size_t>(track_number)];
+
+  core::Project only = project;
+  for (const std::size_t i : video) only.sequence().tracks[i].hidden = i != index;
+  // A matte drawn through its own matte would be a loop nobody means.
+  for (core::Clip& clip : only.sequence().tracks[index].clips) {
+    std::erase_if(clip.effects,
+                  [](const core::ClipEffect& effect) { return effect.type == "trackmatte"; });
+  }
+
+  const std::string key = sequence.tracks[index].id;
+  auto found = mattes.find(key);
+  if (found == mattes.end()) {
+    auto made = FrameRenderer::create(device, sequence.canvas_w, sequence.canvas_h, queue);
+    if (!made.has_value()) return {};
+    (*made)->impl_->depth = depth + 1;
+    (*made)->set_use_proxies(use_proxies);
+    found = mattes.emplace(key, std::move(*made)).first;
+  }
+  FrameRenderer& renderer = *found->second;
+  renderer.compositor().set_hdr_display(std::nullopt);
+  if (!renderer.render(only, t).has_value()) return {};
+  const auto picture = renderer.compositor().display_texture();
+  return picture.has_value() ? *picture : gpu::SceneTexture{};
+}
+
 const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double time,
                                             const media::VideoDecoder** from) {
   const std::string& wanted = core::source_path(media, use_proxies);
@@ -1945,6 +1991,19 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
                          : to_gpu_passes(render::plan_effect_passes(
                                *source.clip, t - source.clip->start)));
     layer.passes = stacks.back();
+
+    // A Track Matte Key reads another track's picture, which is drawn here and
+    // handed over with the layer.
+    if (source.clip != nullptr) {
+      for (const core::ClipEffect& effect : source.clip->effects) {
+        if (!effect.enabled || effect.type != "trackmatte") continue;
+        const auto track = effect.params.find("track");
+        const int number =
+            static_cast<int>(std::lround(track == effect.params.end() ? 0.0 : track->second));
+        const gpu::SceneTexture matte = d.matte_picture(project, number, t);
+        if (!matte.empty()) layer.matte = gpu::SourceTexture{.resource = matte.resource};
+      }
+    }
 
     switch (source.content) {
       case render::LayerContent::Nested: {

@@ -151,6 +151,34 @@ constexpr std::array kNoise{
     Param{.key = "monochrome", .name = "Monochrome", .minimum = 0.0, .maximum = 1.0,
           .fallback = 1.0, .suffix = "", .toggle = true}};
 
+// Premiere's defaults: half opaque, down and to the right, ten pixels away
+// and ten soft.
+constexpr std::array kDropShadow{
+    Param{.key = "opacity", .name = "Opacity", .minimum = 0.0, .maximum = 100.0,
+          .fallback = 50.0, .suffix = "%"},
+    Param{.key = "direction", .name = "Direction", .minimum = 0.0, .maximum = 360.0,
+          .fallback = 135.0, .suffix = "°"},
+    Param{.key = "distance", .name = "Distance", .minimum = 0.0, .maximum = 200.0,
+          .fallback = 10.0, .suffix = "px"},
+    Param{.key = "softness", .name = "Softness", .minimum = 0.0, .maximum = 100.0,
+          .fallback = 10.0, .suffix = "px"},
+    Param{.key = "shadow_only", .name = "Shadow Only", .minimum = 0.0, .maximum = 1.0,
+          .fallback = 0.0, .suffix = "", .toggle = true}};
+
+constexpr std::array kDropShadowColors{
+    EffectColorSpec{.key = "color", .name = "Shadow Colour", .fallback = "#000000"}};
+
+// The matte by its track's number counting up from V1, which is how Premiere's
+// menu names them. Nought is none, which is where Premiere's starts too: a key
+// that picked a track by itself would key against something nobody chose.
+constexpr std::array kTrackMatte{
+    Param{.key = "track", .name = "Matte Track", .minimum = 0.0, .maximum = 99.0,
+          .fallback = 0.0, .suffix = ""},
+    Param{.key = "luma", .name = "Composite Using Luma", .minimum = 0.0, .maximum = 1.0,
+          .fallback = 0.0, .suffix = "", .toggle = true},
+    Param{.key = "reverse", .name = "Reverse", .minimum = 0.0, .maximum = 1.0, .fallback = 0.0,
+          .suffix = "", .toggle = true}};
+
 constexpr std::array kPosterize{
     Param{.key = "levels", .name = "Levels", .minimum = 2.0, .maximum = 32.0, .fallback = 6.0,
           .suffix = ""}};
@@ -191,6 +219,8 @@ constexpr std::array kCatalog{
                .category = EffectCategory::BlurAndSharpen, .params = kRadialBlur},
     EffectSpec{.type = "chromakey", .name = "Chroma Key", .category = EffectCategory::Keying,
                .params = kChromaKey, .colors = kChromaKeyColors},
+    EffectSpec{.type = "trackmatte", .name = "Track Matte Key", .category = EffectCategory::Keying,
+               .params = kTrackMatte},
     EffectSpec{.type = "crop", .name = "Crop", .category = EffectCategory::Transform,
                .params = kCrop},
     EffectSpec{.type = "flip", .name = "Flip", .category = EffectCategory::Transform,
@@ -201,6 +231,8 @@ constexpr std::array kCatalog{
                .params = kVignette},
     EffectSpec{.type = "noise", .name = "Noise", .category = EffectCategory::Stylize,
                .params = kNoise},
+    EffectSpec{.type = "dropshadow", .name = "Drop Shadow", .category = EffectCategory::Stylize,
+               .params = kDropShadow, .colors = kDropShadowColors},
     EffectSpec{.type = "posterize", .name = "Posterize", .category = EffectCategory::Stylize,
                .params = kPosterize},
     EffectSpec{.type = "threshold", .name = "Threshold", .category = EffectCategory::Stylize,

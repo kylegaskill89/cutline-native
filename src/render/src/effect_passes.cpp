@@ -176,6 +176,28 @@ EffectPass noise_pass(float amount, float seed, bool monochrome) noexcept {
   return pass;
 }
 
+EffectPass keep_pass() noexcept { return EffectPass{.kind = EffectPassKind::Keep}; }
+
+EffectPass shadow_shape_pass(EffectColor color, float opacity, float dx, float dy) noexcept {
+  EffectPass pass{.kind = EffectPassKind::ShadowShape};
+  pass.values[0] = color.r;
+  pass.values[1] = color.g;
+  pass.values[2] = color.b;
+  pass.values[3] = std::clamp(opacity, 0.0f, 1.0f);
+  pass.values[4] = dx;
+  pass.values[5] = dy;
+  return pass;
+}
+
+EffectPass under_kept_pass() noexcept { return EffectPass{.kind = EffectPassKind::UnderKept}; }
+
+EffectPass matte_pass(bool luma, bool reverse) noexcept {
+  EffectPass pass{.kind = EffectPassKind::Matte};
+  pass.values[0] = luma ? 1.0f : 0.0f;
+  pass.values[1] = reverse ? 1.0f : 0.0f;
+  return pass;
+}
+
 EffectPass posterize_pass(float levels) noexcept {
   EffectPass pass{.kind = EffectPassKind::Posterize};
   pass.values[0] = std::max(2.0f, levels);
@@ -423,6 +445,35 @@ std::vector<EffectPass> plan_effect_passes(const core::Clip& clip, double local_
       if (sigma > 0.0f) {
         passes.push_back(directional_blur_pass(
             sigma, static_cast<float>(param(effect, "angle", 0.0) * std::numbers::pi / 180.0)));
+      }
+
+    } else if (effect.type == "dropshadow") {
+      // Premiere's Drop Shadow: the layer kept, its shape moved along the
+      // direction and coloured, softened, and the layer put back on top -- or
+      // the shadow alone, when that is asked for.
+      const auto opacity = static_cast<float>(param(effect, "opacity", 50.0) / 100.0);
+      if (opacity > 0.0f) {
+        const double direction = param(effect, "direction", 135.0) * std::numbers::pi / 180.0;
+        const double distance = std::max(0.0, param(effect, "distance", 10.0));
+        const auto softness = static_cast<float>(std::max(0.0, param(effect, "softness", 10.0)));
+        const bool alone = toggled(effect, "shadow_only", 0.0);
+        const auto color = effect.colors.find("color");
+        constexpr EffectColor kBlack{0.0f, 0.0f, 0.0f};
+        // Clockwise from up, as Premiere measures it, so 135 is down and right.
+        if (!alone) passes.push_back(keep_pass());
+        passes.push_back(shadow_shape_pass(
+            color == effect.colors.end() ? kBlack : parse_hex_color(color->second, kBlack),
+            opacity, static_cast<float>(std::sin(direction) * distance),
+            static_cast<float>(-std::cos(direction) * distance)));
+        if (softness > 0.0f) passes.push_back(blur_pass(softness / 2.0f));
+        if (!alone) passes.push_back(under_kept_pass());
+      }
+
+    } else if (effect.type == "trackmatte") {
+      // Which track is the engine's business: it draws that track's picture
+      // and hands it over with the layer. Without one there is nothing to key.
+      if (param(effect, "track", 0.0) >= 1.0) {
+        passes.push_back(matte_pass(toggled(effect, "luma", 0.0), toggled(effect, "reverse", 0.0)));
       }
 
     } else if (effect.type == "chromakey") {

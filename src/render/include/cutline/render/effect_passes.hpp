@@ -81,6 +81,19 @@ enum class EffectPassKind {
   Distort,
   /// Film grain, which needs the moment as well as the amount.
   Noise,
+
+  // The passes that read a second texture: the layer as it was before them, or
+  // another track's picture. Drop Shadow is three of them and a blur; Track
+  // Matte Key is one.
+
+  /// Not a draw: the layer as it stands is kept, to be read back later.
+  Keep,
+  /// The layer's silhouette, moved and coloured: a shadow before it is softened.
+  ShadowShape,
+  /// What was kept, put back over whatever the passes since have made.
+  UnderKept,
+  /// Opacity from another track's picture where this layer is on the frame.
+  Matte,
 };
 
 /// How many floats a pass carries.
@@ -206,6 +219,21 @@ struct EffectPass {
 
 /// A lens: positive barrels outward, negative pinches inward.
 [[nodiscard]] EffectPass distort_pass(float amount, float scale) noexcept;
+
+/// Keeps the layer as it stands for a later `under_kept_pass` to put back.
+[[nodiscard]] EffectPass keep_pass() noexcept;
+
+/// The layer's shape in one colour, moved by `dx`/`dy` of its own pixels:
+/// a shadow before it is softened.
+[[nodiscard]] EffectPass shadow_shape_pass(EffectColor color, float opacity, float dx,
+                                           float dy) noexcept;
+
+/// What `keep_pass` kept, over the layer as it now is.
+[[nodiscard]] EffectPass under_kept_pass() noexcept;
+
+/// The layer's opacity times another track's: its alpha, or its luma when
+/// `luma`, the other way round when `reverse`.
+[[nodiscard]] EffectPass matte_pass(bool luma, bool reverse) noexcept;
 
 /// Film grain. `seed` is what makes it move — the same value twice is the same
 /// grain twice, which is what one frame wants and a running sequence does not.

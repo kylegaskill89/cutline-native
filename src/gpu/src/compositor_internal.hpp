@@ -74,6 +74,9 @@ struct Compositor::Impl {
   /// Ping-pong targets for the effect chain. Allocated only when a layer
   /// actually has an effect on it, because they are canvas-sized.
   ComPtr<ID3D12Resource> scratch[2];
+  /// Where a `Keep` pass puts the layer aside, the same size and format as
+  /// the scratch so a copy is all it takes.
+  ComPtr<ID3D12Resource> kept;
   ComPtr<ID3D12Resource> display;
   /// The scRGB copy for an HDR display, made the first time one is asked for.
   ComPtr<ID3D12Resource> hdr_display;
@@ -196,6 +199,21 @@ struct Compositor::Impl {
   [[nodiscard]] UINT scratch_slot(int which) const noexcept {
     return (layer_capacity + 1 + static_cast<UINT>(which)) * kSlotsPerLayer;
   }
+
+  /// A layer's own runs for its effect passes, one per ping-pong buffer:
+  /// t0 the buffer being read, t1 the layer's matte, t2 what was kept, t3 the
+  /// backdrop. A run each, because a matte is one layer's own and two layers
+  /// in a frame cannot share the descriptor that names it.
+  [[nodiscard]] UINT pass_slot(UINT layer, int which) const noexcept {
+    return (layer_capacity + 3 + layer * 2 + static_cast<UINT>(which)) * kSlotsPerLayer;
+  }
+  /// Every run in the table: the layers', the present pass's, the two scratch
+  /// runs, and two pass runs per layer.
+  [[nodiscard]] UINT run_count() const noexcept { return layer_capacity * 3 + 3; }
+
+  /// Writes the pass runs' fixed views: the scratch buffers, what was kept and
+  /// the backdrop, whichever of them exist yet.
+  void write_pass_runs();
 
   /// Writes a descriptor that reads as transparent black, so a table slot the
   /// current layout does not use still has something valid behind it.

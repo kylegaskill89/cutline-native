@@ -91,6 +91,14 @@ enum class PassKind {
   RadialBlur,
   Distort,
   Noise,
+  /// Not a draw: the layer as it stands is copied aside, for `UnderKept`.
+  Keep,
+  /// The layer's alpha, moved and filled with one colour: a shadow's shape.
+  ShadowShape,
+  /// What `Keep` copied, over the layer as it now is.
+  UnderKept,
+  /// The layer's alpha times `Layer::matte`'s, where the layer is on the frame.
+  Matte,
 };
 
 /// How many floats a pass carries. Eight, shared by every kind, because only
@@ -179,6 +187,11 @@ struct Layer {
   ///
   /// Borrowed: the span has to outlive the `compose` call and nothing more.
   std::span<const EffectPass> passes;
+
+  /// Another track's composited picture, for a `Matte` pass to read: a scene
+  /// texture from a compositor on this device, as a nest's picture is. Empty
+  /// when the layer has no matte.
+  SourceTexture matte;
 
   /// An adjustment layer draws nothing of its own: it puts everything already
   /// composited beneath it through `passes`, within its own quad. `opacity`

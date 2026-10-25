@@ -180,8 +180,9 @@ std::expected<void, std::string> Compositor::Impl::ensure_capacity(UINT layers) 
 
   D3D12_DESCRIPTOR_HEAP_DESC desc{};
   desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-  // Past every layer's run: one for the present pass, two for blur scratch.
-  desc.NumDescriptors = (capacity + 3) * kSlotsPerLayer;
+  // Past every layer's run: one for the present pass, two for blur scratch,
+  // and two pass runs for each layer.
+  desc.NumDescriptors = (capacity * 3 + 3) * kSlotsPerLayer;
   desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
   ComPtr<ID3D12DescriptorHeap> heap;
@@ -221,7 +222,24 @@ std::expected<void, std::string> Compositor::Impl::ensure_capacity(UINT layers) 
                                              srv_cpu(scratch_slot(i) + 3));
     }
   }
+  write_pass_runs();
   return {};
+}
+
+void Compositor::Impl::write_pass_runs() {
+  if (!srv_heap) return;
+  for (UINT layer = 0; layer < layer_capacity; ++layer) {
+    for (int which = 0; which < 2; ++which) {
+      const UINT run = pass_slot(layer, which);
+      if (scratch[which]) {
+        gpu().device->CreateShaderResourceView(scratch[which].Get(), nullptr, srv_cpu(run));
+      }
+      if (kept) gpu().device->CreateShaderResourceView(kept.Get(), nullptr, srv_cpu(run + 2));
+      if (backdrop) {
+        gpu().device->CreateShaderResourceView(backdrop.Get(), nullptr, srv_cpu(run + 3));
+      }
+    }
+  }
 }
 
 /// Handed out to every compositor in the process, never restarted.
@@ -259,6 +277,7 @@ std::expected<void, std::string> Compositor::Impl::create_targets() {
   // if a layer asks for a blur again.
   scratch[0].Reset();
   scratch[1].Reset();
+  kept.Reset();
   // And the encoder's planes, for the same reason and the same way.
   yuv_luma.Reset();
   yuv_chroma.Reset();
@@ -322,11 +341,12 @@ std::expected<void, std::string> Compositor::Impl::create_targets() {
                                              srv_cpu(scratch_slot(i) + 3));
     }
   }
+  write_pass_runs();
   return {};
 }
 
 std::expected<void, std::string> Compositor::Impl::ensure_scratch() {
-  if (scratch[0] && scratch[1]) return {};
+  if (scratch[0] && scratch[1] && kept) return {};
 
   const D3D12_HEAP_PROPERTIES heap = heap_of(D3D12_HEAP_TYPE_DEFAULT);
 
@@ -360,6 +380,15 @@ std::expected<void, std::string> Compositor::Impl::ensure_scratch() {
                                              srv_cpu(scratch_slot(i) + 3));
     }
   }
+  if (!kept) {
+    if (HRESULT hr = gpu().device->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            &clear, IID_PPV_ARGS(&kept));
+        FAILED(hr)) {
+      return std::unexpected(std::format("cannot create the kept target: {}", hresult_string(hr)));
+    }
+  }
+  write_pass_runs();
   return {};
 }
 
@@ -406,7 +435,7 @@ std::expected<void, std::string> Compositor::Impl::ensure_mask_points(std::size_
 
   // Into every run of the table, because a path may be masking any pass of any
   // layer and the run is chosen by which layer is being drawn.
-  for (UINT i = 0; i < layer_capacity + 3; ++i) {
+  for (UINT i = 0; i < run_count(); ++i) {
     gpu().device->CreateShaderResourceView(mask_points.Get(), &view,
                                            srv_cpu(i * kSlotsPerLayer + 4));
   }
@@ -1033,10 +1062,17 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     if (through_passes) {
       const auto shorter = static_cast<float>(std::min(d.width, d.height));
       float reach = 0.0f;
+      // A shadow moves the layer's shape as well as softening it, so it needs
+      // room for both: the offset, and the blur that follows it.
+      float moved = 0.0f;
       for (const EffectPass& effect : layer.passes) {
+        if (effect.kind == PassKind::ShadowShape) {
+          moved = std::max(moved, std::abs(effect.values[4]) + std::abs(effect.values[5]));
+        }
         if (effect.kind != PassKind::Blur && effect.kind != PassKind::DirectionalBlur) continue;
         reach = std::max(reach, 3.0f * std::max(0.0f, effect.values[0]));
       }
+      reach += moved;
       if (reach > 0.0f && shorter > 0.0f) {
         const float r = reach / shorter;
         margin = std::min(kMaxScratchMargin, r / (1.0f + 2.0f * r));
@@ -1048,6 +1084,24 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
     if (through_passes) {
       const D3D12_CPU_DESCRIPTOR_HANDLE scratch_rtv[2] = {d.rtv(kScratchRtv),
                                                           d.rtv(kScratchRtv + 1)};
+
+      // This layer's matte, if it has one, into both of its pass runs. Written
+      // now, while recording: each layer has runs of its own, so nothing else
+      // drawn this frame reads them.
+      for (int which = 0; which < 2; ++which) {
+        const UINT run = d.pass_slot(static_cast<UINT>(i), which);
+        auto* matte = static_cast<ID3D12Resource*>(layer.matte.resource);
+        if (matte != nullptr) {
+          D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+          view.Format = matte->GetDesc().Format;
+          view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+          view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+          view.Texture2D.MipLevels = 1;
+          d.gpu().device->CreateShaderResourceView(matte, &view, d.srv_cpu(run + 1));
+        } else {
+          d.write_null_srv(d.srv_cpu(run + 1));
+        }
+      }
 
       auto scratch_to_target = transition(d.scratch[0].Get(),
                                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
@@ -1072,6 +1126,27 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
       // One draw per pass, and two for a blur - a separable Gaussian is two
       // passes at right angles, which is what makes a large radius affordable.
       for (const EffectPass& effect : layer.passes) {
+        // Keeping is a copy, not a draw: the layer as it stands, put aside for
+        // an `UnderKept` further down the stack to put back.
+        if (effect.kind == PassKind::Keep) {
+          const D3D12_RESOURCE_BARRIER before[] = {
+              transition(d.scratch[held].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                         D3D12_RESOURCE_STATE_COPY_SOURCE),
+              transition(d.kept.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_COPY_DEST),
+          };
+          commands->ResourceBarrier(2, before);
+          commands->CopyResource(d.kept.Get(), d.scratch[held].Get());
+          const D3D12_RESOURCE_BARRIER after[] = {
+              transition(d.scratch[held].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                         D3D12_RESOURCE_STATE_RENDER_TARGET),
+              transition(d.kept.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+          };
+          commands->ResourceBarrier(2, after);
+          continue;
+        }
+
         // A Gaussian is two draws at right angles; everything else is one,
         // including a directional blur, which is one of those axes aimed
         // somewhere the compositor works out below.
@@ -1132,6 +1207,10 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
             const float radius = std::max(0.0f, effect.values[1]) * span;
             pass.pass_a[2] = radius * texel_x;
             pass.pass_a[3] = radius * texel_y;
+          } else if (effect.kind == PassKind::ShadowShape) {
+            // The offset in the layer's pixels, as a step across the scratch.
+            pass.pass_b[0] = effect.values[4] * span * texel_x;
+            pass.pass_b[1] = effect.values[5] * span * texel_y;
           }
 
           const D3D12_RESOURCE_BARRIER swap[] = {
@@ -1146,7 +1225,8 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
           commands->ClearRenderTargetView(scratch_rtv[destination], transparent, 0, nullptr);
 
           commands->SetPipelineState(d.pipeline_effect.Get());
-          commands->SetGraphicsRootDescriptorTable(0, d.srv_gpu(d.scratch_slot(source)));
+          commands->SetGraphicsRootDescriptorTable(
+              0, d.srv_gpu(d.pass_slot(static_cast<UINT>(i), source)));
           commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &pass, 0);
           commands->DrawInstanced(3, 1, 0, 0);
 

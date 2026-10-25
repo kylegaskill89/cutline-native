@@ -95,6 +95,10 @@
 #define PASS_RADIAL    14
 #define PASS_DISTORT   15
 #define PASS_NOISE     16
+#define PASS_KEEP      17
+#define PASS_SHADOW    18
+#define PASS_UNDER     19
+#define PASS_MATTE     20
 
 // Laid out so no member straddles a 16-byte boundary, because these arrive as
 // root constants and HLSL packs a cbuffer in float4 rows.
@@ -984,6 +988,24 @@ float3 sharpenPass(float2 uv) {
 }
 
 /// One effect over the scratch. Coded in, coded out.
+/// How much of a layer a track matte lets through at a point in the layer's
+/// scratch: the matte track's picture, sampled where this point of the layer
+/// lands on the frame -- the same walk `PSAdjustSource` makes.
+float matteFactor(float2 uv) {
+    const float2 local = (layerUv(uv) - 0.5) * params.size;
+    const float2 rotated = float2(
+        local.x * params.rotation.x - local.y * params.rotation.y,
+        local.x * params.rotation.y + local.y * params.rotation.x);
+    const float2 screen = (params.center + rotated) / params.canvas;
+    float factor = 0.0;
+    if (all(screen >= 0.0) && all(screen <= 1.0)) {
+        const float4 matte = texture1.Sample(linearSampler, screen);
+        factor = params.passA.x > 0.5 ? dot(matte.rgb, float3(0.2126, 0.7152, 0.0722)) * matte.a
+                                      : matte.a;
+    }
+    return params.passA.y > 0.5 ? 1.0 - factor : factor;
+}
+
 float4 PSEffect(VSOutput input) : SV_Target {
     const float4 before = texture0.Sample(linearSampler, input.uv);
 
@@ -1000,6 +1022,20 @@ float4 PSEffect(VSOutput input) : SV_Target {
         after = distortPass(input.uv);
     } else if (params.passKind == PASS_NOISE) {
         after = noisePass(input.uv, before);
+    } else if (params.passKind == PASS_SHADOW) {
+        // The shape the layer makes, moved and in one colour. Read from where
+        // the shadow comes from, so the shape lands where it falls.
+        const float shape = texture0.Sample(linearSampler, input.uv - params.passB.xy).a;
+        after = float4(params.passA.rgb, shape * params.passA.a);
+    } else if (params.passKind == PASS_UNDER) {
+        // What was kept, over what the passes since have made of it: the layer
+        // back on top of its own shadow.
+        const float4 kept = texture2.Sample(linearSampler, input.uv);
+        const float alpha = kept.a + before.a * (1.0 - kept.a);
+        const float3 rgb = alpha > 0.0
+            ? (kept.rgb * kept.a + before.rgb * before.a * (1.0 - kept.a)) / alpha
+            : float3(0.0, 0.0, 0.0);
+        after = float4(rgb, alpha);
     } else if (params.passKind == PASS_SHARPEN) {
         after = float4(sharpenPass(input.uv), texture0.Sample(linearSampler, input.uv).a);
     } else if (params.passKind == PASS_FLIP) {
@@ -1039,6 +1075,8 @@ float4 PSEffect(VSOutput input) : SV_Target {
             // instead of half of one.
             const float levels = max(params.passA.x, 2.0);
             after.rgb = saturate(round(after.rgb * (levels - 1.0)) / (levels - 1.0));
+        } else if (params.passKind == PASS_MATTE) {
+            after.a *= matteFactor(input.uv);
         } else if (params.passKind == PASS_THRESHOLD) {
             const float luma = rgbToYuv601(after.rgb).x;
             after.rgb = luma >= params.passA.x ? float3(1.0, 1.0, 1.0) : float3(0.0, 0.0, 0.0);

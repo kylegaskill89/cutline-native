@@ -95,7 +95,7 @@ TEST(EffectCatalog, EveryEntryIsNamedAndUsable) {
 constexpr std::string_view kStartsVisible[]{
     "grayscale", "invert",   "flip",      "vignette",        "chromakey",
     "exposure",  "gamma",    "levels",    "balance",         "tint",
-    "sharpen",   "posterize", "threshold", "directionalblur"};
+    "sharpen",   "posterize", "threshold", "directionalblur", "dropshadow"};
 
 [[nodiscard]] bool starts_visible(std::string_view type) {
   return std::ranges::contains(kStartsVisible, type);

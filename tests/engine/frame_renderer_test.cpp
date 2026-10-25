@@ -473,6 +473,99 @@ TEST_F(TitleRendererTest, AShapeIsTheColourItWasGivenNotWhite) {
   EXPECT_NEAR(centre.b, 0xa0, 3);
 }
 
+// ------------------------------------------- drop shadow and track matte --
+
+/// A graphic of one white square, 20 pixels across, in the middle of the frame.
+[[nodiscard]] Project square_in_the_middle(core::ClipEffect effect) {
+  Project p = canvas_project();
+  p.media = {graphic("g", {square("sq", "#ffffff", 32.0, 32.0, 20.0)})};
+  Clip c = clip("c", "g", 0.0, 5.0);
+  c.effects = {std::move(effect)};
+  p.sequence().tracks = {video_track("v1", {c})};
+  return p;
+}
+
+[[nodiscard]] core::ClipEffect drop_shadow(bool alone = false, std::string colour = "#000000") {
+  return core::ClipEffect{.type = "dropshadow",
+                          .params = {{"opacity", 100.0},
+                                     {"direction", 135.0},
+                                     {"distance", 10.0},
+                                     {"softness", 0.0},
+                                     {"shadow_only", alone ? 1.0 : 0.0}},
+                          .colors = {{"color", std::move(colour)}}};
+}
+
+TEST_F(TitleRendererTest, ADropShadowFallsDownAndRightBehindTheLayer) {
+  const gpu::Image image = render(square_in_the_middle(drop_shadow()), 1.0);
+  // The square itself is still white, on top.
+  const Rgba middle = pixel_at(image, 32, 32);
+  EXPECT_GT(middle.r, 240);
+  EXPECT_EQ(middle.a, 255);
+  // Beyond its lower right corner, the shadow: opaque and black. Ten pixels
+  // at 135 degrees is seven each way, so the shadow runs to 49 and this is
+  // clear of its softened edge.
+  const Rgba shadow = pixel_at(image, 44, 44);
+  EXPECT_EQ(shadow.a, 255);
+  EXPECT_LT(shadow.r, 15);
+  // And nothing up and to the left of it.
+  EXPECT_EQ(pixel_at(image, 18, 18).a, 0);
+}
+
+TEST_F(TitleRendererTest, AShadowTakesTheColourItIsGiven) {
+  const Rgba shadow = pixel_at(render(square_in_the_middle(drop_shadow(false, "#ff0000")), 1.0),
+                               44, 44);
+  EXPECT_GT(shadow.r, 240);
+  EXPECT_LT(shadow.g, 15);
+}
+
+TEST_F(TitleRendererTest, ShadowOnlyLeavesTheLayerOut) {
+  const gpu::Image image = render(square_in_the_middle(drop_shadow(true)), 1.0);
+  // Where the square was and the shadow is not, nothing.
+  EXPECT_EQ(pixel_at(image, 24, 24).a, 0);
+  // Where they overlap, the shadow, not the white.
+  EXPECT_LT(pixel_at(image, 38, 38).r, 15);
+  EXPECT_EQ(pixel_at(image, 38, 38).a, 255);
+}
+
+/// Red on V1 through a matte of a white square on V2, which is hidden: the
+/// way a track matte is usually set up.
+[[nodiscard]] Project red_through_a_matte(bool luma, bool reverse,
+                                          std::string matte_colour = "#ffffff") {
+  Project p = canvas_project();
+  p.media = {matte("red", "#ff0000"),
+             graphic("m", {square("sq", std::move(matte_colour), 32.0, 32.0, 20.0)})};
+  Clip keyed = clip("keyed", "red", 0.0, 5.0);
+  keyed.effects = {core::ClipEffect{.type = "trackmatte",
+                                    .params = {{"track", 2.0},
+                                               {"luma", luma ? 1.0 : 0.0},
+                                               {"reverse", reverse ? 1.0 : 0.0}}}};
+  Track above = video_track("v2", {clip("matte", "m", 0.0, 5.0)});
+  above.hidden = true;
+  p.sequence().tracks = {above, video_track("v1", {keyed})};
+  return p;
+}
+
+TEST_F(TitleRendererTest, ATrackMatteShowsTheLayerOnlyWhereTheMatteIs) {
+  const gpu::Image image = render(red_through_a_matte(false, false), 1.0);
+  const Rgba inside = pixel_at(image, 32, 32);
+  EXPECT_GT(inside.r, 240);
+  EXPECT_EQ(inside.a, 255);
+  EXPECT_EQ(pixel_at(image, 4, 4).a, 0) << "outside the matte";
+}
+
+TEST_F(TitleRendererTest, AReversedMatteShowsTheLayerEverywhereElse) {
+  const gpu::Image image = render(red_through_a_matte(false, true), 1.0);
+  EXPECT_EQ(pixel_at(image, 32, 32).a, 0);
+  EXPECT_GT(pixel_at(image, 4, 4).r, 240);
+}
+
+TEST_F(TitleRendererTest, ALumaMatteGoesByBrightnessNotOpacity) {
+  // A black square is opaque but dark: by alpha it lets everything through,
+  // by luma nothing.
+  EXPECT_GT(pixel_at(render(red_through_a_matte(false, false, "#000000"), 1.0), 32, 32).a, 240);
+  EXPECT_EQ(pixel_at(render(red_through_a_matte(true, false, "#000000"), 1.0), 32, 32).a, 0);
+}
+
 TEST_F(TitleRendererTest, TheTopLayerOfAGraphicIsDrawnOverTheOthers) {
   Project p = canvas_project();
   // Top first, as the panel lists them.
