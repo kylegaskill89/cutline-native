@@ -12790,6 +12790,7 @@ template <typename T>
     int escaped = 0;
     int clipped = 0;
     int squeezed = 0;
+    int misaligned = 0;
     int counted = 0;
     /// The window being walked. The main one, until a settings or export
     /// window is laid out at its own size -- a widget inside that has to be
@@ -12869,6 +12870,34 @@ template <typename T>
           (widget.bounds().x < clipper->bounds().x - 0.5 ||
            widget.bounds().right() > clipper->bounds().right() + 0.5)) {
         ++clipped;
+      }
+
+      // Text across a row reads along one line. Labels, buttons, fields and
+      // dropdowns each centre their text in their own bounds, so in a row
+      // their middles have to agree -- a label left at its own height at the
+      // top of a row of taller buttons sits half a line above them, and
+      // nothing above this would ever say so, because nothing is clipped,
+      // squeezed or outside anything.
+      if (const auto* row = dynamic_cast<const Box*>(&widget);
+          row != nullptr && row->axis() == Axis::Horizontal && widget.visible()) {
+        std::optional<double> line;
+        for (const auto& child : row->children()) {
+          const Widget* item = child.get();
+          if (!item->visible() || item->bounds().empty()) continue;
+          const auto* field = dynamic_cast<const TextField*>(item);
+          const bool text = dynamic_cast<const Label*>(item) != nullptr ||
+                            dynamic_cast<const Button*>(item) != nullptr ||
+                            dynamic_cast<const Dropdown*>(item) != nullptr ||
+                            (field != nullptr && !field->multiline());
+          if (!text) continue;
+          const double middle = item->bounds().y + item->bounds().height / 2.0;
+          if (!line.has_value()) {
+            line = middle;
+          } else if (std::abs(middle - *line) > 1.0) {
+            ++misaligned;
+            break;
+          }
+        }
       }
 
       const Widget* next = widget.clips_children() ? &widget : clipper;
@@ -13300,9 +13329,10 @@ template <typename T>
     }
 
     std::println(
-        "{:<10} {:>3} widgets, {} empty, {} outside the window, {} clipped away, {} squeezed",
-        theme.id, counted, empty, escaped, clipped, squeezed);
-    if (empty > 0 || escaped > 0 || clipped > 0 || squeezed > 0) ++failures;
+        "{:<10} {:>3} widgets, {} empty, {} outside the window, {} clipped away, {} squeezed, "
+        "{} off the line",
+        theme.id, counted, empty, escaped, clipped, squeezed, misaligned);
+    if (empty > 0 || escaped > 0 || clipped > 0 || squeezed > 0 || misaligned > 0) ++failures;
   }
 
   // The tool cursors, which are drawings rather than system handles and so can
