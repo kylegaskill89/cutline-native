@@ -147,6 +147,10 @@ class TextMeasurer {
 /// The drawing primitives every backend must provide.
 class Painter : public TextMeasurer {
  public:
+  /// Device pixels per unit of what is being drawn: the display's scale. For
+  /// marks drawn from lines, which are only crisp when their edges land on
+  /// pixel edges and so have to know where those are.
+  [[nodiscard]] virtual double device_scale() const noexcept { return 1.0; }
 
   /// Restricts drawing to a rounded rectangle until the matching `pop_clip`.
   virtual void push_clip(const Rect& bounds, double corner_radius) = 0;

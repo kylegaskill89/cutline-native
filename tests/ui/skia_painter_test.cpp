@@ -11,6 +11,7 @@
 
 #include "cutline/ui/skia_painter.hpp"
 
+#include "cutline/ui/controls.hpp"
 #include "cutline/ui/theme.hpp"
 
 #include <gtest/gtest.h>
@@ -47,6 +48,24 @@ class Canvas {
   }
 
   [[nodiscard]] bool ready() const { return surface_ != nullptr && painter_ != nullptr; }
+
+  /// Draws as a window on a display at this scale does.
+  void scale(double by) {
+    surface_->getCanvas()->scale(static_cast<SkScalar>(by), static_cast<SkScalar>(by));
+  }
+
+  /// How many pixels in a rectangle are neither lit nor dark: the grey an edge
+  /// leaves when it falls between two pixels.
+  [[nodiscard]] int partly_lit(int left, int top, int right, int bottom) const {
+    int count = 0;
+    for (int y = top; y < bottom; ++y) {
+      for (int x = left; x < right; ++x) {
+        const double l = luma(x, y);
+        if (l > 0.1 && l < 0.9) ++count;
+      }
+    }
+    return count;
+  }
   [[nodiscard]] SkiaPainter& painter() const { return *painter_; }
 
   /// The pixel at (x, y) as a theme colour, so assertions read in the same
@@ -255,6 +274,57 @@ TEST_F(SkiaPainterTest, AnXpButtonLooksDifferentPressed) {
   // The top edge is light when raised and dark when pressed, which is the
   // bevel inverting rather than the fill merely darkening.
   EXPECT_GT(normal.luma(100, 22), pressed.luma(100, 22));
+}
+
+// ------------------------------------------------------------- pixel grid --
+//
+// At 125% a unit is a pixel and a quarter, so an edge laid out at a whole unit
+// lands a quarter of the way into a pixel. These are what the painter does
+// about it.
+
+TEST_F(SkiaPainterTest, AtAScaledDisplayAFillsEdgesAreWholePixels) {
+  canvas_.scale(1.25);
+  canvas_.painter().fill(Rect{13.0, 13.0, 27.0, 11.0}, 0.0, Fill::solid(parse_color("#ffffff")));
+  EXPECT_EQ(canvas_.partly_lit(0, 0, kWidth, kHeight), 0);
+}
+
+TEST_F(SkiaPainterTest, TwoFillsThatMeetStillMeetOnTheGrid) {
+  canvas_.scale(1.25);
+  canvas_.painter().fill(Rect{13.0, 13.0, 27.0, 11.0}, 0.0, Fill::solid(parse_color("#ffffff")));
+  canvas_.painter().fill(Rect{40.0, 13.0, 27.0, 11.0}, 0.0, Fill::solid(parse_color("#ffffff")));
+  // No dark seam where they touch, and no grey one either.
+  const int y = static_cast<int>(18.0 * 1.25);
+  for (int x = static_cast<int>(14.0 * 1.25); x < static_cast<int>(66.0 * 1.25); ++x) {
+    EXPECT_GT(canvas_.luma(x, y), 0.9) << "at " << x;
+  }
+}
+
+TEST_F(SkiaPainterTest, AtAScaledDisplayARuleIsWholePixels) {
+  canvas_.scale(1.25);
+  canvas_.painter().line(13.0, 5.0, 13.0, 40.0, parse_color("#ffffff"), 1.0);
+  canvas_.painter().line(5.0, 61.0, 120.0, 61.0, parse_color("#ffffff"), 1.0);
+  EXPECT_EQ(canvas_.partly_lit(0, 0, kWidth, kHeight), 0);
+}
+
+TEST_F(SkiaPainterTest, AFrameIsWholePixelsAtAScaledDisplay) {
+  canvas_.scale(1.25);
+  canvas_.painter().stroke(Rect{13.0, 13.0, 27.0, 21.0}, 0.0, parse_color("#ffffff"), 1.0);
+  EXPECT_EQ(canvas_.partly_lit(0, 0, kWidth, kHeight), 0);
+}
+
+TEST_F(SkiaPainterTest, AnIconsStraightStrokesAreWholePixelsAtEveryScale) {
+  for (const double scale : {1.0, 1.25, 1.5, 2.0}) {
+    Canvas canvas;
+    ASSERT_TRUE(canvas.ready());
+    canvas.scale(scale);
+    // Laid out where a button would put it: at whole units, which are not
+    // whole pixels at most of these scales.
+    draw_icon(canvas.painter(), IconButton::Icon::Plus, Rect{13.0, 13.0, 23.0, 23.0},
+              parse_color("#ffffff"), 6.0, 1.75);
+    EXPECT_EQ(canvas.partly_lit(0, 0, kWidth, kHeight), 0) << "at " << scale;
+    EXPECT_GT(canvas.luma(static_cast<int>(24.5 * scale), static_cast<int>(24.5 * scale)), 0.9)
+        << "the icon was drawn nowhere near where it was laid out at " << scale;
+  }
 }
 
 }  // namespace

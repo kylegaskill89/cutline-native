@@ -491,7 +491,29 @@ struct Shell {
   HMONITOR monitor = nullptr;
   /// For a dialog window, the name its size is remembered under.
   std::string size_key;
+  /// Pixels per unit of the interface: the window's display DPI over 96. The
+  /// widget tree is laid out in units and the window scales it as it draws, so
+  /// a 125% display gets the interface drawn at its own resolution rather than
+  /// a 100% bitmap stretched by Windows -- which blurred every edge and every
+  /// letter on it.
+  double scale = 1.0;
 };
+
+/// What a window's display asks of it, as a scale.
+[[nodiscard]] double scale_of(HWND window) {
+  const UINT dpi = window != nullptr ? GetDpiForWindow(window) : 0;
+  return dpi == 0 ? 1.0 : static_cast<double>(dpi) / USER_DEFAULT_SCREEN_DPI;
+}
+
+/// A size in interface units, as pixels on a window at this scale.
+[[nodiscard]] int to_pixels(double units, double scale) {
+  return static_cast<int>(std::lround(units * scale));
+}
+
+/// A point in a window's client pixels, in the units its tree is laid out in.
+[[nodiscard]] std::pair<double, double> to_units(const Shell& shell, POINT local) {
+  return {static_cast<double>(local.x) / shell.scale, static_cast<double>(local.y) / shell.scale};
+}
 
 struct App {
   /// The editor's window, and any panels dragged out of it.
@@ -5636,10 +5658,14 @@ void open_settings_dialog(App& app, SettingsKind kind) {
   // anybody guessing: at 460 it found the pane short of the sentence under the
   // durations by forty pixels, in every theme.
   // Or as big as it was last left.
-  const auto [width, height] = dialog_size(app, kind == SettingsKind::Project ? "Project Settings"
-                                                                              : "Preferences",
-                                           kind == SettingsKind::Project ? 470 : 580,
-                                           kind == SettingsKind::Project ? 430 : 420);
+  const auto [units_wide, units_tall] =
+      dialog_size(app, kind == SettingsKind::Project ? "Project Settings" : "Preferences",
+                  kind == SettingsKind::Project ? 470 : 580,
+                  kind == SettingsKind::Project ? 430 : 420);
+  // On the editor's display, which is where it opens.
+  shell->scale = app.main.scale;
+  const int width = to_pixels(units_wide, shell->scale);
+  const int height = to_pixels(units_tall, shell->scale);
   const int x = owner.left + ((owner.right - owner.left) - width) / 2;
   const int y = owner.top + ((owner.bottom - owner.top) - height) / 2;
 
@@ -10285,8 +10311,8 @@ void refresh_audio_panel(App& app) {
 
     // Over this window, so it answers — whether or not the answer is a drop.
     // A point over a caption must not fall through to the window behind it.
-    const auto target =
-        shell->dock->drop_target(static_cast<double>(local.x), static_cast<double>(local.y));
+    const auto [ux, uy] = to_units(*shell, local);
+    const auto target = shell->dock->drop_target(ux, uy);
     if (target.has_value()) return std::pair{shell, *target};
     return std::nullopt;
   }
@@ -10303,7 +10329,8 @@ void show_drag_across(App& app, const PanelId& panel, POINT screen) {
     if (landed.has_value() && landed->first == shell && !panel.empty()) {
       POINT local = screen;
       ScreenToClient(shell->window, &local);
-      shell->dock->set_drag(panel, static_cast<double>(local.x), static_cast<double>(local.y));
+      const auto [ux, uy] = to_units(*shell, local);
+      shell->dock->set_drag(panel, ux, uy);
     } else {
       shell->dock->set_drag(std::nullopt, 0.0, 0.0);
     }
@@ -10349,15 +10376,16 @@ void float_panel_under_cursor(App& app, Shell& shell) {
   POINT local = screen;
   ScreenToClient(shell.window, &local);
 
+  const auto [ux, uy] = to_units(shell, local);
   for (const cutline::ui::DockGroup* group : shell.dock->groups()) {
-    if (!group->bounds().contains(static_cast<double>(local.x), static_cast<double>(local.y))) {
-      continue;
-    }
+    if (!group->bounds().contains(ux, uy)) continue;
     const PanelId panel = group->active_panel();
     if (panel.empty()) return;
 
-    const cutline::ui::Rect where{static_cast<double>(screen.x) - 130.0,
-                                  static_cast<double>(screen.y) - 12.0, 520.0, 380.0};
+    // On the screen, so in its pixels: a floating window is placed by Windows.
+    const double s = shell.scale;
+    const cutline::ui::Rect where{static_cast<double>(screen.x) - 130.0 * s,
+                                  static_cast<double>(screen.y) - 12.0 * s, 520.0 * s, 380.0 * s};
     if (cutline::ui::float_panel(layout_of(app), panel, where)) app.dock_stale = true;
     return;
   }
@@ -10396,7 +10424,7 @@ void wire_dock(App* app, Shell* shell, DockView& dock) {
 
   dock.set_on_drag([app, shell](const PanelId& panel, double x, double y) {
     if (app == nullptr || shell == nullptr || shell->window == nullptr) return;
-    POINT screen{static_cast<LONG>(x), static_cast<LONG>(y)};
+    POINT screen{to_pixels(x, shell->scale), to_pixels(y, shell->scale)};
     ClientToScreen(shell->window, &screen);
     show_drag_across(*app, panel, screen);
   });
@@ -10411,7 +10439,7 @@ void wire_dock(App* app, Shell* shell, DockView& dock) {
     // panel would leave that window showing nothing.
     if (cutline::ui::restore_maximised(layout_of(*app))) app->dock_stale = true;
 
-    POINT screen{static_cast<LONG>(x), static_cast<LONG>(y)};
+    POINT screen{to_pixels(x, shell->scale), to_pixels(y, shell->scale)};
     ClientToScreen(shell->window, &screen);
     show_drag_across(*app, PanelId{}, screen);
 
@@ -11271,8 +11299,11 @@ void open_export_dialog(App& app) {
   // eye already is.
   RECT owner{};
   GetWindowRect(app.main.window, &owner);
-  const auto [kWidth, kHeight] =
+  const auto [units_wide, units_tall] =
       dialog_size(app, "Export Settings", kExportWindowWidth, kExportWindowHeight);
+  shell->scale = app.main.scale;
+  const int kWidth = to_pixels(units_wide, shell->scale);
+  const int kHeight = to_pixels(units_tall, shell->scale);
   const int x = owner.left + ((owner.right - owner.left) - kWidth) / 2;
   const int y = owner.top + ((owner.bottom - owner.top) - kHeight) / 2;
 
@@ -11360,6 +11391,7 @@ void open_float_window(App& app, const cutline::ui::FloatingDock& floating) {
   if (window == nullptr) return;
 
   shell->window = window;
+  shell->scale = scale_of(window);
   SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(shell.get()));
 
   const MARGINS shadow{0, 0, 1, 0};
@@ -11466,10 +11498,12 @@ void refresh_float_titles(App& app) {
   };
 }
 
-[[nodiscard]] MouseEvent mouse_from(LPARAM lparam, MouseButton button, int clicks = 1) {
+[[nodiscard]] MouseEvent mouse_from(const Shell& shell, LPARAM lparam, MouseButton button,
+                                    int clicks = 1) {
+  const auto [x, y] = to_units(shell, POINT{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)});
   return MouseEvent{
-      .x = static_cast<double>(GET_X_LPARAM(lparam)),
-      .y = static_cast<double>(GET_Y_LPARAM(lparam)),
+      .x = x,
+      .y = y,
       .button = button,
       .modifiers = modifiers_now(),
       .click_count = clicks,
@@ -11530,7 +11564,10 @@ void remember_dialog_size(App& app, const Shell& shell) {
   if (shell.window == nullptr || shell.size_key.empty()) return;
   RECT box{};
   if (!GetWindowRect(shell.window, &box)) return;
-  app.settings.dialog_sizes[shell.size_key] = {box.right - box.left, box.bottom - box.top};
+  // In units, so a size left on one display opens the same size on another.
+  app.settings.dialog_sizes[shell.size_key] = {
+      static_cast<int>(std::lround((box.right - box.left) / shell.scale)),
+      static_cast<int>(std::lround((box.bottom - box.top) / shell.scale))};
   save_settings(app);
 }
 
@@ -11669,8 +11706,8 @@ void render(Shell& shell) {
     return;
   }
 
-  const Rect client{0.0, 0.0, static_cast<double>(shell.width),
-                    static_cast<double>(shell.height)};
+  const Rect client{0.0, 0.0, static_cast<double>(shell.width) / shell.scale,
+                    static_cast<double>(shell.height) / shell.scale};
   const LayoutContext context{theme, *painter};
 
   settle(app);
@@ -11688,8 +11725,11 @@ void render(Shell& shell) {
   // Through the painter rather than a canvas clear, so a themed background
   // that is a gradient stays one.
   canvas->clear(SK_ColorBLACK);
+  canvas->save();
+  canvas->scale(static_cast<SkScalar>(shell.scale), static_cast<SkScalar>(shell.scale));
   paint_surface(*painter, client, theme.style(cutline::ui::Part::Window));
   shell.host->paint(*painter, theme);
+  canvas->restore();
 
   shell.surface->present();
 }
@@ -11730,13 +11770,19 @@ constexpr int kCursorSize = 32;
 /// Split from making the cursor itself so `--check` can look at the pixels. A
 /// mark that comes out empty is a cursor that vanishes over the timeline, and
 /// nothing else in the application would notice.
-[[nodiscard]] sk_sp<SkSurface> draw_cursor_art(cutline::ui::IconButton::Icon icon) {
+[[nodiscard]] sk_sp<SkSurface> draw_cursor_art(cutline::ui::IconButton::Icon icon,
+                                               double scale = 1.0) {
   constexpr double kReach = 9.0;
 
   const sk_sp<SkSurface> surface =
-      SkSurfaces::Raster(SkImageInfo::MakeN32Premul(kCursorSize, kCursorSize));
+      SkSurfaces::Raster(SkImageInfo::MakeN32Premul(to_pixels(kCursorSize, scale),
+                                                    to_pixels(kCursorSize, scale)));
   if (surface == nullptr) return nullptr;
   surface->getCanvas()->clear(SK_ColorTRANSPARENT);
+  // Drawn in the same units as the interface and scaled the same way, so a
+  // cursor grows with its display as Windows' own do, and its strokes land on
+  // the same pixel grid as the buttons it came from.
+  surface->getCanvas()->scale(static_cast<SkScalar>(scale), static_cast<SkScalar>(scale));
 
   const std::unique_ptr<cutline::ui::SkiaPainter> painter =
       cutline::ui::SkiaPainter::create(surface->getCanvas());
@@ -11753,9 +11799,9 @@ constexpr int kCursorSize = 32;
   return surface;
 }
 
-[[nodiscard]] HCURSOR render_tool_cursor(cutline::ui::IconButton::Icon icon) {
-  constexpr int kSize = kCursorSize;
-  const sk_sp<SkSurface> surface = draw_cursor_art(icon);
+[[nodiscard]] HCURSOR render_tool_cursor(cutline::ui::IconButton::Icon icon, double scale) {
+  const int kSize = to_pixels(kCursorSize, scale);
+  const sk_sp<SkSurface> surface = draw_cursor_art(icon, scale);
   if (surface == nullptr) return nullptr;
 
   // Into a DIB, because that is what an icon is made of. Top-down, so the rows
@@ -11810,7 +11856,7 @@ constexpr int kCursorSize = 32;
 /// The tool ones are made once and kept: rendering thirty-two pixels is cheap,
 /// and doing it on every mouse move over a timeline is thirty-two pixels sixty
 /// times a second for no reason.
-[[nodiscard]] HCURSOR system_cursor(cutline::ui::Cursor cursor) {
+[[nodiscard]] HCURSOR system_cursor(cutline::ui::Cursor cursor, double scale) {
   using cutline::ui::Cursor;
   using Icon = cutline::ui::IconButton::Icon;
 
@@ -11829,8 +11875,11 @@ constexpr int kCursorSize = 32;
     case Cursor::Roll: break;
   }
 
-  static std::map<cutline::ui::Cursor, HCURSOR> made;
-  if (const auto found = made.find(cursor); found != made.end()) {
+  // One per display scale as well as per tool: a window on each of two
+  // displays wants the same razor at two sizes.
+  static std::map<std::pair<cutline::ui::Cursor, int>, HCURSOR> made;
+  const std::pair key{cursor, to_pixels(kCursorSize, scale)};
+  if (const auto found = made.find(key); found != made.end()) {
     return found->second != nullptr ? found->second : LoadCursorW(nullptr, IDC_ARROW);
   }
 
@@ -11840,8 +11889,8 @@ constexpr int kCursorSize = 32;
                     : cursor == Cursor::Slide       ? Icon::Slide
                     : cursor == Cursor::Ripple      ? Icon::Ripple
                                                     : Icon::Roll;
-  const HCURSOR drawn = render_tool_cursor(icon);
-  made.emplace(cursor, drawn);
+  const HCURSOR drawn = render_tool_cursor(icon, scale);
+  made.emplace(key, drawn);
   return drawn != nullptr ? drawn : LoadCursorW(nullptr, IDC_ARROW);
 }
 
@@ -11865,7 +11914,9 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
         // A maximised window's rectangle deliberately overhangs the monitor by
         // the frame thickness. Without putting that back, the top of the
         // interface — the caption itself — sits off the screen.
-        const int frame = GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+        const UINT dpi = GetDpiForWindow(window);
+        const int frame = GetSystemMetricsForDpi(SM_CXFRAME, dpi) +
+                          GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
         params->rgrc[0].left += frame;
         params->rgrc[0].right -= frame;
         params->rgrc[0].top += frame;
@@ -11884,7 +11935,9 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       // The resize edges have to be answered by hand now that there is no
       // system frame to do it. A maximised window has none.
       if (!IsZoomed(window)) {
-        const LONG grab = GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+        const UINT dpi = GetDpiForWindow(window);
+        const LONG grab = GetSystemMetricsForDpi(SM_CXFRAME, dpi) +
+                          GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
         const bool left = at.x < grab;
         const bool right = at.x >= client.right - grab;
         const bool top = at.y < grab;
@@ -11904,9 +11957,8 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       // does, and anything sitting on it — a button — does not. Asking the
       // tree rather than comparing against a height is what keeps the two from
       // drifting apart.
-      if (shell->title_bar != nullptr &&
-          shell->host->root().at(static_cast<double>(at.x), static_cast<double>(at.y)) ==
-              shell->title_bar) {
+      const auto [ux, uy] = to_units(*shell, at);
+      if (shell->title_bar != nullptr && shell->host->root().at(ux, uy) == shell->title_bar) {
         return HTCAPTION;
       }
       return HTCLIENT;
@@ -11915,6 +11967,22 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
     case WM_DISPLAYCHANGE:
       refresh_hdr(*app);
       return 0;
+
+    case WM_DPICHANGED: {
+      // Dragged onto a display at another scale, or the scale changed under
+      // it. Windows suggests the rectangle that keeps the window the same
+      // size to the eye; taking it is what stops a window doubling or halving
+      // as it crosses from one display to the next.
+      shell->scale = static_cast<double>(HIWORD(wparam)) / USER_DEFAULT_SCREEN_DPI;
+      const auto* suggested = reinterpret_cast<const RECT*>(lparam);
+      SetWindowPos(window, nullptr, suggested->left, suggested->top,
+                   suggested->right - suggested->left, suggested->bottom - suggested->top,
+                   SWP_NOZORDER | SWP_NOACTIVATE);
+      shell->host->request_layout();
+      shell->resized = true;
+      shell->dirty = true;
+      return 0;
+    }
 
     case WM_WINDOWPOSCHANGED:
       // Only when it has crossed onto another display: a drag sends one of
@@ -11949,7 +12017,7 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       // when the pointer goes somewhere else entirely.
       TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT), TME_LEAVE, window, 0};
       TrackMouseEvent(&track);
-      shell->host->mouse_move(mouse_from(lparam, MouseButton::Left));
+      shell->host->mouse_move(mouse_from(*shell, lparam, MouseButton::Left));
 
       // After the move, so the browser has been told how far the drag has got.
       // Only the main window has both a pool and a timeline in it; a floating
@@ -11972,7 +12040,7 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       // system's to draw a cursor for, and taking those would leave a window
       // that cannot be resized by its border without guessing where it is.
       if (LOWORD(lparam) != HTCLIENT) break;
-      SetCursor(system_cursor(shell->host->cursor()));
+      SetCursor(system_cursor(shell->host->cursor(), shell->scale));
       return TRUE;
     }
 
@@ -11987,16 +12055,16 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       KillTimer(window, kTooltipTimer);
       shell->host->hide_tooltip();
       SetCapture(window);
-      shell->host->mouse_down(mouse_from(lparam, MouseButton::Left));
+      shell->host->mouse_down(mouse_from(*shell, lparam, MouseButton::Left));
       if (shell->host->needs_paint()) shell->dirty = true;
       return 0;
     case WM_LBUTTONDBLCLK:
-      shell->host->mouse_down(mouse_from(lparam, MouseButton::Left, 2));
+      shell->host->mouse_down(mouse_from(*shell, lparam, MouseButton::Left, 2));
       if (shell->host->needs_paint()) shell->dirty = true;
       return 0;
     case WM_LBUTTONUP:
       ReleaseCapture();
-      shell->host->mouse_up(mouse_from(lparam, MouseButton::Left));
+      shell->host->mouse_up(mouse_from(*shell, lparam, MouseButton::Left));
       // A drag released anywhere — over the tracks, over a panel, off the
       // window — is a drag that is over, and the promise goes with it. The
       // browser has already forgotten the gesture by now, so this works the
@@ -12015,11 +12083,11 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
     // only mean the release goes somewhere surprising. The host does not
     // capture on it either, for the same reason.
     case WM_RBUTTONDOWN:
-      shell->host->mouse_down(mouse_from(lparam, MouseButton::Right));
+      shell->host->mouse_down(mouse_from(*shell, lparam, MouseButton::Right));
       if (shell->host->needs_paint()) shell->dirty = true;
       return 0;
     case WM_RBUTTONUP:
-      shell->host->mouse_up(mouse_from(lparam, MouseButton::Right));
+      shell->host->mouse_up(mouse_from(*shell, lparam, MouseButton::Right));
       if (shell->host->needs_paint()) shell->dirty = true;
       return 0;
 
@@ -12035,8 +12103,9 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       ScreenToClient(window, &at);
       const double notches =
           -static_cast<double>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
-      shell->host->wheel(WheelEvent{.x = static_cast<double>(at.x),
-                                  .y = static_cast<double>(at.y),
+      const auto [ux, uy] = to_units(*shell, at);
+      shell->host->wheel(WheelEvent{.x = ux,
+                                  .y = uy,
                                   .delta_y = notches,
                                   .modifiers = modifiers_now()});
       if (shell->host->needs_paint()) shell->dirty = true;
@@ -12207,8 +12276,8 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
           POINT at{};
           GetCursorPos(&at);
           ScreenToClient(window, &at);
-          const auto over = shell->dock->panel_at(static_cast<double>(at.x),
-                                                  static_cast<double>(at.y));
+          const auto [ux, uy] = to_units(*shell, at);
+          const auto over = shell->dock->panel_at(ux, uy);
           const PanelId panel =
               over.value_or(layout_of(*app).maximised);
           if (cutline::ui::toggle_maximised(layout_of(*app), panel)) app->dock_stale = true;
@@ -13286,6 +13355,11 @@ template <typename T>
 
 
 int main(int argc, char** argv) {
+  // Each window draws at its own display's resolution and follows it from one
+  // display to another. Without this Windows draws the interface at 96 DPI and
+  // stretches the bitmap, which on a 125% display blurs every edge in it.
+  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
   // `--check [dir]`: the second argument, when there is one, is where each
   // theme's frame is written so it can be looked at.
   if (argc > 1 && std::string_view(argv[1]) == "--check") {
@@ -13391,6 +13465,13 @@ int main(int argc, char** argv) {
   }
 
   app.main.window = window;
+  // Made at 1280 by 800 pixels before anything knew which display it would be
+  // on; now that it does, 1280 by 800 units of it.
+  app.main.scale = scale_of(window);
+  if (app.main.scale != 1.0) {
+    SetWindowPos(window, nullptr, 0, 0, to_pixels(1280.0, app.main.scale),
+                 to_pixels(800.0, app.main.scale), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  }
   // The shell rather than the app: a floating window's proc needs to know
   // which window it is, and every one of them finds its app through this.
   SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&app.main));

@@ -47,6 +47,47 @@ namespace {
                           static_cast<SkScalar>(r.width), static_cast<SkScalar>(r.height));
 }
 
+/// Where the display's pixels are, for a canvas scaled by `scale`.
+///
+/// Layout is in units and a unit is not a pixel on a scaled display: at 125%
+/// a panel edge at 13 units falls at 16.25 pixels, and an antialiased edge
+/// there is a quarter-lit column of grey down the length of the panel. Every
+/// rectangle and every straight rule is put on the grid as it is drawn, so
+/// layout never has to know the display's scale for the interface to be sharp
+/// on it.
+struct PixelGrid {
+  double scale = 1.0;
+
+  /// To the nearest pixel edge. Two rectangles that share an edge in units
+  /// still share one in pixels, because both round the same number.
+  [[nodiscard]] double edge(double at) const { return std::round(at * scale) / scale; }
+
+  [[nodiscard]] Rect edges(const Rect& r) const {
+    if (scale <= 0.0) return r;
+    const double left = edge(r.x);
+    const double top = edge(r.y);
+    // Never rounded away entirely: something laid out thinner than a pixel is
+    // still meant to be seen.
+    const double right = std::max(edge(r.x + r.width), left + (r.width > 0.0 ? 1.0 / scale : 0.0));
+    const double bottom =
+        std::max(edge(r.y + r.height), top + (r.height > 0.0 ? 1.0 / scale : 0.0));
+    return Rect{left, top, right - left, bottom - top};
+  }
+
+  /// A stroke width that fills whole pixels.
+  [[nodiscard]] double width(double units) const {
+    return std::max(1.0, std::round(units * scale)) / scale;
+  }
+
+  /// Where the centre of a stroke `units` wide goes so that it covers whole
+  /// pixels: a pixel's middle for an odd number of them, an edge for an even.
+  [[nodiscard]] double centre(double at, double units) const {
+    const double pixels = std::max(1.0, std::round(units * scale));
+    const double offset = std::fmod(pixels, 2.0) == 1.0 ? 0.5 : 0.0;
+    return (std::floor(at * scale) + offset) / scale;
+  }
+};
+
 [[nodiscard]] SkRRect rounded(const Rect& r, double radius) {
   // Clamped, because a radius larger than half the shorter side produces a
   // shape Skia has to reinterpret and the result stops matching the theme.
@@ -146,14 +187,22 @@ std::unique_ptr<SkiaPainter> SkiaPainter::create(void* canvas, TextureCache* tex
 }
 
 void SkiaPainter::push_clip(const Rect& bounds, double corner_radius) {
+  const PixelGrid grid{device_scale()};
   impl_->canvas->save();
-  impl_->canvas->clipRRect(rounded(bounds, corner_radius), true);
+  impl_->canvas->clipRRect(rounded(grid.edges(bounds), corner_radius), true);
 }
 
 void SkiaPainter::pop_clip() { impl_->canvas->restore(); }
 
-void SkiaPainter::fill(const Rect& bounds, double corner_radius, const Fill& value) {
-  if (bounds.empty()) return;
+double SkiaPainter::device_scale() const noexcept {
+  // The window scales the whole tree once, so the matrix's scale is the
+  // display's. Nothing here rotates or skews.
+  return static_cast<double>(impl_->canvas->getTotalMatrix().getScaleX());
+}
+
+void SkiaPainter::fill(const Rect& laid, double corner_radius, const Fill& value) {
+  if (laid.empty()) return;
+  const Rect bounds = PixelGrid{device_scale()}.edges(laid);
 
   SkPaint paint;
   paint.setAntiAlias(true);
@@ -194,9 +243,12 @@ void SkiaPainter::fill(const Rect& bounds, double corner_radius, const Fill& val
   impl_->canvas->drawRRect(rounded(bounds, corner_radius), paint);
 }
 
-void SkiaPainter::stroke(const Rect& bounds, double corner_radius, const Color& color,
-                         double width) {
-  if (bounds.empty() || width <= 0.0) return;
+void SkiaPainter::stroke(const Rect& laid, double corner_radius, const Color& color,
+                         double asked) {
+  if (laid.empty() || asked <= 0.0) return;
+  const PixelGrid grid{device_scale()};
+  const Rect bounds = grid.edges(laid);
+  const double width = grid.width(asked);
 
   SkPaint paint;
   paint.setAntiAlias(true);
@@ -272,8 +324,10 @@ void SkiaPainter::texture(const Rect& bounds, const TextureView& frame) {
 }
 
 void SkiaPainter::line(double x1, double y1, double x2, double y2, const Color& color,
-                       double width) {
-  if (width <= 0.0 || color.a <= 0.0f) return;
+                       double asked) {
+  if (asked <= 0.0 || color.a <= 0.0f) return;
+  const PixelGrid grid{device_scale()};
+  const double width = grid.width(asked);
 
   SkPaint paint;
   paint.setAntiAlias(true);
@@ -283,6 +337,18 @@ void SkiaPainter::line(double x1, double y1, double x2, double y2, const Color& 
   // instead of leaving a notch where they cross.
   paint.setStrokeCap(SkPaint::kRound_Cap);
   paint.setColor4f(to_sk(color));
+
+  // A rule -- across or down -- goes on the grid, with square ends so it
+  // covers whole pixels to its last one. A round end there is half a pixel of
+  // grey past where the rule stops. Slanted strokes are left alone: they are
+  // antialiased whatever is done with them.
+  if (x1 == x2 || y1 == y2) {
+    x1 = grid.centre(x1, asked);
+    x2 = grid.centre(x2, asked);
+    y1 = grid.centre(y1, asked);
+    y2 = grid.centre(y2, asked);
+    paint.setStrokeCap(SkPaint::kSquare_Cap);
+  }
 
   impl_->canvas->drawLine(static_cast<SkScalar>(x1), static_cast<SkScalar>(y1),
                           static_cast<SkScalar>(x2), static_cast<SkScalar>(y2), paint);

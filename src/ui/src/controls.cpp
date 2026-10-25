@@ -1789,33 +1789,50 @@ void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const 
                double reach, double width, bool on) {
   using Icon = IconButton::Icon;
   const SurfaceStyle style{.text = color};
-  const double cx = area.x + area.width * 0.5;
-  const double cy = area.y + area.height * 0.5;
+
+  // Every mark on the display's pixel grid. A stroke a whole number of pixels
+  // wide, centred on the middle of a pixel when it is odd and on an edge when
+  // it is even, fills whole pixels; anywhere else it is two half-lit rows of
+  // grey, which at twelve pixels across is the difference between a mark and a
+  // smudge. Done here, once, so every icon is drawn to the same grid and the
+  // same stroke at every scale, rather than each being nudged by hand.
+  const double scale = painter.device_scale();
+  const double pixels_wide = std::max(1.0, std::round(width * scale));
+  width = pixels_wide / scale;
+  const double offset = std::fmod(pixels_wide, 2.0) == 1.0 ? 0.5 : 0.0;
+  const auto snap = [scale, offset](double at) { return (std::floor(at * scale) + offset) / scale; };
+  const auto edge = [scale](double at) { return std::round(at * scale) / scale; };
+  const auto line = [&painter, &snap, &style, width](double x0, double y0, double x1, double y1) {
+    painter.line(snap(x0), snap(y0), snap(x1), snap(y1), style.text, width);
+  };
+  reach = std::max(1.0, std::round(reach * scale)) / scale;
+  const double cx = snap(area.x + area.width * 0.5);
+  const double cy = snap(area.y + area.height * 0.5);
 
   switch (icon) {
     case Icon::ArrowUp:
-      painter.line(cx - reach, cy + reach * 0.5, cx, cy - reach * 0.5, style.text, width);
-      painter.line(cx, cy - reach * 0.5, cx + reach, cy + reach * 0.5, style.text, width);
+      line(cx - reach, cy + reach * 0.5, cx, cy - reach * 0.5);
+      line(cx, cy - reach * 0.5, cx + reach, cy + reach * 0.5);
       break;
     case Icon::ArrowDown:
-      painter.line(cx - reach, cy - reach * 0.5, cx, cy + reach * 0.5, style.text, width);
-      painter.line(cx, cy + reach * 0.5, cx + reach, cy - reach * 0.5, style.text, width);
+      line(cx - reach, cy - reach * 0.5, cx, cy + reach * 0.5);
+      line(cx, cy + reach * 0.5, cx + reach, cy - reach * 0.5);
       break;
     case Icon::ArrowLeft:
-      painter.line(cx + reach * 0.5, cy - reach, cx - reach * 0.5, cy, style.text, width);
-      painter.line(cx - reach * 0.5, cy, cx + reach * 0.5, cy + reach, style.text, width);
+      line(cx + reach * 0.5, cy - reach, cx - reach * 0.5, cy);
+      line(cx - reach * 0.5, cy, cx + reach * 0.5, cy + reach);
       break;
     case Icon::ArrowRight:
-      painter.line(cx - reach * 0.5, cy - reach, cx + reach * 0.5, cy, style.text, width);
-      painter.line(cx + reach * 0.5, cy, cx - reach * 0.5, cy + reach, style.text, width);
+      line(cx - reach * 0.5, cy - reach, cx + reach * 0.5, cy);
+      line(cx + reach * 0.5, cy, cx - reach * 0.5, cy + reach);
       break;
     case Icon::Cross:
-      painter.line(cx - reach, cy - reach, cx + reach, cy + reach, style.text, width);
-      painter.line(cx - reach, cy + reach, cx + reach, cy - reach, style.text, width);
+      line(cx - reach, cy - reach, cx + reach, cy + reach);
+      line(cx - reach, cy + reach, cx + reach, cy - reach);
       break;
     case Icon::Plus:
-      painter.line(cx - reach, cy, cx + reach, cy, style.text, width);
-      painter.line(cx, cy - reach, cx, cy + reach, style.text, width);
+      line(cx - reach, cy, cx + reach, cy);
+      line(cx, cy - reach, cx, cy + reach);
       break;
 
     case Icon::Stopwatch: {
@@ -1825,15 +1842,15 @@ void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const 
       painter.stroke(face, reach, style.text, width);
       // One hand, pointing up and to the right, so a clock face reads as one
       // at this size rather than as a ring.
-      painter.line(cx, cy, cx + reach * 0.6, cy - reach * 0.6, style.text, width);
+      line(cx, cy, cx + reach * 0.6, cy - reach * 0.6);
       break;
     }
 
     case Icon::Diamond:
-      painter.line(cx, cy - reach, cx + reach, cy, style.text, width);
-      painter.line(cx + reach, cy, cx, cy + reach, style.text, width);
-      painter.line(cx, cy + reach, cx - reach, cy, style.text, width);
-      painter.line(cx - reach, cy, cx, cy - reach, style.text, width);
+      line(cx, cy - reach, cx + reach, cy);
+      line(cx + reach, cy, cx, cy + reach);
+      line(cx, cy + reach, cx - reach, cy);
+      line(cx - reach, cy, cx, cy - reach);
       break;
 
     case Icon::Disclosure: {
@@ -1843,11 +1860,11 @@ void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const 
       // arrows meaning three different things.
       const double small = reach * 0.66;
       if (on) {
-        painter.line(cx - small, cy - small * 0.5, cx, cy + small * 0.5, style.text, width);
-        painter.line(cx, cy + small * 0.5, cx + small, cy - small * 0.5, style.text, width);
+        line(cx - small, cy - small * 0.5, cx, cy + small * 0.5);
+        line(cx, cy + small * 0.5, cx + small, cy - small * 0.5);
       } else {
-        painter.line(cx - small * 0.5, cy - small, cx + small * 0.5, cy, style.text, width);
-        painter.line(cx + small * 0.5, cy, cx - small * 0.5, cy + small, style.text, width);
+        line(cx - small * 0.5, cy - small, cx + small * 0.5, cy);
+        line(cx + small * 0.5, cy, cx - small * 0.5, cy + small);
       }
       break;
     }
@@ -1867,12 +1884,12 @@ void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const 
       for (int i = 0; i < kDrawn; ++i) {
         const auto [x0, y0] = point(i);
         const auto [x1, y1] = point(i + 1);
-        painter.line(x0, y0, x1, y1, style.text, width);
+        line(x0, y0, x1, y1);
       }
       // The head, at the open end, pointing the way round the ring goes.
       const auto [hx, hy] = point(0);
-      painter.line(hx, hy, hx - reach * 0.5, hy - reach * 0.4, style.text, width);
-      painter.line(hx, hy, hx - reach * 0.1, hy + reach * 0.6, style.text, width);
+      line(hx, hy, hx - reach * 0.5, hy - reach * 0.4);
+      line(hx, hy, hx - reach * 0.1, hy + reach * 0.6);
       break;
     }
 
@@ -1880,12 +1897,10 @@ void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const 
       // A cursor: tip at the top, two flanks, and a tail.
       const double tip_x = cx - reach * 0.5;
       const double tip_y = cy - reach;
-      painter.line(tip_x, tip_y, cx + reach * 0.55, cy + reach * 0.25, style.text, width);
-      painter.line(cx + reach * 0.55, cy + reach * 0.25, cx - reach * 0.05, cy + reach * 0.4,
-                   style.text, width);
-      painter.line(cx - reach * 0.05, cy + reach * 0.4, tip_x, tip_y, style.text, width);
-      painter.line(cx + reach * 0.2, cy + reach * 0.35, cx + reach * 0.5, cy + reach,
-                   style.text, width);
+      line(tip_x, tip_y, cx + reach * 0.55, cy + reach * 0.25);
+      line(cx + reach * 0.55, cy + reach * 0.25, cx - reach * 0.05, cy + reach * 0.4);
+      line(cx - reach * 0.05, cy + reach * 0.4, tip_x, tip_y);
+      line(cx + reach * 0.2, cy + reach * 0.35, cx + reach * 0.5, cy + reach);
       break;
     }
 
@@ -1894,21 +1909,21 @@ void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const 
       // where a blade does not: a blade that size is a grey smudge.
       const double w = reach * 0.75;
       const double h = reach * 1.6;
-      painter.stroke(Rect{cx - reach, cy - h * 0.5, w, h}, 1.0, style.text, width);
-      painter.stroke(Rect{cx + reach - w, cy - h * 0.5, w, h}, 1.0, style.text, width);
+      painter.stroke(Rect{snap(cx - reach), snap(cy - h * 0.5), edge(w), edge(h)}, 1.0, style.text,
+                     width);
+      painter.stroke(Rect{snap(cx + reach - w), snap(cy - h * 0.5), edge(w), edge(h)}, 1.0,
+                     style.text, width);
       break;
     }
 
     case Icon::RateStretch:
       // A fixed span with speed inside it: two end bars and a pair of chevrons,
       // which is a stretch that is going somewhere rather than a trim.
-      painter.line(cx - reach, cy - reach * 0.8, cx - reach, cy + reach * 0.8, style.text,
-                   width);
-      painter.line(cx + reach, cy - reach * 0.8, cx + reach, cy + reach * 0.8, style.text,
-                   width);
+      line(cx - reach, cy - reach * 0.8, cx - reach, cy + reach * 0.8);
+      line(cx + reach, cy - reach * 0.8, cx + reach, cy + reach * 0.8);
       for (const double at : {-reach * 0.6, 0.0}) {
-        painter.line(cx + at, cy - reach * 0.5, cx + at + reach * 0.5, cy, style.text, width);
-        painter.line(cx + at + reach * 0.5, cy, cx + at, cy + reach * 0.5, style.text, width);
+        line(cx + at, cy - reach * 0.5, cx + at + reach * 0.5, cy);
+        line(cx + at + reach * 0.5, cy, cx + at, cy + reach * 0.5);
       }
       break;
 
@@ -1918,50 +1933,42 @@ void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const 
       // mean "the frame stays put", and at eight pixels a box with an arrowhead
       // in it is a blob. The plainest mark that reads is the right one, and this
       // one cannot be confused with the two that have end bars.
-      painter.line(cx - reach, cy, cx + reach, cy, style.text, width);
-      painter.line(cx - reach, cy, cx - reach * 0.4, cy - reach * 0.6, style.text, width);
-      painter.line(cx - reach, cy, cx - reach * 0.4, cy + reach * 0.6, style.text, width);
-      painter.line(cx + reach, cy, cx + reach * 0.4, cy - reach * 0.6, style.text, width);
-      painter.line(cx + reach, cy, cx + reach * 0.4, cy + reach * 0.6, style.text, width);
+      line(cx - reach, cy, cx + reach, cy);
+      line(cx - reach, cy, cx - reach * 0.4, cy - reach * 0.6);
+      line(cx - reach, cy, cx - reach * 0.4, cy + reach * 0.6);
+      line(cx + reach, cy, cx + reach * 0.4, cy - reach * 0.6);
+      line(cx + reach, cy, cx + reach * 0.4, cy + reach * 0.6);
       break;
 
     case Icon::Slide:
       // A block moving between two that stay where they are.
-      painter.line(cx - reach, cy - reach * 0.8, cx - reach, cy + reach * 0.8, style.text,
-                   width);
-      painter.line(cx + reach, cy - reach * 0.8, cx + reach, cy + reach * 0.8, style.text,
-                   width);
-      painter.fill(Rect{cx - reach * 0.45, cy - reach * 0.6, reach * 0.9, reach * 1.2}, 1.0,
-                   Fill::solid(style.text));
+      line(cx - reach, cy - reach * 0.8, cx - reach, cy + reach * 0.8);
+      line(cx + reach, cy - reach * 0.8, cx + reach, cy + reach * 0.8);
+      painter.fill(Rect{edge(cx - reach * 0.45), edge(cy - reach * 0.6), edge(reach * 0.9),
+                        edge(reach * 1.2)},
+                   1.0, Fill::solid(style.text));
       break;
 
     case Icon::Ripple:
       // One edge, and what is behind it going the same way. The single bar is
       // what separates this from the roll beside it, which has two.
-      painter.line(cx - reach * 0.4, cy - reach * 0.8, cx - reach * 0.4, cy + reach * 0.8,
-                   style.text, width);
-      painter.line(cx - reach * 0.1, cy, cx + reach, cy, style.text, width);
-      painter.line(cx + reach, cy, cx + reach * 0.45, cy - reach * 0.5, style.text, width);
-      painter.line(cx + reach, cy, cx + reach * 0.45, cy + reach * 0.5, style.text, width);
+      line(cx - reach * 0.4, cy - reach * 0.8, cx - reach * 0.4, cy + reach * 0.8);
+      line(cx - reach * 0.1, cy, cx + reach, cy);
+      line(cx + reach, cy, cx + reach * 0.45, cy - reach * 0.5);
+      line(cx + reach, cy, cx + reach * 0.45, cy + reach * 0.5);
       break;
 
     case Icon::Roll:
       // The join itself, with the arrows on it going both ways: what moves is
       // the line between two clips, and neither end of the pair does.
-      painter.line(cx - reach, cy - reach * 0.8, cx - reach, cy + reach * 0.8, style.text,
-                   width);
-      painter.line(cx + reach, cy - reach * 0.8, cx + reach, cy + reach * 0.8, style.text,
-                   width);
-      painter.line(cx, cy - reach * 0.8, cx, cy + reach * 0.8, style.text, width);
-      painter.line(cx - reach * 0.55, cy, cx + reach * 0.55, cy, style.text, width);
-      painter.line(cx - reach * 0.55, cy, cx - reach * 0.2, cy - reach * 0.35, style.text,
-                   width);
-      painter.line(cx - reach * 0.55, cy, cx - reach * 0.2, cy + reach * 0.35, style.text,
-                   width);
-      painter.line(cx + reach * 0.55, cy, cx + reach * 0.2, cy - reach * 0.35, style.text,
-                   width);
-      painter.line(cx + reach * 0.55, cy, cx + reach * 0.2, cy + reach * 0.35, style.text,
-                   width);
+      line(cx - reach, cy - reach * 0.8, cx - reach, cy + reach * 0.8);
+      line(cx + reach, cy - reach * 0.8, cx + reach, cy + reach * 0.8);
+      line(cx, cy - reach * 0.8, cx, cy + reach * 0.8);
+      line(cx - reach * 0.55, cy, cx + reach * 0.55, cy);
+      line(cx - reach * 0.55, cy, cx - reach * 0.2, cy - reach * 0.35);
+      line(cx - reach * 0.55, cy, cx - reach * 0.2, cy + reach * 0.35);
+      line(cx + reach * 0.55, cy, cx + reach * 0.2, cy - reach * 0.35);
+      line(cx + reach * 0.55, cy, cx + reach * 0.2, cy + reach * 0.35);
       break;
   }
 
