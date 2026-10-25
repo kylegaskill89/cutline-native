@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace cutline::core {
@@ -53,7 +54,11 @@ class History {
   ///
   /// Taken by value so a caller that is done with it can move it in: its
   /// tracks are then kept without being copied.
-  void push(Project snapshot);
+  ///
+  /// `name` is what the edit that followed is called — what the History panel
+  /// lists and what undoing would take back. It travels with the step between
+  /// the two stacks, so a step undone and redone keeps its name.
+  void push(Project snapshot, std::string name = {});
 
   [[nodiscard]] bool can_undo() const noexcept { return !undo_.empty(); }
   [[nodiscard]] bool can_redo() const noexcept { return !redo_.empty(); }
@@ -70,12 +75,20 @@ class History {
   [[nodiscard]] std::size_t undo_depth() const noexcept { return undo_.size(); }
   [[nodiscard]] std::size_t redo_depth() const noexcept { return redo_.size(); }
 
+  /// The names of the edits that undoing would take back, oldest first: the
+  /// last is what the next undo undoes.
+  [[nodiscard]] std::vector<std::string> undo_names() const;
+  /// The names of the edits that redoing would put back, next first.
+  [[nodiscard]] std::vector<std::string> redo_names() const;
+
  private:
   /// A project with every sequence's tracks taken out, and the tracks, shared
   /// with whichever snapshot it was stored beside wherever they are the same.
   struct Snapshot {
     Project rest;
     std::vector<std::vector<std::shared_ptr<const Track>>> tracks;
+    /// The edit that took the project from this state to the next one.
+    std::string name;
   };
 
   /// Takes a project apart, sharing each track that `beside` already holds as

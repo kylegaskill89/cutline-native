@@ -61,8 +61,9 @@ Project History::restore(const Snapshot& snapshot) {
   return project;
 }
 
-void History::push(Project snapshot) {
+void History::push(Project snapshot, std::string name) {
   undo_.push_back(store(std::move(snapshot), undo_.empty() ? nullptr : &undo_.back()));
+  undo_.back().name = std::move(name);
   trim(undo_, limit_);
   redo_.clear();
 }
@@ -77,6 +78,9 @@ std::optional<Project> History::undo(Project current) {
   // Stored beside the snapshot it is about to replace, which is the one it
   // differs from by a single edit.
   Snapshot stored = store(std::move(current), &undo_.back());
+  // The step being undone is the edit that led from the snapshot to `current`,
+  // and redoing it leads back there, so the name goes with `current`.
+  stored.name = std::move(undo_.back().name);
   Project previous = restore(undo_.back());
   undo_.pop_back();
   redo_.push_back(std::move(stored));
@@ -86,10 +90,25 @@ std::optional<Project> History::undo(Project current) {
 std::optional<Project> History::redo(Project current) {
   if (redo_.empty()) return std::nullopt;
   Snapshot stored = store(std::move(current), &redo_.back());
+  stored.name = std::move(redo_.back().name);
   Project next = restore(redo_.back());
   redo_.pop_back();
   undo_.push_back(std::move(stored));
   return next;
+}
+
+std::vector<std::string> History::undo_names() const {
+  std::vector<std::string> names;
+  names.reserve(undo_.size());
+  for (const Snapshot& step : undo_) names.push_back(step.name);
+  return names;
+}
+
+std::vector<std::string> History::redo_names() const {
+  std::vector<std::string> names;
+  names.reserve(redo_.size());
+  for (auto step = redo_.rbegin(); step != redo_.rend(); ++step) names.push_back(step->name);
+  return names;
 }
 
 void History::clear() noexcept {

@@ -37,7 +37,15 @@ class Session {
   /// avoids putting an entry in the undo stack that undoes nothing.
   ///
   /// Returns whether anything changed.
+  ///
+  /// The step is named for the History panel by what changed (see
+  /// `describe_edit`), unless `name_next_edit` has given it a name already.
   bool apply(core::Project next);
+
+  /// The name the next applied edit is listed under, in place of one worked out
+  /// from what changed. For a command that knows what it is called. Used once
+  /// and forgotten, and an empty name forgets it unused.
+  void name_next_edit(std::string name) { next_name_ = std::move(name); }
 
   /// Replaces the project without recording anything. Opening a file, not
   /// editing one, so the history belongs to the document being closed.
@@ -74,6 +82,20 @@ class Session {
   [[nodiscard]] bool can_redo() const noexcept { return history_.can_redo(); }
   bool undo();
   bool redo();
+
+  /// The steps the History panel lists: what undoing would take back, oldest
+  /// first, and what redoing would put back, next first.
+  [[nodiscard]] std::vector<std::string> undo_names() const { return history_.undo_names(); }
+  [[nodiscard]] std::vector<std::string> redo_names() const { return history_.redo_names(); }
+
+  /// Steps back or forward until `steps` edits stand applied, counting from
+  /// the oldest kept. Clicking a step in the History panel. Returns whether
+  /// anything moved.
+  bool step_to(std::size_t steps);
+
+  /// Forgets every step, keeping the project as it is. Premiere's Clear
+  /// History: for memory, and for a list that has grown too long to read.
+  void clear_history();
 
   /// How many edits are kept to step back through.
   ///
@@ -179,6 +201,8 @@ class Session {
   bool modified_ = false;
 
   core::History history_;
+  /// See `name_next_edit`.
+  std::string next_name_;
   std::vector<std::string> selection_;
   std::vector<core::ClipCopy> clipboard_;
   std::string source_media_;

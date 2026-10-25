@@ -12,6 +12,7 @@ add_library(cutline_editor
   src/browser_binding.cpp
   src/commands.cpp
   src/document.cpp
+  src/edit_names.cpp
   src/effects_binding.cpp
   src/generators.cpp
   src/import.cpp

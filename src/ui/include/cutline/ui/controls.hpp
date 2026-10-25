@@ -692,6 +692,9 @@ struct MenuEntry {
   std::optional<bool> checked;
   /// A rule between groups rather than a row anyone can choose.
   bool separator = false;
+  /// Drawn greyed but still chosen like any other: the History panel's steps
+  /// that have been undone, which are not there now and can be gone back to.
+  bool faded = false;
   /// Rows of the menu that opens beside this one. A row with any is never
   /// chosen itself: pointing at it opens them.
   std::vector<MenuEntry> submenu;

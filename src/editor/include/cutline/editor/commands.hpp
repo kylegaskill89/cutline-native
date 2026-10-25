@@ -145,6 +145,11 @@ enum class Command {
 
 [[nodiscard]] std::string_view to_string(Command command) noexcept;
 
+/// What the History panel lists a command's edit as, in Premiere's words, or
+/// empty for one whose edit is better named by what it did — a key that marks
+/// or unmarks depending on what is there, say — or that edits nothing.
+[[nodiscard]] std::string_view history_name(Command command) noexcept;
+
 /// The track a keyboard edit lands on, or empty when nothing is targeted.
 ///
 /// The first targeted *video* track, because that is what carries a picture and

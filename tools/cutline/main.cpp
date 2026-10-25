@@ -282,7 +282,7 @@ using cutline::ui::built_in_themes;
 /// A panel is a name from here plus whatever `make_panel` builds for it. The
 /// layout only ever moves the name around, which is what lets an arrangement be
 /// saved and restored without saving any widgets.
-constexpr std::array<std::pair<std::string_view, std::string_view>, 8> kPanels{{
+constexpr std::array<std::pair<std::string_view, std::string_view>, 9> kPanels{{
     {"project", "Project"},
     {"effects", "Effect Controls"},
     // Premiere's own two names, which are confusingly similar on purpose: this
@@ -305,6 +305,10 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 8> kPanels{{
     // a scope can sit beside the picture, or on another screen, or be closed —
     // none of which an overlay offers. It costs the picture no room either way.
     {"scopes", "Scopes"},
+    // Premiere's undo list, every step by name. Undo and redo walk it one step
+    // at a time; this is for going back ten, or for seeing what the last few
+    // presses actually did.
+    {"history", "History"},
 }};
 
 /// The panels this build has, which is what a saved arrangement is measured
@@ -758,6 +762,11 @@ struct App {
   /// scrolling with it.
   Box* inspector = nullptr;
   MonitorView* monitor = nullptr;
+  /// The History panel's list, and the steps it was last filled with, so it is
+  /// refilled when they change rather than on every frame.
+  MenuList* history_list = nullptr;
+  std::vector<std::string> history_shown;
+  std::size_t history_at = static_cast<std::size_t>(-1);
   /// The picture the program monitor was last given, kept so a monitor made
   /// afresh — a panel undocked or torn out into a window of its own gets a new
   /// one — starts with it. The engine only hands over a picture better than
@@ -10160,6 +10169,63 @@ void refresh_audio_panel(App& app) {
 }
 
 /// The scopes, with a row of tabs to choose between them.
+/// Goes to the state after `steps` edits, as a click in the History panel does,
+/// and brings everything that shows the document along.
+void step_history_to(App& app, std::size_t steps) {
+  if (!app.session.step_to(steps)) return;
+  refresh_all(app);
+  show_playhead(app);
+  mark_dirty(app);
+}
+
+/// Fills the History panel from the session, when its steps have changed.
+///
+/// The first row is the project as it was opened, Premiere's "New/Open"; each
+/// row after it is the state an edit left. The current one is highlighted and
+/// the ones undone are faded but can still be clicked, which redoes back to
+/// them — Premiere's arrangement, and the reason this is a list and not a pair
+/// of buttons.
+void refresh_history(App& app) {
+  if (app.history_list == nullptr) return;
+  std::vector<std::string> names = app.session.undo_names();
+  const std::size_t at = names.size();
+  for (std::string& name : app.session.redo_names()) names.push_back(std::move(name));
+  if (names == app.history_shown && at == app.history_at) return;
+  app.history_shown = names;
+  app.history_at = at;
+
+  std::vector<MenuEntry> rows;
+  rows.reserve(names.size() + 1);
+  rows.push_back(MenuEntry{.label = "New/Open", .act = [&app] { step_history_to(app, 0); }});
+  for (std::size_t i = 0; i < names.size(); ++i) {
+    rows.push_back(MenuEntry{.label = names[i].empty() ? std::string("Edit") : names[i],
+                             .faded = i >= at,
+                             .act = [&app, steps = i + 1] { step_history_to(app, steps); }});
+  }
+  app.history_list->set_entries(std::move(rows));
+  app.history_list->set_current(at);
+  mark_dirty(app);
+}
+
+[[nodiscard]] std::unique_ptr<Widget> make_history_panel(App* app) {
+  auto panel = std::make_unique<Panel>();
+  // Scrolled: a hundred steps is the default depth, and a panel tall enough for
+  // all of them is not one anybody has.
+  auto& scroll = panel->emplace<ScrollView>(Axis::Vertical);
+  auto& list = static_cast<MenuList&>(scroll.set_content(std::make_unique<MenuList>()));
+  // A click is a step, and a step is the panel's whole purpose; the list stays
+  // where it is rather than closing like a menu would.
+  list.set_on_dismiss([] {});
+  list.set_fills_height(true);
+  if (app != nullptr) {
+    app->history_list = &list;
+    app->history_shown.clear();
+    app->history_at = static_cast<std::size_t>(-1);
+    refresh_history(*app);
+  }
+  return panel;
+}
+
 [[nodiscard]] std::unique_ptr<Widget> make_scopes_panel(App* app) {
   auto panel = std::make_unique<Panel>();
 
@@ -10330,6 +10396,7 @@ void refresh_audio_panel(App& app) {
 
 [[nodiscard]] std::unique_ptr<Widget> make_panel(App* app, const PanelId& id) {
   if (id == "scopes") return make_scopes_panel(app);
+  if (id == "history") return make_history_panel(app);
   if (id == "source") return make_source_panel(app);
   if (id == "project") return make_project_panel(app);
   if (id == "monitor") return make_monitor_panel(app);
@@ -10649,6 +10716,15 @@ std::vector<MenuEntry> panel_menu_extras(App& app, const PanelId& panel) {
     }
   } else if (panel == "library") {
     rows.push_back(plain("New Custom Bin", [&app] { new_bin(app); }));
+  } else if (panel == "history") {
+    rows.push_back(command_entry(app, "Step Backward", Command::Undo));
+    rows.push_back(command_entry(app, "Step Forward", Command::Redo));
+    rows.push_back(MenuEntry::divider());
+    rows.push_back(action_entry("Clear History", [&app] {
+      app.session.clear_history();
+      refresh_title(app);
+      mark_dirty(app);
+    }, {}, app.session.can_undo() || app.session.can_redo()));
   }
   return rows;
 }
@@ -12070,6 +12146,10 @@ void settle(App& app) {
     app.settings_page_stale = false;
     refresh_settings_page(app);
   }
+  // Compared rather than flagged: there are well over a hundred places that
+  // apply an edit, and a flag set at each would be a list that has to stay
+  // complete for ever. Comparing a hundred short names is nothing.
+  refresh_history(app);
 #if CUTLINE_HAVE_PREVIEW
   // Once per frame at most, however many mouse moves a scrub produced. A
   // read-back stalls the GPU, so rendering on each one would make the drag

@@ -316,7 +316,51 @@ bool can_run(const Session& session, Command command) {
   return false;
 }
 
+std::string_view history_name(Command command) noexcept {
+  switch (command) {
+    case Command::Split: return "Add Edit";
+    case Command::SplitAllTracks: return "Add Edit to All Tracks";
+    case Command::Delete: return "Clear";
+    case Command::RippleDelete: return "Ripple Delete";
+    case Command::NudgeLeft:
+    case Command::NudgeRight: return "Nudge";
+    case Command::TrimPreviousToPlayhead: return "Trim Previous Edit";
+    case Command::TrimNextToPlayhead: return "Trim Next Edit";
+    case Command::Cut: return "Cut";
+    case Command::Paste: return "Paste";
+    case Command::PasteInsert: return "Paste Insert";
+    case Command::Nest: return "Nest";
+    case Command::Insert: return "Insert";
+    case Command::Overwrite: return "Overwrite";
+    case Command::FitToFill: return "Fit to Fill";
+    case Command::ClearMarks: return "Clear In and Out";
+    case Command::ClearMarkers: return "Clear All Markers";
+    case Command::LinkClips: return "Link";
+    case Command::UnlinkClips: return "Unlink";
+    case Command::AddVideoTrack: return "Add Video Track";
+    case Command::AddAudioTrack: return "Add Audio Track";
+    case Command::RemoveTrack: return "Delete Track";
+    default: return {};
+  }
+}
+
+namespace {
+bool run_named(Session& session, Command command);
+}  // namespace
+
 bool run(Session& session, Command command) {
+  // Named here, once, rather than at each apply below. Forgotten afterwards
+  // whether or not anything was applied, so a command that changed nothing
+  // cannot lend its name to whatever edit comes next.
+  session.name_next_edit(std::string(history_name(command)));
+  const bool changed = run_named(session, command);
+  session.name_next_edit({});
+  return changed;
+}
+
+namespace {
+
+bool run_named(Session& session, Command command) {
   const core::Project& project = session.project();
   const double frame = core::frame_duration(project.sequence().fps);
 
@@ -576,5 +620,7 @@ bool run(Session& session, Command command) {
   }
   return false;
 }
+
+}  // namespace
 
 }  // namespace cutline::editor

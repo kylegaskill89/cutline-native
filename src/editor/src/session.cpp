@@ -1,5 +1,7 @@
 #include "cutline/editor/session.hpp"
 
+#include "cutline/editor/edit_names.hpp"
+
 #include "cutline/core/query.hpp"
 #include "cutline/core/nesting.hpp"
 #include "cutline/core/sequences.hpp"
@@ -35,11 +37,16 @@ bool Session::apply(core::Project next) {
   // every edit goes through, and the alternative is a list of callers that has
   // to stay complete for ever.
   next = core::sync_nested_media(std::move(next));
+  std::string name = std::move(next_name_);
+  next_name_.clear();
   if (next == project_) return false;
 
+  // Named while both are in hand; the comparison is cheap beside the one just
+  // made, since it stops at the first difference it understands.
+  if (name.empty()) name = describe_edit(project_, next);
   // Moved rather than copied: the history keeps the tracks it is handed, and
   // a copy of a ten-thousand-clip project is four milliseconds an edit.
-  history_.push(std::move(project_));
+  history_.push(std::move(project_), std::move(name));
   project_ = std::move(next);
   prune_selection();
   refresh_modified();
@@ -92,6 +99,18 @@ bool Session::redo() {
   ++revision_;
   ++document_revision_;
   return true;
+}
+
+bool Session::step_to(std::size_t steps) {
+  bool moved = false;
+  while (history_.undo_depth() > steps && undo()) moved = true;
+  while (history_.undo_depth() < steps && redo()) moved = true;
+  return moved;
+}
+
+void Session::clear_history() {
+  history_.clear();
+  ++revision_;
 }
 
 bool Session::is_selected(std::string_view clip_id) const noexcept {

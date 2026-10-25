@@ -1293,7 +1293,7 @@ void MenuList::paint_content(Painter& painter, const Theme& theme) const {
 
     SurfaceStyle style = theme.style(Part::MenuItem, row_state);
     if (row_state != State::Normal) paint_surface(painter, row, style);
-    if (!entry.enabled) style.text = greyed;
+    if (!entry.enabled || entry.faded) style.text = greyed;
 
     if (i < checked_.size() && checked_[i]) {
       // The same two lines the checkbox draws, and for the same reason: no

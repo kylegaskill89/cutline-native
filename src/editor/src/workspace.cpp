@@ -164,7 +164,8 @@ std::vector<Workspace> built_in_workspaces() {
       split(Axis::Vertical,
             {split(Axis::Horizontal,
                    {tabs({"source", "effects", "audio"}), tabs({"monitor"})}, {0.5, 0.5}),
-             split(Axis::Horizontal, {tabs({"project", "library", "scopes"}), tabs({"timeline"})},
+             split(Axis::Horizontal,
+                   {tabs({"project", "library", "scopes", "history"}), tabs({"timeline"})},
                    {0.3, 0.7})},
             {0.55, 0.45});
 
@@ -175,7 +176,7 @@ std::vector<Workspace> built_in_workspaces() {
   assembly.layout.root =
       split(Axis::Vertical,
             {split(Axis::Horizontal,
-                   {tabs({"project", "library"}),
+                   {tabs({"project", "library", "history"}),
                     split(Axis::Vertical,
                           {tabs({"source", "effects", "audio"}), tabs({"monitor", "scopes"})},
                           {0.5, 0.5})},
@@ -195,7 +196,7 @@ std::vector<Workspace> built_in_workspaces() {
             {split(Axis::Horizontal,
                    {tabs({"scopes", "source"}), tabs({"monitor"}), tabs({"effects"})},
                    {0.22, 0.48, 0.30}),
-             split(Axis::Horizontal, {tabs({"project", "library", "audio"}), tabs({"timeline"})},
+             split(Axis::Horizontal, {tabs({"project", "library", "audio", "history"}), tabs({"timeline"})},
                    {0.3, 0.7})},
             {0.6, 0.4});
 
@@ -208,7 +209,7 @@ std::vector<Workspace> built_in_workspaces() {
             {split(Axis::Horizontal,
                    {tabs({"effects", "source"}), tabs({"monitor"}), tabs({"library"})},
                    {0.32, 0.48, 0.20}),
-             split(Axis::Horizontal, {tabs({"project", "scopes", "audio"}), tabs({"timeline"})},
+             split(Axis::Horizontal, {tabs({"project", "scopes", "audio", "history"}), tabs({"timeline"})},
                    {0.3, 0.7})},
             {0.58, 0.42});
 
@@ -220,7 +221,7 @@ std::vector<Workspace> built_in_workspaces() {
       split(Axis::Vertical,
             {split(Axis::Horizontal,
                    {tabs({"audio", "source", "effects"}), tabs({"monitor"})}, {0.5, 0.5}),
-             split(Axis::Horizontal, {tabs({"project", "library", "scopes"}), tabs({"timeline"})},
+             split(Axis::Horizontal, {tabs({"project", "library", "scopes", "history"}), tabs({"timeline"})},
                    {0.3, 0.7})},
             {0.5, 0.5});
 
