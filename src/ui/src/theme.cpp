@@ -17,7 +17,7 @@ namespace {
 
 [[nodiscard]] float channel(int value) noexcept { return static_cast<float>(value) / 255.0f; }
 
-constexpr std::array<std::pair<Part, std::string_view>, 23> kPartNames{{
+constexpr std::array<std::pair<Part, std::string_view>, 26> kPartNames{{
     {Part::Window, "window"},
     {Part::TitleBar, "title_bar"},
     {Part::Panel, "panel"},
@@ -41,6 +41,9 @@ constexpr std::array<std::pair<Part, std::string_view>, 23> kPartNames{{
     {Part::ScrollThumb, "scroll_thumb"},
     {Part::Check, "check"},
     {Part::Radio, "radio"},
+    {Part::Progress, "progress"},
+    {Part::Caption, "caption"},
+    {Part::CaptionClose, "caption_close"},
 }};
 
 constexpr std::array<std::pair<State, std::string_view>, 6> kStateNames{{
@@ -237,6 +240,16 @@ SurfaceStyle mix(const SurfaceStyle& a, const SurfaceStyle& b, float t) {
     out.rim = Rim{.width = b.rim->width, .fill = mix_fill(a.fill, b.rim->fill, t)};
   } else if (a.rim && !b.rim) {
     out.rim = Rim{.width = a.rim->width, .fill = mix_fill(a.rim->fill, b.fill, t)};
+  }
+
+  // The same for a cap: a line arriving fades in out of the border it covers.
+  if (a.cap && b.cap) {
+    out.cap = Rim{.width = between(a.cap->width, b.cap->width),
+                  .fill = mix_fill(a.cap->fill, b.cap->fill, t)};
+  } else if (!a.cap && b.cap) {
+    out.cap = Rim{.width = b.cap->width, .fill = mix_fill(Fill::solid(a.border), b.cap->fill, t)};
+  } else if (a.cap && !b.cap) {
+    out.cap = Rim{.width = a.cap->width, .fill = mix_fill(a.cap->fill, Fill::solid(b.border), t)};
   }
 
   if (a.bevel && b.bevel) {

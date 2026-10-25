@@ -98,6 +98,15 @@ void paint_surface(Painter& painter, const Rect& bounds, const SurfaceStyle& sty
   if (style.border_width > 0.0 && style.border.a > 0.0) {
     painter.stroke(bounds, radius, style.border, style.border_width);
   }
+
+  // Over the border, which it replaces along the top, and clipped to the
+  // shape so it follows the rounded corners down.
+  if (style.cap && style.cap->width > 0.0) {
+    painter.push_clip(bounds, radius);
+    painter.fill(Rect{bounds.x, bounds.y, bounds.width, std::min(bounds.height, style.cap->width)},
+                 0.0, style.cap->fill);
+    painter.pop_clip();
+  }
 }
 
 TextRun text_run(const Rect& bounds, std::string text, const SurfaceStyle& style, double size,

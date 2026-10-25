@@ -327,9 +327,14 @@ class CaptionButton : public Button {
   void set_kind(Kind kind) noexcept { kind_ = kind; }
 
   [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  /// Painted in `paint_content`, on `face` rather than the whole bounds.
+  [[nodiscard]] bool paints_surface() const noexcept override;
   void paint_content(Painter& painter, const Theme& theme) const override;
 
  private:
+  /// Where the button is drawn: its bounds, or the theme's square inside them.
+  [[nodiscard]] Rect face(const Theme& theme) const;
+
   Kind kind_;
 };
 

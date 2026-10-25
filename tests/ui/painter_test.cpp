@@ -253,6 +253,24 @@ TEST(PaintSurface, AnXpButtonLightsABandUnderThePointer) {
   EXPECT_GT(bottom.r, bottom.b + 0.3f) << "the band is orange at its foot";
 }
 
+TEST(PaintSurface, ACapIsDrawnAcrossTheTopOverTheBorder) {
+  // Luna's tab line: after the border, so it covers it, and clipped to the
+  // rounded shape so it follows the corners down.
+  const SurfaceStyle& showing = built_in_theme("xp")->style(Part::Tab, State::Selected);
+  ASSERT_TRUE(showing.cap.has_value());
+
+  RecordingPainter painter;
+  paint_surface(painter, kBounds, showing);
+  const auto& calls = painter.calls();
+  ASSERT_FALSE(calls.empty());
+  const DrawCall& line = calls[calls.size() - 2];
+  EXPECT_EQ(line.kind, Kind::Fill);
+  EXPECT_DOUBLE_EQ(line.bounds.y, kBounds.y);
+  EXPECT_DOUBLE_EQ(line.bounds.height, showing.cap->width);
+  EXPECT_DOUBLE_EQ(line.bounds.width, kBounds.width);
+  EXPECT_TRUE(painter.clips_balanced());
+}
+
 TEST(PaintSurface, AnAeroPanelBlursWhatIsBehindIt) {
   RecordingPainter painter;
   paint_surface(painter, kBounds, built_in_theme("aero")->style(Part::Panel));
@@ -272,7 +290,7 @@ TEST(PaintSurface, EveryBuiltInPartPaintsSomethingAndBalancesItsClips) {
   // A part that draws nothing at all is a widget that will be invisible, and a
   // leaked clip takes the rest of the frame with it.
   for (const Theme& theme : built_in_themes()) {
-    for (int i = 0; i <= static_cast<int>(Part::ScrollThumb); ++i) {
+    for (int i = 0; i <= static_cast<int>(kLastPart); ++i) {
       const auto part = static_cast<Part>(i);
       RecordingPainter painter;
       paint_surface(painter, kBounds, theme.style(part));

@@ -145,8 +145,14 @@ std::optional<std::size_t> TabStrip::tab_at(double x, double y) const {
 
 void TabStrip::paint_content(Painter& painter, const Theme& theme) const {
   for (std::size_t i = 0; i < tabs_.size(); ++i) {
-    const Rect tab = tab_rect(i);
+    Rect tab = tab_rect(i);
     if (tab.empty()) continue;
+    // The tab showing stands taller than the rest where the theme says so.
+    // Drawn only: the whole height is still the tab's to click.
+    if (const double rise = std::min(theme.metrics.tab_rise, tab.height / 2.0);
+        i != active_ && rise > 0.0) {
+      tab = Rect{tab.x, tab.y + rise, tab.width, tab.height - rise};
+    }
 
     State state = State::Normal;
     if (i == active_) {
@@ -165,7 +171,7 @@ void TabStrip::paint_content(Painter& painter, const Theme& theme) const {
                            std::max(0.0, text_end - tab.x - theme.metrics.padding_x), tab.height};
     if (!text.empty()) {
       painter.text(text_run(text, tabs_[i].title, style, theme.metrics.font_size,
-                            TextAlign::Left, i == active_));
+                            TextAlign::Left, i == active_ && theme.metrics.bold_active_tab));
     }
 
     if (!closer.empty()) {

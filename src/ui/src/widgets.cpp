@@ -1,7 +1,9 @@
 #include "cutline/ui/widgets.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <string_view>
 #include <vector>
 
 namespace cutline::ui {
@@ -344,28 +346,91 @@ void TitleBar::paint_content(Painter& painter, const Theme& theme) const {
 
 CaptionButton::CaptionButton(Kind kind, std::function<void()> on_click)
     : Button({}, std::move(on_click)), kind_(kind) {
-  set_part(Part::ToolButton);
+  set_part(kind == Kind::Close ? Part::CaptionClose : Part::Caption);
   // Not in the tab order. Closing a window by accident because the focus
   // happened to be resting on the close button would be unforgivable.
   set_focusable(false);
 }
 
 LayoutItem CaptionButton::sizing(Axis axis, const LayoutContext& context) const {
-  const double height = context.metrics().title_bar_height;
+  const Metrics& metrics = context.metrics();
+  const double height = metrics.title_bar_height;
   if (axis == Axis::Vertical) return LayoutItem::fixed(height);
+  // XP's are squares with a gap after each; the bar's height is still the
+  // button's, so the pointer finds it anywhere above or below the square.
+  if (metrics.caption_button > 0.0) {
+    return LayoutItem::fixed(metrics.caption_button + metrics.tight_spacing);
+  }
   // Wider than tall, the way every caption button on the platform is.
   return LayoutItem::fixed(std::round(height * 1.6));
 }
 
+Rect CaptionButton::face(const Theme& theme) const {
+  const double side = theme.metrics.caption_button;
+  if (side <= 0.0) return bounds();
+  return Rect{bounds().x, bounds().y + (bounds().height - side) / 2.0, side, side};
+}
+
+bool CaptionButton::paints_surface() const noexcept { return false; }
+
+namespace {
+
+/// XP's glyphs, on the eleven-pixel grid they sit on five pixels into a
+/// twenty-one pixel button. `a` is a pixel half covered, where a stroke of
+/// the cross ends.
+constexpr std::array<std::string_view, 11> kLunaMinimise{{
+    "...........", "...........", "...........", "...........", "...........", "...........",
+    "...........", "...........", "#######....", "#######....", "#######....",
+}};
+constexpr std::array<std::string_view, 11> kLunaMaximise{{
+    "###########", "###########", "###########", "#.........#", "#.........#", "#.........#",
+    "#.........#", "#.........#", "#.........#", "#.........#", "###########",
+}};
+constexpr std::array<std::string_view, 11> kLunaRestore{{
+    "...########", "...########", "...#......#", "########..#", "########..#", "#......#..#",
+    "#......####", "#......#...", "#......#...", "#......#...", "########...",
+}};
+constexpr std::array<std::string_view, 11> kLunaClose{{
+    "a#.......#a", "###.....###", ".###...###.", "..###.###..", "...#####...", "....###....",
+    "...#####...", "..###.###..", ".###...###.", "###.....###", "a#.......#a",
+}};
+
+}  // namespace
+
 void CaptionButton::paint_content(Painter& painter, const Theme& theme) const {
-  const SurfaceStyle& style = theme.style(part(), state());
+  const SurfaceStyle style = surface_style(theme);
+  const Rect square = face(theme);
+  paint_surface(painter, square, style);
   const Color& ink = style.text;
+
+  if (theme.metrics.caption_glyphs == CaptionGlyphs::Luna) {
+    const std::array<std::string_view, 11>* glyph = &kLunaClose;
+    switch (kind_) {
+      case Kind::Minimise: glyph = &kLunaMinimise; break;
+      case Kind::Maximise: glyph = &kLunaMaximise; break;
+      case Kind::Restore: glyph = &kLunaRestore; break;
+      case Kind::Close: break;
+    }
+    const double unit = square.width / 21.0;
+    Color half = ink;
+    half.a *= 0.5f;
+    for (std::size_t row = 0; row < glyph->size(); ++row) {
+      const std::string_view line = (*glyph)[row];
+      for (std::size_t col = 0; col < line.size(); ++col) {
+        if (line[col] == '.') continue;
+        painter.fill(Rect{square.x + (5.0 + static_cast<double>(col)) * unit,
+                          square.y + (5.0 + static_cast<double>(row)) * unit, unit, unit},
+                     0.0, Fill::solid(line[col] == 'a' ? half : ink));
+      }
+    }
+    return;
+  }
 
   // A square in the middle, the same size whichever glyph is drawn in it, so
   // the three buttons look like a set rather than three separate decisions.
   constexpr double kGlyph = 10.0;
-  const double cx = bounds().x + bounds().width / 2.0;
-  const double cy = bounds().y + bounds().height / 2.0;
+  const double cx = square.x + square.width / 2.0;
+  const double cy = square.y + square.height / 2.0;
   const double half = kGlyph / 2.0;
   const double weight = 1.0;
 

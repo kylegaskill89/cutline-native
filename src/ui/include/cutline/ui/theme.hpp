@@ -141,6 +141,11 @@ struct SurfaceStyle {
   std::optional<Bevel> bevel;
   std::optional<Shadow> shadow;
   std::optional<Rim> rim;
+  /// A band of its own fill across the top, drawn over the border and clipped
+  /// to the corners. Luna's tabs light up this way -- an orange line along the
+  /// top of the one showing and the one under the pointer -- and a rim cannot,
+  /// since it goes all the way round.
+  std::optional<Rim> cap;
 
   Color border;
   double border_width = 0.0;
@@ -187,10 +192,13 @@ enum class Part {
   ScrollThumb,
   Check,        ///< a check box's box. `Selected` styles the mark
   Radio,        ///< a radio button's circle. `Selected` styles the dot
+  Progress,     ///< a progress bar's trough. `Selected` styles what is done
+  Caption,      ///< a title bar's minimise and maximise buttons
+  CaptionClose, ///< its close button, which XP and Vista drew in red
 };
 
 /// The last part, for walking every one of them.
-inline constexpr Part kLastPart = Part::Radio;
+inline constexpr Part kLastPart = Part::CaptionClose;
 
 [[nodiscard]] std::string_view to_string(Part part) noexcept;
 [[nodiscard]] std::optional<Part> part_from_string(std::string_view name) noexcept;
@@ -225,6 +233,25 @@ enum class CheckMark {
   /// XP's tick: a fixed pattern of twenty-one pixels in a thirteen-pixel box,
   /// scaled with the box. Its stepped edge is the look, and strokes cannot
   /// make it.
+  Luna,
+};
+
+/// The shape of a slider's thumb.
+enum class ThumbShape {
+  /// A block across the whole groove, with the groove filled up to it.
+  Block,
+  /// XP's trackbar: a narrow thumb with a point at the bottom, over a thin
+  /// channel that is never filled. Drawn a pixel at a time on an eleven by
+  /// twenty-one grid, scaled with the control, for the same reason as the tick.
+  Pointer,
+};
+
+/// How the caption buttons' glyphs are drawn.
+enum class CaptionGlyphs {
+  /// Hairlines, the way Windows 10 and later draw them.
+  Stroked,
+  /// XP's: heavy white pixel patterns on an eleven-pixel grid -- a bar, a box
+  /// with a thick top, a cross three pixels wide.
   Luna,
 };
 
@@ -302,6 +329,21 @@ struct Metrics {
   FocusCue focus_cue = FocusCue::Ring;
   TextSmoothing text_smoothing = TextSmoothing::ClearType;
   CheckMark check_mark = CheckMark::Stroked;
+  ThumbShape slider_thumb = ThumbShape::Block;
+  CaptionGlyphs caption_glyphs = CaptionGlyphs::Stroked;
+  /// A caption button's side, as a square inside the title bar with a gap of
+  /// `tight_spacing` after it; zero fills the bar's height and is wider than
+  /// tall, as modern Windows draws them.
+  double caption_button = 0.0;
+  /// A progress bar drawn as blocks this wide, `progress_gap` apart, inside
+  /// its trough, as XP drew it; zero fills it continuously.
+  double progress_block = 0.0;
+  double progress_gap = 0.0;
+  /// How much shorter a tab that is not showing stands than the one that is.
+  /// XP's showing tab rose two pixels above the others.
+  double tab_rise = 0.0;
+  /// Whether the showing tab's title is bold. XP's was not.
+  bool bold_active_tab = true;
 
   /// How long a view takes to get where it was sent -- a zoom, a scroll by
   /// the wheel -- and how long a popup takes to arrive, in seconds. Zero

@@ -9,6 +9,7 @@
 #include <format>
 #include <limits>
 #include <numbers>
+#include <string_view>
 #include <utility>
 #include <system_error>
 
@@ -21,6 +22,65 @@ constexpr double kDegenerate = 1e-12;
 
 /// Coarse nudge, for arrow keys with shift held.
 constexpr double kCoarseNudge = 10.0;
+
+/// The colour `t` of the way along a fill: its stops for a gradient, its
+/// colour otherwise. For the shapes drawn a pixel at a time, where each pixel
+/// has to be given its own colour.
+[[nodiscard]] Color sample(const Fill& fill, float t) {
+  if (fill.kind != FillKind::Gradient || fill.stops.empty()) return fill.color;
+  if (t <= fill.stops.front().at) return fill.stops.front().color;
+  for (std::size_t i = 1; i < fill.stops.size(); ++i) {
+    const GradientStop& a = fill.stops[i - 1];
+    const GradientStop& b = fill.stops[i];
+    if (t <= b.at) {
+      const float span = b.at - a.at;
+      return span <= 0.0f ? b.color : mix(a.color, b.color, (t - a.at) / span);
+    }
+  }
+  return fill.stops.back().color;
+}
+
+/// XP's trackbar thumb, a pixel at a time: `L` and `D` its light and dark
+/// edges and `M` the diagonals between them, `b` the band across the top and
+/// `g` the same colour lining the point, `h` where that lining meets an edge,
+/// and `f` the face.
+constexpr std::array<std::string_view, 21> kPointer{{
+    ".LLLLLLLLM.", "LbbbbbbbbbD", "LbbbbbbbbbD", "LbbbbbbbbbD", "LfffffffffD",
+    "LfffffffffD", "LfffffffffD", "LfffffffffD", "LfffffffffD", "LfffffffffD",
+    "LfffffffffD", "LfffffffffD", "LfffffffffD", "LfffffffffD", "LgfffffffgD",
+    "MhgfffffghD", ".MhgfffghD.", "..MhgfghD..", "...MhghD...", "....MhD....",
+    ".....M.....",
+}};
+
+void paint_pointer(Painter& painter, const Rect& thumb, const SurfaceStyle& style) {
+  const double unit = thumb.height / static_cast<double>(kPointer.size());
+  const double left = thumb.x + (thumb.width - unit * 11.0) / 2.0;
+  const Color light = style.bevel ? style.bevel->light : style.border;
+  const Color dark = style.bevel ? style.bevel->dark : style.border;
+  const Color middle = mix(light, dark, 0.5f);
+  const Fill& band = style.rim ? style.rim->fill : style.fill;
+  const Color lining = sample(band, 1.0f);
+
+  for (std::size_t row = 0; row < kPointer.size(); ++row) {
+    const std::string_view line = kPointer[row];
+    for (std::size_t col = 0; col < line.size(); ++col) {
+      Color colour;
+      switch (line[col]) {
+        case 'L': colour = light; break;
+        case 'D': colour = dark; break;
+        case 'M': colour = middle; break;
+        case 'b': colour = sample(band, (static_cast<float>(row) - 0.5f) / 3.0f); break;
+        case 'g': colour = lining; break;
+        case 'h': colour = mix(lining, col < 5 ? middle : dark, 0.5f); break;
+        case 'f': colour = sample(style.fill, (static_cast<float>(col) - 0.5f) / 9.0f); break;
+        default: continue;
+      }
+      painter.fill(Rect{left + static_cast<double>(col) * unit,
+                        thumb.y + static_cast<double>(row) * unit, unit, unit},
+                   0.0, Fill::solid(colour));
+    }
+  }
+}
 
 }  // namespace
 
@@ -86,11 +146,23 @@ LayoutItem Slider::sizing(Axis axis, const LayoutContext& context) const {
 void Slider::layout(const LayoutContext& context) {
   // From the theme rather than a constant: a bevelled thumb needs more room
   // than a flat one, and no control should be deciding that for itself.
-  thumb_size_ = context.metrics().control_height * 0.6;
+  shape_ = context.metrics().slider_thumb;
+  thumb_size_ = shape_ == ThumbShape::Pointer
+                    ? context.metrics().control_height * 11.0 / static_cast<double>(kPointer.size())
+                    : context.metrics().control_height * 0.6;
+}
+
+double Slider::pointer_height() const {
+  // In proportion to its width, as XP drew it, and centred in a taller slot
+  // rather than stretched to fill it.
+  return std::min(bounds().height, thumb_size_ * static_cast<double>(kPointer.size()) / 11.0);
 }
 
 Rect Slider::groove() const {
-  const double height = std::max(4.0, bounds().height * 0.25);
+  // XP's channel is four pixels of the thumb's twenty-one, whatever the size.
+  const double height = shape_ == ThumbShape::Pointer
+                            ? pointer_height() * 4.0 / static_cast<double>(kPointer.size())
+                            : std::max(4.0, bounds().height * 0.25);
   return Rect{bounds().x, bounds().y + (bounds().height - height) / 2.0, bounds().width,
               height};
 }
@@ -101,6 +173,11 @@ Rect Slider::thumb() const {
   // The thumb travels the groove minus its own width. Mapping against the full
   // width instead is the same bug as a scrollbar that cannot reach the end.
   const double travel = std::max(0.0, track.width - size);
+  if (shape_ == ThumbShape::Pointer) {
+    const double height = pointer_height();
+    return Rect{track.x + fraction() * travel, bounds().y + (bounds().height - height) / 2.0, size,
+                height};
+  }
   return Rect{track.x + fraction() * travel, bounds().y, size, bounds().height};
 }
 
@@ -118,6 +195,12 @@ void Slider::paint_content(Painter& painter, const Theme& theme) const {
   const SurfaceStyle& groove_style = theme.style(Part::Slider, state());
   const Rect track = groove();
   paint_surface(painter, track, groove_style);
+
+  // XP never filled its channel: the pointer says where the value is.
+  if (shape_ == ThumbShape::Pointer) {
+    paint_pointer(painter, thumb(), theme.style(Part::SliderThumb, state()));
+    return;
+  }
 
   // The filled part, so the value is readable without finding the thumb.
   const Rect knob = thumb();
@@ -2374,12 +2457,26 @@ LayoutItem ProgressBar::sizing(Axis axis, const LayoutContext& context) const {
 }
 
 void ProgressBar::paint_content(Painter& painter, const Theme& theme) const {
-  const Rect done = filled();
-  if (!done.empty()) {
-    // The thumb's colour rather than the groove's: this is the part that has
-    // happened, and every theme has already decided what the active part of a
-    // control looks like.
-    paint_surface(painter, done, theme.style(Part::SliderThumb, State::Normal));
+  const SurfaceStyle& done_style = theme.style(Part::Progress, State::Selected);
+  const double block = theme.metrics.progress_block;
+  if (block > 0.0 && fraction_ > 0.0) {
+    // XP's: whole blocks with gaps between them, inside the trough's border,
+    // bevel and a pixel of its face. Whole blocks only -- a part-drawn block
+    // was never something XP showed.
+    const SurfaceStyle& trough = theme.style(Part::Progress, State::Normal);
+    const double edge = trough.border_width + (trough.bevel ? trough.bevel->width : 0.0) + 1.0;
+    const Rect inner = bounds().inset(edge);
+    const Rect area{inner.x + 1.0, inner.y, std::max(0.0, inner.width - 1.0), inner.height};
+    const double end = area.x + area.width * fraction_;
+    const double step = block + theme.metrics.progress_gap;
+    for (double x = area.x; x < end && x + block <= area.right() + 1e-9; x += step) {
+      painter.fill(Rect{x, area.y, block, area.height}, 0.0, done_style.fill);
+    }
+  } else if (const Rect done = filled(); !done.empty()) {
+    // The thumb's colour rather than the groove's, in a theme that has not
+    // said otherwise: this is the part that has happened, and every theme has
+    // already decided what the active part of a control looks like.
+    paint_surface(painter, done, done_style);
   }
 
   if (text_.empty()) return;

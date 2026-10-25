@@ -109,39 +109,32 @@ namespace {
             .text = hex("#0a246a"),
         });
 
-  // Luna's tabs: the one showing rises out of the strip and joins the panel
-  // below it, the rest sit back in shadow. That difference is bevels and a
-  // gradient direction, not a colour, which is the whole argument for the
-  // theme model.
+  // Luna's tabs, measured from XP's: a grey-blue hairline round a face that
+  // fades from white to the dialog's beige, and an orange line along the top
+  // of the one showing and of the one under the pointer. The one showing is
+  // plain white, stands two pixels taller, and its title is not bold.
+  t.metrics.tab_rise = 2.0;
+  t.metrics.bold_active_tab = false;
   t.set(Part::TabBar, State::Normal,
-        SurfaceStyle{.fill = Fill::gradient({{0.0f, hex("#e4e1d3")}, {1.0f, hex("#d4d0c0")}}),
-                     .border = hex("#aca899"),
-                     .border_width = 1.0,
-                     .text = hex("#000000")});
-
-  t.set(Part::Tab, State::Normal,
-        SurfaceStyle{
-            .fill = Fill::gradient({{0.0f, hex("#f0eee0")}, {1.0f, hex("#d8d4c4")}}),
-            .bevel = raised("#ffffff", "#aca899"),
-            .corner_radius = 3.0,
-            .text = hex("#3b3b3b"),
-        });
-  t.set(Part::Tab, State::Hover,
-        SurfaceStyle{
-            .fill = Fill::gradient({{0.0f, hex("#fffdf4")}, {1.0f, hex("#ffe894")}}),
-            .bevel = raised("#ffffff", "#c0a060"),
-            .corner_radius = 3.0,
-            .text = hex("#000000"),
-        });
-  t.set(Part::Tab, State::Selected,
-        SurfaceStyle{
-            .fill = Fill::gradient({{0.00f, hex("#ffffff")},
-                                    {0.45f, hex("#f6f5ec")},
-                                    {1.00f, hex("#ece9d8")}}),
-            .bevel = raised("#ffffff", "#ece9d8"),
-            .corner_radius = 3.0,
-            .text = hex("#0a246a"),
-        });
+        SurfaceStyle{.fill = Fill::solid(hex("#ece9d8")), .text = hex("#000000")});
+  const Rim luna_tab_line{.width = 3.0,
+                          .fill = Fill::gradient({{0.17f, hex("#e68b2c")},
+                                                  {0.50f, hex("#ffc83c")},
+                                                  {0.83f, hex("#ffc73c")}})};
+  const SurfaceStyle tab{
+      .fill = Fill::gradient({{0.0f, hex("#fefefe")}, {0.5f, hex("#f4f4f0")}, {1.0f, hex("#e9e8e1")}}),
+      .border = hex("#919b9c"),
+      .border_width = 1.0,
+      .corner_radius = 3.0,
+      .text = hex("#000000"),
+  };
+  t.set(Part::Tab, State::Normal, tab);
+  SurfaceStyle tab_hover = tab;
+  tab_hover.cap = luna_tab_line;
+  t.set(Part::Tab, State::Hover, tab_hover);
+  SurfaceStyle tab_selected = tab_hover;
+  tab_selected.fill = Fill::solid(hex("#fcfcfe"));
+  t.set(Part::Tab, State::Selected, tab_selected);
 
   // The button, measured from XP's own: a navy hairline with three-pixel
   // corners round a face that is nearly white at the top and falls away over
@@ -247,27 +240,91 @@ namespace {
   tool_disabled.text = hex("#aca899");
   t.set(Part::ToolButton, State::Disabled, tool_disabled);
 
-  // The trackbar: a sunken channel with a raised handle, which is the one
-  // control XP drew in two clearly different depths.
+  // The trackbar, measured from XP's: a channel four pixels deep, dark above
+  // and white below, under a pointed thumb whose band across the top is green
+  // at rest, orange under the pointer and a darker green while held. The
+  // thumb's face is lit from the left; its band and edges are the rim and the
+  // bevel, which is how `paint_pointer` reads them.
+  t.metrics.slider_thumb = ThumbShape::Pointer;
   t.set(Part::Slider, State::Normal,
-        SurfaceStyle{.fill = Fill::solid(hex("#ece9d8")),
-                     .bevel = sunken("#ffffff", "#9d9a8f"),
-                     .border = hex("#7b7a70"),
-                     .border_width = 1.0,
+        SurfaceStyle{.fill = Fill::gradient({{0.0f, hex("#f2f1e9")}, {1.0f, hex("#f0ede0")}}),
+                     .bevel = sunken("#ffffff", "#9d9c99"),
                      .corner_radius = 2.0,
                      .text = hex("#000000")});
-  // The thumb's fill is also the filled part of the groove, so it carries the
-  // Luna blue rather than more grey plastic.
-  t.set(Part::SliderThumb, State::Normal,
-        SurfaceStyle{.fill = Fill::gradient({{0.00f, hex("#dbe9ff")},
-                                             {0.45f, hex("#a8c4e8")},
-                                             {0.50f, hex("#7fa8dd")},
-                                             {1.00f, hex("#c4dbf5")}}),
-                     .bevel = raised("#ffffff", "#4a6f9e"),
-                     .border = hex("#3d6b9e"),
+  const auto luna_band = [](std::string_view top, std::string_view middle,
+                            std::string_view bottom) {
+    return Rim{.width = 3.0,
+               .fill = Fill::gradient(
+                   {{0.17f, hex(top)}, {0.50f, hex(middle)}, {0.83f, hex(bottom)}})};
+  };
+  const SurfaceStyle thumb{.fill = Fill::gradient({{0.05f, hex("#f7f7f4")},
+                                                   {0.17f, hex("#f5f5f2")},
+                                                   {0.28f, hex("#f3f3ef")},
+                                                   {0.72f, hex("#f3f3ef")},
+                                                   {0.83f, hex("#dcdcd9")},
+                                                   {0.95f, hex("#c3c3c0")}}),
+                           .bevel = raised("#b5c4cd", "#778892"),
+                           .rim = luna_band("#66ce64", "#47c446", "#21b81f"),
+                           .text = hex("#000000")};
+  t.set(Part::SliderThumb, State::Normal, thumb);
+  SurfaceStyle thumb_hover = thumb;
+  thumb_hover.rim = luna_band("#fbcb74", "#fac158", "#f9b435");
+  t.set(Part::SliderThumb, State::Hover, thumb_hover);
+  SurfaceStyle thumb_pressed = thumb;
+  thumb_pressed.rim = luna_band("#66b65b", "#48a73b", "#229512");
+  t.set(Part::SliderThumb, State::Pressed, thumb_pressed);
+
+  // The progress bar: a grey hairline round a white trough, and green blocks
+  // shaded as a tube, darkest along the middle.
+  t.metrics.progress_block = 6.0;
+  t.metrics.progress_gap = 2.0;
+  t.set(Part::Progress, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#ffffff")),
+                     .bevel = sunken("#efefef", "#bebebe"),
+                     .border = hex("#686868"),
                      .border_width = 1.0,
-                     .corner_radius = 2.0,
+                     .corner_radius = 3.0,
                      .text = hex("#000000")});
+  t.set(Part::Progress, State::Selected,
+        SurfaceStyle{.fill = Fill::gradient({{0.07f, hex("#abedac")},
+                                             {0.21f, hex("#7ce47e")},
+                                             {0.36f, hex("#4dda50")},
+                                             {0.50f, hex("#2ed331")},
+                                             {0.64f, hex("#41d744")},
+                                             {0.79f, hex("#76e277")},
+                                             {0.93f, hex("#8fe890")}}),
+                     .text = hex("#000000")});
+
+  // The caption buttons: squares with a white edge and three-pixel corners,
+  // lit from the top left, blue but for the red close. Under the pointer they
+  // brighten; held, they darken and their glyph dims.
+  t.metrics.caption_button = 21.0;
+  t.metrics.caption_glyphs = CaptionGlyphs::Luna;
+  const auto caption = [](std::string_view light, std::string_view middle, std::string_view dark,
+                          std::string_view edge_light, std::string_view edge_dark,
+                          std::string_view ink) {
+    return SurfaceStyle{
+        .fill = Fill::gradient({{0.0f, hex(light)}, {0.5f, hex(middle)}, {1.0f, hex(dark)}},
+                               315.0),
+        .bevel = raised(edge_light, edge_dark),
+        .border = hex("#ffffff"),
+        .border_width = 1.0,
+        .corner_radius = 3.0,
+        .text = hex(ink),
+    };
+  };
+  t.set(Part::Caption, State::Normal,
+        caption("#9ab7fa", "#4078f5", "#0253e6", "#7aa0f8", "#1546b9", "#ffffff"));
+  t.set(Part::Caption, State::Hover,
+        caption("#b8cfff", "#5d90ff", "#1a6cf2", "#9ab7fa", "#2458cc", "#ffffff"));
+  t.set(Part::Caption, State::Pressed,
+        caption("#0a3a98", "#0047a7", "#0a63d0", "#0a3a98", "#3a78e0", "#ffffff99"));
+  t.set(Part::CaptionClose, State::Normal,
+        caption("#f1ac9a", "#e66b4e", "#e03802", "#eb8b73", "#ad3a1d", "#ffffff"));
+  t.set(Part::CaptionClose, State::Hover,
+        caption("#ffbcb2", "#fd7c62", "#f04d22", "#ffa08c", "#c43a1a", "#ffffff"));
+  t.set(Part::CaptionClose, State::Pressed,
+        caption("#8a2a12", "#b23a18", "#cc4a24", "#8a2a12", "#d8603c", "#ffffff99"));
 
   // Menus were white with the highlight in Luna blue.
   t.set(Part::MenuItem, State::Normal,
@@ -1255,7 +1312,15 @@ namespace {
 
 [[nodiscard]] Theme finished(Theme theme) {
   theme = with_inherited(std::move(theme), Part::Check, Part::Input);
-  return with_inherited(std::move(theme), Part::Radio, Part::Input);
+  theme = with_inherited(std::move(theme), Part::Radio, Part::Input);
+  // A progress bar was a slider's groove, filled with its thumb, and the
+  // caption buttons were tool buttons, until Luna drew them as XP did.
+  if (!theme.defines(Part::Progress, State::Selected)) {
+    theme.set(Part::Progress, State::Selected, theme.style(Part::SliderThumb, State::Normal));
+  }
+  theme = with_inherited(std::move(theme), Part::Progress, Part::Slider);
+  theme = with_inherited(std::move(theme), Part::Caption, Part::ToolButton);
+  return with_inherited(std::move(theme), Part::CaptionClose, Part::Caption);
 }
 
 /// Built once. Themes are immutable and shared, and rebuilding this list per

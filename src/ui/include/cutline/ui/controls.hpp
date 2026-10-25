@@ -105,6 +105,8 @@ class Slider : public Widget {
  private:
   /// The value a pointer at `x` means, accounting for the thumb's own width.
   [[nodiscard]] double value_at(double x) const;
+  /// A pointed thumb's height, which follows its width rather than the slot's.
+  [[nodiscard]] double pointer_height() const;
   void commit(double value);
   /// Reports the end of a gesture, if it actually moved anything.
   void finish();
@@ -114,6 +116,7 @@ class Slider : public Widget {
   std::optional<double> default_;
   bool dragging_ = false;
   double thumb_size_ = 12.0;
+  ThumbShape shape_ = ThumbShape::Block;
   /// What the value was when the gesture began, so a drag that ends where it
   /// started reports nothing.
   double gesture_start_ = 0.0;
@@ -1007,7 +1010,7 @@ class ProgressBar : public Widget {
   /// The filled part of the groove.
   [[nodiscard]] Rect filled() const;
 
-  [[nodiscard]] Part part() const noexcept override { return Part::Slider; }
+  [[nodiscard]] Part part() const noexcept override { return Part::Progress; }
   [[nodiscard]] bool paints_surface() const noexcept override { return true; }
   [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
   void paint_content(Painter& painter, const Theme& theme) const override;

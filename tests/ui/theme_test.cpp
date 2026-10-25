@@ -301,7 +301,9 @@ TEST(ThemeChrome, TabsDifferBetweenThemesInMoreThanColour) {
   const SurfaceStyle& flat = built_in_theme("flat")->style(Part::Tab, State::Selected);
   const SurfaceStyle& aero = built_in_theme("aero")->style(Part::Tab, State::Selected);
 
-  EXPECT_TRUE(xp.bevel.has_value()) << "Luna's active tab rises out of the strip";
+  EXPECT_TRUE(xp.cap.has_value()) << "Luna marks the tab showing with a line across its top";
+  EXPECT_GT(built_in_theme("xp")->metrics.tab_rise, 0.0) << "and stands it taller than the rest";
+  EXPECT_FALSE(flat.cap.has_value());
   EXPECT_FALSE(flat.bevel.has_value()) << "flat chrome has no bevel to rise with";
   EXPECT_TRUE(flat.shadow.has_value() && flat.shadow->inner)
       << "so it marks the active tab with an inset accent instead";
@@ -317,6 +319,31 @@ TEST(ThemeChrome, XpButtonsAreNavyHairlines) {
   EXPECT_EQ(button.border, parse_color("#003c74"));
   EXPECT_DOUBLE_EQ(button.border_width, 1.0);
   EXPECT_FALSE(button.bevel.has_value());
+}
+
+TEST(ThemeChrome, ThemesThatDoNotStyleTheNewPartsDrawThemAsBefore) {
+  // A progress bar was a slider's groove filled in its thumb's style, and the
+  // caption buttons were tool buttons, until Luna drew them as XP did.
+  for (const char* id : {"flat", "aero", "terminal"}) {
+    const Theme& theme = *built_in_theme(id);
+    EXPECT_EQ(theme.style(Part::Progress, State::Normal), theme.style(Part::Slider, State::Normal))
+        << id;
+    EXPECT_EQ(theme.style(Part::Progress, State::Selected),
+              theme.style(Part::SliderThumb, State::Normal))
+        << id;
+    for (const State state : {State::Normal, State::Hover, State::Pressed}) {
+      EXPECT_EQ(theme.style(Part::Caption, state), theme.style(Part::ToolButton, state)) << id;
+      EXPECT_EQ(theme.style(Part::CaptionClose, state), theme.style(Part::ToolButton, state)) << id;
+    }
+  }
+}
+
+TEST(ThemeChrome, LunasCloseButtonIsRedAndTheOthersBlue) {
+  const Theme& xp = *built_in_theme("xp");
+  const Color close = xp.style(Part::CaptionClose).fill.stops.back().color;
+  const Color other = xp.style(Part::Caption).fill.stops.back().color;
+  EXPECT_GT(close.r, close.b + 0.3f);
+  EXPECT_GT(other.b, other.r + 0.3f);
 }
 
 TEST(ThemeChrome, XpBandsItsButtonsAndFlatDoesNot) {

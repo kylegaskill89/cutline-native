@@ -348,6 +348,42 @@ TEST(Slider, DrawsAGrooveAndAThumb) {
   EXPECT_TRUE(has_thumb) << "no thumb was drawn in the theme's thumb style";
 }
 
+TEST(Slider, LunasThumbIsAPointerAsTallAsItsProportionsInAnySlot) {
+  // XP's trackbar thumb is eleven pixels by twenty-one. A slot taller than a
+  // control centres it rather than stretching it, and the channel under it is
+  // four of its twenty-one pixels deep.
+  const Theme& xp = *built_in_theme("xp");
+  const RecordingPainter measure;
+  const LayoutContext context{xp, measure};
+  Slider slider(ValueRange{.minimum = 0.0, .maximum = 1.0}, 0.5);
+  slider.arrange(Rect{0.0, 0.0, 200.0, 40.0}, context);
+
+  const Rect thumb = slider.thumb();
+  EXPECT_NEAR(thumb.width, 11.0, 1e-9);
+  EXPECT_NEAR(thumb.height, 21.0, 1e-9);
+  EXPECT_NEAR(thumb.y + thumb.height / 2.0, 20.0, 1e-9);
+  EXPECT_NEAR(slider.groove().height, 4.0, 1e-9);
+}
+
+TEST(Slider, LunasChannelIsNeverFilled) {
+  // Nothing is drawn in the thumb's band colour except the thumb itself:
+  // XP's pointer says where the value is, and the channel stays empty.
+  const Theme& xp = *built_in_theme("xp");
+  const RecordingPainter measure;
+  const LayoutContext context{xp, measure};
+  Slider slider(ValueRange{.minimum = 0.0, .maximum = 1.0}, 0.9);
+  slider.arrange(Rect{0.0, 0.0, 200.0, 21.0}, context);
+
+  RecordingPainter painter;
+  slider.paint(painter, xp);
+  const Rect thumb = slider.thumb();
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind != DrawCall::Kind::Fill || call.bounds.width > 2.0) continue;
+    EXPECT_GE(call.bounds.x, thumb.x - 1e-9) << "a pixel was drawn left of the thumb";
+    EXPECT_LE(call.bounds.right(), thumb.right() + 1e-9);
+  }
+}
+
 TEST(Slider, ANarrowSliderIsStillHarmless) {
   Slid test;
   test.slider->arrange(Rect{0.0, 0.0, 2.0, 24.0}, flat_context());
@@ -2334,6 +2370,27 @@ TEST(ProgressBar, NonsenseIsClampedRatherThanDrawn) {
   bar.set_fraction(4.0);
   EXPECT_DOUBLE_EQ(bar.fraction(), 1.0);
   EXPECT_DOUBLE_EQ(bar.filled().width, 200.0);
+}
+
+TEST(ProgressBar, LunaDrawsWholeBlocksWithGapsBetweenThem) {
+  // XP's progress bar: blocks six pixels wide and two apart, and never part
+  // of a block.
+  const Theme& xp = *built_in_theme("xp");
+  const RecordingPainter measure;
+  ProgressBar bar(0.5);
+  bar.arrange(Rect{0.0, 0.0, 200.0, 13.0}, LayoutContext{xp, measure});
+
+  RecordingPainter painter;
+  bar.paint(painter, xp);
+  const Fill& green = xp.style(Part::Progress, State::Selected).fill;
+  std::vector<Rect> blocks;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::Fill && call.fill == green) blocks.push_back(call.bounds);
+  }
+  ASSERT_GE(blocks.size(), 2u);
+  for (const Rect& block : blocks) EXPECT_DOUBLE_EQ(block.width, 6.0);
+  EXPECT_DOUBLE_EQ(blocks[1].x - blocks[0].right(), 2.0);
+  EXPECT_LE(blocks.back().right(), 100.0 + 6.0) << "no further than half way, give or take a block";
 }
 
 TEST(ProgressBar, NothingDoneDrawsNoFill) {
