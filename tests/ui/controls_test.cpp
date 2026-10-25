@@ -365,6 +365,18 @@ TEST(Slider, LunasThumbIsAPointerAsTallAsItsProportionsInAnySlot) {
   EXPECT_NEAR(slider.groove().height, 4.0, 1e-9);
 }
 
+TEST(Slider, VistasThumbIsTenBySeventeenInATwentyThreePixelControl) {
+  const Theme& aero = *built_in_theme("aero");
+  const RecordingPainter measure;
+  const LayoutContext context{aero, measure};
+  Slider slider(ValueRange{.minimum = 0.0, .maximum = 1.0}, 0.5);
+  slider.arrange(Rect{0.0, 0.0, 200.0, 23.0}, context);
+
+  EXPECT_NEAR(slider.thumb().width, 10.0, 1e-9);
+  EXPECT_NEAR(slider.thumb().height, 17.0, 1e-9);
+  EXPECT_NEAR(slider.groove().height, 4.0, 1e-9);
+}
+
 TEST(Slider, LunasChannelIsNeverFilled) {
   // Nothing is drawn in the thumb's band colour except the thumb itself:
   // XP's pointer says where the value is, and the channel stays empty.

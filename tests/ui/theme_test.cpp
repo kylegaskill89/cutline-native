@@ -307,7 +307,8 @@ TEST(ThemeChrome, TabsDifferBetweenThemesInMoreThanColour) {
   EXPECT_FALSE(flat.bevel.has_value()) << "flat chrome has no bevel to rise with";
   EXPECT_TRUE(flat.shadow.has_value() && flat.shadow->inner)
       << "so it marks the active tab with an inset accent instead";
-  EXPECT_EQ(aero.fill.kind, FillKind::Glass);
+  EXPECT_EQ(aero.fill.kind, FillKind::Solid) << "Vista's tab showing is its page's white";
+  EXPECT_GT(built_in_theme("aero")->metrics.tab_rise, 0.0);
 }
 
 [[nodiscard]] float lightness(const Color& c) { return c.r + c.g + c.b; }
@@ -324,7 +325,7 @@ TEST(ThemeChrome, XpButtonsAreNavyHairlines) {
 TEST(ThemeChrome, ThemesThatDoNotStyleTheNewPartsDrawThemAsBefore) {
   // A progress bar was a slider's groove filled in its thumb's style, and the
   // caption buttons were tool buttons, until Luna drew them as XP did.
-  for (const char* id : {"flat", "aero", "terminal"}) {
+  for (const char* id : {"flat", "terminal"}) {
     const Theme& theme = *built_in_theme(id);
     EXPECT_EQ(theme.style(Part::Progress, State::Normal), theme.style(Part::Slider, State::Normal))
         << id;
@@ -401,13 +402,31 @@ TEST(ThemeChrome, AeroTextGlowsAndFlatTextDoesNot) {
   EXPECT_EQ(built_in_theme("flat")->style(Part::TitleBar).text_glow, 0.0);
 }
 
+TEST(ThemeChrome, VistasButtonsStepAcrossTheMiddleAndTurnBlueUnderThePointer) {
+  // Measured from Vista's: two tones with a hard step just above the middle,
+  // grey at rest, pale blue under the pointer.
+  const Theme& aero = *built_in_theme("aero");
+  const Fill& rest = aero.style(Part::Button).fill;
+  ASSERT_EQ(rest.kind, FillKind::Gradient);
+  bool stepped = false;
+  for (std::size_t i = 1; i < rest.stops.size(); ++i) {
+    const float gap = rest.stops[i].at - rest.stops[i - 1].at;
+    const float drop = lightness(rest.stops[i - 1].color) - lightness(rest.stops[i].color);
+    if (gap < 0.05f && drop > 0.1f) stepped = true;
+  }
+  EXPECT_TRUE(stepped) << "no hard step in the face";
+
+  const Color hover = aero.style(Part::Button, State::Hover).fill.stops.back().color;
+  EXPECT_GT(hover.b, hover.r + 0.1f) << "under the pointer it is blue";
+}
+
 TEST(ThemeChrome, CornerRadiiDiffer) {
-  const double xp = built_in_theme("xp")->style(Part::Panel).corner_radius;
-  const double aero = built_in_theme("aero")->style(Part::Panel).corner_radius;
-  const double terminal = built_in_theme("terminal")->style(Part::Panel).corner_radius;
-  EXPECT_NE(aero, terminal);
+  // Rounded where the period rounded: XP's and Vista's buttons, not a CRT's.
+  const double xp = built_in_theme("xp")->style(Part::Button).corner_radius;
+  const double aero = built_in_theme("aero")->style(Part::Button).corner_radius;
+  const double terminal = built_in_theme("terminal")->style(Part::Button).corner_radius;
   EXPECT_LT(terminal, aero) << "a CRT terminal has square corners";
-  EXPECT_LT(xp, aero);
+  EXPECT_LT(terminal, xp);
 }
 
 TEST(ThemeChrome, TerminalGlowsFromWithin) {

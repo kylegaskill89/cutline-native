@@ -301,10 +301,16 @@ TEST(PaintScrollThumb, ALyingThumbTurnsItsLightAQuarter) {
   EXPECT_DOUBLE_EQ(body->fill.angle_deg, standing - 90.0);
 }
 
-TEST(PaintSurface, AnAeroPanelBlursWhatIsBehindIt) {
-  RecordingPainter painter;
-  paint_surface(painter, kBounds, built_in_theme("aero")->style(Part::Panel));
-  EXPECT_EQ(painter.count(Kind::BackdropBlur), 1u);
+TEST(PaintSurface, AerosFrameBlursWhatIsBehindItAndItsPagesDoNot) {
+  // Vista's glass is the frame; the pages inside it are opaque, as the
+  // captures of Vista show.
+  RecordingPainter frame;
+  paint_surface(frame, kBounds, built_in_theme("aero")->style(Part::TitleBar));
+  EXPECT_EQ(frame.count(Kind::BackdropBlur), 1u);
+
+  RecordingPainter page;
+  paint_surface(page, kBounds, built_in_theme("aero")->style(Part::Panel));
+  EXPECT_EQ(page.count(Kind::BackdropBlur), 0u);
 }
 
 TEST(PaintSurface, AFlatButtonDrawsNeitherBevelNorBlur) {

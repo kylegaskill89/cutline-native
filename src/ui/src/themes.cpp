@@ -365,6 +365,7 @@ namespace {
   // face that lightens from the top left corner to the bottom right, an orange
   // band under the pointer, and a grey well while held. The marks are green.
   t.metrics.check_mark = CheckMark::Luna;
+  t.metrics.lit_radio_dot = true;
   // Menus, measured from XP's: seventeen-pixel rows, nine between groups, and
   // two pixels of white inside the edge.
   t.metrics.menu_row_height = 17.0;
@@ -562,53 +563,70 @@ namespace {
 
 // ------------------------------------------------------------ Windows Vista --
 
-/// Aero glass: translucent chrome with the desktop blurred behind it.
+/// Windows Vista: glass round the window, and opaque, softly lit controls
+/// inside it.
 ///
-/// The blur is the whole point, and it is the one thing in this file that a
-/// painter cannot do with fills alone — it has to sample what is already on the
-/// surface. Text carries a glow because dark-on-glass is otherwise unreadable
-/// wherever the backdrop happens to be dark.
+/// Measured from captures of Vista itself. The glass is the frame only -- the
+/// title bar, blurred and tinted, with its text haloed because dark text on
+/// glass is unreadable wherever the backdrop is dark. Everything inside the
+/// frame is opaque: a light grey face, white pages, and controls whose faces
+/// are two tones with a hard step across the middle, grey at rest and pale blue
+/// under the pointer. The blur is still the one thing here a painter cannot do
+/// with fills alone.
 [[nodiscard]] Theme make_aero() {
   Theme t;
   t.id = "aero";
   t.name = "Aero";
   t.dark = false;
-  t.accent = hex("#3f9fdf");
+  t.accent = hex("#3399ff");
 
-  t.metrics.control_height = 25.0;
-  t.metrics.padding_x = 14.0;
+  // Segoe UI at nine points, and the twenty-three pixel buttons of Vista's
+  // own dialogs.
+  t.metrics.control_height = 23.0;
+  t.metrics.padding_x = 12.0;
   t.metrics.padding_y = 4.0;
-  t.metrics.spacing = 8.0;
-  t.metrics.panel_padding = 10.0;
-  t.metrics.title_bar_height = 34.0;
-  t.metrics.panel_header_height = 28.0;
-  t.metrics.list_row_height = 26.0;
+  t.metrics.spacing = 7.0;
+  t.metrics.panel_padding = 9.0;
+  t.metrics.title_bar_height = 30.0;
+  t.metrics.panel_header_height = 24.0;
+  t.metrics.list_row_height = 21.0;
   t.metrics.font_family = "Segoe UI";
-  t.metrics.font_size = 13.0;
-  t.metrics.scrollbar_width = 16.0;
+  t.metrics.font_size = 12.0;
+  t.metrics.small_font_size = 11.0;
   t.metrics.heading_font_size = 15.0;  // Vista's "main instructions" stood a step up
   t.metrics.group_spacing = 14.0;
+  t.metrics.scrollbar_width = 17.0;
   t.metrics.track_height = 58.0;
+  t.metrics.audio_track_height = 46.0;
   // Vista's buttons glowed in quickly and let go slowly.
   t.metrics.hover_in = 0.15;
   t.metrics.hover_out = 0.5;
   t.metrics.focus_cue = FocusCue::Dotted;  // Vista kept XP's
   t.metrics.motion = 0.25;
   t.metrics.popup_fade = 0.15;
-  t.metrics.audio_track_height = 46.0;
+  t.metrics.lit_radio_dot = true;
+  t.metrics.slider_thumb = ThumbShape::VistaPointer;
+  t.metrics.tab_rise = 2.0;
+  t.metrics.bold_active_tab = false;
+  t.metrics.header_dividers = true;
+  t.metrics.menu_row_height = 22.0;
+  t.metrics.menu_separator_height = 7.0;
+  t.metrics.menu_padding = 3.0;
+
+  const Color ink = hex("#000000");
+  const Color greyed = hex("#838383");
 
   t.fallback = SurfaceStyle{
-      .fill = Fill::glass(hex("#ffffff40"), 18.0),
-      .border = hex("#ffffff60"),
+      .fill = Fill::solid(hex("#f0f0f0")),
+      .border = hex("#898c95"),
       .border_width = 1.0,
-      .corner_radius = 4.0,
-      .text = hex("#1a1a1a"),
-      .text_glow = 3.0,
+      .text = ink,
   };
 
   t.set(Part::Window, State::Normal,
-        SurfaceStyle{.fill = Fill::solid(hex("#2c4a66")), .text = hex("#ffffff")});
+        SurfaceStyle{.fill = Fill::solid(hex("#f0f0f0")), .text = ink});
 
+  // The glass: the frame, and only the frame.
   t.set(Part::TitleBar, State::Normal,
         SurfaceStyle{
             .fill = Fill::glass(hex("#b8d8f088"), 24.0),
@@ -619,254 +637,365 @@ namespace {
             .text_glow = 4.0,
         });
 
+  // A page is white with a grey hairline, as a tab's page and Explorer's
+  // panes were.
   t.set(Part::Panel, State::Normal,
-        SurfaceStyle{
-            .fill = Fill::glass(hex("#e8f2fa66"), 16.0),
-            .border = hex("#ffffff70"),
-            .border_width = 1.0,
-            .corner_radius = 6.0,
-            .text = hex("#12222e"),
-            .text_glow = 2.0,
-        });
-
-  t.set(Part::PanelHeader, State::Normal,
-        SurfaceStyle{
-            .fill = Fill::glass(hex("#ffffff55"), 12.0),
-            .border = hex("#ffffff66"),
-            .border_width = 1.0,
-            .corner_radius = 4.0,
-            .text = hex("#12222e"),
-            .text_glow = 2.0,
-        });
-
-  // Aero's tabs are glass too, and the one showing is the least translucent:
-  // it is the pane you are meant to be looking through.
-  t.set(Part::TabBar, State::Normal,
-        SurfaceStyle{.fill = Fill::glass(hex("#ffffff3a"), 10.0),
-                     .border = hex("#ffffff55"),
+        SurfaceStyle{.fill = Fill::solid(hex("#ffffff")),
+                     .border = hex("#898c95"),
                      .border_width = 1.0,
-                     .text = hex("#12222e")});
+                     .text = ink});
 
-  t.set(Part::Tab, State::Normal,
-        SurfaceStyle{.fill = Fill::glass(hex("#ffffff2a"), 8.0),
-                     .corner_radius = 4.0,
-                     .text = hex("#2c3c4a"),
-                     .text_glow = 1.0});
-  t.set(Part::Tab, State::Hover,
-        SurfaceStyle{.fill = Fill::glass(hex("#a8e0ff66"), 8.0),
-                     .border = hex("#ffffff88"),
-                     .border_width = 1.0,
-                     .corner_radius = 4.0,
-                     .text = hex("#12222e"),
-                     .text_glow = 2.0});
-  t.set(Part::Tab, State::Selected,
-        SurfaceStyle{.fill = Fill::glass(hex("#ffffff8c"), 14.0),
-                     .border = hex("#ffffffaa"),
-                     .border_width = 1.0,
-                     .corner_radius = 4.0,
-                     .text = hex("#0d1a24"),
-                     .text_glow = 3.0});
+  // A list's headings, and the headers of panels, measured from Explorer's:
+  // white above a soft step, a grey line below, pale blue under the pointer.
+  const SurfaceStyle header{
+      .fill = Fill::gradient({{0.00f, hex("#ffffff")},
+                              {0.40f, hex("#ffffff")},
+                              {0.42f, hex("#f7f8fa")},
+                              {1.00f, hex("#f1f2f4")}}),
+      .foot = Rim{.width = 1.0, .fill = Fill::solid(hex("#d5d5d5"))},
+      .border = hex("#d5d5d5"),
+      .text = ink,
+  };
+  SurfaceStyle header_hover = header;
+  header_hover.fill = Fill::gradient({{0.00f, hex("#e3f7ff")},
+                                      {0.40f, hex("#e3f7ff")},
+                                      {0.42f, hex("#bdedff")},
+                                      {1.00f, hex("#b7e7fb")}});
+  header_hover.foot = Rim{.width = 1.0, .fill = Fill::solid(hex("#93c9e3"))};
+  t.set(Part::ListHeader, State::Normal, header);
+  t.set(Part::ListHeader, State::Hover, header_hover);
+  t.set(Part::PanelHeader, State::Normal, header);
+  t.set(Part::Ruler, State::Normal, header);
 
-  // Aero buttons are still glossy, but the gloss is a translucent white sheen
-  // over glass rather than XP's opaque plastic.
+  // The button, measured from Vista's: a grey hairline with three-pixel
+  // corners, a white line inside it, and a face in two tones with a hard step
+  // just above the middle. Pale blue under the pointer, deeper blue held, and
+  // the default button ringed in cyan.
+  const auto two_tone = [](std::string_view top, std::string_view above, std::string_view below,
+                           std::string_view bottom) {
+    return Fill::gradient({{0.00f, hex(top)},
+                           {0.45f, hex(above)},
+                           {0.46f, hex(below)},
+                           {1.00f, hex(bottom)}});
+  };
   const SurfaceStyle button{
-      .fill = Fill::gradient({{0.00f, hex("#ffffffcc")},
-                              {0.48f, hex("#ffffff66")},
-                              {0.52f, hex("#d8e8f855")},
-                              {1.00f, hex("#eaf4ffaa")}}),
-      .shadow = Shadow{.offset_x = 0.0, .offset_y = 1.0, .blur = 3.0, .color = hex("#00000030")},
-      .border = hex("#8fb8d8"),
+      .fill = two_tone("#f2f2f2", "#ebebeb", "#dddddd", "#cfcfcf"),
+      .rim = Rim{.width = 1.0, .fill = Fill::solid(hex("#fcfcfc"))},
+      .border = hex("#707070"),
       .border_width = 1.0,
-      .corner_radius = 4.0,
-      .text = hex("#12222e"),
+      .corner_radius = 3.0,
+      .text = ink,
   };
   t.set(Part::Button, State::Normal, button);
 
   SurfaceStyle button_hover = button;
-  button_hover.fill = Fill::gradient({{0.00f, hex("#ffffffee")},
-                                      {0.48f, hex("#d8f0ffaa")},
-                                      {0.52f, hex("#b8e4ff88")},
-                                      {1.00f, hex("#dff2ffcc")}});
-  button_hover.border = hex("#3f9fdf");
-  // The Aero hover glow, drawn inside the control.
-  button_hover.shadow = Shadow{.offset_x = 0.0, .offset_y = 0.0, .blur = 8.0,
-                               .color = hex("#7fd0ff80"), .inner = true};
+  button_hover.fill = two_tone("#eaf6fd", "#d9f0fc", "#bee6fd", "#a7d9f5");
+  button_hover.rim = Rim{.width = 1.0, .fill = Fill::solid(hex("#fafdfe"))};
+  button_hover.border = hex("#3c7fb1");
   t.set(Part::Button, State::Hover, button_hover);
 
   SurfaceStyle button_pressed = button;
-  button_pressed.fill = Fill::gradient({{0.0f, hex("#a8c8e0aa")}, {1.0f, hex("#cfe4f5cc")}});
-  button_pressed.shadow = Shadow{.offset_x = 0.0, .offset_y = 1.0, .blur = 4.0,
-                                 .color = hex("#00000050"), .inner = true};
+  button_pressed.fill = two_tone("#e4f3fb", "#c4e5f6", "#98d1ef", "#68b2da");
+  button_pressed.rim.reset();
+  button_pressed.shadow = Shadow{.offset_x = 0.0, .offset_y = 1.0, .blur = 2.0,
+                                 .color = hex("#00000040"), .inner = true};
+  button_pressed.border = hex("#2c628b");
   t.set(Part::Button, State::Pressed, button_pressed);
 
   SurfaceStyle button_disabled = button;
-  button_disabled.fill = Fill::solid(hex("#ffffff33"));
-  button_disabled.text = hex("#12222e66");
-  button_disabled.shadow.reset();
+  button_disabled.fill = Fill::solid(hex("#f4f4f4"));
+  button_disabled.rim.reset();
+  button_disabled.border = hex("#adb2b5");
+  button_disabled.text = greyed;
   t.set(Part::Button, State::Disabled, button_disabled);
 
-  // Latched. Aero's own answer to this was the glass going blue and staying
-  // lit, which is the hover glow kept on rather than a darker surface.
-  SurfaceStyle button_selected = button;
-  button_selected.fill = Fill::gradient({{0.00f, hex("#cfe8ffdd")},
-                                         {0.48f, hex("#a8d4f5cc")},
-                                         {0.52f, hex("#8fc4eecc")},
-                                         {1.00f, hex("#c4e2ffdd")}});
-  button_selected.border = t.accent;
-  button_selected.border_width = 2.0;
-  button_selected.shadow = Shadow{.offset_x = 0.0, .offset_y = 0.0, .blur = 10.0,
-                                  .color = hex("#7fd0ffa0"), .inner = true};
+  SurfaceStyle button_default = button;
+  button_default.fill = two_tone("#eef3f5", "#e9eef1", "#d7e1e7", "#c8d5dd");
+  button_default.rim = Rim{.width = 1.0, .fill = Fill::solid(hex("#40d7fc"))};
+  button_default.border = hex("#3c7fb1");
+  t.set(Part::Button, State::Focused, button_default);
+
+  // Latched: held down, as a toggle on a command bar stays.
+  SurfaceStyle button_selected = button_pressed;
+  button_selected.shadow.reset();
   t.set(Part::Button, State::Selected, button_selected);
 
-  // Toolbar buttons are barely-there glass until they are pointed at, which is
-  // what let Aero put a dozen of them in a row without it reading as chrome.
-  SurfaceStyle tool = button;
-  tool.fill = Fill::solid(hex("#ffffff22"));
-  tool.border = hex("#00000000");
-  tool.border_width = 0.0;
-  tool.shadow.reset();
+  // A command bar's buttons are nothing until pointed at, then the button's
+  // blue.
+  const SurfaceStyle tool{.fill = Fill::solid(hex("#ffffff00")), .text = ink};
   t.set(Part::ToolButton, State::Normal, tool);
-
   SurfaceStyle tool_hover = button_hover;
-  tool_hover.border_width = 1.0;
+  tool_hover.corner_radius = 2.0;
   t.set(Part::ToolButton, State::Hover, tool_hover);
-  t.set(Part::ToolButton, State::Pressed, button_pressed);
-  t.set(Part::ToolButton, State::Selected, button_selected);
-
+  SurfaceStyle tool_pressed = button_pressed;
+  tool_pressed.corner_radius = 2.0;
+  t.set(Part::ToolButton, State::Pressed, tool_pressed);
+  SurfaceStyle tool_selected = button_selected;
+  tool_selected.corner_radius = 2.0;
+  t.set(Part::ToolButton, State::Selected, tool_selected);
   SurfaceStyle tool_disabled = tool;
-  tool_disabled.text = hex("#12222e66");
+  tool_disabled.text = greyed;
   t.set(Part::ToolButton, State::Disabled, tool_disabled);
 
-  // A glass trough with the light coming from inside it.
+  // The tabs: the one showing is the page's white and stands taller, the
+  // rest are buttons at rest, and the one under the pointer is a button under
+  // the pointer.
+  t.set(Part::TabBar, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#f0f0f0")), .text = ink});
+  SurfaceStyle tab = button;
+  tab.border = hex("#898c95");
+  tab.corner_radius = 2.0;
+  t.set(Part::Tab, State::Normal, tab);
+  SurfaceStyle tab_hover = button_hover;
+  tab_hover.corner_radius = 2.0;
+  t.set(Part::Tab, State::Hover, tab_hover);
+  SurfaceStyle tab_selected = tab;
+  tab_selected.fill = Fill::solid(hex("#ffffff"));
+  tab_selected.rim.reset();
+  t.set(Part::Tab, State::Selected, tab_selected);
+
+  // A text field: white, with a top edge darker than its sides and bottom,
+  // which go blue under the pointer and bluer with the keyboard.
+  const auto field = [&ink](std::string_view top, std::string_view sides, std::string_view bottom) {
+    return SurfaceStyle{
+        .fill = Fill::solid(hex("#ffffff")),
+        .cap = Rim{.width = 1.0, .fill = Fill::solid(hex(top))},
+        .foot = Rim{.width = 1.0, .fill = Fill::solid(hex(bottom))},
+        .border = hex(sides),
+        .border_width = 1.0,
+        .text = ink,
+    };
+  };
+  t.set(Part::Input, State::Normal, field("#abadb3", "#e2e3ea", "#e3e9ef"));
+  t.set(Part::Input, State::Hover, field("#5794bf", "#b7d5ea", "#c7e2f1"));
+  t.set(Part::Input, State::Focused, field("#3d7bad", "#a4c9e3", "#b7d9ed"));
+  SurfaceStyle field_selected = field("#3d7bad", "#a4c9e3", "#b7d9ed");
+  field_selected.fill = Fill::solid(t.accent);
+  field_selected.text = hex("#ffffff");
+  t.set(Part::Input, State::Selected, field_selected);
+  SurfaceStyle field_disabled = field("#afafaf", "#dadada", "#e5e5e5");
+  field_disabled.fill = Fill::solid(hex("#f4f4f4"));
+  field_disabled.text = greyed;
+  t.set(Part::Input, State::Disabled, field_disabled);
+
+  // The check box and the radio: a grey hairline, a pale ring inside it, and a
+  // well lit from the bottom right, blue under the pointer and deeper blue
+  // while held. The tick and the dot's ring are navy; the dot is a bead.
+  const auto well = [&ink](std::string_view edge, std::string_view ring, std::string_view shade,
+                           std::string_view mid, std::string_view light, std::string_view lightest) {
+    return SurfaceStyle{
+        .fill = Fill::gradient({{0.00f, hex(shade)},
+                                {0.15f, hex(mid)},
+                                {0.65f, hex(light)},
+                                {1.00f, hex(lightest)}},
+                               315.0),
+        .rim = Rim{.width = 1.0, .fill = Fill::solid(hex(ring))},
+        .border = hex(edge),
+        .border_width = 1.0,
+        .text = ink,
+    };
+  };
+  const SurfaceStyle check = well("#8e8f8f", "#f4f4f4", "#aeb3b9", "#cbcfd5", "#eeeeee", "#f6f6f6");
+  const SurfaceStyle check_hover =
+      well("#5586a3", "#def9fa", "#79c6f9", "#b1dffd", "#def3fe", "#e8f7fe");
+  const SurfaceStyle check_pressed =
+      well("#2c628b", "#c2e4f6", "#5eb6f7", "#9dd5fc", "#d9f2fe", "#e1f4fe");
+  SurfaceStyle check_disabled = well("#b1b1b1", "#f4f4f4", "#f4f4f4", "#f4f4f4", "#f4f4f4", "#f4f4f4");
+  check_disabled.text = greyed;
+  t.set(Part::Check, State::Normal, check);
+  t.set(Part::Check, State::Hover, check_hover);
+  t.set(Part::Check, State::Pressed, check_pressed);
+  t.set(Part::Check, State::Disabled, check_disabled);
+  t.set(Part::Check, State::Selected, SurfaceStyle{.text = hex("#1d3e57")});
+  SurfaceStyle radio = check;
+  radio.border = hex("#919292");
+  t.set(Part::Radio, State::Normal, radio);
+  SurfaceStyle radio_hover = check_hover;
+  radio_hover.border = hex("#5989a5");
+  t.set(Part::Radio, State::Hover, radio_hover);
+  t.set(Part::Radio, State::Pressed, check_pressed);
+  t.set(Part::Radio, State::Disabled, check_disabled);
+  t.set(Part::Radio, State::Selected,
+        SurfaceStyle{.fill = Fill::gradient({{0.0f, hex("#90d5e5")},
+                                             {0.5f, hex("#1898d1")},
+                                             {1.0f, hex("#0f3f5d")}},
+                                            315.0),
+                     .text = hex("#1d3e57")});
+
+  // The trackbar: a hairline channel, dark above and white below, under a
+  // pointed thumb faced like a button.
   t.set(Part::Slider, State::Normal,
-        SurfaceStyle{.fill = Fill::solid(hex("#ffffff55")),
-                     .shadow = Shadow{.offset_x = 0.0, .offset_y = 1.0, .blur = 3.0,
-                                      .color = hex("#00000040"), .inner = true},
-                     .border = hex("#8fb8d8"),
-                     .border_width = 1.0,
-                     .corner_radius = 3.0,
-                     .text = hex("#12222e")});
-  t.set(Part::SliderThumb, State::Normal,
-        SurfaceStyle{.fill = Fill::gradient({{0.00f, hex("#ffffffee")},
-                                             {0.48f, hex("#dff2ffcc")},
-                                             {0.52f, hex("#b8e4ffaa")},
-                                             {1.00f, hex("#eaf8ffdd")}}),
-                     .shadow = Shadow{.offset_x = 0.0, .offset_y = 1.0, .blur = 3.0,
-                                      .color = hex("#00000030")},
-                     .border = t.accent,
-                     .border_width = 1.0,
-                     .corner_radius = 3.0,
-                     .text = hex("#12222e")});
+        SurfaceStyle{.fill = Fill::solid(hex("#e7eaea")),
+                     .bevel = sunken("#fcfcfc", "#b0b0b0"),
+                     .text = ink});
+  SurfaceStyle thumb = button;
+  thumb.fill = two_tone("#f2f2f2", "#ebebeb", "#dbdbdb", "#d6d6d6");
+  thumb.rim = Rim{.width = 1.0, .fill = Fill::solid(hex("#fbfbfb"))};
+  t.set(Part::SliderThumb, State::Normal, thumb);
+  t.set(Part::SliderThumb, State::Hover, button_hover);
+  SurfaceStyle thumb_pressed = button_pressed;
+  thumb_pressed.rim = Rim{.width = 1.0, .fill = Fill::solid(hex("#e4f3fb"))};
+  t.set(Part::SliderThumb, State::Pressed, thumb_pressed);
 
-  t.set(Part::MenuItem, State::Normal,
-        SurfaceStyle{.fill = Fill::solid(hex("#ffffff00")), .text = hex("#12222e")});
-  t.set(Part::MenuItem, State::Hover,
-        SurfaceStyle{.fill = Fill::gradient({{0.0f, hex("#dff2ffdd")}, {1.0f, hex("#b8e4ffcc")}}),
-                     .border = t.accent,
+  // The progress bar: a grey trough glazed like a button, and a green bar
+  // glazed the same way.
+  t.set(Part::Progress, State::Normal,
+        SurfaceStyle{.fill = Fill::gradient({{0.00f, hex("#f3f3f3")},
+                                             {0.10f, hex("#fcfcfc")},
+                                             {0.45f, hex("#dbdbdb")},
+                                             {0.50f, hex("#cacaca")},
+                                             {0.90f, hex("#d5d5d5")},
+                                             {1.00f, hex("#eaeaea")}}),
+                     .border = hex("#9e9e9e"),
                      .border_width = 1.0,
-                     .corner_radius = 3.0,
-                     .text = hex("#0d1a26")});
-  t.set(Part::MenuItem, State::Selected,
-        SurfaceStyle{.fill = Fill::solid(hex("#a8d4f5aa")),
-                     .corner_radius = 3.0,
-                     .text = hex("#0d1a26")});
+                     .corner_radius = 2.0,
+                     .text = ink});
+  t.set(Part::Progress, State::Selected,
+        SurfaceStyle{.fill = Fill::gradient({{0.00f, hex("#c6f7c9")},
+                                             {0.45f, hex("#95e6a1")},
+                                             {0.50f, hex("#0cbb2b")},
+                                             {0.85f, hex("#3fd457")},
+                                             {1.00f, hex("#6aec79")}}),
+                     .border = hex("#9e9e9e"),
+                     .border_width = 1.0,
+                     .corner_radius = 2.0,
+                     .text = ink});
 
-  // Aero's tooltips were near-white glass with a hairline, not the grey box
-  // every other part of the interface falls back to.
-  t.set(Part::Tooltip, State::Normal,
-        SurfaceStyle{.fill = Fill::solid(hex("#f8fcffee")),
-                     .shadow = Shadow{.offset_x = 0.0, .offset_y = 2.0, .blur = 6.0,
+  // Menus: a grey hairline, two pixels of near-white inside it, a light grey
+  // body, and the row under the pointer a pale blue rounded box. The rules
+  // between groups are the border colour.
+  t.set(Part::Menu, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#f0f0f0")),
+                     .shadow = Shadow{.offset_x = 2.0, .offset_y = 2.0, .blur = 4.0,
                                       .color = hex("#00000040")},
-                     .border = hex("#8fb8d8"),
+                     .rim = Rim{.width = 2.0, .fill = Fill::solid(hex("#f5f5f5"))},
+                     .border = hex("#979797"),
+                     .border_width = 1.0,
+                     .text = ink});
+  t.set(Part::MenuItem, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#ffffff00")), .border = hex("#e0e0e0"), .text = ink});
+  t.set(Part::MenuItem, State::Hover,
+        SurfaceStyle{.fill = Fill::gradient({{0.0f, hex("#eef5f8")}, {1.0f, hex("#dcebf3")}}),
+                     .border = hex("#a8d8eb"),
                      .border_width = 1.0,
                      .corner_radius = 3.0,
-                     .text = hex("#12222e")});
+                     .text = ink});
+  t.set(Part::MenuItem, State::Selected,
+        SurfaceStyle{.fill = Fill::gradient({{0.0f, hex("#f2f8fa")}, {1.0f, hex("#e5f0f6")}}),
+                     .border = hex("#c4e3ef"),
+                     .border_width = 1.0,
+                     .corner_radius = 3.0,
+                     .text = ink});
 
-  t.set(Part::Input, State::Normal,
-        SurfaceStyle{
-            .fill = Fill::solid(hex("#ffffffdd")),
-            .shadow = Shadow{.offset_x = 0.0, .offset_y = 1.0, .blur = 3.0,
-                             .color = hex("#00000030"), .inner = true},
-            .border = hex("#7fa8c8"),
-            .border_width = 1.0,
-            .corner_radius = 3.0,
-            .text = hex("#0d1a26"),
-        });
+  // A tooltip, as Vista drew it without glass: pale yellow, a grey hairline.
+  t.set(Part::Tooltip, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#ffffe1")),
+                     .border = hex("#646464"),
+                     .border_width = 1.0,
+                     .text = ink});
 
+  // The scroll bar: a pale track, and a thumb glazed across its width in grey,
+  // blue under the pointer.
+  t.set(Part::Scrollbar, State::Normal,
+        SurfaceStyle{.fill = Fill::gradient({{0.00f, hex("#e3e3e3")},
+                                             {0.10f, hex("#f1f1f1")},
+                                             {0.90f, hex("#f3f3f3")},
+                                             {1.00f, hex("#eaeaea")}},
+                                            90.0)});
+  const auto scroll_thumb = [](std::string_view edge, std::string_view light,
+                               std::string_view above, std::string_view below,
+                               std::string_view dark, std::string_view last) {
+    return SurfaceStyle{
+        .fill = Fill::gradient({{0.00f, hex(light)},
+                                {0.45f, hex(above)},
+                                {0.46f, hex(below)},
+                                {0.90f, hex(dark)},
+                                {1.00f, hex(last)}},
+                               90.0),
+        .border = hex(edge),
+        .border_width = 1.0,
+        .corner_radius = 2.0,
+        .text = hex("#000000"),
+    };
+  };
+  t.set(Part::ScrollThumb, State::Normal,
+        scroll_thumb("#979797", "#f5f5f5", "#e9e9eb", "#d9dadc", "#c0c0c4", "#cfcfd1"));
+  const SurfaceStyle scroll_hot =
+      scroll_thumb("#3c7fb1", "#e3f4fc", "#d6eefb", "#a9d9f2", "#9bc9e2", "#b9dcef");
+  t.set(Part::ScrollThumb, State::Hover, scroll_hot);
+  t.set(Part::ScrollThumb, State::Pressed, scroll_hot);
+
+  t.set(Part::Splitter, State::Normal,
+        SurfaceStyle{.fill = Fill::solid(hex("#f0f0f0")), .text = ink});
+
+  // The caption buttons on the glass: the minimise and maximise glass
+  // themselves, a darker hairline round a sheen; the close a red that glows
+  // under the pointer. From public references, since the captures were taken
+  // without glass.
+  const auto caption = [](std::string_view top, std::string_view above, std::string_view below,
+                          std::string_view bottom, std::string_view edge, std::string_view glyph) {
+    return SurfaceStyle{
+        .fill = Fill::gradient({{0.00f, hex(top)},
+                                {0.45f, hex(above)},
+                                {0.50f, hex(below)},
+                                {1.00f, hex(bottom)}}),
+        .rim = Rim{.width = 1.0, .fill = Fill::solid(hex("#ffffff60"))},
+        .border = hex(edge),
+        .border_width = 1.0,
+        .corner_radius = 3.0,
+        .text = hex(glyph),
+    };
+  };
+  t.set(Part::Caption, State::Normal,
+        caption("#ffffff99", "#ffffff40", "#00000010", "#ffffff30", "#00000060", "#1d2a3a"));
+  t.set(Part::Caption, State::Hover,
+        caption("#c9e9ff", "#8ccdf9", "#3e9ee8", "#74ccff", "#00000080", "#ffffff"));
+  t.set(Part::Caption, State::Pressed,
+        caption("#8cb4d8", "#4f8cc4", "#1a5c9c", "#3a8ad0", "#00000099", "#ffffff"));
+  t.set(Part::CaptionClose, State::Normal,
+        caption("#e8a493", "#d8775f", "#c4422a", "#d8654a", "#4c1a0f", "#ffffff"));
+  t.set(Part::CaptionClose, State::Hover,
+        caption("#f6b8a6", "#ee8a70", "#e0482d", "#f88c5c", "#4c1a0f", "#ffffff"));
+  t.set(Part::CaptionClose, State::Pressed,
+        caption("#b8735f", "#a8523a", "#8c2410", "#b04a2a", "#3a1208", "#ffffff"));
+
+  // The timeline is no Vista control. Its pieces are drawn in Vista's
+  // materials: clips glazed in blue, the headers of tracks a list's headings.
   t.set(Part::Clip, State::Normal,
         SurfaceStyle{
-            .fill = Fill::gradient({{0.0f, hex("#9fd4f5dd")}, {0.5f, hex("#6fb4e5cc")},
-                                    {1.0f, hex("#4f94d5dd")}}),
-            .border = hex("#ffffff80"),
+            .fill = Fill::gradient({{0.00f, hex("#d6ecfb")},
+                                    {0.45f, hex("#b9dcf5")},
+                                    {0.46f, hex("#8fc6ee")},
+                                    {1.00f, hex("#6fb0e2")}}),
+            .border = hex("#3c7fb1"),
             .border_width = 1.0,
-            .corner_radius = 5.0,
-            .text = hex("#08202e"),
-            .text_glow = 2.0,
+            .corner_radius = 3.0,
+            .text = hex("#0b2236"),
         });
   t.set(Part::Clip, State::Disabled,
         SurfaceStyle{
-            .fill = Fill::gradient({{0.0f, hex("#c8ccd0aa")}, {1.0f, hex("#8f9498aa")}}),
-            .border = hex("#ffffff40"),
+            .fill = Fill::gradient({{0.0f, hex("#eeeeee")}, {1.0f, hex("#cfcfcf")}}),
+            .border = hex("#adb2b5"),
             .border_width = 1.0,
-            .corner_radius = 5.0,
-            .text = hex("#3a4046"),
-            .text_glow = 2.0,
+            .corner_radius = 3.0,
+            .text = greyed,
         });
   t.set(Part::Clip, State::Selected,
         SurfaceStyle{
-            .fill = Fill::gradient({{0.0f, hex("#ffe8a0ee")}, {1.0f, hex("#ffc850ee")}}),
-            .shadow = Shadow{.offset_x = 0.0, .offset_y = 0.0, .blur = 10.0,
-                             .color = hex("#ffd070aa")},
-            .border = hex("#ffffffcc"),
+            .fill = Fill::gradient({{0.00f, hex("#fff3c8")},
+                                    {0.45f, hex("#ffe08a")},
+                                    {0.46f, hex("#ffcf55")},
+                                    {1.00f, hex("#ffbf2a")}}),
+            .border = hex("#c08a00"),
             .border_width = 2.0,
-            .corner_radius = 5.0,
+            .corner_radius = 3.0,
             .text = hex("#3a2600"),
         });
-
-  t.set(Part::TrackHeader, State::Normal,
-        SurfaceStyle{
-            .fill = Fill::glass(hex("#ffffff44"), 10.0),
-            .border = hex("#ffffff55"),
-            .border_width = 1.0,
-            .text = hex("#12222e"),
-            .text_glow = 2.0,
-        });
-
-  t.set(Part::Ruler, State::Normal,
-        SurfaceStyle{.fill = Fill::glass(hex("#ffffff33"), 8.0), .text = hex("#12222e")});
+  SurfaceStyle track_header = header;
+  track_header.border_width = 1.0;
+  t.set(Part::TrackHeader, State::Normal, track_header);
   t.set(Part::Playhead, State::Normal,
-        SurfaceStyle{.fill = Fill::solid(hex("#ff4444")), .text = hex("#ff4444")});
-
-  t.set(Part::Menu, State::Normal,
-        SurfaceStyle{.fill = Fill::glass(hex("#f4fafeee"), 20.0),
-                     .shadow = Shadow{.offset_x = 0.0, .offset_y = 4.0, .blur = 12.0,
-                                      .color = hex("#00000055")},
-                     .border = hex("#ffffff99"),
-                     .border_width = 1.0,
-                     .corner_radius = 6.0,
-                     .text = hex("#0d1a26")});
-  t.set(Part::MenuItem, State::Hover,
-        SurfaceStyle{.fill = Fill::gradient({{0.0f, hex("#d8f0ff")}, {1.0f, hex("#a8d8f8")}}),
-                     .border = hex("#7fc0e8"),
-                     .border_width = 1.0,
-                     .corner_radius = 3.0,
-                     .text = hex("#0d1a26")});
-
-  t.set(Part::Splitter, State::Normal,
-        SurfaceStyle{.fill = Fill::glass(hex("#ffffff33"), 8.0),
-                     .border = hex("#ffffff55"),
-                     .border_width = 1.0,
-                     .text = hex("#0d1a26")});
-
-  t.set(Part::Scrollbar, State::Normal,
-        SurfaceStyle{.fill = Fill::glass(hex("#ffffff22"), 6.0)});
-  t.set(Part::ScrollThumb, State::Normal,
-        SurfaceStyle{
-            .fill = Fill::gradient({{0.0f, hex("#ffffffcc")}, {1.0f, hex("#c8dcecaa")}}),
-            .border = hex("#8fb8d8"),
-            .border_width = 1.0,
-            .corner_radius = 6.0,
-        });
+        SurfaceStyle{.fill = Fill::solid(hex("#e81123")), .text = hex("#e81123")});
 
   return t;
 }

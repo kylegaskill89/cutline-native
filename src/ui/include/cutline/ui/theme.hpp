@@ -252,6 +252,9 @@ enum class ThumbShape {
   /// channel that is never filled. Drawn a pixel at a time on an eleven by
   /// twenty-one grid, scaled with the control, for the same reason as the tick.
   Pointer,
+  /// Vista's: ten pixels by seventeen in a white rim and a grey hairline, the
+  /// button's two-tone face, a short point, over a hairline channel.
+  VistaPointer,
 };
 
 /// How the caption buttons' glyphs are drawn.
@@ -337,6 +340,9 @@ struct Metrics {
   FocusCue focus_cue = FocusCue::Ring;
   TextSmoothing text_smoothing = TextSmoothing::ClearType;
   CheckMark check_mark = CheckMark::Stroked;
+  /// Whether a chosen radio's dot is drawn in the `Selected` style's fill --
+  /// lit like a bead, as XP's and Vista's were -- rather than flat in its ink.
+  bool lit_radio_dot = false;
   ThumbShape slider_thumb = ThumbShape::Block;
   CaptionGlyphs caption_glyphs = CaptionGlyphs::Stroked;
   /// A caption button's side, as a square inside the title bar with a gap of

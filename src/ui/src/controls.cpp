@@ -9,6 +9,7 @@
 #include <format>
 #include <limits>
 #include <numbers>
+#include <span>
 #include <string_view>
 #include <utility>
 #include <system_error>
@@ -51,6 +52,52 @@ constexpr std::array<std::string_view, 21> kPointer{{
     "MhgfffffghD", ".MhgfffghD.", "..MhgfghD..", "...MhghD...", "....MhD....",
     ".....M.....",
 }};
+
+/// Vista's trackbar thumb: `E` its edge, `a` the edge half covered, `r` the
+/// white rim inside it and `f` the face, which runs top to bottom.
+constexpr std::array<std::string_view, 17> kVistaPointer{{
+    "aEEEEEEEEa", "ErrrrrrrrE", "ErffffffrE", "ErffffffrE", "ErffffffrE", "ErffffffrE",
+    "ErffffffrE", "ErffffffrE", "ErffffffrE", "ErffffffrE", "ErffffffrE", "ErffffffrE",
+    "ErffffffrE", "aErffffrEE", ".EErffrEEa", "..EErrEEa.", "...EEEEa..",
+}};
+
+/// The rows of a pointed thumb, and the control height it was measured in.
+struct PointerShape {
+  std::span<const std::string_view> rows;
+  double slot = 0.0;
+};
+
+[[nodiscard]] PointerShape pointer_shape(ThumbShape shape) {
+  if (shape == ThumbShape::VistaPointer) return {kVistaPointer, 23.0};
+  return {kPointer, 21.0};
+}
+
+void paint_vista_pointer(Painter& painter, const Rect& thumb, const SurfaceStyle& style) {
+  const double unit = thumb.height / static_cast<double>(kVistaPointer.size());
+  const double width = static_cast<double>(kVistaPointer.front().size());
+  const double left = thumb.x + (thumb.width - unit * width) / 2.0;
+  Color half = style.border;
+  half.a *= 0.5f;
+  const Color rim = style.rim ? sample(style.rim->fill, 0.5f) : sample(style.fill, 0.0f);
+  const auto rows = static_cast<float>(kVistaPointer.size());
+
+  for (std::size_t row = 0; row < kVistaPointer.size(); ++row) {
+    const std::string_view line = kVistaPointer[row];
+    for (std::size_t col = 0; col < line.size(); ++col) {
+      Color colour;
+      switch (line[col]) {
+        case 'E': colour = style.border; break;
+        case 'a': colour = half; break;
+        case 'r': colour = rim; break;
+        case 'f': colour = sample(style.fill, (static_cast<float>(row) + 0.5f) / rows); break;
+        default: continue;
+      }
+      painter.fill(Rect{left + static_cast<double>(col) * unit,
+                        thumb.y + static_cast<double>(row) * unit, unit, unit},
+                   0.0, Fill::solid(colour));
+    }
+  }
+}
 
 void paint_pointer(Painter& painter, const Rect& thumb, const SurfaceStyle& style) {
   const double unit = thumb.height / static_cast<double>(kPointer.size());
@@ -147,22 +194,31 @@ void Slider::layout(const LayoutContext& context) {
   // From the theme rather than a constant: a bevelled thumb needs more room
   // than a flat one, and no control should be deciding that for itself.
   shape_ = context.metrics().slider_thumb;
-  thumb_size_ = shape_ == ThumbShape::Pointer
-                    ? context.metrics().control_height * 11.0 / static_cast<double>(kPointer.size())
-                    : context.metrics().control_height * 0.6;
+  if (shape_ == ThumbShape::Block) {
+    thumb_size_ = context.metrics().control_height * 0.6;
+  } else {
+    // As wide as it was in the control height it was measured in, scaled.
+    const PointerShape pointer = pointer_shape(shape_);
+    thumb_size_ = context.metrics().control_height *
+                  static_cast<double>(pointer.rows.front().size()) / pointer.slot;
+  }
 }
 
 double Slider::pointer_height() const {
-  // In proportion to its width, as XP drew it, and centred in a taller slot
-  // rather than stretched to fill it.
-  return std::min(bounds().height, thumb_size_ * static_cast<double>(kPointer.size()) / 11.0);
+  // In proportion to its width, as XP and Vista drew it, and centred in a
+  // taller slot rather than stretched to fill it.
+  const PointerShape pointer = pointer_shape(shape_);
+  return std::min(bounds().height, thumb_size_ * static_cast<double>(pointer.rows.size()) /
+                                       static_cast<double>(pointer.rows.front().size()));
 }
 
 Rect Slider::groove() const {
-  // XP's channel is four pixels of the thumb's twenty-one, whatever the size.
-  const double height = shape_ == ThumbShape::Pointer
-                            ? pointer_height() * 4.0 / static_cast<double>(kPointer.size())
-                            : std::max(4.0, bounds().height * 0.25);
+  // The channel is four of the thumb's rows deep, whatever the size: XP's of
+  // twenty-one, Vista's of seventeen.
+  const double height =
+      shape_ != ThumbShape::Block
+          ? pointer_height() * 4.0 / static_cast<double>(pointer_shape(shape_).rows.size())
+          : std::max(4.0, bounds().height * 0.25);
   return Rect{bounds().x, bounds().y + (bounds().height - height) / 2.0, bounds().width,
               height};
 }
@@ -173,7 +229,7 @@ Rect Slider::thumb() const {
   // The thumb travels the groove minus its own width. Mapping against the full
   // width instead is the same bug as a scrollbar that cannot reach the end.
   const double travel = std::max(0.0, track.width - size);
-  if (shape_ == ThumbShape::Pointer) {
+  if (shape_ != ThumbShape::Block) {
     const double height = pointer_height();
     return Rect{track.x + fraction() * travel, bounds().y + (bounds().height - height) / 2.0, size,
                 height};
@@ -196,9 +252,13 @@ void Slider::paint_content(Painter& painter, const Theme& theme) const {
   const Rect track = groove();
   paint_surface(painter, track, groove_style);
 
-  // XP never filled its channel: the pointer says where the value is.
+  // XP and Vista never filled the channel: the pointer says where the value is.
   if (shape_ == ThumbShape::Pointer) {
     paint_pointer(painter, thumb(), theme.style(Part::SliderThumb, state()));
+    return;
+  }
+  if (shape_ == ThumbShape::VistaPointer) {
+    paint_vista_pointer(painter, thumb(), theme.style(Part::SliderThumb, state()));
     return;
   }
 
@@ -1025,9 +1085,8 @@ void RadioGroup::paint_content(Painter& painter, const Theme& theme) const {
       const double inset_by = circle.width * 0.28;
       const Rect mark{circle.x + inset_by, circle.y + inset_by, circle.width - inset_by * 2.0,
                       circle.height - inset_by * 2.0};
-      // Luna's dot is lit like a bead; elsewhere it is the mark's colour.
-      const bool lit = theme.metrics.check_mark == CheckMark::Luna &&
-                       taken.fill.kind == FillKind::Gradient;
+      // Lit like a bead where the theme says so; elsewhere the mark's colour.
+      const bool lit = theme.metrics.lit_radio_dot && taken.fill.kind == FillKind::Gradient;
       painter.fill(mark, mark.width / 2.0, lit ? taken.fill : Fill::solid(taken.text));
     }
 
