@@ -298,6 +298,16 @@ void Player::Impl::render(const core::Project& project, PlayerSettings settings,
     return fail(std::format("cannot get the audio render client: {}", describe(hr)));
   }
 
+  // The device's own account of what it has played, and the moment it was
+  // true. Without one the buffer's padding is asked instead, which is the
+  // same count without the moment.
+  ComPtr<IAudioClock> device_clock;
+  UINT64 clock_rate = 0;
+  if (FAILED(client->GetService(IID_PPV_ARGS(&device_clock))) ||
+      FAILED(device_clock->GetFrequency(&clock_rate)) || clock_rate == 0) {
+    device_clock.Reset();
+  }
+
   // Everything that touches a file happens here, before the first deadline.
   // Real time, which is what stops a long source being decoded end to end
   // before a note is heard — and what forbids this thread from ever touching a
@@ -405,8 +415,26 @@ void Player::Impl::render(const core::Project& project, PlayerSettings settings,
     // What has been *played*, not what has been submitted: those differ by the
     // buffer depth, and using the latter would run the picture ahead of the
     // sound.
-    UINT32 remaining = 0;
-    if (SUCCEEDED(client->GetCurrentPadding(&remaining))) {
+    //
+    // From the device's clock when it has one, because that says *when* the
+    // count was true. The buffer's padding only moves once a device period,
+    // and stamped with the time this thread happened to wake it was a period
+    // behind on some wakes and not others: a clock that stalled for ten
+    // milliseconds and caught up, now and then, which is the staircase the
+    // interpolation exists to remove. A seek resets the device and its count
+    // together and a pause stops both, so its count since the last reset is
+    // the frames played since `base`.
+    UINT64 heard = 0;
+    UINT64 heard_at = 0;
+    if (device_clock != nullptr && SUCCEEDED(device_clock->GetPosition(&heard, &heard_at)) &&
+        heard_at != 0) {
+      played.store(static_cast<std::int64_t>(std::llround(
+                       static_cast<double>(heard) * rate / static_cast<double>(clock_rate))),
+                   std::memory_order_release);
+      // The performance counter in hundreds of nanoseconds, which is the
+      // steady clock's own count in a coarser unit.
+      anchor.store(static_cast<std::int64_t>(heard_at) * 100, std::memory_order_release);
+    } else if (UINT32 remaining = 0; SUCCEEDED(client->GetCurrentPadding(&remaining))) {
       const auto submitted = static_cast<std::int64_t>(
           std::llround((cursor - base.load(std::memory_order_acquire)) * rate));
       played.store(std::max<std::int64_t>(0, submitted - remaining),
