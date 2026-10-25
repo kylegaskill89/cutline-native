@@ -150,6 +150,7 @@ using cutline::ui::DockLayout;
 using cutline::ui::Dropdown;
 using cutline::ui::Edges;
 using cutline::ui::IconButton;
+using cutline::ui::MenuEntry;
 using cutline::ui::MenuList;
 using cutline::ui::DockNode;
 using cutline::ui::DockView;
@@ -757,6 +758,12 @@ struct App {
   /// scrolling with it.
   Box* inspector = nullptr;
   MonitorView* monitor = nullptr;
+  /// The picture the program monitor was last given, kept so a monitor made
+  /// afresh — a panel undocked or torn out into a window of its own gets a new
+  /// one — starts with it. The engine only hands over a picture better than
+  /// the last, so without this a new monitor stayed empty until the playhead
+  /// moved. Valid until the canvas changes size, when the next take replaces it.
+  cutline::ui::TextureView shown_preview;
 
   /// The scopes, what they are showing, and the tabs that choose it.
   ///
@@ -931,6 +938,8 @@ struct App {
   // where insert, overwrite and a drag from the pool already read them.
 
   MonitorView* source_monitor = nullptr;
+  /// The source monitor's, for the same reason as `shown_preview`.
+  cutline::ui::TextureView shown_source;
   /// Shown instead of the picture when the source has none. A sound file in a
   /// monitor that renders video is a black rectangle, which looks exactly like
   /// a file that failed to decode.
@@ -4360,6 +4369,7 @@ void poll_preview([[maybe_unused]] App& app) {
   }
   if (taken->has_value()) {
     app.monitor->set_texture(**taken);
+    app.shown_preview = **taken;
     mark_dirty(app);
   }
 
@@ -4618,6 +4628,7 @@ void refresh_source([[maybe_unused]] App& app) {
     // placeholder rather than showing the last source, which would be a picture
     // of something nobody is pointing at.
     app.source_monitor->clear_frame();
+    app.shown_source = {};
     if (app.source_waveform != nullptr) app.source_waveform->set_visible(false);
     if (app.source_scrub != nullptr) {
       app.source_scrub->set_duration(0.0);
@@ -4651,6 +4662,7 @@ void refresh_source([[maybe_unused]] App& app) {
   app.source_monitor->set_visible(has_picture);
   if (!has_picture) {
     app.source_monitor->clear_frame();
+    app.shown_source = {};
     mark_dirty(app);
     return;
   }
@@ -4707,6 +4719,7 @@ void poll_source([[maybe_unused]] App& app) {
   }
   if (taken->has_value()) {
     app.source_monitor->set_texture(**taken);
+    app.shown_source = **taken;
     mark_dirty(app);
   }
 #endif
@@ -7044,6 +7057,50 @@ constexpr std::array kTransportKeys{
     Binding{Key::V, true, false, cutline::editor::Command::PasteAttributes, true},
 };
 
+/// How a key is written in a menu: the character itself where it has one, as
+/// Windows writes "Ctrl+," rather than "Ctrl+Comma".
+[[nodiscard]] std::string key_label(Key key) {
+  const auto value = static_cast<std::uint16_t>(key);
+  if (value > ' ' && value < 127) return std::string(1, static_cast<char>(value));
+  if (key == Key::Escape) return "Esc";
+  if (key == Key::Delete) return "Del";
+  return std::string(cutline::ui::to_string(key));
+}
+
+/// The shortcut a command is bound to, written as a menu shows it, or empty.
+///
+/// Read from the same tables the keys are handled from, so a menu can never
+/// claim a key that does something else.
+[[nodiscard]] std::string shortcut_for(cutline::editor::Command command) {
+  const auto written = [](const Binding& binding) {
+    std::string text;
+    // Windows' order, which is the order its own menus write them in.
+    if (binding.control) text += "Ctrl+";
+    if (binding.alt) text += "Alt+";
+    if (binding.shift) text += "Shift+";
+    return text + key_label(binding.key);
+  };
+  for (const Binding& binding : kApplicationKeys) {
+    if (binding.command == command) return written(binding);
+  }
+  for (const Binding& binding : kTransportKeys) {
+    if (binding.command == command) return written(binding);
+  }
+  return {};
+}
+
+void run_command(App& app, cutline::editor::Command command);
+
+/// A menu row for an editing command: its key beside it, greyed when it has
+/// nothing to act on, and running exactly what the key runs.
+[[nodiscard]] MenuEntry command_entry(App& app, std::string label,
+                                      cutline::editor::Command command) {
+  return MenuEntry{.label = std::move(label),
+                   .shortcut = shortcut_for(command),
+                   .enabled = cutline::editor::can_run(app.session, command),
+                   .act = [&app, command] { run_command(app, command); }};
+}
+
 /// The tool palette, in the order it is drawn and offered.
 ///
 /// The keys are Premiere's, which is the point of choosing them: anybody who
@@ -7247,6 +7304,20 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
 // than rebuilt. `app` may be null, so the headless check can build every panel
 // with no window and no session behind it.
 
+/// Shows the pool as a list or as pictures, and remembers which.
+void set_pool_view(App& app, cutline::ui::BrowserView view) {
+  if (app.browser == nullptr) return;
+  app.browser->set_view(view);
+  save_settings(app);
+  // Named for what it would do next, so the button says where pressing it
+  // goes rather than where you already are.
+  if (app.view_button != nullptr) {
+    app.view_button->set_text(view == cutline::ui::BrowserView::Icons ? "List" : "Icons");
+  }
+  refresh_browser(app);
+  if (app.main.host != nullptr) app.main.host->request_layout();
+}
+
 [[nodiscard]] std::unique_ptr<Widget> make_project_panel(App* app) {
   auto panel = std::make_unique<Panel>();
 
@@ -7289,14 +7360,7 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
   auto& view_choice = tools.emplace<Button>("Icons", [app] {
     if (app == nullptr || app->browser == nullptr) return;
     const bool icons = app->browser->view() == cutline::ui::BrowserView::Icons;
-    app->browser->set_view(icons ? cutline::ui::BrowserView::List
-                                 : cutline::ui::BrowserView::Icons);
-    save_settings(*app);
-    // Named for what it would do next, so the button says where pressing it
-    // goes rather than where you already are.
-    if (app->view_button != nullptr) app->view_button->set_text(icons ? "Icons" : "List");
-    refresh_browser(*app);
-    if (app->main.host != nullptr) app->main.host->request_layout();
+    set_pool_view(*app, icons ? cutline::ui::BrowserView::List : cutline::ui::BrowserView::Icons);
   });
   view_choice.set_tooltip("Show the pool as pictures or as a list");
 
@@ -7406,6 +7470,14 @@ bool run_binding(App& app, std::span<const Binding> bindings, Key key,
     // empty sequence shows an empty frame — colour bars there read as content
     // somebody put on the timeline rather than as "there is nothing here yet".
     picture.set_frame(app->pattern.view());
+#else
+    if (!app->shown_preview.empty()) {
+      picture.set_texture(app->shown_preview);
+    } else if (!app->preview_pixels.pixels.empty()) {
+      picture.set_frame(cutline::ui::ImageView{.pixels = app->preview_pixels.pixels.data(),
+                                               .width = app->preview_pixels.width,
+                                               .height = app->preview_pixels.height});
+    }
 #endif
     // Pushed rather than defaulted, for the same reason snapping is: the panel
     // is rebuilt by a rearrangement and the setting is not.
@@ -10181,6 +10253,7 @@ void refresh_audio_panel(App& app) {
   picture.set_placeholder("Select something in the project panel.");
   if (app != nullptr) {
     app->source_monitor = &picture;
+    if (!app->shown_source.empty()) picture.set_texture(app->shown_source);
     // Premiere's shortest statement of "use this": what is in the monitor is
     // what is about to be placed, so drag it where it goes. The marked span
     // comes with it, exactly as it does from the pool.
@@ -10401,6 +10474,213 @@ void float_panel_under_cursor(App& app, Shell& shell) {
   }
 }
 
+/// The tab group holding a panel, in whichever window it is.
+[[nodiscard]] const DockNode* group_holding(const DockLayout& layout, const PanelId& panel) {
+  if (const DockNode* found = cutline::ui::group_of(layout.root, panel); found != nullptr) {
+    return found;
+  }
+  for (const FloatingDock& window : layout.floating) {
+    if (const DockNode* found = cutline::ui::group_of(window.root, panel); found != nullptr) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
+/// Where a panel's group is on the screen, in pixels, for a window undocked
+/// from it to open in the same place rather than wherever the pointer is.
+[[nodiscard]] Rect group_on_screen(const Shell& shell, const PanelId& panel) {
+  const double s = shell.scale;
+  Rect where{0.0, 0.0, 520.0 * s, 380.0 * s};
+  if (shell.dock == nullptr || shell.window == nullptr) return where;
+  const cutline::ui::DockGroup* group = shell.dock->group_showing(panel);
+  if (group == nullptr) return where;
+
+  POINT corner{to_pixels(group->bounds().x, s), to_pixels(group->bounds().y, s)};
+  ClientToScreen(shell.window, &corner);
+  // No smaller than a torn-out panel, so undocking a sliver of a group does not
+  // give a window too small to use.
+  return Rect{static_cast<double>(corner.x), static_cast<double>(corner.y),
+              std::max(group->bounds().width * s, 320.0 * s),
+              std::max(group->bounds().height * s, 240.0 * s)};
+}
+
+/// What a panel's own menu adds after the entries every panel shares.
+///
+/// Premiere's panel menus are where a panel keeps its view options — how a
+/// list is shown, what a monitor overlays — and the commands that act on what
+/// the panel holds. Here they are the same commands the panel's toolbar and
+/// right-click already run, so the menu is one more way to them rather than a
+/// second implementation.
+[[nodiscard]] std::vector<MenuEntry> panel_menu_extras(App& app, const PanelId& panel);
+
+/// A panel's menu: the ≡ beside its tab's title, or a right-click on the tab.
+///
+/// The entries every panel shares come first and in Premiere's order, then the
+/// panel's own. Opened on the window the panel is in, since a torn-out panel's
+/// menu belongs over that window rather than over the editor behind it.
+void open_panel_menu(App& app, Shell& shell, const PanelId& panel, const Rect& anchor) {
+  if (shell.host == nullptr) return;
+
+  DockLayout& layout = layout_of(app);
+  const DockNode* group = group_holding(layout, panel);
+  const std::vector<PanelId> siblings = group != nullptr ? group->panels : std::vector<PanelId>{};
+  const bool floating = cutline::ui::is_floating(layout, panel);
+  // Alone in a window already, there is nothing to undock it from.
+  const bool alone_in_window = floating && siblings.size() == 1;
+  const auto undock_to = group_on_screen(shell, panel);
+  // A window holding this group and nothing else is already what undocking the
+  // group would make.
+  bool group_is_window = false;
+  for (const FloatingDock& window : layout.floating) {
+    if (cutline::ui::contains_panel(window.root, panel)) group_is_window = !window.root.is_split();
+  }
+
+  std::vector<MenuEntry> entries;
+  entries.push_back(MenuEntry{.label = "Close Panel", .act = [&app, panel] {
+    if (cutline::ui::close_panel(layout_of(app), panel)) app.dock_stale = true;
+  }});
+  entries.push_back(MenuEntry{.label = "Undock Panel", .enabled = !alone_in_window,
+                              .act = [&app, panel, undock_to] {
+    // A panel undocked while another fills the window would leave that window
+    // showing what was maximised and nothing to come back to.
+    if (cutline::ui::restore_maximised(layout_of(app))) app.dock_stale = true;
+    if (cutline::ui::float_panel(layout_of(app), panel, undock_to)) app.dock_stale = true;
+  }});
+  entries.push_back(MenuEntry{.label = "Close Other Panels in Group",
+                              .enabled = siblings.size() > 1,
+                              .act = [&app, panel, siblings] {
+    for (const PanelId& other : siblings) {
+      if (other != panel && cutline::ui::close_panel(layout_of(app), other)) app.dock_stale = true;
+    }
+  }});
+
+  std::vector<MenuEntry> group_settings;
+  group_settings.push_back(MenuEntry{.label = "Close Panel Group", .act = [&app, siblings] {
+    for (const PanelId& each : siblings) {
+      if (cutline::ui::close_panel(layout_of(app), each)) app.dock_stale = true;
+    }
+  }});
+  group_settings.push_back(MenuEntry{.label = "Undock Panel Group",
+                                     .enabled = !group_is_window,
+                                     .act = [&app, panel, siblings, undock_to] {
+    DockLayout& now = layout_of(app);
+    if (cutline::ui::restore_maximised(now)) app.dock_stale = true;
+    // The panel the menu came from goes first and the rest join it, so the
+    // group arrives in its window as it was, showing what it showed.
+    if (!cutline::ui::float_panel(now, panel, undock_to)) return;
+    for (const PanelId& other : siblings) {
+      if (other != panel) {
+        (void)cutline::ui::dock_panel(now, other, panel, cutline::ui::DockSide::Centre);
+      }
+    }
+    (void)cutline::ui::activate_panel(now, panel);
+    app.dock_stale = true;
+  }});
+  group_settings.push_back(MenuEntry{
+      .label = "Maximise Panel Group",
+      .shortcut = "`",
+      .enabled = !floating,
+      .checked = layout.maximised == panel,
+      .act = [&app, panel] {
+        if (cutline::ui::toggle_maximised(layout_of(app), panel)) app.dock_stale = true;
+      }});
+  entries.push_back(MenuEntry{.label = "Panel Group Settings", .submenu = std::move(group_settings)});
+
+  if (std::vector<MenuEntry> extras = panel_menu_extras(app, panel); !extras.empty()) {
+    entries.push_back(MenuEntry::divider());
+    for (MenuEntry& extra : extras) entries.push_back(std::move(extra));
+  }
+
+  auto list = std::make_unique<MenuList>(std::move(entries));
+  if (shell.host->keyboard_cues()) list->set_highlighted(0);
+  shell.host->open_popup(std::move(list), anchor);
+}
+
+std::vector<MenuEntry> panel_menu_extras(App& app, const PanelId& panel) {
+  using cutline::editor::Command;
+  const auto plain = [](std::string label, std::function<void()> act, std::string keys = {}) {
+    return MenuEntry{.label = std::move(label), .shortcut = std::move(keys), .act = std::move(act)};
+  };
+  const auto switch_entry = [](std::string label, bool on, std::function<void()> act,
+                               std::string keys = {}) {
+    return MenuEntry{.label = std::move(label), .shortcut = std::move(keys), .checked = on,
+                     .act = std::move(act)};
+  };
+
+  std::vector<MenuEntry> rows;
+  if (panel == "project") {
+    rows.push_back(plain("New Bin", [&app] { add_bin(app); }));
+    rows.push_back(plain("New Title", [&app] { add_title(app); }));
+    rows.push_back(plain("New Colour Matte", [&app] { add_matte(app); }));
+    rows.push_back(plain("New Adjustment Layer", [&app] { add_adjustment(app); }));
+    rows.push_back(MenuEntry::divider());
+    rows.push_back(plain("Import...", [&app] { import_media(app); }, "Ctrl+I"));
+    rows.push_back(plain("Remove from Project", [&app] { remove_from_pool(app); }));
+    rows.push_back(plain("Link Media...", [&app] { relink_pool_entry(app); }));
+    rows.push_back(MenuEntry::divider());
+    // Premiere's List and Icon, as a pair of switches with one of them on.
+    const bool icons =
+        app.browser != nullptr && app.browser->view() == cutline::ui::BrowserView::Icons;
+    rows.push_back(switch_entry("List", !icons, [&app] {
+      set_pool_view(app, cutline::ui::BrowserView::List);
+    }));
+    rows.push_back(switch_entry("Icon", icons, [&app] {
+      set_pool_view(app, cutline::ui::BrowserView::Icons);
+    }));
+  } else if (panel == "monitor") {
+    rows.push_back(command_entry(app, "Mark In", Command::MarkIn));
+    rows.push_back(command_entry(app, "Mark Out", Command::MarkOut));
+    rows.push_back(command_entry(app, "Clear In and Out", Command::ClearMarks));
+    rows.push_back(MenuEntry::divider());
+    rows.push_back(switch_entry("Loop", app.looping, [&app] { toggle_looping(app); }));
+    std::vector<MenuEntry> resolutions;
+    for (const auto& [scale, name] : kPreviewScales) {
+      resolutions.push_back(switch_entry(std::string(name), scale == app.preview_scale,
+                                         [&app, scale] { choose_preview_scale(app, scale); }));
+    }
+    rows.push_back(MenuEntry{.label = "Playback Resolution", .submenu = std::move(resolutions)});
+    rows.push_back(MenuEntry::divider());
+    rows.push_back(plain("Export Frame", [&app] { take_snapshot(app); }));
+  } else if (panel == "source") {
+    const bool has_source = source_media_of(app) != nullptr;
+    MenuEntry in = plain("Mark In", [&app] { mark_source(app, false); }, "I");
+    MenuEntry out = plain("Mark Out", [&app] { mark_source(app, true); }, "O");
+    MenuEntry clear = plain("Clear In and Out", [&app] {
+      if (const cutline::core::Media* media = source_media_of(app); media != nullptr) {
+        app.session.apply(cutline::core::clear_source_marks(app.session.project(), media->id));
+        refresh_all(app);
+      }
+    });
+    for (MenuEntry* each : {&in, &out, &clear}) each->enabled = has_source;
+    rows.push_back(std::move(in));
+    rows.push_back(std::move(out));
+    rows.push_back(std::move(clear));
+  } else if (panel == "timeline") {
+    rows.push_back(command_entry(app, "Add Video Track", Command::AddVideoTrack));
+    rows.push_back(command_entry(app, "Add Audio Track", Command::AddAudioTrack));
+    rows.push_back(command_entry(app, "Remove Track", Command::RemoveTrack));
+    rows.push_back(MenuEntry::divider());
+    rows.push_back(switch_entry("Snap in Timeline", app.snapping, [&app] { toggle_snapping(app); },
+                                "S"));
+    rows.push_back(plain("Zoom to Sequence", [&app] {
+      if (app.timeline == nullptr) return;
+      app.timeline->zoom_to_fit();
+      mark_dirty(app);
+    }, "\\"));
+  } else if (panel == "scopes") {
+    for (const cutline::ui::ScopeKind kind :
+         {cutline::ui::ScopeKind::Histogram, cutline::ui::ScopeKind::Waveform,
+          cutline::ui::ScopeKind::Parade, cutline::ui::ScopeKind::Vectorscope}) {
+      rows.push_back(switch_entry(std::string(cutline::ui::to_string(kind)), app.scope_kind == kind,
+                                  [&app, kind] { choose_scope(app, kind); }));
+    }
+  } else if (panel == "library") {
+    rows.push_back(plain("New Custom Bin", [&app] { new_bin(app); }));
+  }
+  return rows;
+}
+
 /// Everything a dock reports, wired to the layout.
 ///
 /// The same for the main window and for a torn-out one: which window a panel is
@@ -10420,6 +10700,10 @@ void wire_dock(App* app, Shell* shell, DockView& dock) {
   dock.set_on_close([app](PanelId panel) {
     if (app == nullptr) return;
     if (cutline::ui::close_panel(layout_of(*app), panel)) app->dock_stale = true;
+  });
+  dock.set_on_menu([app, shell](PanelId panel, Rect anchor) {
+    if (app == nullptr || shell == nullptr) return;
+    open_panel_menu(*app, *shell, panel, anchor);
   });
   dock.set_on_dock([app](PanelId panel, cutline::ui::DropTarget target) {
     if (app == nullptr) return;

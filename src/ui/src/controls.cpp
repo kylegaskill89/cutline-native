@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -1067,43 +1068,116 @@ namespace {
 constexpr std::size_t kNone = static_cast<std::size_t>(-1);
 }  // namespace
 
-MenuList::MenuList(std::vector<std::string> items) : items_(std::move(items)) {
+namespace {
+[[nodiscard]] std::vector<MenuEntry> entries_from(std::vector<std::string> labels) {
+  std::vector<MenuEntry> entries;
+  entries.reserve(labels.size());
+  for (std::string& label : labels) entries.push_back(MenuEntry{.label = std::move(label)});
+  return entries;
+}
+
+/// How tall a rule is against a row: enough to read as a gap between groups,
+/// not so much that a menu of several groups is mostly gaps.
+[[nodiscard]] double separator_height_for(double row_height) {
+  return std::max(5.0, std::round(row_height * 0.4));
+}
+
+/// The room a submenu's arrow takes at the trailing end of every row, once any
+/// row has one — so shortcuts line up whether or not their row opens a menu.
+[[nodiscard]] double arrow_gutter_for(double row_height) { return row_height * 0.6; }
+}  // namespace
+
+MenuList::MenuList(std::vector<std::string> items) : MenuList(entries_from(std::move(items))) {}
+
+MenuList::MenuList(std::vector<MenuEntry> entries) {
   // So an open menu answers the arrows and Enter, and the settings window's
   // categories can be reached with Tab.
   set_focusable(true);
+  set_entries(std::move(entries));
 }
 
 void MenuList::set_items(std::vector<std::string> items) {
-  items_ = std::move(items);
+  set_entries(entries_from(std::move(items)));
+}
+
+void MenuList::set_entries(std::vector<MenuEntry> entries) {
+  close_submenu();
+  entries_ = std::move(entries);
+  items_.clear();
+  items_.reserve(entries_.size());
   // The ticks belonged to the old items. Kept, they would tick rows by
-  // position — which is to say, the wrong ones.
+  // position — which is to say, the wrong ones. Taken from the new entries
+  // instead, which say for themselves which of them are switches.
   checked_.clear();
+  bool any_switches = false;
+  for (const MenuEntry& entry : entries_) {
+    items_.push_back(entry.label);
+    if (entry.checked.has_value()) any_switches = true;
+  }
+  if (any_switches) {
+    for (const MenuEntry& entry : entries_) checked_.push_back(entry.checked.value_or(false));
+  }
   highlighted_ = kNone;
+  tops_.clear();
+  invalidate_layout();
+}
+
+void MenuList::set_checked(std::vector<bool> checked) {
+  checked_ = std::move(checked);
+  for (std::size_t i = 0; i < entries_.size(); ++i) {
+    entries_[i].checked = i < checked_.size() ? std::optional<bool>(checked_[i]) : std::nullopt;
+  }
+}
+
+void MenuList::rebuild_geometry(const Metrics& metrics) {
+  row_height_ = metrics.list_row_height;
+  separator_height_ = separator_height_for(row_height_);
+  tops_.assign(entries_.size() + 1, 0.0);
+  double y = 0.0;
+  for (std::size_t i = 0; i < entries_.size(); ++i) {
+    tops_[i] = y;
+    y += entries_[i].separator ? separator_height_ : row_height_;
+  }
+  tops_[entries_.size()] = y;
 }
 
 Rect MenuList::row_rect(std::size_t index) const {
-  if (index >= items_.size()) return {};
+  if (index >= entries_.size()) return {};
   const Rect area = bounds();
-  const double y = area.y + padding_ + static_cast<double>(index) * row_height_;
+  // Before the first layout every row is the same height, which is what they
+  // are anyway until a rule is among them.
+  const double offset = tops_.size() == entries_.size() + 1
+                            ? tops_[index]
+                            : static_cast<double>(index) * row_height_;
+  const double height = entries_[index].separator ? separator_height_ : row_height_;
+  const double y = area.y + padding_ + offset;
   // Clipped to the list, so a row past the bottom is empty rather than a
   // rectangle drawn outside it.
   if (y >= area.bottom()) return {};
-  return Rect{area.x, y, area.width, std::min(row_height_, area.bottom() - y)};
+  return Rect{area.x, y, area.width, std::min(height, area.bottom() - y)};
 }
 
 std::size_t MenuList::row_at(double y) const {
   const Rect area = bounds();
-  if (items_.empty() || row_height_ <= 0.0) return kNone;
+  if (entries_.empty() || row_height_ <= 0.0) return kNone;
   if (y < area.y + padding_ || y >= area.bottom() - padding_) return kNone;
 
-  const auto index = static_cast<std::size_t>((y - area.y - padding_) / row_height_);
-  return index < items_.size() ? index : kNone;
+  for (std::size_t i = 0; i < entries_.size(); ++i) {
+    const Rect row = row_rect(i);
+    if (row.empty()) break;
+    if (y >= row.y && y < row.bottom()) return i;
+  }
+  return kNone;
 }
 
 LayoutItem MenuList::sizing(Axis axis, const LayoutContext& context) const {
   const Metrics& metrics = context.metrics();
   if (axis == Axis::Vertical) {
-    const double rows = static_cast<double>(items_.size()) * metrics.list_row_height;
+    double rows = 0.0;
+    const double rule = separator_height_for(metrics.list_row_height);
+    for (const MenuEntry& entry : entries_) {
+      rows += entry.separator ? rule : metrics.list_row_height;
+    }
     const double needed = rows + 2.0 * padding_;
     // A category column takes the height it is given; a menu is as tall as what
     // is in it. Never *shorter* than its rows either way, so filling can only
@@ -1112,76 +1186,253 @@ LayoutItem MenuList::sizing(Axis axis, const LayoutContext& context) const {
   }
 
   double widest = 0.0;
-  for (const std::string& item : items_) {
-    widest = std::max(widest, context.text.measure(item, metrics.font_size, false));
+  double widest_shortcut = 0.0;
+  bool any_submenu = false;
+  for (const MenuEntry& entry : entries_) {
+    widest = std::max(widest, context.text.measure(entry.label, metrics.font_size, false));
+    if (!entry.shortcut.empty()) {
+      widest_shortcut = std::max(widest_shortcut,
+                                 context.text.measure(entry.shortcut, metrics.font_size, false));
+    }
+    if (!entry.submenu.empty()) any_submenu = true;
   }
   // The tick gutter is width the labels no longer have, so it is asked for
   // here as well as drawn — otherwise ticking a menu clips its longest label.
   const double gutter = checked_.empty() ? 0.0 : metrics.list_row_height * 0.6;
+  // A clear gap between a label and its shortcut, as Windows leaves, so the
+  // two never read as one phrase.
+  const double shortcuts = widest_shortcut > 0.0 ? widest_shortcut + 3.0 * metrics.padding_x : 0.0;
+  const double arrows = any_submenu ? arrow_gutter_for(metrics.list_row_height) : 0.0;
   // Room either side, and never so narrow that a one-word menu is a sliver.
-  return LayoutItem::fixed(std::max(widest + gutter + 4.0 * metrics.padding_x, 96.0));
+  return LayoutItem::fixed(
+      std::max(widest + gutter + shortcuts + arrows + 4.0 * metrics.padding_x, 96.0));
 }
 
 void MenuList::layout(const LayoutContext& context) {
-  row_height_ = context.metrics().list_row_height;
-  font_size_ = context.metrics().font_size;
+  const Metrics& metrics = context.metrics();
+  rebuild_geometry(metrics);
+  font_size_ = metrics.font_size;
+  shortcut_width_ = 0.0;
+  for (const MenuEntry& entry : entries_) {
+    if (entry.shortcut.empty()) continue;
+    shortcut_width_ =
+        std::max(shortcut_width_, context.text.measure(entry.shortcut, metrics.font_size, false));
+  }
+
+  if (sub_ == nullptr) return;
+
+  // Beside the row that opened it, its first row level with that one — the
+  // padding is taken back off so the two line up rather than stepping down.
+  const Rect row = row_rect(sub_row_);
+  const double width = sub_->sizing(Axis::Horizontal, context).basis;
+  const double height = sub_->sizing(Axis::Vertical, context).basis;
+  WidgetHost* owner = host();
+  const Rect window = owner != nullptr ? owner->bounds() : Rect{};
+
+  // To the right by preference, overlapping the list's edge by a hair as
+  // Windows' do so the pointer crosses no gap; to the left when there is no
+  // room, which is what a menu near the right of the screen does.
+  const double overlap = 2.0;
+  double x = bounds().right() - overlap;
+  if (!window.empty() && x + width > window.right() && bounds().x - width + overlap >= window.x) {
+    x = bounds().x - width + overlap;
+  }
+  double y = row.y - padding_;
+  if (!window.empty()) {
+    if (y + height > window.bottom()) y = window.bottom() - height;
+    y = std::max(window.y, y);
+  }
+  sub_->arrange(Rect{x, y, width, height}, context);
+}
+
+bool MenuList::hit(double x, double y) const {
+  if (bounds().contains(x, y)) return true;
+  return sub_ != nullptr && sub_->hit(x, y);
 }
 
 void MenuList::paint_content(Painter& painter, const Theme& theme) const {
-  for (std::size_t i = 0; i < items_.size(); ++i) {
+  bool any_submenu = false;
+  for (const MenuEntry& entry : entries_) any_submenu = any_submenu || !entry.submenu.empty();
+  const SurfaceStyle& resting = theme.style(Part::MenuItem);
+  // The theme's own grey for a control that cannot be used, so a greyed
+  // command matches a greyed button beside it.
+  const Color greyed = theme.style(Part::Button, State::Disabled).text;
+
+  for (std::size_t i = 0; i < entries_.size(); ++i) {
     const Rect row = row_rect(i);
     if (row.empty()) continue;
+    const MenuEntry& entry = entries_[i];
+
+    // Indented horizontally only: insetting the height too would shrink the
+    // text box and push short labels off their own row.
+    double indent = padding_ + 6.0;
+    const double gutter = row_height_ * 0.6;
+    if (!checked_.empty()) indent += gutter;
+
+    if (entry.separator) {
+      // From where the labels start to where the row ends, as Windows draws
+      // them: a rule under the tick column would cut the column in two.
+      const double y = std::round(row.y + row.height * 0.5) + 0.5;
+      const Color rule = resting.border.a > 0.0F ? resting.border : mix(resting.text, greyed, 0.7F);
+      painter.line(row.x + indent - 2.0, y, row.right() - padding_ - 2.0, y,
+                   Color{rule.r, rule.g, rule.b, rule.a * 0.5F}, 1.0);
+      continue;
+    }
 
     // Hover wins over the current value: the row about to be taken is the one
     // worth pointing at, and the one already chosen is where the pointer came
-    // from often enough that showing both reads as a muddle.
+    // from often enough that showing both reads as a muddle. A row whose
+    // submenu is open stays lit while the pointer is in the submenu, so it is
+    // clear where that menu came from.
     State row_state = State::Normal;
-    if (i == highlighted_) {
+    if (entry.enabled && (i == highlighted_ || i == sub_row_)) {
       row_state = State::Hover;
     } else if (i == current_) {
       row_state = State::Selected;
     }
 
-    const SurfaceStyle& style = theme.style(Part::MenuItem, row_state);
+    SurfaceStyle style = theme.style(Part::MenuItem, row_state);
     if (row_state != State::Normal) paint_surface(painter, row, style);
-    // Indented horizontally only: insetting the height too would shrink the
-    // text box and push short labels off their own row.
-    double indent = padding_ + 6.0;
+    if (!entry.enabled) style.text = greyed;
 
-    if (!checked_.empty()) {
-      const double gutter = row.height * 0.6;
-      if (i < checked_.size() && checked_[i]) {
-        // The same two lines the checkbox draws, and for the same reason: no
-        // font can be relied on to have a tick in it.
-        const double size = gutter * 0.5;
-        const double left = row.x + indent + (gutter - size) * 0.5;
-        const double right = left + size;
-        const double top = row.y + (row.height - size) * 0.5;
-        const double bottom = top + size;
-        const double elbow_x = left + size * 0.36;
+    if (i < checked_.size() && checked_[i]) {
+      // The same two lines the checkbox draws, and for the same reason: no
+      // font can be relied on to have a tick in it.
+      const double size = gutter * 0.5;
+      const double left = row.x + padding_ + 6.0 + (gutter - size) * 0.5;
+      const double right = left + size;
+      const double top = row.y + (row.height - size) * 0.5;
+      const double bottom = top + size;
+      const double elbow_x = left + size * 0.36;
 
-        painter.line(left, top + size * 0.5, elbow_x, bottom, style.text, 2.0);
-        painter.line(elbow_x, bottom, right, top, style.text, 2.0);
-      }
-      indent += gutter;
+      painter.line(left, top + size * 0.5, elbow_x, bottom, style.text, 2.0);
+      painter.line(elbow_x, bottom, right, top, style.text, 2.0);
     }
 
-    const Rect text{row.x + indent, row.y, std::max(0.0, row.width - 2.0 * indent), row.height};
-    painter.text(text_run(text, items_[i], style, font_size_, TextAlign::Left, false));
+    const double arrows = any_submenu ? arrow_gutter_for(row_height_) : 0.0;
+    const double trailing = row.right() - padding_ - 6.0 - arrows;
+    if (!entry.shortcut.empty()) {
+      // Left-aligned in a column of their own rather than right-aligned to the
+      // edge, which is how Windows sets them: "Ctrl+S" and "Ctrl+Shift+S" then
+      // start at one place and read as a list.
+      const Rect keys{trailing - shortcut_width_, row.y, shortcut_width_, row.height};
+      painter.text(text_run(keys, entry.shortcut, style, font_size_, TextAlign::Left, false));
+    }
+
+    const double label_right =
+        entry.shortcut.empty() ? trailing : trailing - shortcut_width_ - padding_;
+    const Rect text{row.x + indent, row.y, std::max(0.0, label_right - row.x - indent), row.height};
+    painter.text(text_run(text, entry.label, style, font_size_, TextAlign::Left, false));
+
+    if (!entry.submenu.empty()) {
+      // Two lines rather than a glyph, for the same reason the tick is.
+      const double cx = row.right() - padding_ - arrows * 0.5;
+      const double cy = row.y + row.height * 0.5;
+      const double reach = std::max(2.5, row.height * 0.14);
+      painter.line(cx - reach * 0.5, cy - reach, cx + reach * 0.5, cy, style.text, 1.5);
+      painter.line(cx + reach * 0.5, cy, cx - reach * 0.5, cy + reach, style.text, 1.5);
+    }
   }
 }
 
+MenuList& MenuList::top() {
+  MenuList* level = this;
+  while (level->parent_list_ != nullptr) level = level->parent_list_;
+  return *level;
+}
+
+void MenuList::open_submenu(std::size_t index) {
+  if (index >= entries_.size() || entries_[index].submenu.empty() || !entries_[index].enabled) {
+    return;
+  }
+  if (sub_ != nullptr && sub_row_ == index) return;
+  close_submenu();
+
+  auto list = std::make_unique<MenuList>(entries_[index].submenu);
+  list->parent_list_ = this;
+  sub_ = &static_cast<MenuList&>(add(std::move(list)));
+  sub_row_ = index;
+  invalidate_layout();
+}
+
+void MenuList::close_submenu() {
+  if (sub_ == nullptr) return;
+  // Told to the host first: the pointer may be resting on it, and a hovered
+  // widget freed under the host is a write through a dangling pointer on the
+  // next move.
+  if (WidgetHost* owner = host(); owner != nullptr) owner->forget(sub_);
+  std::unique_ptr<Widget> gone = take(sub_);
+  sub_ = nullptr;
+  sub_row_ = kNone;
+  invalidate_layout();
+}
+
 void MenuList::choose(std::size_t index) {
-  if (index >= items_.size()) return;
+  if (index >= entries_.size()) return;
+  const MenuEntry& entry = entries_[index];
+  if (!entry.submenu.empty()) {
+    open_submenu(index);
+    if (sub_ != nullptr) sub_->highlighted_ = sub_->step_from(kNone, 1);
+    return;
+  }
+  if (!entry.choosable()) return;
+
   current_ = index;
   // Copied before it is called: what it does very often closes this list, and
   // touching a member afterwards would be touching a widget on its way out.
-  const auto callback = on_choose_;
-  if (callback) callback(index);
+  if (const auto callback = on_choose_; callback) {
+    callback(index);
+    return;
+  }
+  const auto act = entry.act;
+  if (const auto dismiss = top().on_dismiss_; dismiss) {
+    dismiss();
+  } else if (WidgetHost* owner = host(); owner != nullptr) {
+    owner->close_popup();
+  }
+  if (act) act();
+}
+
+std::size_t MenuList::step_from(std::size_t from, int step) const {
+  const std::size_t count = entries_.size();
+  if (count == 0) return kNone;
+  std::size_t at = from;
+  for (std::size_t tried = 0; tried < count; ++tried) {
+    if (at == kNone) {
+      at = step > 0 ? 0 : count - 1;
+    } else if (step > 0) {
+      at = at + 1 >= count ? 0 : at + 1;
+    } else {
+      at = at == 0 ? count - 1 : at - 1;
+    }
+    if (entries_[at].reachable()) return at;
+  }
+  return kNone;
 }
 
 bool MenuList::on_mouse_move(const MouseEvent& event) {
-  highlighted_ = row_at(event.y);
+  // Passed on while this list holds the pointer, so a press that began here
+  // and travelled into the submenu still lights what it is over there.
+  if (sub_ != nullptr && !bounds().contains(event.x, event.y) && sub_->hit(event.x, event.y)) {
+    return sub_->on_mouse_move(event);
+  }
+  const std::size_t over = row_at(event.y);
+  if (over < entries_.size() && !entries_[over].reachable()) {
+    // A rule or a greyed row lights nothing, and leaves an open submenu be:
+    // passing over the gap between groups is not a change of mind.
+    highlighted_ = kNone;
+    return true;
+  }
+  highlighted_ = over;
+  // Pointing at a row opens its menu at once, and pointing at a different row
+  // closes the one that was open. Resting in the padding changes neither.
+  if (over < entries_.size()) {
+    if (!entries_[over].submenu.empty()) {
+      open_submenu(over);
+    } else {
+      close_submenu();
+    }
+  }
   return true;
 }
 
@@ -1193,33 +1444,105 @@ bool MenuList::on_mouse_down(const MouseEvent& event) {
 
 bool MenuList::on_mouse_up(const MouseEvent& event) {
   if (event.button != MouseButton::Left) return false;
-  choose(row_at(event.y));
+  if (!bounds().contains(event.x, event.y)) {
+    // Let go over the submenu after pressing here: the choice is there.
+    if (sub_ != nullptr && sub_->hit(event.x, event.y)) return sub_->on_mouse_up(event);
+    return true;
+  }
+  const std::size_t index = row_at(event.y);
+  // Released on a row that opens a menu: it is open already, from the
+  // pointing, and the release is not a choice.
+  if (index < entries_.size() && !entries_[index].submenu.empty()) {
+    open_submenu(index);
+    return true;
+  }
+  choose(index);
   return true;
 }
 
-bool MenuList::on_key_down(const KeyEvent& event) {
-  if (items_.empty()) return false;
-
-  const std::size_t last = items_.size() - 1;
+bool MenuList::own_key(const KeyEvent& event) {
   switch (event.key) {
     case Key::Down:
-      highlighted_ = highlighted_ == kNone || highlighted_ >= last ? 0 : highlighted_ + 1;
+      highlighted_ = step_from(highlighted_, 1);
       return true;
     case Key::Up:
-      highlighted_ = highlighted_ == kNone || highlighted_ == 0 ? last : highlighted_ - 1;
+      highlighted_ = step_from(highlighted_, -1);
       return true;
     case Key::Home:
-      highlighted_ = 0;
+      highlighted_ = step_from(kNone, 1);
       return true;
     case Key::End:
-      highlighted_ = last;
+      highlighted_ = step_from(kNone, -1);
       return true;
     case Key::Enter:
       choose(highlighted_);
       return true;
-    default:
-      return false;
+    default: break;
   }
+
+  // A letter goes to the next row that starts with it, as Windows does for a
+  // menu without access keys of its own. A letter only one row starts with
+  // takes that row at once, which is the access-key half of the same rule.
+  if (event.key >= Key::A && event.key <= Key::Z && event.modifiers.none()) {
+    const char letter = static_cast<char>(event.key);
+    std::vector<std::size_t> matches;
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+      const MenuEntry& entry = entries_[i];
+      if (!entry.reachable() || entry.label.empty()) continue;
+      if (std::toupper(static_cast<unsigned char>(entry.label.front())) == letter) {
+        matches.push_back(i);
+      }
+    }
+    if (matches.empty()) return true;
+    if (matches.size() == 1) {
+      highlighted_ = matches.front();
+      choose(matches.front());
+      return true;
+    }
+    const auto next = std::ranges::find_if(matches, [&](std::size_t i) {
+      return highlighted_ == kNone || i > highlighted_;
+    });
+    highlighted_ = next != matches.end() ? *next : matches.front();
+    return true;
+  }
+  return false;
+}
+
+bool MenuList::on_key_down(const KeyEvent& event) {
+  if (entries_.empty()) return false;
+
+  // The level the keyboard is in: the deepest one somebody has moved into.
+  // A submenu opened by pointing has nothing lit in it until the keyboard or
+  // the pointer goes there, and until then the keys belong to its parent.
+  MenuList* level = this;
+  while (level->sub_ != nullptr && level->sub_->highlighted_ != kNone) level = level->sub_;
+
+  if (event.key == Key::Right) {
+    const std::size_t row = level->highlighted_;
+    if (row < level->entries_.size() && !level->entries_[row].submenu.empty()) {
+      level->open_submenu(row);
+      if (level->sub_ != nullptr) level->sub_->highlighted_ = level->sub_->step_from(kNone, 1);
+      return true;
+    }
+    // Declined, so a menu bar can move on to the next menu.
+    return false;
+  }
+  if (event.key == Key::Left) {
+    if (level->parent_list_ == nullptr) return false;
+    // Closed by its parent, which is not the list being closed — so nothing
+    // is freed from inside its own handler.
+    level->parent_list_->close_submenu();
+    return true;
+  }
+
+  const std::size_t before = level->highlighted_;
+  const bool handled = level->own_key(event);
+  // The keyboard moving off a row closes the menu that row opened, as moving
+  // the pointer off it does.
+  if (level->sub_ != nullptr && level->highlighted_ != before && level->highlighted_ != level->sub_row_) {
+    level->close_submenu();
+  }
+  return handled;
 }
 
 // --------------------------------------------------------------- dropdown --

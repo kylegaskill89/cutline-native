@@ -1427,6 +1427,245 @@ TEST(MenuList, TheKeyboardWrapsAtBothEnds) {
   EXPECT_EQ(test.list->highlighted(), 0u) << "down from the last row should wrap to the first";
 }
 
+// ------------------------------------------------------------ menu entries --
+
+/// A menu open on a host's popup layer, the way every menu here is shown.
+struct Menued {
+  explicit Menued(std::vector<MenuEntry> entries, Rect anchor = Rect{10.0, 10.0, 0.0, 0.0},
+                  Rect window = Rect{0.0, 0.0, 600.0, 400.0}) {
+    host = std::make_unique<WidgetHost>(std::make_unique<Widget>());
+    host->resize(window, flat_context());
+    auto owned = std::make_unique<MenuList>(std::move(entries));
+    list = owned.get();
+    host->open_popup(std::move(owned), anchor);
+    settle();
+  }
+
+  void settle() { (void)host->update_layout(flat_context()); }
+
+  void point_at(const MenuList& in, std::size_t row) {
+    const Rect area = in.row_rect(row);
+    host->mouse_move(press(area.x + 8.0, area.y + area.height * 0.5));
+    settle();
+  }
+
+  void click(const MenuList& in, std::size_t row) {
+    const Rect area = in.row_rect(row);
+    host->mouse_down(press(area.x + 8.0, area.y + area.height * 0.5));
+    host->mouse_up(press(area.x + 8.0, area.y + area.height * 0.5));
+    settle();
+  }
+
+  void key(Key which) {
+    (void)host->key_down(KeyEvent{.key = which});
+    settle();
+  }
+
+  MenuList* list = nullptr;
+  std::unique_ptr<WidgetHost> host;
+};
+
+[[nodiscard]] MenuEntry command(std::string label, std::function<void()> act = {},
+                                std::string shortcut = {}) {
+  return MenuEntry{.label = std::move(label), .shortcut = std::move(shortcut),
+                   .act = std::move(act)};
+}
+
+[[nodiscard]] MenuEntry greyed(std::string label) {
+  MenuEntry entry = command(std::move(label));
+  entry.enabled = false;
+  return entry;
+}
+
+[[nodiscard]] MenuEntry opens(std::string label, std::vector<MenuEntry> rows) {
+  MenuEntry entry = command(std::move(label));
+  entry.submenu = std::move(rows);
+  return entry;
+}
+
+TEST(MenuEntries, ARuleIsShorterThanARowAndTheRowsAfterItFollowOn) {
+  Menued test({command("Cut"), MenuEntry::divider(), command("Paste")});
+  const Rect rule = test.list->row_rect(1);
+  const Rect after = test.list->row_rect(2);
+
+  EXPECT_LT(rule.height, test.list->row_height());
+  EXPECT_DOUBLE_EQ(after.y, rule.bottom()) << "nothing should overlap or leave a gap";
+  EXPECT_EQ(test.list->row_at(after.y + 1.0), 2u);
+}
+
+TEST(MenuEntries, TheKeyboardPassesOverRulesAndGreyedRows) {
+  Menued test({command("Undo"), MenuEntry::divider(), greyed("Paste"), command("Select All")});
+  test.key(Key::Down);
+  EXPECT_EQ(test.list->highlighted(), 0u);
+  test.key(Key::Down);
+  EXPECT_EQ(test.list->highlighted(), 3u) << "the rule and the greyed row are not stops";
+  test.key(Key::Up);
+  EXPECT_EQ(test.list->highlighted(), 0u);
+}
+
+TEST(MenuEntries, AGreyedRowCannotBeChosen) {
+  bool ran = false;
+  MenuEntry paste = greyed("Paste");
+  paste.act = [&] { ran = true; };
+  Menued test({command("Copy"), paste});
+
+  test.click(*test.list, 1);
+  EXPECT_FALSE(ran);
+  EXPECT_TRUE(test.host->popup_open()) << "a click on a greyed row is not a choice";
+}
+
+TEST(MenuEntries, ChoosingAnEntryClosesTheMenuAndRunsIt) {
+  int ran = 0;
+  Menued test({command("Copy", [&] { ++ran; })});
+
+  test.click(*test.list, 0);
+  EXPECT_EQ(ran, 1);
+  EXPECT_FALSE(test.host->popup_open());
+}
+
+TEST(MenuEntries, AMenuCanBeDismissedItsOwnWay) {
+  int dismissed = 0;
+  Menued test({command("Copy")});
+  test.list->set_on_dismiss([&] { ++dismissed; });
+
+  test.click(*test.list, 0);
+  EXPECT_EQ(dismissed, 1);
+  EXPECT_TRUE(test.host->popup_open()) << "closing was left to whoever asked to";
+}
+
+TEST(MenuEntries, ShortcutsStartInOneColumn) {
+  Menued test({command("Save", {}, "Ctrl+S"), command("Save As...", {}, "Ctrl+Shift+S"),
+               command("Close")});
+  RecordingPainter painter;
+  test.host->paint(painter, default_theme());
+
+  std::vector<double> lefts;
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::Text && call.run.has_value() &&
+        call.run->text.starts_with("Ctrl")) {
+      lefts.push_back(call.run->bounds.x);
+    }
+  }
+  ASSERT_EQ(lefts.size(), 2u);
+  EXPECT_DOUBLE_EQ(lefts[0], lefts[1]);
+}
+
+TEST(MenuEntries, AShortcutWidensTheMenuRatherThanCrowdingItsLabel) {
+  const LayoutContext context = flat_context();
+  const MenuList bare({command("Save As...")});
+  const MenuList keyed({command("Save As...", {}, "Ctrl+Shift+S")});
+  EXPECT_GT(keyed.sizing(Axis::Horizontal, context).basis,
+            bare.sizing(Axis::Horizontal, context).basis);
+}
+
+TEST(MenuEntries, PointingAtARowWithAMenuOpensItBesideTheRow) {
+  Menued test({command("Close Panel"), opens("Panel Group Settings", {command("Small Tabs")})});
+  test.point_at(*test.list, 1);
+
+  MenuList* sub = test.list->submenu();
+  ASSERT_NE(sub, nullptr);
+  EXPECT_GE(sub->bounds().x, test.list->bounds().right() - 4.0) << "to the right of the list";
+  EXPECT_DOUBLE_EQ(sub->row_rect(0).y, test.list->row_rect(1).y)
+      << "its first row should be level with the row that opened it";
+}
+
+TEST(MenuEntries, PointingAtAnotherRowClosesTheSubmenu) {
+  Menued test({command("Close Panel"), opens("Panel Group Settings", {command("Small Tabs")})});
+  test.point_at(*test.list, 1);
+  ASSERT_NE(test.list->submenu(), nullptr);
+
+  test.point_at(*test.list, 0);
+  EXPECT_EQ(test.list->submenu(), nullptr);
+}
+
+TEST(MenuEntries, ChoosingInASubmenuRunsItAndClosesTheWholeMenu) {
+  bool ran = false;
+  Menued test({opens("Panel Group Settings", {command("Small Tabs", [&] { ran = true; })})});
+  test.point_at(*test.list, 0);
+  ASSERT_NE(test.list->submenu(), nullptr);
+
+  test.click(*test.list->submenu(), 0);
+  EXPECT_TRUE(ran);
+  EXPECT_FALSE(test.host->popup_open());
+}
+
+TEST(MenuEntries, APressInTheSubmenuIsNotAPressOutsideTheMenu) {
+  Menued test({opens("Panel Group Settings", {greyed("Small Tabs")})});
+  test.point_at(*test.list, 0);
+  ASSERT_NE(test.list->submenu(), nullptr);
+
+  test.click(*test.list->submenu(), 0);
+  EXPECT_TRUE(test.host->popup_open()) << "the submenu is outside the list but inside the menu";
+}
+
+TEST(MenuEntries, RightOpensASubmenuOnItsFirstRowAndLeftClosesIt) {
+  bool ran = false;
+  Menued test({opens("Panel Group Settings",
+                     {MenuEntry::divider(), command("Small Tabs", [&] { ran = true; })})});
+  test.key(Key::Down);
+  test.key(Key::Right);
+
+  MenuList* sub = test.list->submenu();
+  ASSERT_NE(sub, nullptr);
+  EXPECT_EQ(sub->highlighted(), 1u) << "the first row that can be taken";
+
+  test.key(Key::Left);
+  EXPECT_EQ(test.list->submenu(), nullptr);
+  EXPECT_EQ(test.list->highlighted(), 0u) << "back on the row it came from";
+
+  test.key(Key::Enter);
+  ASSERT_NE(test.list->submenu(), nullptr) << "Enter on such a row opens it too";
+  test.key(Key::Enter);
+  EXPECT_TRUE(ran);
+}
+
+TEST(MenuEntries, LeftAndRightAreDeclinedWhereTheMenuBarWantsThem) {
+  Menued test({command("Copy")});
+  test.key(Key::Down);
+  EXPECT_FALSE(test.host->key_down(KeyEvent{.key = Key::Right}));
+  EXPECT_FALSE(test.host->key_down(KeyEvent{.key = Key::Left}));
+}
+
+TEST(MenuEntries, ASubmenuOpensLeftwardsWhenThereIsNoRoomToTheRight) {
+  Menued test({opens("Panel Group Settings", {command("Maximize Panel Group")})},
+              Rect{540.0, 10.0, 0.0, 0.0});
+  test.point_at(*test.list, 0);
+
+  MenuList* sub = test.list->submenu();
+  ASSERT_NE(sub, nullptr);
+  EXPECT_LE(sub->bounds().right(), test.list->bounds().x + 4.0);
+  EXPECT_GE(sub->bounds().x, 0.0);
+}
+
+TEST(MenuEntries, ALetterOnlyOneRowStartsWithTakesThatRow) {
+  bool ran = false;
+  Menued test({command("Copy"), command("Undock Panel", [&] { ran = true; })});
+  test.key(Key::U);
+  EXPECT_TRUE(ran);
+}
+
+TEST(MenuEntries, ALetterSeveralRowsStartWithStepsBetweenThem) {
+  bool ran = false;
+  Menued test({command("Close Panel", [&] { ran = true; }), command("Copy"),
+               command("Close Other Panels")});
+  test.key(Key::C);
+  EXPECT_EQ(test.list->highlighted(), 0u);
+  test.key(Key::C);
+  EXPECT_EQ(test.list->highlighted(), 1u);
+  test.key(Key::C);
+  EXPECT_EQ(test.list->highlighted(), 2u);
+  EXPECT_FALSE(ran) << "with a choice of rows the letter only moves";
+}
+
+TEST(MenuEntries, SwitchesAreTickedFromTheirEntries) {
+  MenuEntry on = command("Small Tabs");
+  on.checked = true;
+  MenuEntry off = command("Stacked");
+  off.checked = false;
+  const MenuList list({on, off, command("Close")});
+  EXPECT_EQ(list.checked(), (std::vector<bool>{true, false, false}));
+}
+
 // --------------------------------------------------------------- dropdown --
 
 struct Chosen {

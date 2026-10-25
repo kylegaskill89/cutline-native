@@ -672,6 +672,46 @@ class Checkbox : public Widget {
   std::function<void(bool)> on_change_;
 };
 
+/// One row of a menu.
+///
+/// Everything a Windows menu row can be, because Premiere's menus use all of
+/// it: a command with its shortcut beside it, a switch with a tick, a greyed
+/// command that cannot run yet, a rule between groups, and a row that opens
+/// another menu beside it. A list of plain labels could say none of that, and
+/// every menu built from one either left commands out or ran ones that had
+/// nothing to act on.
+struct MenuEntry {
+  std::string label;
+  /// Shown right-aligned in a column of its own, as Windows shows them. Only
+  /// words: the key is handled elsewhere, and the menu is where it is learnt.
+  std::string shortcut;
+  /// Greyed and passed over rather than left out, so the menu keeps its shape
+  /// and says the command exists even when it has nothing to act on.
+  bool enabled = true;
+  /// A switch, ticked or not. Empty for a plain command.
+  std::optional<bool> checked;
+  /// A rule between groups rather than a row anyone can choose.
+  bool separator = false;
+  /// Rows of the menu that opens beside this one. A row with any is never
+  /// chosen itself: pointing at it opens them.
+  std::vector<MenuEntry> submenu;
+  /// What choosing it does, when the list has no `on_choose` of its own.
+  std::function<void()> act;
+
+  [[nodiscard]] static MenuEntry divider() {
+    MenuEntry entry;
+    entry.separator = true;
+    return entry;
+  }
+  /// Whether it can be chosen: a command that is enabled, not a rule and not a
+  /// way into another menu.
+  [[nodiscard]] bool choosable() const noexcept {
+    return enabled && !separator && submenu.empty();
+  }
+  /// Whether the pointer or the keyboard can rest on it.
+  [[nodiscard]] bool reachable() const noexcept { return enabled && !separator; }
+};
+
 /// A vertical list of choices, drawn as a menu.
 ///
 /// Built for the host's popup layer rather than for the tree, which is what a
@@ -679,12 +719,22 @@ class Checkbox : public Widget {
 /// rather than a box of buttons, for the same reason the browser and the
 /// timeline draw their own: a hundred entries would otherwise be a hundred
 /// widgets to lay out, each needing the same styling talked into it.
+///
+/// A submenu is another of these, held as a child and placed beside the row
+/// that opened it — outside this list's own bounds, which is why `hit` counts
+/// it. The host has one popup layer, and a cascade is still one popup: it
+/// opens as one, closes as one, and a press outside every level of it is a
+/// press outside the menu.
 class MenuList : public Widget {
  public:
   explicit MenuList(std::vector<std::string> items = {});
+  explicit MenuList(std::vector<MenuEntry> entries);
 
+  /// The labels, in order. Rules have empty ones.
   [[nodiscard]] const std::vector<std::string>& items() const noexcept { return items_; }
   void set_items(std::vector<std::string> items);
+  [[nodiscard]] const std::vector<MenuEntry>& entries() const noexcept { return entries_; }
+  void set_entries(std::vector<MenuEntry> entries);
 
   /// The row drawn as the current one — a dropdown's selected entry. Past the
   /// end means none, which is what a menu wants.
@@ -698,7 +748,7 @@ class MenuList : public Widget {
   /// that are either on or off needs — the panels that are open, say. A list
   /// with any ticks at all indents every row, ticked or not, so the labels line
   /// up as a column rather than stepping in and out.
-  void set_checked(std::vector<bool> checked) { checked_ = std::move(checked); }
+  void set_checked(std::vector<bool> checked);
   [[nodiscard]] const std::vector<bool>& checked() const noexcept { return checked_; }
 
   /// The row under the pointer or the keyboard, and what Enter would take.
@@ -710,6 +760,11 @@ class MenuList : public Widget {
   void set_on_choose(std::function<void(std::size_t)> on_choose) {
     on_choose_ = std::move(on_choose);
   }
+
+  /// How the menu closes when an entry's `act` is chosen. Asked of the top
+  /// list from any level, so a menu bar can close its menus its own way.
+  /// Unset, the host's popup is closed.
+  void set_on_dismiss(std::function<void()> on_dismiss) { on_dismiss_ = std::move(on_dismiss); }
 
   /// Whether the list takes all the height it is given rather than only what
   /// its rows need.
@@ -726,20 +781,42 @@ class MenuList : public Widget {
   /// The row at a point, or past the end when there is none.
   [[nodiscard]] std::size_t row_at(double y) const;
 
+  /// The submenu showing beside this list, or null.
+  [[nodiscard]] MenuList* submenu() const noexcept { return sub_; }
+  /// Which row the submenu belongs to. Past the end when none is open.
+  [[nodiscard]] std::size_t submenu_row() const noexcept { return sub_row_; }
+
   [[nodiscard]] Part part() const noexcept override { return Part::Menu; }
   [[nodiscard]] bool paints_surface() const noexcept override { return true; }
   [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
   void layout(const LayoutContext& context) override;
   void paint_content(Painter& painter, const Theme& theme) const override;
+  /// The list, and the submenu beside it.
+  [[nodiscard]] bool hit(double x, double y) const override;
 
   bool on_mouse_move(const MouseEvent& event) override;
   bool on_mouse_down(const MouseEvent& event) override;
   bool on_mouse_up(const MouseEvent& event) override;
+  /// Handled for the deepest open level, wherever the keyboard is, since the
+  /// top list is what holds focus and a submenu opened from it never does.
   bool on_key_down(const KeyEvent& event) override;
 
  private:
   void choose(std::size_t index);
+  /// Opens the submenu of row `index`, closing any other.
+  void open_submenu(std::size_t index);
+  void close_submenu();
+  /// The list a dismissal is asked of: the top of the cascade.
+  [[nodiscard]] MenuList& top();
+  /// The next row the keyboard can rest on from `from`, stepping by `step`
+  /// and wrapping. Past the end when there is none.
+  [[nodiscard]] std::size_t step_from(std::size_t from, int step) const;
+  /// One level's own keys. Left and Right are the cascade's, and handled by
+  /// the top list, which is the only one that can close a level safely.
+  bool own_key(const KeyEvent& event);
+  void rebuild_geometry(const Metrics& metrics);
 
+  std::vector<MenuEntry> entries_;
   std::vector<std::string> items_;
   std::vector<bool> checked_;
   std::size_t current_ = static_cast<std::size_t>(-1);
@@ -747,11 +824,22 @@ class MenuList : public Widget {
   /// Taken at layout, where the metrics are, because painting and hit-testing
   /// both need it and neither has them.
   double row_height_ = 22.0;
+  double separator_height_ = 9.0;
+  /// Where each row starts, from the top of the list, and where the last
+  /// ends. Rows are not all one height once there are rules among them.
+  std::vector<double> tops_;
   bool fills_height_ = false;
   double font_size_ = 13.0;
   double padding_ = 4.0;
+  /// The widest shortcut, so the column of them lines up.
+  double shortcut_width_ = 0.0;
+
+  MenuList* sub_ = nullptr;
+  std::size_t sub_row_ = static_cast<std::size_t>(-1);
+  MenuList* parent_list_ = nullptr;
 
   std::function<void(std::size_t)> on_choose_;
+  std::function<void()> on_dismiss_;
 };
 
 /// One choice from a list — the control Premiere is mostly built out of.

@@ -53,6 +53,9 @@ class TabStrip : public Widget {
     on_activate_ = std::move(on_activate);
   }
   void set_on_close(std::function<void(std::size_t)> on_close) { on_close_ = std::move(on_close); }
+  /// Asked for a tab's panel menu: by its ≡, hung under that, or by a
+  /// right-click anywhere on a tab, hung at the pointer.
+  void set_on_menu(std::function<void(std::size_t, Rect)> on_menu) { on_menu_ = std::move(on_menu); }
 
   /// Tabs are as wide as their titles, up to a share of the strip. Past that
   /// they are all squeezed equally — the alternative is the last tab of a full
@@ -61,6 +64,11 @@ class TabStrip : public Widget {
   /// The little cross at the trailing end of a tab. Empty when it has none, or
   /// when the tab is too narrow to hold one.
   [[nodiscard]] Rect close_rect(std::size_t index) const;
+  /// The panel menu's ≡, beside the title of the tab showing and of no other,
+  /// which is where Premiere puts it: the menu is the showing panel's, and a
+  /// ≡ on every tab would be a row of them all opening different menus.
+  /// Empty when the tab is too narrow to hold one.
+  [[nodiscard]] Rect menu_rect(std::size_t index) const;
   [[nodiscard]] std::optional<std::size_t> tab_at(double x, double y) const;
 
   [[nodiscard]] Part part() const noexcept override { return Part::TabBar; }
@@ -95,6 +103,7 @@ class TabStrip : public Widget {
 
   std::function<void(std::size_t)> on_activate_;
   std::function<void(std::size_t)> on_close_;
+  std::function<void(std::size_t, Rect)> on_menu_;
 };
 
 /// One tab group: the strip, and whichever panel is showing under it.
@@ -212,6 +221,8 @@ class DockView : public Widget {
   }
 
   void set_on_close(std::function<void(PanelId)> on_close) { on_close_ = std::move(on_close); }
+  /// Called when a panel's menu is asked for, with what to hang it from.
+  void set_on_menu(std::function<void(PanelId, Rect)> on_menu) { on_menu_ = std::move(on_menu); }
   void set_on_activate(std::function<void(PanelId)> on_activate) {
     on_activate_ = std::move(on_activate);
   }
@@ -285,6 +296,7 @@ class DockView : public Widget {
   std::function<void(PanelId, DropTarget)> on_dock_;
   std::function<void(PanelId, double, double)> on_tear_out_;
   std::function<void(PanelId)> on_close_;
+  std::function<void(PanelId, Rect)> on_menu_;
   std::function<void(PanelId)> on_activate_;
   std::function<void()> on_resize_;
 };

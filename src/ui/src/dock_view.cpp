@@ -70,11 +70,14 @@ void TabStrip::layout(const LayoutContext& context) {
   if (tabs_.empty()) return;
 
   const double closer = metrics_.font_size + metrics_.padding_x * 0.5;
+  // The ≡ takes the same room as the cross, and only on the tab showing.
+  const double menu = closer;
 
   double total = 0.0;
   for (std::size_t i = 0; i < tabs_.size(); ++i) {
     const double text = context.text.measure(tabs_[i].title, metrics_.font_size, false);
-    widths_[i] = text + metrics_.padding_x * 2.0 + (tabs_[i].closable ? closer : 0.0);
+    widths_[i] = text + metrics_.padding_x * 2.0 + (tabs_[i].closable ? closer : 0.0) +
+                 (i == active_ ? menu : 0.0);
     total += widths_[i];
   }
 
@@ -116,6 +119,22 @@ Rect TabStrip::close_rect(std::size_t index) const {
   return Rect{tab.right() - size - metrics_.padding_y, tab.y + metrics_.padding_y, size, size};
 }
 
+Rect TabStrip::menu_rect(std::size_t index) const {
+  if (index != active_ || index >= tabs_.size()) return {};
+
+  const Rect tab = tab_rect(index);
+  if (tab.empty()) return {};
+
+  const double size = std::max(0.0, tab.height - metrics_.padding_y * 2.0);
+  // Narrower than this and the title is gone: a tab that is all controls is
+  // one where every click does something other than show the panel.
+  if (size <= 0.0 || tab.width < size * 4.0) return {};
+
+  const Rect closer = close_rect(index);
+  const double right = closer.empty() ? tab.right() - metrics_.padding_y : closer.x;
+  return Rect{right - size, tab.y + metrics_.padding_y, size, size};
+}
+
 std::optional<std::size_t> TabStrip::tab_at(double x, double y) const {
   if (!bounds().contains(x, y)) return std::nullopt;
   for (std::size_t i = 0; i < tabs_.size(); ++i) {
@@ -140,10 +159,10 @@ void TabStrip::paint_content(Painter& painter, const Theme& theme) const {
     paint_surface(painter, tab, style);
 
     const Rect closer = close_rect(i);
+    const Rect menu = menu_rect(i);
+    const double text_end = !menu.empty() ? menu.x : closer.empty() ? tab.right() : closer.x;
     const Rect text = Rect{tab.x + theme.metrics.padding_x, tab.y,
-                           std::max(0.0, (closer.empty() ? tab.right() : closer.x) - tab.x -
-                                             theme.metrics.padding_x),
-                           tab.height};
+                           std::max(0.0, text_end - tab.x - theme.metrics.padding_x), tab.height};
     if (!text.empty()) {
       painter.text(text_run(text, tabs_[i].title, style, theme.metrics.font_size,
                             TextAlign::Left, i == active_));
@@ -157,14 +176,37 @@ void TabStrip::paint_content(Painter& painter, const Theme& theme) const {
       painter.line(mark.x, mark.y, mark.right(), mark.bottom(), style.text, 1.0);
       painter.line(mark.right(), mark.y, mark.x, mark.bottom(), style.text, 1.0);
     }
+
+    if (!menu.empty()) {
+      // Three bars, drawn rather than set for the same reason as the cross.
+      const Rect mark = menu.inset(menu.width * 0.25);
+      for (int bar = 0; bar < 3; ++bar) {
+        const double y = mark.y + mark.height * (0.15 + 0.35 * bar);
+        painter.line(mark.x, y, mark.right(), y, style.text, 1.0);
+      }
+    }
   }
 }
 
 bool TabStrip::on_mouse_down(const MouseEvent& event) {
-  if (event.button != MouseButton::Left) return false;
-
   const auto index = tab_at(event.x, event.y);
   if (!index.has_value()) return false;
+
+  // A right-click on any tab is that panel's menu, at the pointer, as in
+  // Premiere. Handled here, since it starts no drag.
+  if (event.button == MouseButton::Right) {
+    if (on_menu_) on_menu_(*index, Rect{event.x, event.y, 0.0, 0.0});
+    return true;
+  }
+  if (event.button != MouseButton::Left) return false;
+
+  if (const Rect menu = menu_rect(*index); !menu.empty() && menu.contains(event.x, event.y)) {
+    // Hung under the tab rather than under the little mark, so the menu's
+    // edge meets the strip's rather than floating a few pixels into the panel.
+    const Rect tab = tab_rect(*index);
+    if (on_menu_) on_menu_(*index, Rect{menu.x, tab.y, menu.width, tab.height});
+    return true;
+  }
 
   if (const Rect closer = close_rect(*index);
       !closer.empty() && closer.contains(event.x, event.y)) {
@@ -322,6 +364,9 @@ void DockView::wire(DockGroup& group) {
   which->strip_->set_on_close([this, which](std::size_t index) {
     if (index < which->panels_.size() && on_close_) on_close_(which->panels_[index]);
   });
+  which->strip_->set_on_menu([this, which](std::size_t index, Rect anchor) {
+    if (index < which->panels_.size() && on_menu_) on_menu_(which->panels_[index], anchor);
+  });
 }
 
 std::vector<DockGroup*> DockView::groups() const { return groups_; }
@@ -410,9 +455,12 @@ std::optional<PanelId> DockView::tab_at(double x, double y) const {
   for (const DockGroup* group : groups_) {
     const std::optional<std::size_t> index = group->strip().tab_at(x, y);
     if (!index.has_value() || *index >= group->panels_.size()) continue;
-    // Not the cross: that closes the tab, and the strip has already done it.
+    // Not the cross or the ≡: the strip has already acted on those.
     if (const Rect closer = group->strip().close_rect(*index);
         !closer.empty() && closer.contains(x, y)) {
+      return std::nullopt;
+    }
+    if (const Rect menu = group->strip().menu_rect(*index); !menu.empty() && menu.contains(x, y)) {
       return std::nullopt;
     }
     return group->panels_[*index];

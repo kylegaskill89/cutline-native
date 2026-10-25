@@ -89,6 +89,9 @@ struct Fixture {
     });
     view->set_on_close([this](PanelId panel) { closed = std::move(panel); });
     view->set_on_activate([this](PanelId panel) { activated = std::move(panel); });
+    view->set_on_menu([this](PanelId panel, Rect anchor) {
+      menu = std::pair{std::move(panel), anchor};
+    });
 
     view->set_node(sample_node());
     host->resize(Rect{0.0, 0.0, 1000.0, 600.0}, flat_context());
@@ -114,6 +117,7 @@ struct Fixture {
   std::optional<std::tuple<PanelId, double, double>> torn_out;
   std::optional<PanelId> closed;
   std::optional<PanelId> activated;
+  std::optional<std::pair<PanelId, Rect>> menu;
 };
 
 // ------------------------------------------------------------------ building --
@@ -537,6 +541,65 @@ TEST(DockView, TheCrossClosesTheTabRatherThanSelectingIt) {
   ASSERT_TRUE(fixture.closed.has_value());
   EXPECT_EQ(*fixture.closed, "effects");
   EXPECT_FALSE(fixture.activated.has_value());
+}
+
+TEST(DockView, OnlyTheTabShowingHasAPanelMenu) {
+  Fixture fixture;
+  DockGroup* group = fixture.view->group_showing("project");
+  ASSERT_NE(group, nullptr);
+  EXPECT_FALSE(group->strip().menu_rect(0).empty());
+  EXPECT_TRUE(group->strip().menu_rect(1).empty()) << "the hidden panel's menu is not its own yet";
+}
+
+TEST(DockView, ThePanelMenuSitsBetweenTheTitleAndTheCross) {
+  Fixture fixture;
+  const TabStrip& strip = fixture.view->group_showing("project")->strip();
+  const Rect menu = strip.menu_rect(0);
+  const Rect closer = strip.close_rect(0);
+  ASSERT_FALSE(menu.empty());
+  ASSERT_FALSE(closer.empty());
+  EXPECT_LE(menu.right(), closer.x);
+
+  RecordingPainter painter;
+  fixture.host->paint(painter, default_theme());
+  for (const DrawCall& call : painter.calls()) {
+    if (call.kind == DrawCall::Kind::Text && call.run.has_value() &&
+        call.run->text == "The project") {
+      EXPECT_LE(call.run->bounds.right(), menu.x) << "the title should stop short of the mark";
+    }
+  }
+}
+
+TEST(DockView, PressingThePanelMenuAsksForItUnderTheTab) {
+  Fixture fixture;
+  const TabStrip& strip = fixture.view->group_showing("project")->strip();
+  const Rect menu = strip.menu_rect(0);
+  const Rect tab = strip.tab_rect(0);
+
+  const MouseEvent at = press(menu.x + menu.width / 2.0, menu.y + menu.height / 2.0);
+  fixture.host->mouse_down(at);
+  fixture.host->mouse_move(MouseEvent{.x = at.x + 40.0, .y = at.y + 40.0});
+  fixture.host->mouse_up(MouseEvent{.x = at.x + 40.0, .y = at.y + 40.0, .button = MouseButton::Left});
+
+  ASSERT_TRUE(fixture.menu.has_value());
+  EXPECT_EQ(fixture.menu->first, "project");
+  EXPECT_DOUBLE_EQ(fixture.menu->second.bottom(), tab.bottom()) << "hung from the foot of the tab";
+  EXPECT_FALSE(fixture.docked.has_value()) << "a press on the mark is not the start of a drag";
+  EXPECT_FALSE(fixture.torn_out.has_value());
+}
+
+TEST(DockView, RightClickingAnyTabAsksForThatPanelsMenuAtThePointer) {
+  Fixture fixture;
+  const Rect hidden = fixture.view->group_showing("project")->strip().tab_rect(1);
+  const double x = hidden.x + 5.0;
+  const double y = hidden.y + hidden.height / 2.0;
+  fixture.host->mouse_down(MouseEvent{.x = x, .y = y, .button = MouseButton::Right});
+
+  ASSERT_TRUE(fixture.menu.has_value());
+  EXPECT_EQ(fixture.menu->first, "effects");
+  EXPECT_DOUBLE_EQ(fixture.menu->second.x, x);
+  EXPECT_DOUBLE_EQ(fixture.menu->second.y, y);
+  EXPECT_FALSE(fixture.activated.has_value()) << "asking for a menu is not showing the panel";
 }
 
 TEST(DockView, RebuildingFromInsideADropDoesNotUseAFreedStrip) {
