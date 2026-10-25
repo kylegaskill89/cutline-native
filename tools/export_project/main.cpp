@@ -4,7 +4,8 @@
 /// premise of the rewrite end to end, and it reports the throughput so a
 /// regression is visible rather than merely felt.
 ///
-///     export_project <project.json> <out.mp4> [--hevc] [--software]
+///     export_project <project.json> <out.mp4> [--hevc] [--prores] [--dnxhr]
+///                    [--no-smart] [--software]
 ///                    [--quality N] [--bitrate BPS] [--fps N]
 ///                    [--width N] [--height N] [--mono] [--no-audio]
 ///                    [--start S] [--duration S]
@@ -37,7 +38,8 @@ namespace {
 int main(int argc, char** argv) {
   if (argc < 3) {
     std::println(stderr,
-                 "usage: export_project <project.json> <out.mp4> [--hevc] [--software]\n"
+                 "usage: export_project <project.json> <out.mp4> [--hevc] [--prores] [--dnxhr]\n"
+                 "                      [--no-smart] [--software]\n"
                  "                      [--quality N] [--bitrate BPS] [--fps N]\n"
                  "                      [--width N] [--height N] [--mono] [--no-audio]\n"
                  "                      [--start S] [--duration S]");
@@ -55,6 +57,12 @@ int main(int argc, char** argv) {
 
     if (flag == "--hevc") {
       settings.codec = cutline::media::VideoCodec::Hevc;
+    } else if (flag == "--prores") {
+      settings.codec = cutline::media::VideoCodec::ProRes;
+    } else if (flag == "--dnxhr") {
+      settings.codec = cutline::media::VideoCodec::DnxHr;
+    } else if (flag == "--no-smart") {
+      settings.smart_render = false;
     } else if (flag == "--software") {
       settings.preference = cutline::media::EncoderPreference::Software;
     } else if (flag == "--hardware") {
@@ -145,6 +153,9 @@ int main(int argc, char** argv) {
                result->elapsed_seconds > 0.0 ? result->duration_seconds / result->elapsed_seconds
                                              : 0.0,
                result->encoder);
+  if (result->copied_frames > 0) {
+    std::println("{} of them copied from their sources unchanged", result->copied_frames);
+  }
   std::println("wrote {}", settings.path);
   return 0;
 }

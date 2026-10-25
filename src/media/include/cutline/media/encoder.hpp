@@ -161,6 +161,12 @@ class MediaWriter {
   /// than a colour conversion.
   [[nodiscard]] std::expected<void, std::string> write_frame(const PlanarFrame& frame);
 
+  /// Appends one frame already encoded, as it was taken from a source file:
+  /// smart rendering. Only for an intermediate, whose frames stand alone, and
+  /// only a frame of the same codec, profile and size -- which the caller has
+  /// to have checked, since the bytes are written as they are.
+  [[nodiscard]] std::expected<void, std::string> write_packet(std::span<const std::uint8_t> data);
+
   /// Appends audio. `interleaved` is float samples in [-1, 1], a whole number
   /// of frames of `channels` each.
   ///

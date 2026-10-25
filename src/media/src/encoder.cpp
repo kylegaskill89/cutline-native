@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <optional>
 #include <format>
 #include <vector>
@@ -248,6 +249,20 @@ struct MediaWriter::Impl {
   int width = 0;
   int height = 0;
 
+  /// Whether every frame stands alone, so a frame taken from a source file can
+  /// sit between two this encoder made.
+  bool intra = false;
+  /// Video packets come out of the encoder late -- a threaded one holds a few
+  /// frames -- and a copied frame goes in at once, so for an intermediate they
+  /// meet here and leave in frame order. Keyed by frame number; `next_out` is
+  /// the next one the file is waiting for.
+  std::map<std::int64_t, detail::Packet> waiting;
+  std::int64_t next_out = 0;
+
+  /// Writes a video packet, in frame order when frames are being copied in.
+  [[nodiscard]] std::expected<void, std::string> put_video(AVPacket* video, std::int64_t order);
+  [[nodiscard]] std::expected<void, std::string> write(AVPacket* ready);
+
   /// Drains whatever an encoder has ready. Passing a null frame flushes it.
   ///
   /// `duration` is what to stamp on each packet, in the encoder's time base. A
@@ -297,15 +312,39 @@ std::expected<void, std::string> MediaWriter::Impl::drain(AVCodecContext* codec,
     // The encoder counts in its own time base; the muxer counts in the
     // stream's. Rescaling here is what keeps timestamps right when they differ,
     // and it carries the duration across with them.
+    const std::int64_t order = packet->pts;
     av_packet_rescale_ts(packet.get(), codec->time_base, target->time_base);
     packet->stream_index = target->index;
 
-    const int written = av_interleaved_write_frame(format.get(), packet.get());
-    av_packet_unref(packet.get());
-    if (written < 0) {
-      return std::unexpected(std::format("cannot write a packet: {}", av_error_string(written)));
+    if (target == stream && intra) {
+      if (auto ok = put_video(packet.get(), order); !ok) return ok;
+      continue;
     }
+    if (auto ok = write(packet.get()); !ok) return ok;
   }
+}
+
+std::expected<void, std::string> MediaWriter::Impl::write(AVPacket* ready) {
+  const int written = av_interleaved_write_frame(format.get(), ready);
+  av_packet_unref(ready);
+  if (written < 0) {
+    return std::unexpected(std::format("cannot write a packet: {}", av_error_string(written)));
+  }
+  return {};
+}
+
+std::expected<void, std::string> MediaWriter::Impl::put_video(AVPacket* video,
+                                                              std::int64_t order) {
+  detail::Packet held(av_packet_alloc());
+  if (!held) return std::unexpected("out of memory");
+  av_packet_move_ref(held.get(), video);
+  waiting.emplace(order, std::move(held));
+  for (auto next = waiting.find(next_out); next != waiting.end(); next = waiting.find(next_out)) {
+    if (auto ok = write(next->second.get()); !ok) return ok;
+    waiting.erase(next);
+    ++next_out;
+  }
+  return {};
 }
 
 std::expected<void, std::string> MediaWriter::Impl::open_audio(
@@ -610,6 +649,7 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
     return std::unexpected("out of memory");
   }
   impl->ten_bit = settings.bit_depth == 10;
+  impl->intra = is_intermediate(settings.codec);
   impl->sdr = settings.colour == VideoColour::Bt709;
 
   // Audio is set up before the header, because a container records its streams
@@ -755,6 +795,28 @@ std::expected<void, std::string> MediaWriter::write_frame(const PlanarFrame& pla
   return d.drain(d.encoder.get(), d.stream, d.frame.get(), 1);
 }
 
+std::expected<void, std::string> MediaWriter::write_packet(std::span<const std::uint8_t> data) {
+  Impl& d = *impl_;
+  if (d.finished) return std::unexpected("the writer has already been finished");
+  if (!d.intra) return std::unexpected("only an intermediate's frames stand alone to be copied");
+  if (data.empty()) return std::unexpected("a copied frame needs its bytes");
+
+  detail::Packet copied(av_packet_alloc());
+  if (!copied || av_new_packet(copied.get(), static_cast<int>(data.size())) < 0) {
+    return std::unexpected("out of memory");
+  }
+  std::memcpy(copied->data, data.data(), data.size());
+  copied->pts = d.frames;
+  copied->dts = d.frames;
+  copied->duration = 1;
+  copied->flags |= AV_PKT_FLAG_KEY;
+  const std::int64_t order = d.frames;
+  ++d.frames;
+  av_packet_rescale_ts(copied.get(), d.encoder->time_base, d.stream->time_base);
+  copied->stream_index = d.stream->index;
+  return d.put_video(copied.get(), order);
+}
+
 std::expected<void, std::string> MediaWriter::write_audio(std::span<const float> interleaved,
                                                          int stream) {
   Impl& d = *impl_;
@@ -808,6 +870,12 @@ std::expected<void, std::string> MediaWriter::finish() {
   }
 
   if (auto ok = d.drain(d.encoder.get(), d.stream, nullptr, 1); !ok) return ok;
+  // Anything still held is past a gap that will never fill -- which would be a
+  // fault upstream -- and goes out in order rather than being lost.
+  for (auto& [order, held] : d.waiting) {
+    if (auto ok = d.write(held.get()); !ok) return ok;
+  }
+  d.waiting.clear();
 
   if (int rc = av_write_trailer(d.format.get()); rc < 0) {
     return std::unexpected(std::format("cannot finalise the file: {}", av_error_string(rc)));

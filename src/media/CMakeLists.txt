@@ -5,6 +5,7 @@ add_library(cutline_media
   src/d3d11_share.cpp
   src/decoder.cpp
   src/encoder.cpp
+  src/packet_reader.cpp
   src/probe.cpp
   src/thumbnail.cpp
   src/transcode.cpp)

@@ -15,6 +15,7 @@
 #include "cutline/core/model.hpp"
 #include "cutline/media/decoder.hpp"
 #include "cutline/media/encoder.hpp"
+#include "cutline/media/packet_reader.hpp"
 #include "cutline/media/probe.hpp"
 
 #include <gtest/gtest.h>
@@ -590,6 +591,246 @@ TEST_F(ExportTest, HdrIsNotWrittenAsH264) {
   settings.codec = media::VideoCodec::H264;
   EXPECT_FALSE(export_project(device_, pq_patches(core::WorkingColour::Rec2100Pq), settings)
                    .has_value());
+}
+
+// ------------------------------------------------------- smart rendering --
+
+constexpr int kSmartWidth = 256;
+constexpr int kSmartHeight = 144;
+constexpr int kSmartFrames = 12;
+constexpr double kSmartFps = 24.0;
+
+/// An intermediate source, every frame a different grey, so a frame copied
+/// from it can be told from any other frame of it.
+[[nodiscard]] bool write_intermediate(const TempFile& file, media::VideoCodec codec) {
+  media::VideoEncodeSettings video;
+  video.width = kSmartWidth;
+  video.height = kSmartHeight;
+  video.fps = kSmartFps;
+  video.codec = codec;
+  video.bit_depth = codec == media::VideoCodec::ProRes ? 10 : 8;
+  auto writer = media::MediaWriter::create(file.string(), video);
+  if (!writer) return false;
+  for (int f = 0; f < kSmartFrames; ++f) {
+    const std::vector<std::uint8_t> frame(kSmartWidth * kSmartHeight * 4,
+                                          static_cast<std::uint8_t>(20 + f * 16));
+    if (!writer.value()->write_frame(frame)) return false;
+  }
+  return writer.value()->finish().has_value();
+}
+
+/// The source's second half and then its first, as two clips: a cut, so a
+/// copy has to follow the edit rather than the file.
+[[nodiscard]] Project swapped_halves(const std::string& path) {
+  Media m;
+  m.id = "s";
+  m.path = path;
+  m.has_video = true;
+  m.width = kSmartWidth;
+  m.height = kSmartHeight;
+  m.fps = kSmartFps;
+  m.duration = kSmartFrames / kSmartFps;
+
+  const double half = kSmartFrames / 2 / kSmartFps;
+  Clip second;
+  second.id = "second";
+  second.media_id = "s";
+  second.start = 0.0;
+  second.source_in = half;
+  second.source_out = 2.0 * half;
+  Clip first = second;
+  first.id = "first";
+  first.start = half;
+  first.source_in = 0.0;
+  first.source_out = half;
+
+  Track t;
+  t.id = "v1";
+  t.kind = TrackKind::Video;
+  t.clips = {std::move(second), std::move(first)};
+
+  Project p;
+  p.sequence().canvas_w = kSmartWidth;
+  p.sequence().canvas_h = kSmartHeight;
+  p.sequence().fps = kSmartFps;
+  p.media = {std::move(m)};
+  p.sequence().tracks = {std::move(t)};
+  return p;
+}
+
+/// Every compressed frame of a file, in order.
+[[nodiscard]] std::vector<std::vector<std::uint8_t>> packets_of(const std::string& path) {
+  std::vector<std::vector<std::uint8_t>> out;
+  auto reader = media::PacketReader::open(path);
+  if (!reader) return out;
+  for (int f = 0; f < kSmartFrames; ++f) {
+    auto bytes = (*reader)->frame_at(f / kSmartFps);
+    if (!bytes) break;
+    out.push_back(std::move(*bytes));
+  }
+  return out;
+}
+
+class SmartRenderTest : public ExportTest,
+                        public ::testing::WithParamInterface<media::VideoCodec> {
+ protected:
+  void SetUp() override {
+    ExportTest::SetUp();
+    if (IsSkipped()) return;
+    ASSERT_TRUE(write_intermediate(source_, GetParam()));
+    source_packets_ = packets_of(source_.string());
+    ASSERT_EQ(source_packets_.size(), static_cast<std::size_t>(kSmartFrames));
+  }
+
+  [[nodiscard]] std::expected<ExportResult, std::string> render(const Project& project,
+                                                                const TempFile& file,
+                                                                ExportSettings settings = {}) {
+    settings.audio = false;
+    settings.path = file.string();
+    settings.codec = GetParam();
+    return export_project(device_, project, settings);
+  }
+
+  TempFile source_{".mov"};
+  std::vector<std::vector<std::uint8_t>> source_packets_;
+};
+
+TEST_P(SmartRenderTest, AnUntouchedCutIsCopiedFrameForFrame) {
+  const TempFile file(".mov");
+  const auto result = render(swapped_halves(source_.string()), file);
+  ASSERT_TRUE(result.has_value()) << result.error();
+  EXPECT_EQ(result->copied_frames, kSmartFrames);
+
+  // Byte for byte, and following the edit: the source's second half first.
+  const auto written = packets_of(file.string());
+  ASSERT_EQ(written.size(), static_cast<std::size_t>(kSmartFrames));
+  for (int f = 0; f < kSmartFrames; ++f) {
+    const int from = (f + kSmartFrames / 2) % kSmartFrames;
+    EXPECT_EQ(written[f], source_packets_[from]) << "frame " << f;
+  }
+}
+
+TEST_P(SmartRenderTest, AFrameWithSomethingOverItIsRenderedAndTheRestCopied) {
+  // A matte on the track above, over three frames in the middle. Those are a
+  // different picture and have to be rendered; the frames either side are
+  // still the source's own, and the file holds them all in order.
+  Project project = swapped_halves(source_.string());
+  Media matte;
+  matte.id = "matte";
+  matte.is_color = true;
+  matte.color = "#00ff00";
+  project.media.push_back(matte);
+  Clip over;
+  over.id = "over";
+  over.media_id = "matte";
+  over.start = 4 / kSmartFps;
+  over.source_in = 0.0;
+  over.source_out = 3 / kSmartFps;
+  Track above;
+  above.id = "v2";
+  above.kind = TrackKind::Video;
+  above.clips = {over};
+  project.sequence().tracks.insert(project.sequence().tracks.begin(), above);
+
+  const TempFile file(".mov");
+  const auto result = render(project, file);
+  ASSERT_TRUE(result.has_value()) << result.error();
+  EXPECT_EQ(result->copied_frames, kSmartFrames - 3);
+
+  const auto written = packets_of(file.string());
+  ASSERT_EQ(written.size(), static_cast<std::size_t>(kSmartFrames));
+  for (int f = 0; f < kSmartFrames; ++f) {
+    const int from = (f + kSmartFrames / 2) % kSmartFrames;
+    if (f >= 4 && f < 7) {
+      EXPECT_NE(written[f], source_packets_[from]) << "frame " << f << " is under the matte";
+    } else {
+      EXPECT_EQ(written[f], source_packets_[from]) << "frame " << f;
+    }
+  }
+}
+
+TEST_P(SmartRenderTest, AnythingDoneToThePictureIsRendered) {
+  const TempFile file(".mov");
+  {
+    Project faded = swapped_halves(source_.string());
+    faded.sequence().tracks[0].clips[0].opacity = 0.5;
+    const auto result = render(faded, file);
+    ASSERT_TRUE(result.has_value()) << result.error();
+    EXPECT_EQ(result->copied_frames, kSmartFrames / 2) << "only the faded clip is rendered";
+  }
+  {
+    Project moved = swapped_halves(source_.string());
+    for (Clip& clip : moved.sequence().tracks[0].clips) clip.transform.x = 0.6;
+    const auto result = render(moved, file);
+    ASSERT_TRUE(result.has_value()) << result.error();
+    EXPECT_EQ(result->copied_frames, 0);
+  }
+  {
+    Project graded = swapped_halves(source_.string());
+    for (Clip& clip : graded.sequence().tracks[0].clips) {
+      clip.effects.push_back(core::ClipEffect{.type = "brightness"});
+    }
+    const auto result = render(graded, file);
+    ASSERT_TRUE(result.has_value()) << result.error();
+    EXPECT_EQ(result->copied_frames, 0);
+  }
+}
+
+TEST_P(SmartRenderTest, AnotherSizeOrRateIsRendered) {
+  const TempFile file(".mov");
+  ExportSettings smaller;
+  smaller.width = kSmartWidth;
+  smaller.height = kSmartHeight * 2;
+  auto result = render(swapped_halves(source_.string()), file, smaller);
+  ASSERT_TRUE(result.has_value()) << result.error();
+  EXPECT_EQ(result->copied_frames, 0);
+
+  ExportSettings faster;
+  faster.fps = kSmartFps * 2;
+  result = render(swapped_halves(source_.string()), file, faster);
+  ASSERT_TRUE(result.has_value()) << result.error();
+  EXPECT_EQ(result->copied_frames, 0);
+}
+
+TEST_P(SmartRenderTest, ItCanBeTurnedOff) {
+  const TempFile file(".mov");
+  ExportSettings settings;
+  settings.smart_render = false;
+  const auto result = render(swapped_halves(source_.string()), file, settings);
+  ASSERT_TRUE(result.has_value()) << result.error();
+  EXPECT_EQ(result->copied_frames, 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(Intermediates, SmartRenderTest,
+                         ::testing::Values(media::VideoCodec::ProRes, media::VideoCodec::DnxHr),
+                         [](const auto& info) { return std::string(media::to_string(info.param)); });
+
+TEST_F(ExportTest, AnotherFormatsFramesAreNeverCopied) {
+  // DNxHR into ProRes: both stand alone, neither is the other.
+  const TempFile source(".mov");
+  ASSERT_TRUE(write_intermediate(source, media::VideoCodec::DnxHr));
+  const TempFile file(".mov");
+  ExportSettings settings;
+  settings.audio = false;
+  settings.path = file.string();
+  settings.codec = media::VideoCodec::ProRes;
+  const auto result = export_project(device_, swapped_halves(source.string()), settings);
+  ASSERT_TRUE(result.has_value()) << result.error();
+  EXPECT_EQ(result->copied_frames, 0);
+}
+
+TEST_F(ExportTest, DeliveryFormatsAreNeverCopiedInto) {
+  // H.264 frames depend on one another, so none stands alone to be copied in.
+  const TempFile source(".mov");
+  ASSERT_TRUE(write_intermediate(source, media::VideoCodec::ProRes));
+  const TempFile file(".mp4");
+  ExportSettings settings;
+  settings.audio = false;
+  settings.path = file.string();
+  settings.codec = media::VideoCodec::H264;
+  const auto result = export_project(device_, swapped_halves(source.string()), settings);
+  ASSERT_TRUE(result.has_value()) << result.error();
+  EXPECT_EQ(result->copied_frames, 0);
 }
 
 }  // namespace

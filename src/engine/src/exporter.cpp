@@ -3,6 +3,8 @@
 #include "cutline/core/query.hpp"
 #include "cutline/engine/audio_mixer.hpp"
 #include "cutline/engine/frame_renderer.hpp"
+#include "cutline/media/packet_reader.hpp"
+#include "cutline/render/plan.hpp"
 
 #include "cutline/gpu/compositor.hpp"
 
@@ -12,6 +14,7 @@
 #include <condition_variable>
 #include <deque>
 #include <format>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -21,12 +24,87 @@
 namespace cutline::engine {
 namespace {
 
-/// One frame on its way to the file: where its picture is coming back to, and
-/// the sound that goes with it, a block per stream.
+/// One frame on its way to the file: where its picture is coming back to, or
+/// the source frame it is copied from, and the sound that goes with it, a block
+/// per stream.
 struct Delivery {
   std::size_t slot = 0;
+  std::optional<std::vector<std::uint8_t>> copied;
   std::vector<std::vector<float>> audio;
 };
+
+/// The output an export is writing, for deciding whether a source frame is
+/// already it.
+struct Shape {
+  media::VideoCodec codec = media::VideoCodec::H264;
+  int width = 0;
+  int height = 0;
+  double fps = 0.0;
+  core::WorkingColour colour = core::WorkingColour::Rec709;
+};
+
+/// The source frame an output frame is, unchanged, when it is one.
+struct Untouched {
+  const core::Media* media = nullptr;
+  double source_time = 0.0;
+};
+
+/// Whether the frame at `t` is exactly one source frame, untouched.
+///
+/// Read from the renderer's own plan, so "untouched" means what the renderer
+/// would draw rather than a second reading of the clip: one layer and nothing
+/// else -- a transition, a title, an adjustment layer above all make two --
+/// filling the frame exactly, opaque, unrotated, blended normally, from a clip
+/// at its own speed with no effect on it, of a source the frame's size and in
+/// the colour being written. Conservative on purpose. A frame copied that
+/// should have been rendered is a wrong picture in a delivered file; a frame
+/// rendered that could have been copied is only slower.
+[[nodiscard]] std::optional<Untouched> untouched_at(const core::Project& project, double t,
+                                                   const Shape& shape) {
+  const std::vector<render::PlannedLayer> layers = render::plan_frame(project, t);
+  if (layers.size() != 1) return std::nullopt;
+  const render::PlannedLayer& layer = layers.front();
+  if (layer.content != render::LayerContent::Video || layer.clip == nullptr ||
+      layer.media == nullptr) {
+    return std::nullopt;
+  }
+  if (layer.alpha < 1.0 - 1e-9 || layer.blend != core::BlendMode::Normal ||
+      layer.anti_flicker != 0.0) {
+    return std::nullopt;
+  }
+  constexpr double kPixel = 1e-3;
+  const core::LayerBox& box = layer.box;
+  if (std::abs(box.center_x - shape.width / 2.0) > kPixel ||
+      std::abs(box.center_y - shape.height / 2.0) > kPixel ||
+      std::abs(box.width - shape.width) > kPixel || std::abs(box.height - shape.height) > kPixel ||
+      box.rotation_deg != 0.0) {
+    return std::nullopt;
+  }
+  const core::Clip& clip = *layer.clip;
+  if (clip.speed != 1.0 || clip.reverse || clip.hold.has_value()) return std::nullopt;
+  if (std::ranges::any_of(clip.effects, &core::ClipEffect::enabled)) return std::nullopt;
+  const core::Media& media = *layer.media;
+  // A conformed source plays its frames at another rate; a copy would not.
+  if (media.assumed_fps.has_value()) return std::nullopt;
+  if (media.colour_override.value_or(media.colour_space.value_or(core::WorkingColour::Rec709)) !=
+      shape.colour) {
+    return std::nullopt;
+  }
+  if (media.width != shape.width || media.height != shape.height) return std::nullopt;
+  // On a frame of the source, not between two. The renderer would show the
+  // one before; the copy would take the nearer, and they could differ.
+  const double frames = layer.source_time * shape.fps;
+  if (std::abs(frames - std::round(frames)) > 1e-3) return std::nullopt;
+  return Untouched{.media = &media, .source_time = layer.source_time};
+}
+
+/// Whether a source's frames can stand in the file being written: the same
+/// codec and profile, the same size and rate, whole frames.
+[[nodiscard]] bool fits(const media::PacketStream& stream, const Shape& shape) {
+  return stream.codec == shape.codec && stream.export_profile && stream.width == shape.width &&
+         stream.height == shape.height && std::abs(stream.fps - shape.fps) < 1e-3 &&
+         stream.progressive;
+}
 
 /// The encoding side of an export, on a thread of its own.
 ///
@@ -113,9 +191,14 @@ class Encoding {
                                .chroma = planes.chroma,
                                .chroma_stride = planes.chroma_stride});
       };
-      auto collected = compositor_.finish_yuv_read_back(delivery.slot, write);
-      if (skip) continue;
-      if (!collected) written = std::unexpected(collected.error());
+      if (delivery.copied.has_value()) {
+        if (skip) continue;
+        written = writer_.write_packet(*delivery.copied);
+      } else {
+        auto collected = compositor_.finish_yuv_read_back(delivery.slot, write);
+        if (skip) continue;
+        if (!collected) written = std::unexpected(collected.error());
+      }
       for (std::size_t i = 0; written && i < delivery.audio.size(); ++i) {
         written = writer_.write_audio(delivery.audio[i], static_cast<int>(i));
       }
@@ -298,6 +381,30 @@ std::expected<ExportResult, std::string> export_project(
     }
   }
 
+  // Smart rendering, for the intermediates. One reader per source, opened the
+  // first time a frame of it could be copied; null for a source whose frames
+  // cannot stand in this file, so it is not opened again to find that out.
+  const bool smart = settings.smart_render && media::is_intermediate(settings.codec);
+  const Shape shape{.codec = settings.codec, .width = width, .height = height, .fps = fps,
+                    .colour = colour};
+  std::map<std::string, std::unique_ptr<media::PacketReader>> readers;
+  const auto copy_of = [&](double t) -> std::optional<std::vector<std::uint8_t>> {
+    if (!smart) return std::nullopt;
+    const std::optional<Untouched> found = untouched_at(*source, t, shape);
+    if (!found.has_value()) return std::nullopt;
+    auto [entry, fresh] = readers.try_emplace(found->media->id);
+    if (fresh) {
+      auto opened = media::PacketReader::open(found->media->path);
+      if (opened.has_value() && fits((*opened)->stream(), shape)) entry->second = std::move(*opened);
+    }
+    if (!entry->second) return std::nullopt;
+    // A frame that cannot be read is rendered instead: the copy is a saving,
+    // never a reason for an export to fail.
+    auto bytes = entry->second->frame_at(found->source_time);
+    if (!bytes.has_value()) return std::nullopt;
+    return std::move(*bytes);
+  };
+
   Encoding encoding((*renderer)->compositor(), **writer);
   // Anything that leaves early leaves the encoder stopped and the slots given
   // back, before the renderer that owns them goes.
@@ -317,15 +424,20 @@ std::expected<ExportResult, std::string> export_project(
     // rounding error cannot drift over a long timeline.
     const double t = start + static_cast<double>(frame) / fps;
 
-    if (auto ok = (*renderer)->render(*source, t); !ok) {
-      return std::unexpected(std::format("frame {}: {}", frame, ok.error()));
+    Delivery delivery;
+    if (auto copied = copy_of(t); copied.has_value()) {
+      delivery.copied = std::move(*copied);
+      ++result.copied_frames;
+    } else {
+      if (auto ok = (*renderer)->render(*source, t); !ok) {
+        return std::unexpected(std::format("frame {}: {}", frame, ok.error()));
+      }
+      for (const std::string& id : (*renderer)->missing_media()) missing.insert(id);
+
+      const auto slot = (*renderer)->compositor().begin_yuv_read_back(layout, output);
+      if (!slot) return std::unexpected(std::format("frame {}: {}", frame, slot.error()));
+      delivery.slot = *slot;
     }
-    for (const std::string& id : (*renderer)->missing_media()) missing.insert(id);
-
-    const auto slot = (*renderer)->compositor().begin_yuv_read_back(layout, output);
-    if (!slot) return std::unexpected(std::format("frame {}: {}", frame, slot.error()));
-
-    Delivery delivery{.slot = *slot};
     if (!mixers.empty()) {
       // How much audio this frame of video should be accompanied by, computed
       // from the frame index rather than accumulated so the two stay locked

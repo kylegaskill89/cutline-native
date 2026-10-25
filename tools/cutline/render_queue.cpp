@@ -127,6 +127,11 @@ void begin_job(App& app, App::RenderJob& job) {
       job.outcome = std::format("Done — {} frames in {:.1f}s ({:.1f} fps) via {}",
                                 result->frames, result->elapsed_seconds,
                                 result->frames_per_second(), result->encoder);
+      // Smart rendering said out loud, because a render that took a second
+      // where the last took a minute looks like one that went wrong.
+      if (result->copied_frames > 0) {
+        job.outcome += std::format(", {} copied unchanged", result->copied_frames);
+      }
       job.state = RenderState::Done;
     }
   });

@@ -84,6 +84,14 @@ struct ExportSettings {
   /// of the tracks that have something on them.
   bool separate_audio = false;
 
+  /// Premiere's smart rendering: for ProRes and DNxHR, a frame that is a
+  /// source frame of the same format, untouched, is copied into the file
+  /// rather than decoded and encoded again -- no generation lost, and no time
+  /// spent. Anything done to the frame, or any difference in size, rate,
+  /// colour or profile, and it is rendered as usual. Off only for tests that
+  /// compare the two.
+  bool smart_render = true;
+
   int audio_sample_rate = 48000;
   /// One channel mixes the project down to mono. The downmix happens in the
   /// resampler as each source is decoded, so a stereo source is summed into it
@@ -100,6 +108,8 @@ struct ExportProgress {
 
 struct ExportResult {
   std::int64_t frames = 0;
+  /// Of those, how many were copied from a source rather than rendered.
+  std::int64_t copied_frames = 0;
   double duration_seconds = 0.0;  ///< of the output, not of the export
   double elapsed_seconds = 0.0;
   std::string encoder;
