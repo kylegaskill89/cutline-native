@@ -384,6 +384,25 @@ template <typename T>
     ///
     /// Horizontally only. A column overflowing its scroll view vertically is the
     /// entire point of a scroll view.
+    /// Says which widget a fault is, when `CUTLINE_CHECK_DETAIL` is set. A
+    /// count says that something is wrong; finding it took printing the tree
+    /// by hand every time, so this prints the one widget with what it says.
+    const bool detail = std::getenv("CUTLINE_CHECK_DETAIL") != nullptr;
+    const auto report = [&](std::string_view fault, const Widget& widget) {
+      if (!detail) return;
+      std::string says;
+      if (const auto* label = dynamic_cast<const Label*>(&widget); label != nullptr) {
+        says = label->text();
+      } else if (const auto* button = dynamic_cast<const Button*>(&widget); button != nullptr) {
+        says = button->text();
+      } else if (const auto* strip = dynamic_cast<const cutline::ui::TabStrip*>(&widget);
+                 strip != nullptr) {
+        for (const auto& tab : strip->tabs()) says += tab.title + " | ";
+      }
+      const Rect& at = widget.bounds();
+      std::println("  {} {}: {} \"{}\" at {:.0f},{:.0f} {:.0f}x{:.0f}", theme.id, fault,
+                   typeid(widget).name(), says, at.x, at.y, at.width, at.height);
+    };
     const auto walk_within = [&](this const auto& self, const Widget& widget,
                                  const Widget* clipper) -> void {
       ++counted;
@@ -399,13 +418,19 @@ template <typename T>
       // around it.
       const bool allowed_to_be_empty =
           !widget.visible() || dynamic_cast<const Spacer*>(&widget) != nullptr;
-      if (widget.bounds().empty() && !allowed_to_be_empty) ++empty;
+      if (widget.bounds().empty() && !allowed_to_be_empty) {
+        ++empty;
+        report("empty", widget);
+      }
       if (widget.visible() && !widget.bounds().empty()) {
         const Rect& at = widget.bounds();
         const bool across = at.x < frame.x - 0.5 || at.right() > frame.right() + 0.5;
         const bool down = !scrolled(widget) &&
                           (at.y < frame.y - 0.5 || at.bottom() > frame.bottom() + 0.5);
-        if (across || down) ++escaped;
+        if (across || down) {
+          ++escaped;
+          report("outside the window", widget);
+        }
       }
 
       // A widget narrower than it asked to be.
@@ -430,6 +455,7 @@ template <typename T>
           wanted.grow == 0.0 && !widget.bounds().empty() &&
           widget.bounds().width + 0.5 < wanted.basis) {
         ++squeezed;
+        report("squeezed", widget);
       }
 
       // A tab strip grows, so the test above cannot see inside it; it says
@@ -437,6 +463,7 @@ template <typename T>
       if (const auto* strip = dynamic_cast<const cutline::ui::TabStrip*>(&widget);
           strip != nullptr && strip->squeezed()) {
         ++squeezed;
+        report("squeezed", widget);
       }
 
       if (clipper != nullptr && !widget.bounds().empty() &&
@@ -444,6 +471,7 @@ template <typename T>
           (widget.bounds().x < clipper->bounds().x - 0.5 ||
            widget.bounds().right() > clipper->bounds().right() + 0.5)) {
         ++clipped;
+        report("clipped", widget);
       }
 
       // Text across a row reads along one line. Labels, buttons, fields and
@@ -469,6 +497,7 @@ template <typename T>
             line = middle;
           } else if (std::abs(middle - *line) > 1.0) {
             ++misaligned;
+            report("off the line", widget);
             break;
           }
         }
@@ -728,6 +757,47 @@ template <typename T>
         app.main.host->update_layout(context);
         app.main.host->paint(*painter, theme);
         walk(app.main.host->root());
+      }
+
+      // The Essential Graphics panel, brought to the front and shown every way
+      // it can be: the graphic as a whole with a roll, then a text layer and a
+      // shape each with everything switched on. Nearly all its controls exist
+      // only once a layer is chosen, so the panel at rest would measure none.
+      {
+        cutline::core::Graphic full;
+        cutline::core::GraphicLayer words = cutline::editor::text_layer("Name");
+        words.id = "words";
+        words.box_width = 400.0;
+        words.style.strokes = {cutline::core::GraphicStroke{}, cutline::core::GraphicStroke{}};
+        words.style.background = cutline::core::GraphicBackground{};
+        words.style.shadow = cutline::core::GraphicShadow{};
+        words.reveal_in = cutline::core::GraphicReveal{.kind = cutline::core::RevealKind::Fade};
+        words.reveal_out = cutline::core::GraphicReveal{.kind = cutline::core::RevealKind::Wipe};
+        words.master_style = "Caption";
+        cutline::core::GraphicLayer plate = cutline::editor::shape_layer(
+            cutline::core::GraphicKind::Rectangle);
+        plate.id = "plate";
+        plate.style.shadow = cutline::core::GraphicShadow{};
+        plate.pin = cutline::core::GraphicPin{.to = "words", .left = true};
+        full.layers = {words, plate};
+        full.scroll.mode = cutline::core::ScrollMode::Roll;
+        std::string full_clip;
+        app.session.apply(cutline::editor::add_graphic_at(app.session.project(), full, 0.0, {},
+                                                          &full_clip));
+        app.session.apply(cutline::editor::create_master_style(
+            app.session.project(),
+            cutline::core::find_clip(app.session.project(), full_clip)->media_id, "words",
+            "Caption"));
+        if (cutline::ui::activate_panel(layout_of(app), PanelId("graphics"))) refresh_dock(app);
+        app.session.select_one(full_clip);
+        for (const std::string layer : {"", "words", "plate"}) {
+          app.graphic_layer = layer;
+          refresh_graphics_panel(app);
+          app.main.host->update_layout(context);
+          app.main.host->paint(*painter, theme);
+          walk(app.main.host->root());
+        }
+        app.graphic_layer.clear();
       }
 
       // And the colour picker, which lives on the popup layer and is therefore

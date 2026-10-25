@@ -10,7 +10,7 @@ if(WIN32)
   list(APPEND CUTLINE_RESOURCES cutline.rc)
 endif()
 
-add_executable(cutline main.cpp gallery.cpp settings_window.cpp export_window.cpp menus.cpp check.cpp inspector.cpp audio_panel.cpp clip_dialogs.cpp pool.cpp playback.cpp panels.cpp document.cpp dock.cpp keyboard_window.cpp render_queue.cpp ${CUTLINE_RESOURCES})
+add_executable(cutline main.cpp gallery.cpp settings_window.cpp export_window.cpp menus.cpp check.cpp inspector.cpp audio_panel.cpp clip_dialogs.cpp pool.cpp playback.cpp panels.cpp document.cpp dock.cpp keyboard_window.cpp render_queue.cpp graphics_panel.cpp ${CUTLINE_RESOURCES})
 
 if(WIN32)
   # The version block wants the number twice in two spellings, and getting them
@@ -45,6 +45,13 @@ target_link_libraries(cutline PRIVATE
 # surface the interface is drawn into.
 find_package(unofficial-skia CONFIG REQUIRED)
 target_link_libraries(cutline PRIVATE unofficial::skia::skia)
+
+# The text library, for measuring a graphic's layers on the monitor and in the
+# Essential Graphics panel exactly as the renderer will draw them.
+if(TARGET cutline_text)
+  target_link_libraries(cutline PRIVATE cutline::text)
+  target_compile_definitions(cutline PRIVATE CUTLINE_HAVE_TEXT=1)
+endif()
 
 # Decoding and previewing when the media layer is present, and a chrome harness
 # when it is not. The window is the same either way; what it can do is not.

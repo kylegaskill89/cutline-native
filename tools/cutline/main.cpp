@@ -345,10 +345,18 @@ void refresh_handles(App& app) {
 
   const cutline::core::Project& document = app.showing();
   const auto selection = app.session.selection();
-  app.monitor->set_transform(
-      selection.empty()
-          ? std::nullopt
-          : cutline::editor::monitor_box(document, selection.front(), app.session.playhead()));
+  // A layer of a graphic, when one is chosen in Essential Graphics: the handles
+  // go round it, as Premiere's do, rather than round the whole frame-sized
+  // graphic.
+  std::optional<cutline::ui::MonitorBox> box;
+  if (!selection.empty() && !app.graphic_layer.empty()) {
+    box = cutline::editor::graphic_layer_box(document, selection.front(), app.graphic_layer,
+                                             app.session.playhead(), layer_measurer());
+  }
+  if (!box.has_value() && !selection.empty()) {
+    box = cutline::editor::monitor_box(document, selection.front(), app.session.playhead());
+  }
+  app.monitor->set_transform(box);
 
   // The masks on whatever is selected, drawn where they actually fall on the
   // frame. Which effect each belongs to is remembered here, because the widget
@@ -1164,6 +1172,12 @@ void settle(App& app) {
   if (app.inspector_stale) {
     app.inspector_stale = false;
     refresh_inspector(app);
+    // Whatever changed what the inspector shows changed what this shows.
+    app.graphics_stale = true;
+  }
+  if (app.graphics_stale) {
+    app.graphics_stale = false;
+    refresh_graphics_panel(app);
   }
   if (app.mixer_stale) {
     app.mixer_stale = false;

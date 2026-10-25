@@ -13,6 +13,7 @@
 /// lives here because this is the only layer that knows both: `core` has no
 /// idea what a widget is, and `ui` has never heard of a clip.
 
+#include "cutline/core/graphic.hpp"
 #include "cutline/core/model.hpp"
 #include "cutline/ui/monitor.hpp"
 
@@ -45,6 +46,25 @@ namespace cutline::editor {
 /// Returns the project unchanged when it cannot apply, like every other edit.
 [[nodiscard]] core::Project apply_monitor_box(core::Project project, std::string_view clip_id,
                                               const ui::MonitorBox& box, double t);
+
+/// The box round one layer of a graphic, as the monitor draws handles: where
+/// the layer is within the graphic, carried through the clip's own transform.
+/// Nothing when the clip is not a graphic on screen or has no such layer.
+///
+/// Composed in pixels rather than in fractions of the frame, so the handles
+/// stay on the layer when the clip itself is turned -- fractions of a wide
+/// frame are not square, and turning in them shears.
+[[nodiscard]] std::optional<ui::MonitorBox> graphic_layer_box(
+    const core::Project& project, std::string_view clip_id, std::string_view layer_id, double t,
+    const core::LayerMeasurer& measure);
+
+/// Applies a box the handles produced back to the layer: its position, its
+/// scale and its turn, keyed at the playhead where they are animated -- the
+/// same edit the Essential Graphics panel's numbers make.
+[[nodiscard]] core::Project apply_graphic_layer_box(core::Project project, std::string_view clip_id,
+                                                    std::string_view layer_id,
+                                                    const ui::MonitorBox& box, double t,
+                                                    const core::LayerMeasurer& measure);
 
 // ------------------------------------------------------------- framing --
 

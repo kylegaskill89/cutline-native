@@ -1,6 +1,7 @@
 #include "cutline/editor/monitor_binding.hpp"
 
 #include "cutline/editor/effects_binding.hpp"
+#include "cutline/editor/graphics.hpp"
 
 #include "cutline/core/layout.hpp"
 #include "cutline/core/mask_path.hpp"
@@ -282,6 +283,142 @@ core::Project apply_mask_overlay(core::Project project, std::string_view clip_id
     project = core::set_effect_mask(std::move(project), clip_id, effect, std::move(mask));
   }
   return project;
+}
+
+namespace {
+
+/// A selected graphic layer, placed: the layer as placed in the graphic, and
+/// the clip's own box in canvas pixels that the graphic is drawn into.
+struct PlacedGraphicLayer {
+  core::PlacedLayer placed;
+  core::Graphic graphic;
+  double key_time = 0.0;
+  double canvas_w = 0.0;
+  double canvas_h = 0.0;
+  // The clip's box, in pixels.
+  double frame_x = 0.0;
+  double frame_y = 0.0;
+  double frame_w = 0.0;
+  double frame_h = 0.0;
+  double frame_rotation = 0.0;
+};
+
+[[nodiscard]] std::optional<PlacedGraphicLayer> place_selected_layer(
+    const core::Project& project, std::string_view clip_id, std::string_view layer_id, double t,
+    const core::LayerMeasurer& measure) {
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr) return std::nullopt;
+  const core::Graphic* graphic = graphic_of(project, clip->media_id);
+  if (graphic == nullptr) return std::nullopt;
+  if (t < clip->start || t >= clip->start + core::clip_duration(*clip)) return std::nullopt;
+  const std::optional<ui::MonitorBox> frame = mask_frame(project, *clip, t);
+  if (!frame.has_value()) return std::nullopt;
+
+  PlacedGraphicLayer out;
+  out.graphic = *graphic;
+  out.canvas_w = project.sequence().canvas_w;
+  out.canvas_h = project.sequence().canvas_h;
+  if (out.canvas_w <= 0.0 || out.canvas_h <= 0.0) return std::nullopt;
+  const double local = t - clip->start;
+  const double duration = core::clip_duration(*clip);
+  out.key_time = core::graphic_time(out.graphic, local, duration);
+  bool found = false;
+  for (const core::PlacedLayer& at : core::place_graphic(out.graphic, local, duration,
+                                                         out.canvas_w, out.canvas_h, measure)) {
+    if (at.layer->id != layer_id) continue;
+    out.placed = at;
+    found = true;
+  }
+  if (!found) return std::nullopt;
+  // Pointed back into the copy this holds rather than the project's.
+  out.placed.layer = core::find_layer(out.graphic, layer_id);
+  out.frame_x = frame->x * out.canvas_w;
+  out.frame_y = frame->y * out.canvas_h;
+  out.frame_w = frame->width * out.canvas_w;
+  out.frame_h = frame->height * out.canvas_h;
+  out.frame_rotation = frame->rotation;
+  return out;
+}
+
+[[nodiscard]] std::pair<double, double> turned(double x, double y, double degrees) {
+  const double radians = degrees * std::numbers::pi / 180.0;
+  return {x * std::cos(radians) - y * std::sin(radians),
+          x * std::sin(radians) + y * std::cos(radians)};
+}
+
+}  // namespace
+
+std::optional<ui::MonitorBox> graphic_layer_box(const core::Project& project,
+                                                std::string_view clip_id,
+                                                std::string_view layer_id, double t,
+                                                const core::LayerMeasurer& measure) {
+  const auto at = place_selected_layer(project, clip_id, layer_id, t, measure);
+  if (!at.has_value()) return std::nullopt;
+  const core::LayerBox& box = at->placed.box;
+  // From the graphic's centre, scaled and turned as the clip draws it.
+  const double sx = at->frame_w / at->canvas_w;
+  const double sy = at->frame_h / at->canvas_h;
+  const auto [dx, dy] = turned((box.center_x - at->canvas_w / 2.0) * sx,
+                               (box.center_y - at->canvas_h / 2.0) * sy, at->frame_rotation);
+  return ui::MonitorBox{
+      .x = (at->frame_x + dx) / at->canvas_w,
+      .y = (at->frame_y + dy) / at->canvas_h,
+      .width = box.width * sx / at->canvas_w,
+      .height = box.height * sy / at->canvas_h,
+      .rotation = box.rotation_deg + at->frame_rotation,
+  };
+}
+
+core::Project apply_graphic_layer_box(core::Project project, std::string_view clip_id,
+                                      std::string_view layer_id, const ui::MonitorBox& box,
+                                      double t, const core::LayerMeasurer& measure) {
+  const auto at = place_selected_layer(project, clip_id, layer_id, t, measure);
+  if (!at.has_value()) return project;
+  const double sx = at->frame_w / at->canvas_w;
+  const double sy = at->frame_h / at->canvas_h;
+  if (sx <= 0.0 || sy <= 0.0) return project;
+
+  // Straight back the way it came: into the graphic's own pixels.
+  const auto [dx, dy] = turned(box.x * at->canvas_w - at->frame_x,
+                               box.y * at->canvas_h - at->frame_y, -at->frame_rotation);
+  const double centre_x = dx / sx + at->canvas_w / 2.0;
+  const double centre_y = dy / sy + at->canvas_h / 2.0;
+  const double width = box.width * at->canvas_w / sx;
+  const double rotation = box.rotation - at->frame_rotation;
+
+  const core::PlacedLayer& was = at->placed;
+  const core::GraphicLayer& layer = *was.layer;
+  // Where the anchor was, and the drawing's centre relative to it before the
+  // turn: what a move, a scale and a turn are all made about.
+  const double anchor_x = was.content.left + layer.anchor_x * was.content.width;
+  const double anchor_y = was.content.top + layer.anchor_y * was.content.height;
+  const auto [rx, ry] = turned(was.box.center_x - anchor_x, was.box.center_y - anchor_y,
+                               -was.box.rotation_deg);
+  // One scale for both directions: a layer has one, as Premiere's does.
+  const double grow = was.box.width > 0.0 ? width / was.box.width : 1.0;
+  const auto [nx, ny] = turned(rx * grow, ry * grow, rotation);
+  const double new_anchor_x = centre_x - nx;
+  const double new_anchor_y = centre_y - ny;
+
+  const double time = at->key_time;
+  core::Graphic graphic = at->graphic;
+  const auto value = [&](std::string_view property) {
+    return core::layer_value(layer, property, time);
+  };
+  graphic = set_layer_value(std::move(graphic), layer_id, "x", time,
+                            value("x") + (new_anchor_x - anchor_x) / at->canvas_w);
+  graphic = set_layer_value(std::move(graphic), layer_id, "y", time,
+                            value("y") + (new_anchor_y - anchor_y) / at->canvas_h);
+  if (std::abs(grow - 1.0) > 1e-9) {
+    graphic = set_layer_value(std::move(graphic), layer_id, "scale", time, value("scale") * grow);
+  }
+  if (std::abs(rotation - was.box.rotation_deg) > 1e-9) {
+    graphic = set_layer_value(std::move(graphic), layer_id, "rotation", time,
+                              value("rotation") + (rotation - was.box.rotation_deg));
+  }
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  return clip == nullptr ? project : set_graphic(std::move(project), clip->media_id,
+                                                  std::move(graphic));
 }
 
 core::Project apply_monitor_box(core::Project project, std::string_view clip_id,

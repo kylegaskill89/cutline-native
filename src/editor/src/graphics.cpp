@@ -3,6 +3,7 @@
 #include "cutline/core/edit.hpp"
 #include "cutline/core/id.hpp"
 #include "cutline/core/keyframe.hpp"
+#include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 
 #include <algorithm>
@@ -67,6 +68,32 @@ using core::GraphicLayer;
   }
 }
 
+/// Where a new graphic goes when no track is named, as Premiere puts one: on
+/// the first video track above everything that is showing over the span it
+/// will cover, so it lands on top of the picture rather than over a clip of it.
+/// A track is added at the top when every one is taken.
+[[nodiscard]] std::string free_track_above(core::Project& project, double from, double to) {
+  // Stored top first, so walking backwards goes up from the bottom.
+  std::vector<std::size_t> video;
+  for (std::size_t i = 0; i < project.sequence().tracks.size(); ++i) {
+    if (project.sequence().tracks[i].kind == core::TrackKind::Video) video.push_back(i);
+  }
+  std::optional<std::size_t> highest_busy;
+  for (std::size_t k = video.size(); k-- > 0;) {
+    const core::Track& track = project.sequence().tracks[video[k]];
+    const bool busy = std::ranges::any_of(track.clips, [&](const core::Clip& clip) {
+      return clip.start < to && core::clip_end(clip) > from;
+    });
+    if (busy) highest_busy = k;
+  }
+  if (!highest_busy.has_value()) {
+    return video.empty() ? std::string{} : project.sequence().tracks[video.back()].id;
+  }
+  if (*highest_busy > 0) return project.sequence().tracks[video[*highest_busy - 1]].id;
+  project = core::add_video_track(std::move(project));
+  return project.sequence().tracks.front().id;
+}
+
 /// Whether following the pins from `from` reaches `target`.
 [[nodiscard]] bool pinned_through(const Graphic& graphic, std::string_view from,
                                   std::string_view target) {
@@ -116,13 +143,15 @@ core::Project add_graphic_at(core::Project project, Graphic graphic, double at,
                              std::string_view video_track_id, std::string* clip_id) {
   std::string media_id;
   project = add_graphic(std::move(project), std::move(graphic), &media_id);
+  std::string on_track(video_track_id);
+  if (on_track.empty()) on_track = free_track_above(project, at, at + kDefaultTitleLength);
 
   std::vector<std::string> existing;
   for (const core::Track& track : project.sequence().tracks) {
     for (const core::Clip& clip : track.clips) existing.push_back(clip.id);
   }
 
-  project = core::place_media(std::move(project), media_id, at, video_track_id);
+  project = core::place_media(std::move(project), media_id, at, on_track);
 
   // The placement decides the clip's id; finding it is how a caller can select
   // what it just made. Comparing against what was there beats guessing at the
@@ -442,7 +471,8 @@ core::Project create_master_style(core::Project project, std::string_view media_
     project.graphic_styles.push_back(style);
   }
   Graphic linked = apply_master_style(*graphic, layer_id, style);
-  return set_master_style(set_graphic(std::move(project), media_id, std::move(linked)), style);
+  project = editor::set_graphic(std::move(project), media_id, std::move(linked));
+  return set_master_style(std::move(project), style);
 }
 
 core::Project set_master_style(core::Project project, core::GraphicMasterStyle style) {

@@ -642,6 +642,13 @@ struct App {
   /// The History panel's list, and the steps it was last filled with, so it is
   /// refilled when they change rather than on every frame.
   MenuList* history_list = nullptr;
+  /// The Essential Graphics panel's column, which it rebuilds, and the layer
+  /// of the selected graphic it is showing -- none for the graphic itself.
+  Box* graphics_body = nullptr;
+  std::string graphic_layer;
+  /// Set when the panel needs rebuilding for something that is not a change
+  /// to the document: a layer chosen. Deferred, as the inspector is.
+  bool graphics_stale = false;
   std::vector<std::string> history_shown;
   std::size_t history_at = static_cast<std::size_t>(-1);
   /// The picture the program monitor was last given, kept so a monitor made
@@ -1160,7 +1167,7 @@ constexpr std::array<double, 7> kFrameRates{23.976, 24.0, 25.0, 29.97, 30.0, 50.
 /// A panel is a name from here plus whatever `make_panel` builds for it. The
 /// layout only ever moves the name around, which is what lets an arrangement be
 /// saved and restored without saving any widgets.
-constexpr std::array<std::pair<std::string_view, std::string_view>, 10> kPanels{{
+constexpr std::array<std::pair<std::string_view, std::string_view>, 11> kPanels{{
     {"project", "Project"},
     {"effects", "Effect Controls"},
     // Premiere's own two names, which are confusingly similar on purpose: this
@@ -1192,6 +1199,9 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 10> kPanels{
     // workspace, as Premiere docks its Progress panel: that strip is the one
     // with room for another tab. "Queue" is Media Encoder's own name for it.
     {"queue", "Queue"},
+    // Premiere's Essential Graphics: the selected graphic's layers and every
+    // property of the one chosen.
+    {"graphics", "Essential Graphics"},
 }};
 
 /// The tool palette, in the order it is drawn and offered, and the action in
@@ -1483,6 +1493,16 @@ void complain(HWND owner, const std::string& message);
 void play_sound(const App& app, cutline::ui::Sound sound);
 void give_sounds(App& app, WidgetHost& host);
 [[nodiscard]] std::optional<std::filesystem::path> choose_image_file(HWND owner);
+/// A picture to put in a graphic: PNG or JPEG.
+[[nodiscard]] std::optional<std::filesystem::path> choose_picture_to_open(HWND owner);
+
+// The Essential Graphics panel, in `graphics_panel.cpp`.
+[[nodiscard]] std::unique_ptr<Widget> make_graphics_panel(App* app);
+void refresh_graphics_panel(App& app);
+/// Measures graphic layers as the renderer will draw them, where there is a
+/// text library to do it with: what the panel pins by and the monitor puts
+/// handles round.
+[[nodiscard]] cutline::core::LayerMeasurer layer_measurer();
 [[nodiscard]] std::optional<std::filesystem::path> choose_folder(HWND owner);
 void take_snapshot(App& app);
 void check_for_updates(App& app);

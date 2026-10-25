@@ -153,7 +153,7 @@ std::vector<Workspace> built_in_workspaces() {
   // Each is Premiere's arrangement for the same task, as Adobe describes it,
   // with this application's panels standing in for Premiere's: the mixer for
   // its audio mixers, Effect Controls for Lumetri Color until there is one.
-  // Graphics joins them with the Essential Graphics panel it is built round.
+  // Graphics is built round the Essential Graphics panel.
 
   // Editing: Premiere's default. Source and Program side by side over the
   // project and the timeline, with Effect Controls and the mixer behind the
@@ -163,7 +163,8 @@ std::vector<Workspace> built_in_workspaces() {
   editing.layout.root =
       split(Axis::Vertical,
             {split(Axis::Horizontal,
-                   {tabs({"source", "effects", "audio"}), tabs({"monitor"})}, {0.5, 0.5}),
+                   {tabs({"source", "effects", "audio", "graphics"}), tabs({"monitor"})},
+                   {0.5, 0.5}),
              split(Axis::Horizontal,
                    {tabs({"project", "library", "scopes", "history"}),
                     tabs({"timeline", "queue"})},
@@ -179,7 +180,8 @@ std::vector<Workspace> built_in_workspaces() {
             {split(Axis::Horizontal,
                    {tabs({"project", "library", "history", "queue"}),
                     split(Axis::Vertical,
-                          {tabs({"source", "effects", "audio"}), tabs({"monitor", "scopes"})},
+                          {tabs({"source", "effects", "audio", "graphics"}),
+                           tabs({"monitor", "scopes"})},
                           {0.5, 0.5})},
                    {0.5, 0.5}),
              tabs({"timeline"})},
@@ -199,7 +201,7 @@ std::vector<Workspace> built_in_workspaces() {
                    {0.22, 0.48, 0.30}),
              split(Axis::Horizontal,
                    {tabs({"project", "library", "audio"}),
-                    tabs({"timeline", "queue", "history"})},
+                    tabs({"timeline", "queue", "history", "graphics"})},
                    {0.3, 0.7})},
             {0.6, 0.4});
 
@@ -214,7 +216,7 @@ std::vector<Workspace> built_in_workspaces() {
                    {0.32, 0.48, 0.20}),
              split(Axis::Horizontal,
                    {tabs({"project", "scopes", "audio"}),
-                    tabs({"timeline", "queue", "history"})},
+                    tabs({"timeline", "queue", "history", "graphics"})},
                    {0.3, 0.7})},
             {0.58, 0.42});
 
@@ -225,14 +227,32 @@ std::vector<Workspace> built_in_workspaces() {
   audio.layout.root =
       split(Axis::Vertical,
             {split(Axis::Horizontal,
-                   {tabs({"audio", "source", "effects"}), tabs({"monitor"})}, {0.5, 0.5}),
+                   {tabs({"audio", "source", "effects", "graphics"}), tabs({"monitor"})},
+                   {0.5, 0.5}),
              split(Axis::Horizontal,
                    {tabs({"project", "library", "scopes", "history"}), tabs({"timeline", "queue"})},
                    {0.3, 0.7})},
             {0.5, 0.5});
 
+  // Graphics: Premiere's, built round the Essential Graphics panel, which sits
+  // beside a large Program Monitor so a layer can be chosen in one and dragged
+  // in the other. In the top row rather than the full height, which Premiere
+  // gives it on a wider screen: at an ordinary width that left the timeline too
+  // narrow for its own toolbar.
+  Workspace graphics;
+  graphics.name = "Graphics";
+  graphics.layout.root = split(
+      Axis::Vertical,
+      {split(Axis::Horizontal,
+             {tabs({"source", "effects"}), tabs({"monitor", "scopes"}), tabs({"graphics"})},
+             {0.27, 0.48, 0.25}),
+       split(Axis::Horizontal,
+             {tabs({"project", "library", "audio"}), tabs({"timeline", "queue", "history"})},
+             {0.3, 0.7})},
+      {0.6, 0.4});
+
   return {std::move(editing), std::move(assembly), std::move(colour), std::move(effects),
-          std::move(audio)};
+          std::move(audio), std::move(graphics)};
 }
 
 Workspaces default_workspaces() {

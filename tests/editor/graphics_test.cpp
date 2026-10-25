@@ -132,6 +132,32 @@ TEST(Graphics, PlacingHonoursTheTrackItIsGiven) {
   EXPECT_EQ(lower.clips.front().id, clip_id);
 }
 
+TEST(Graphics, ANewGraphicGoesAboveThePictureRatherThanOverIt) {
+  Project p = with_tracks();
+  p.media.push_back(core::Media{.id = "m", .path = "a.mp4", .duration = 20.0, .has_video = true});
+  p.sequence().tracks[1].clips.push_back(core::Clip{.id = "c", .media_id = "m", .source_out = 20.0});
+
+  std::string clip_id;
+  p = add_graphic_at(std::move(p), saying("Over"), 2.0, {}, &clip_id);
+  // The footage is on v1, so the graphic goes on v2, and the footage is whole.
+  ASSERT_EQ(p.sequence().tracks[0].clips.size(), 1u);
+  EXPECT_EQ(p.sequence().tracks[0].clips.front().id, clip_id);
+  ASSERT_EQ(p.sequence().tracks[1].clips.size(), 1u);
+  EXPECT_DOUBLE_EQ(core::clip_duration(p.sequence().tracks[1].clips.front()), 20.0);
+}
+
+TEST(Graphics, ATrackIsAddedWhenEveryOneIsTaken) {
+  Project p = with_tracks();
+  p.media.push_back(core::Media{.id = "m", .path = "a.mp4", .duration = 20.0, .has_video = true});
+  p.sequence().tracks[0].clips.push_back(core::Clip{.id = "top", .media_id = "m", .source_out = 20.0});
+
+  std::string clip_id;
+  p = add_graphic_at(std::move(p), saying("Over"), 2.0, {}, &clip_id);
+  ASSERT_EQ(p.sequence().tracks.size(), 4u);
+  ASSERT_EQ(p.sequence().tracks[0].clips.size(), 1u);
+  EXPECT_EQ(p.sequence().tracks[0].clips.front().id, clip_id);
+}
+
 TEST(Graphics, TheGraphicComesBackForAMediaAndForAClip) {
   std::string clip_id;
   const Project p = add_graphic_at(with_tracks(), saying("Hello"), 0.0, {}, &clip_id);

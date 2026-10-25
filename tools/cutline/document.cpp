@@ -238,6 +238,19 @@ void add_adjustment(App& app) {
   return std::filesystem::path(buffer.data());
 }
 
+[[nodiscard]] std::optional<std::filesystem::path> choose_picture_to_open(HWND owner) {
+  std::array<wchar_t, MAX_PATH> buffer{};
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = owner;
+  dialog.lpstrFilter = L"Pictures\0*.png;*.jpg;*.jpeg\0All files\0*.*\0";
+  dialog.lpstrFile = buffer.data();
+  dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+  dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+  if (GetOpenFileNameW(&dialog) == FALSE) return std::nullopt;
+  return std::filesystem::path(buffer.data());
+}
+
 /// Where a snapshot should go. A third dialog for the same reason the second
 /// exists: the filter and the default extension are the whole of what these
 /// functions do.

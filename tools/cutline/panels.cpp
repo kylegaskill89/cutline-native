@@ -6,6 +6,22 @@
 
 namespace cutline::tool {
 
+/// What a drag of the monitor's handles does: moves the graphic layer chosen
+/// in Essential Graphics when there is one, and the clip otherwise.
+[[nodiscard]] cutline::core::Project apply_handles(const App& app, const std::string& clip_id,
+                                                  const cutline::ui::MonitorBox& box) {
+  if (!app.graphic_layer.empty() &&
+      cutline::editor::graphic_layer_box(app.session.project(), clip_id, app.graphic_layer,
+                                         app.session.playhead(), layer_measurer())
+          .has_value()) {
+    return cutline::editor::apply_graphic_layer_box(app.session.project(), clip_id,
+                                                    app.graphic_layer, box,
+                                                    app.session.playhead(), layer_measurer());
+  }
+  return cutline::editor::apply_monitor_box(app.session.project(), clip_id, box,
+                                            app.session.playhead());
+}
+
 [[nodiscard]] std::unique_ptr<Widget> make_project_panel(App* app) {
   auto panel = std::make_unique<Panel>();
 
@@ -208,8 +224,7 @@ namespace cutline::tool {
       // preview: the box the view reports is where the layer should be, not how
       // far it has come, and compounding them would send it off across the
       // canvas at several times the speed of the pointer.
-      app->live_project = cutline::editor::apply_monitor_box(
-          app->session.project(), selection.front(), box, app->session.playhead());
+      app->live_project = apply_handles(*app, selection.front(), box);
       invalidate_preview(*app);
     });
     picture.set_on_transform_commit([app](const cutline::ui::MonitorBox& box) {
@@ -218,8 +233,7 @@ namespace cutline::tool {
       app->live_project.reset();
       if (selection.empty()) return;
 
-      app->session.apply(cutline::editor::apply_monitor_box(
-          app->session.project(), selection.front(), box, app->session.playhead()));
+      app->session.apply(apply_handles(*app, selection.front(), box));
       refresh_timeline(*app);
       invalidate_preview(*app);
       // The inspector's Motion rows are showing the same numbers, and a
@@ -1632,6 +1646,7 @@ void refresh_history(App& app) {
   if (id == "library") return make_library_panel(app);
   if (id == "audio") return make_audio_panel(app);
   if (id == "queue") return make_queue_panel(app);
+  if (id == "graphics") return make_graphics_panel(app);
 
   // A layout naming a panel this build does not have. Saying so beats an empty
   // rectangle, which looks like a panel that failed to draw.

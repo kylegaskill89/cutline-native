@@ -26,7 +26,7 @@ const std::vector<ui::PanelId>& known_panels() {
   static const std::vector<ui::PanelId> panels{"project", "effects",  "library",
                                                "monitor", "source",   "timeline",
                                                "scopes",  "audio",    "history",
-                                               "queue"};
+                                               "queue",   "graphics"};
   return panels;
 }
 
@@ -84,7 +84,8 @@ TEST(Workspaces, TheBuiltInsAreDifferentArrangements) {
 TEST(Workspaces, TheBuiltInsArePremieresTasks) {
   std::vector<std::string> names;
   for (const Workspace& workspace : built_in_workspaces()) names.push_back(workspace.name);
-  EXPECT_EQ(names, (std::vector<std::string>{"Editing", "Assembly", "Colour", "Effects", "Audio"}));
+  EXPECT_EQ(names, (std::vector<std::string>{"Editing", "Assembly", "Colour", "Effects", "Audio",
+                                             "Graphics"}));
 }
 
 TEST(Workspaces, EditingKeepsEffectControlsBehindTheSourceAsPremiereDoes) {
@@ -111,6 +112,7 @@ TEST(Workspaces, EachGivesItsOwnPanelAGroupOfItsOwn) {
   EXPECT_TRUE(alone("Colour", "effects")) << "where Premiere keeps Lumetri Color";
   EXPECT_TRUE(alone("Effects", "library"));
   EXPECT_TRUE(alone("Assembly", "timeline"));
+  EXPECT_TRUE(alone("Graphics", "graphics")) << "the panel the workspace is built round";
 }
 
 TEST(Workspaces, TheDefaultsStartOnTheFirstOne) {
