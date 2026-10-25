@@ -45,6 +45,7 @@ add_executable(cutline_core_tests
   editor/shortcuts_test.cpp
   editor/timeline_binding_test.cpp
   editor/graphics_test.cpp
+  editor/graphic_templates_test.cpp
   editor/transitions_test.cpp
   editor/updates_test.cpp
   editor/workspace_test.cpp

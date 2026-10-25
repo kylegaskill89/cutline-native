@@ -298,8 +298,76 @@ void build_layer_list(App& app, Box& body, const Target& target) {
 
 // ------------------------------------------------------ the graphic itself --
 
+void open_export_template_prompt(App& app) {
+  if (app.main.host == nullptr) return;
+  const std::optional<Target> target = target_of(app);
+  if (!target.has_value()) return;
+  auto dialog = std::make_unique<cutline::ui::Dialog>("Export as Template");
+  auto& row = dialog->row("Name");
+  const auto media = std::ranges::find(app.session.project().media, target->media_id,
+                                       &cutline::core::Media::id);
+  auto& name = row.emplace<TextField>(media != app.session.project().media.end() ? media->name
+                                                                               : std::string{});
+  name.set_columns(24);
+  dialog->set_accept("Save", [&app, field = &name]() -> std::optional<std::string> {
+    const std::optional<Target> now = target_of(app);
+    if (!now.has_value()) return std::nullopt;
+    const auto saved = cutline::editor::save_template(cutline::editor::default_templates_folder(),
+                                                      field->text(), now->graphic, now->duration);
+    if (!saved.has_value()) return saved.error();
+    app.saved_templates.reset();
+    app.graphics_stale = true;
+    return std::nullopt;
+  });
+  dialog->set_cancel("Cancel");
+  app.main.host->open_popup(std::move(dialog), settings_anchor());
+}
+
+void build_browse(App& app, Box& body) {
+  if (!app.saved_templates.has_value()) {
+    app.saved_templates =
+        cutline::editor::read_templates(cutline::editor::default_templates_folder());
+  }
+  const auto list = [&app, &body](const std::vector<cutline::editor::GraphicTemplate>& all) {
+    for (const cutline::editor::GraphicTemplate& made : all) {
+      auto& row = body.emplace<Box>(Axis::Horizontal);
+      row.emplace<Label>(made.name);
+      auto& length = row.emplace<Label>(std::format("{:.1f} s", made.length));
+      length.set_small(true);
+      row.emplace<Spacer>();
+      row.emplace<Button>("Add", [&app, made] {
+        std::string clip_id;
+        app.session.apply(cutline::editor::add_template_at(app.session.project(), made,
+                                                           app.session.playhead(), &clip_id));
+        if (!clip_id.empty()) app.session.select_one(clip_id);
+        app.graphics_browsing = false;
+        app.graphic_layer.clear();
+        refresh_all(app);
+      }).set_tooltip("Put this on the timeline at the playhead");
+      if (!made.built_in()) {
+        auto& remove = row.emplace<IconButton>(IconButton::Icon::Cross, [&app, file = made.file] {
+          cutline::editor::delete_template(file);
+          app.saved_templates.reset();
+          app.graphics_stale = true;
+        });
+        remove.set_tooltip("Delete this template");
+      }
+    }
+  };
+  heading(body, "Templates");
+  list(cutline::editor::built_in_templates());
+  heading(body, "Saved");
+  if (app.saved_templates->empty()) {
+    body.emplace<Label>("A graphic saved with Export as Template is listed here.").set_small(true);
+  } else {
+    list(*app.saved_templates);
+  }
+}
+
 void build_graphic_timing(App& app, Box& body, const Target& target) {
   const Graphic& graphic = target.graphic;
+  body.emplace<Button>("Export as Template...", [&app] { open_export_template_prompt(app); })
+      .set_tooltip("Keep this graphic to use again, from Browse");
   heading(body, "Responsive Design - Time");
   // Setting either records how long the graphic is now: the length its
   // keyframes were written against, which the protected ends keep to.
@@ -1072,11 +1140,31 @@ void refresh_graphics_panel(App& app) {
   Box& body = *app.graphics_body;
 
   const std::optional<Target> target = target_of(app);
-  if (!target.has_value()) {
-    app.graphic_layer.clear();
-    body.emplace<Label>("Select a graphic in the timeline, or make one with File > New > Title.")
-        .set_small(true);
-    body.emplace<Spacer>();
+  const std::string showing = target.has_value() ? target->clip_id : std::string{};
+  if (showing != app.graphics_clip) {
+    app.graphics_clip = showing;
+    if (!showing.empty()) app.graphics_browsing = false;
+  }
+  const bool browsing = app.graphics_browsing || !target.has_value();
+
+  // Premiere's two tabs. Edit is offered only with a graphic to edit.
+  auto& tabs = body.emplace<Box>(Axis::Horizontal);
+  auto& browse = tabs.emplace<Button>("Browse", [&app] {
+    app.graphics_browsing = true;
+    app.graphics_stale = true;
+  });
+  browse.set_selected(browsing);
+  auto& edit = tabs.emplace<Button>("Edit", [&app] {
+    app.graphics_browsing = false;
+    app.graphics_stale = true;
+  });
+  edit.set_selected(!browsing);
+  edit.set_enabled(target.has_value());
+  tabs.emplace<Spacer>();
+
+  if (!target.has_value()) app.graphic_layer.clear();
+  if (browsing) {
+    build_browse(app, body);
   } else {
     // A layer chosen in another graphic means nothing in this one.
     const GraphicLayer* chosen = cutline::core::find_layer(target->graphic, app.graphic_layer);

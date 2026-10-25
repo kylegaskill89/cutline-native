@@ -120,7 +120,8 @@ Graphic default_title() {
   return graphic;
 }
 
-core::Project add_graphic(core::Project project, Graphic graphic, std::string* id) {
+core::Project add_graphic(core::Project project, Graphic graphic, std::string* id,
+                          double length) {
   core::Media media;
   media.id = core::new_id("graphic");
   media.name = name_for(graphic);
@@ -131,7 +132,7 @@ core::Project add_graphic(core::Project project, Graphic graphic, std::string* i
   media.has_video = true;
   // Nothing on disk, and no inherent length. The duration is what a placement
   // uses when there is no source to take one from.
-  media.duration = kDefaultTitleLength;
+  media.duration = length > 0.0 ? length : kDefaultTitleLength;
   media.graphic = std::move(graphic);
 
   if (id != nullptr) *id = media.id;
@@ -140,11 +141,13 @@ core::Project add_graphic(core::Project project, Graphic graphic, std::string* i
 }
 
 core::Project add_graphic_at(core::Project project, Graphic graphic, double at,
-                             std::string_view video_track_id, std::string* clip_id) {
+                             std::string_view video_track_id, std::string* clip_id,
+                             double length) {
   std::string media_id;
-  project = add_graphic(std::move(project), std::move(graphic), &media_id);
+  project = add_graphic(std::move(project), std::move(graphic), &media_id, length);
+  const double span = length > 0.0 ? length : kDefaultTitleLength;
   std::string on_track(video_track_id);
-  if (on_track.empty()) on_track = free_track_above(project, at, at + kDefaultTitleLength);
+  if (on_track.empty()) on_track = free_track_above(project, at, at + span);
 
   std::vector<std::string> existing;
   for (const core::Track& track : project.sequence().tracks) {

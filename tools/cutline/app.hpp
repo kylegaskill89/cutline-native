@@ -42,6 +42,7 @@
 #include "cutline/editor/settings.hpp"
 #include "cutline/editor/shortcuts.hpp"
 #include "cutline/editor/timeline_binding.hpp"
+#include "cutline/editor/graphic_templates.hpp"
 #include "cutline/editor/graphics.hpp"
 #include "cutline/editor/transitions.hpp"
 #include "cutline/editor/workspace.hpp"
@@ -653,6 +654,16 @@ struct App {
   /// the words so far, kept until the typing is accepted or given up -- which
   /// is longer than any drag, so it cannot ride on `live_gesture`.
   bool typing_on_picture = false;
+  /// Which of the panel's two tabs is showing: Browse, the templates, or Edit,
+  /// the selected graphic. Browse whenever no graphic is selected, as there is
+  /// nothing to edit.
+  bool graphics_browsing = false;
+  /// The graphic clip the panel last showed. Selecting a different one goes to
+  /// Edit, as Premiere's panel does.
+  std::string graphics_clip;
+  /// The templates saved on this machine, read once and again after a save or
+  /// a delete rather than on every rebuild of the panel.
+  std::optional<std::vector<cutline::editor::GraphicTemplate>> saved_templates;
   std::vector<std::string> history_shown;
   std::size_t history_at = static_cast<std::size_t>(-1);
   /// The picture the program monitor was last given, kept so a monitor made

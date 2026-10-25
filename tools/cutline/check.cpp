@@ -790,6 +790,14 @@ template <typename T>
             "Caption"));
         if (cutline::ui::activate_panel(layout_of(app), PanelId("graphics"))) refresh_dock(app);
         app.session.select_one(full_clip);
+        // Browse first, with the built-in templates in it.
+        app.graphics_clip = full_clip;
+        app.graphics_browsing = true;
+        refresh_graphics_panel(app);
+        app.main.host->update_layout(context);
+        app.main.host->paint(*painter, theme);
+        walk(app.main.host->root());
+        app.graphics_browsing = false;
         for (const std::string layer : {"", "words", "plate"}) {
           app.graphic_layer = layer;
           refresh_graphics_panel(app);

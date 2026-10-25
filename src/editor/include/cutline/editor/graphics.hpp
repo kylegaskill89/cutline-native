@@ -39,7 +39,8 @@ inline constexpr double kDefaultTitleLength = 5.0;
 /// when one is wanted, since a caller that has just made a graphic almost
 /// always wants to place or select it.
 [[nodiscard]] core::Project add_graphic(core::Project project, core::Graphic graphic,
-                                        std::string* id = nullptr);
+                                        std::string* id = nullptr,
+                                        double length = kDefaultTitleLength);
 
 /// Adds a graphic and puts it on the timeline at `at`: on the track named, or
 /// as Premiere places one, on the first track above everything showing there --
@@ -47,7 +48,8 @@ inline constexpr double kDefaultTitleLength = 5.0;
 /// top when there is no room.
 [[nodiscard]] core::Project add_graphic_at(core::Project project, core::Graphic graphic, double at,
                                            std::string_view video_track_id = {},
-                                           std::string* clip_id = nullptr);
+                                           std::string* clip_id = nullptr,
+                                           double length = kDefaultTitleLength);
 
 /// The graphic a media is, or null.
 [[nodiscard]] const core::Graphic* graphic_of(const core::Project& project,

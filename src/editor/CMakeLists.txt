@@ -25,6 +25,7 @@ add_library(cutline_editor
   src/shortcuts.cpp
   src/timeline_binding.cpp
   src/graphics.cpp
+  src/graphic_templates.cpp
   src/transitions.cpp
   src/updates.cpp
   src/presets.cpp
