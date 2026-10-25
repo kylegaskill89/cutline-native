@@ -1222,6 +1222,14 @@ void open_marker_dialog(App& app, std::size_t index);
 [[nodiscard]] sk_sp<SkSurface> draw_cursor_art(cutline::ui::IconButton::Icon icon,
                                                double scale = 1.0);
 
+// The inspector, and what it shares with the timeline and the library, in
+// `inspector.cpp`.
+void follow_playhead(App& app);
+void scroll_to_playhead(App& app);
+void keep_bins(App& app);
+[[nodiscard]] std::vector<cutline::ui::EffectEntry> library_entries(const App& app);
+void refresh_library(App& app);
+
 // The headless check and the benchmarks, in `check.cpp`.
 [[nodiscard]] int self_check(std::string_view shots = {});
 [[nodiscard]] int benchmark();
