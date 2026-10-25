@@ -327,8 +327,12 @@ namespace {
         caption("#8a2a12", "#b23a18", "#cc4a24", "#8a2a12", "#d8603c", "#ffffff99"));
 
   // Menus were white with the highlight in Luna blue.
+  // The border is the colour of the rules between groups; a resting row draws
+  // no surface, so it is never stroked.
   t.set(Part::MenuItem, State::Normal,
-        SurfaceStyle{.fill = Fill::solid(hex("#ffffff")), .text = hex("#000000")});
+        SurfaceStyle{.fill = Fill::solid(hex("#ffffff")),
+                     .border = hex("#aca899"),
+                     .text = hex("#000000")});
   t.set(Part::MenuItem, State::Hover,
         SurfaceStyle{.fill = Fill::solid(hex("#316ac5")), .text = hex("#ffffff")});
   t.set(Part::MenuItem, State::Selected,
@@ -350,6 +354,11 @@ namespace {
   // face that lightens from the top left corner to the bottom right, an orange
   // band under the pointer, and a grey well while held. The marks are green.
   t.metrics.check_mark = CheckMark::Luna;
+  // Menus, measured from XP's: seventeen-pixel rows, nine between groups, and
+  // two pixels of white inside the edge.
+  t.metrics.menu_row_height = 17.0;
+  t.metrics.menu_separator_height = 9.0;
+  t.metrics.menu_padding = 2.0;
   const Fill luna_well = Fill::gradient({{0.0f, hex("#dcdcd7")}, {1.0f, hex("#ffffff")}}, 315.0);
   const SurfaceStyle check{.fill = luna_well,
                            .border = hex("#1c5180"),

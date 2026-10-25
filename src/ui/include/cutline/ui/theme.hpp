@@ -347,6 +347,12 @@ struct Metrics {
   /// How long the lines of a grip across a scrollbar's thumb are, drawn in
   /// the thumb's text colour beside lines of its border's; zero for none.
   double scroll_grip = 0.0;
+  /// A menu's rows and rules, and the room between its edge and its first and
+  /// last rows. Zero rows and rules follow `list_row_height`; XP's menus were
+  /// tighter than its lists, seventeen pixels a row with nine between groups.
+  double menu_row_height = 0.0;
+  double menu_separator_height = 0.0;
+  double menu_padding = 4.0;
 
   /// How long a view takes to get where it was sent -- a zoom, a scroll by
   /// the wheel -- and how long a popup takes to arrive, in seconds. Zero

@@ -1189,6 +1189,15 @@ namespace {
   return std::max(5.0, std::round(row_height * 0.4));
 }
 
+[[nodiscard]] double menu_row_for(const Metrics& metrics) {
+  return metrics.menu_row_height > 0.0 ? metrics.menu_row_height : metrics.list_row_height;
+}
+
+[[nodiscard]] double menu_rule_for(const Metrics& metrics) {
+  return metrics.menu_separator_height > 0.0 ? metrics.menu_separator_height
+                                             : separator_height_for(menu_row_for(metrics));
+}
+
 /// The room a submenu's arrow takes at the trailing end of every row, once any
 /// row has one — so shortcuts line up whether or not their row opens a menu.
 [[nodiscard]] double arrow_gutter_for(double row_height) { return row_height * 0.6; }
@@ -1237,8 +1246,9 @@ void MenuList::set_checked(std::vector<bool> checked) {
 }
 
 void MenuList::rebuild_geometry(const Metrics& metrics) {
-  row_height_ = metrics.list_row_height;
-  separator_height_ = separator_height_for(row_height_);
+  row_height_ = menu_row_for(metrics);
+  separator_height_ = menu_rule_for(metrics);
+  padding_ = metrics.menu_padding;
   tops_.assign(entries_.size() + 1, 0.0);
   double y = 0.0;
   for (std::size_t i = 0; i < entries_.size(); ++i) {
@@ -1281,11 +1291,11 @@ LayoutItem MenuList::sizing(Axis axis, const LayoutContext& context) const {
   const Metrics& metrics = context.metrics();
   if (axis == Axis::Vertical) {
     double rows = 0.0;
-    const double rule = separator_height_for(metrics.list_row_height);
+    const double rule = menu_rule_for(metrics);
     for (const MenuEntry& entry : entries_) {
-      rows += entry.separator ? rule : metrics.list_row_height;
+      rows += entry.separator ? rule : menu_row_for(metrics);
     }
-    const double needed = rows + 2.0 * padding_;
+    const double needed = rows + 2.0 * metrics.menu_padding;
     // A category column takes the height it is given; a menu is as tall as what
     // is in it. Never *shorter* than its rows either way, so filling can only
     // add room and cannot hide the last entry.
@@ -1305,11 +1315,11 @@ LayoutItem MenuList::sizing(Axis axis, const LayoutContext& context) const {
   }
   // The tick gutter is width the labels no longer have, so it is asked for
   // here as well as drawn — otherwise ticking a menu clips its longest label.
-  const double gutter = checked_.empty() ? 0.0 : metrics.list_row_height * 0.6;
+  const double gutter = checked_.empty() ? 0.0 : menu_row_for(metrics) * 0.6;
   // A clear gap between a label and its shortcut, as Windows leaves, so the
   // two never read as one phrase.
   const double shortcuts = widest_shortcut > 0.0 ? widest_shortcut + 3.0 * metrics.padding_x : 0.0;
-  const double arrows = any_submenu ? arrow_gutter_for(metrics.list_row_height) : 0.0;
+  const double arrows = any_submenu ? arrow_gutter_for(menu_row_for(metrics)) : 0.0;
   // Room either side, and never so narrow that a one-word menu is a sliver.
   return LayoutItem::fixed(
       std::max(widest + gutter + shortcuts + arrows + 4.0 * metrics.padding_x, 96.0));
@@ -1380,9 +1390,14 @@ void MenuList::paint_content(Painter& painter, const Theme& theme) const {
       // From where the labels start to where the row ends, as Windows draws
       // them: a rule under the tick column would cut the column in two.
       const double y = std::round(row.y + row.height * 0.5) + 0.5;
-      const Color rule = resting.border.a > 0.0F ? resting.border : mix(resting.text, greyed, 0.7F);
-      painter.line(row.x + indent - 2.0, y, row.right() - padding_ - 2.0, y,
-                   Color{rule.r, rule.g, rule.b, rule.a * 0.5F}, 1.0);
+      // A theme's own rule colour as it gave it; one made up from the text,
+      // softened, so it reads as a pause rather than a line through the menu.
+      Color rule = resting.border;
+      if (rule.a <= 0.0F) {
+        rule = mix(resting.text, greyed, 0.7F);
+        rule.a *= 0.5F;
+      }
+      painter.line(row.x + indent - 2.0, y, row.right() - padding_ - 2.0, y, rule, 1.0);
       continue;
     }
 

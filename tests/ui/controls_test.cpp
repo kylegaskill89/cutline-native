@@ -1529,6 +1529,21 @@ TEST(MenuEntries, ARuleIsShorterThanARowAndTheRowsAfterItFollowOn) {
   EXPECT_EQ(test.list->row_at(after.y + 1.0), 2u);
 }
 
+TEST(MenuEntries, LunasMenusAreAsTightAsXPs) {
+  // Seventeen-pixel rows, nine between groups and two pixels inside the edge,
+  // measured from XP's; tighter than its lists, which are twenty.
+  const Theme& xp = *built_in_theme("xp");
+  const RecordingPainter measure;
+  const LayoutContext context{xp, measure};
+  MenuList list({command("Cut"), MenuEntry::divider(), command("Paste")});
+  list.arrange(Rect{0.0, 0.0, 200.0, list.sizing(Axis::Vertical, context).basis}, context);
+
+  EXPECT_DOUBLE_EQ(list.row_rect(0).height, 17.0);
+  EXPECT_DOUBLE_EQ(list.row_rect(1).height, 9.0);
+  EXPECT_DOUBLE_EQ(list.row_rect(0).y, 2.0);
+  EXPECT_DOUBLE_EQ(list.bounds().height, 17.0 + 9.0 + 17.0 + 4.0);
+}
+
 TEST(MenuEntries, TheKeyboardPassesOverRulesAndGreyedRows) {
   Menued test({command("Undo"), MenuEntry::divider(), greyed("Paste"), command("Select All")});
   test.key(Key::Down);
