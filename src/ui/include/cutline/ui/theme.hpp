@@ -386,6 +386,9 @@ struct Metrics {
   /// Whether a dropdown's arrow sits on a button of its own, as XP's did,
   /// rather than being a bare chevron.
   bool dropdown_button = false;
+  /// Whether a dropdown is drawn as a button rather than a field -- Vista's
+  /// drop lists were its buttons' faces with a small black triangle.
+  bool dropdown_is_button = false;
 
   /// How long a view takes to get where it was sent -- a zoom, a scroll by
   /// the wheel -- and how long a popup takes to arrive, in seconds. Zero

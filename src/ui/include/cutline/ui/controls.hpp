@@ -880,9 +880,15 @@ class Dropdown : public Widget {
   /// Where the arrow is drawn, on the trailing edge.
   [[nodiscard]] Rect arrow() const;
 
-  [[nodiscard]] Part part() const noexcept override { return Part::Input; }
+  /// A field, or a button where the theme draws drop lists as buttons.
+  [[nodiscard]] Part part() const noexcept override {
+    return as_button_ ? Part::Button : Part::Input;
+  }
   [[nodiscard]] bool paints_surface() const noexcept override { return true; }
   [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  /// Takes from the theme whether it is a field or a button, since painting
+  /// and `part` both need to know and neither has a context to ask.
+  void layout(const LayoutContext& context) override;
   void paint_content(Painter& painter, const Theme& theme) const override;
 
   bool on_mouse_down(const MouseEvent& event) override;
@@ -892,6 +898,7 @@ class Dropdown : public Widget {
   std::vector<std::string> options_;
   std::size_t selected_ = 0;
   bool open_ = false;
+  bool as_button_ = false;
   double arrow_width_ = 18.0;
 
   std::function<void(std::size_t)> on_change_;

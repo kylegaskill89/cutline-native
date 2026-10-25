@@ -621,6 +621,7 @@ namespace {
   t.metrics.caption_close_width = 43.0;
   t.metrics.caption_hangs = true;
   t.metrics.caption_glyphs = CaptionGlyphs::Vista;
+  t.metrics.dropdown_is_button = true;
 
   const Color ink = hex("#000000");
   const Color greyed = hex("#838383");

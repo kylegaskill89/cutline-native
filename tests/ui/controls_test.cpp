@@ -2454,6 +2454,18 @@ TEST(Dropdown, LunasArrowIsAButtonAndOtherThemesIsTwoStrokes) {
   }
 }
 
+TEST(Dropdown, VistasIsAButtonWithATriangle) {
+  // Vista drew a drop list as its buttons' face, with a small black triangle
+  // in place of the chevron; the other themes keep a field.
+  const RecordingPainter measure;
+  for (const char* id : {"aero", "flat"}) {
+    const Theme& theme = *built_in_theme(id);
+    Dropdown dropdown({"Desktop", "Icon"});
+    dropdown.arrange(Rect{0.0, 0.0, 120.0, 23.0}, LayoutContext{theme, measure});
+    EXPECT_EQ(dropdown.part(), std::string_view(id) == "aero" ? Part::Button : Part::Input) << id;
+  }
+}
+
 TEST(ProgressBar, NothingDoneDrawsNoFill) {
   ProgressBar bar;
   bar.arrange(Rect{0.0, 0.0, 200.0, 20.0}, flat_context());

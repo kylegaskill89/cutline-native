@@ -1795,6 +1795,10 @@ LayoutItem Dropdown::sizing(Axis axis, const LayoutContext& context) const {
   return LayoutItem::fixed(widest + 2.0 * metrics.padding_x + arrow_width_);
 }
 
+void Dropdown::layout(const LayoutContext& context) {
+  as_button_ = context.metrics().dropdown_is_button;
+}
+
 void Dropdown::paint_content(Painter& painter, const Theme& theme) const {
   const SurfaceStyle style = surface_style(theme);
   const Rect area = bounds();
@@ -1803,6 +1807,23 @@ void Dropdown::paint_content(Painter& painter, const Theme& theme) const {
   const Rect text{area.x + 8.0, area.y, std::max(0.0, mark.x - area.x - 8.0), area.height};
   // At the theme's size, which is what `sizing` measured it at.
   painter.text(text_run(text, value(), style, theme.metrics.font_size, TextAlign::Left, false));
+
+  if (theme.metrics.dropdown_is_button) {
+    // Vista's: a solid triangle seven pixels by four, in the button's ink.
+    static constexpr std::array<std::string_view, 4> kTriangle{{
+        "#######", ".#####.", "..###..", "...#...",
+    }};
+    const double left = std::round(mark.x + (mark.width - 7.0) / 2.0);
+    const double top = std::round(mark.y + (mark.height - 4.0) / 2.0);
+    for (std::size_t row = 0; row < kTriangle.size(); ++row) {
+      for (std::size_t col = 0; col < kTriangle[row].size(); ++col) {
+        if (kTriangle[row][col] != '#') continue;
+        painter.fill(Rect{left + static_cast<double>(col), top + static_cast<double>(row), 1.0, 1.0},
+                     0.0, Fill::solid(style.text));
+      }
+    }
+    return;
+  }
 
   if (theme.metrics.dropdown_button) {
     // XP's: a button fifteen pixels by seventeen inside the field's edge,
