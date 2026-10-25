@@ -4,6 +4,7 @@
 /// on a quiet machine and fails on a busy one.
 
 #include "cutline/ui/animator.hpp"
+#include "cutline/ui/controls.hpp"
 
 #include "cutline/ui/recording_painter.hpp"
 #include "cutline/ui/theme.hpp"
@@ -13,6 +14,7 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <string_view>
 
 namespace cutline::ui {
 namespace {
@@ -56,6 +58,23 @@ TEST(Animator, AFadeTakesTheTimeItIsGivenAndThenStops) {
 // A control at rest is not asked about while nothing is painted. The pause
 // before the pointer arrives is not part of the fade: counted, it finished
 // every fade in its first frame, which is how this was found on screen.
+TEST(Animator, ACycleGoesRoundForAsLongAsItIsAskedAbout) {
+  Stepped time;
+  Animator animator(time.clock());
+  int owner = 0;
+  EXPECT_FLOAT_EQ(animator.cycle(&owner, channel::kPulse, 2.0), 0.0f);
+  time.now += 0.5;
+  EXPECT_FLOAT_EQ(animator.cycle(&owner, channel::kPulse, 2.0), 0.25f);
+  time.now += 2.0;
+  EXPECT_FLOAT_EQ(animator.cycle(&owner, channel::kPulse, 2.0), 0.25f) << "round again";
+  EXPECT_TRUE(animator.running());
+
+  // A frame that does not ask lets it go, and the loop with it.
+  animator.begin_frame();
+  animator.begin_frame();
+  EXPECT_FALSE(animator.running());
+}
+
 TEST(Animator, TimeAtRestBeforeAChangeIsNotFadeTime) {
   Stepped time;
   Animator animator(time.clock());
@@ -131,6 +150,64 @@ TEST(StyleMix, AGlowArrivingFromNothingFadesIn) {
 // The Aero button under the pointer: at rest when first drawn, partway a
 // moment after the pointer arrives, there once the theme's time has passed --
 // and the host says it wants painting for exactly as long as that takes.
+TEST(Fading, AerosDefaultButtonPulsesAndOthersHoldStill) {
+  // Vista's default button pulsed towards a bluer glow and back every two
+  // seconds while it was the default; the other themes' do not move.
+  const RecordingPainter measurer;
+  for (const char* id : {"aero", "flat"}) {
+    const Theme& theme = *built_in_theme(id);
+    auto made = std::make_unique<Button>("OK");
+    Button* button = made.get();
+    button->set_default(true);
+    WidgetHost host(std::move(made));
+    Stepped time;
+    host.animator().set_clock(time.clock());
+    host.resize(Rect{0.0, 0.0, 200.0, 40.0}, LayoutContext{theme, measurer});
+
+    RecordingPainter painter;
+    host.paint(painter, theme);
+    const SurfaceStyle first = button->surface_style(theme);
+    time.now += 0.5;
+    host.paint(painter, theme);
+    const SurfaceStyle later = button->surface_style(theme);
+    if (std::string_view(id) == "aero") {
+      EXPECT_NE(first, later) << "the pulse should have moved";
+      EXPECT_TRUE(host.animating());
+    } else {
+      EXPECT_EQ(first, later) << id;
+    }
+  }
+}
+
+TEST(Fading, AerosProgressBarShinesNowAndThen) {
+  // A light crosses what is done, then is gone until the next time round.
+  const Theme& aero = *built_in_theme("aero");
+  const RecordingPainter measurer;
+  auto made = std::make_unique<ProgressBar>(0.6);
+  WidgetHost host(std::move(made));
+  Stepped time;
+  host.animator().set_clock(time.clock());
+  host.resize(Rect{0.0, 0.0, 300.0, 20.0}, LayoutContext{aero, measurer});
+
+  const auto shining = [&] {
+    RecordingPainter painter;
+    host.paint(painter, aero);
+    for (const DrawCall& call : painter.calls()) {
+      if (call.kind == DrawCall::Kind::Fill && call.fill.kind == FillKind::Gradient &&
+          call.fill.stops.size() == 3 && call.fill.stops.front().color.a == 0.0f) {
+        return true;
+      }
+    }
+    return false;
+  };
+  EXPECT_TRUE(shining());
+  time.now += aero.metrics.progress_shine_crossing / 2.0;
+  EXPECT_TRUE(shining());
+  time.now += aero.metrics.progress_shine_crossing;
+  EXPECT_FALSE(shining()) << "between crossings";
+  EXPECT_TRUE(host.animating()) << "and still waiting for the next";
+}
+
 TEST(Fading, AButtonGlowsInOverTheThemesTime) {
   const Theme& aero = *built_in_theme("aero");
   ASSERT_GT(aero.metrics.hover_in, 0.0);

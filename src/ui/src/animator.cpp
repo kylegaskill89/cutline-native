@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 namespace cutline::ui {
 
@@ -69,10 +70,25 @@ float Animator::progress(const void* owner, int channel, std::uint64_t change,
   return t * t * (3.0f - 2.0f * t);
 }
 
+float Animator::cycle(const void* owner, int channel, double period) {
+  const double now = clock_();
+  const auto key = std::pair{owner, channel};
+  auto found = entries_.find(key);
+  if (found == entries_.end() || !found->second.looping) {
+    found = entries_.insert_or_assign(key, Entry{.on = true, .when = now, .looping = true}).first;
+  }
+  Entry& entry = found->second;
+  entry.touched = true;
+  if (period <= 0.0) return 0.0f;
+  // From when it started rather than from the last frame: a cycle is a place
+  // in time, and a frame that comes late should land where it would have been.
+  return static_cast<float>(std::fmod(std::max(0.0, now - entry.when), period) / period);
+}
+
 bool Animator::running() const noexcept {
   return std::ranges::any_of(entries_, [](const auto& pair) {
     const Entry& entry = pair.second;
-    return entry.value != (entry.on ? 1.0f : 0.0f);
+    return entry.looping || entry.value != (entry.on ? 1.0f : 0.0f);
   });
 }
 

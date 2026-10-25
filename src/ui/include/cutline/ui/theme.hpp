@@ -201,6 +201,7 @@ enum class Part {
   Caption,      ///< a title bar's minimise and maximise buttons
   CaptionClose, ///< its close button, which XP and Vista drew in red
   DropButton,   ///< a dropdown's arrow, where `dropdown_button` draws one
+  DefaultGlow,  ///< the default button at the height of its pulse
   ListHeader,   ///< the strip of column headings over a list
 };
 
@@ -389,6 +390,13 @@ struct Metrics {
   /// Whether a dropdown is drawn as a button rather than a field -- Vista's
   /// drop lists were its buttons' faces with a small black triangle.
   bool dropdown_is_button = false;
+  /// How long the default button takes to pulse up to its glow and back, in
+  /// seconds; zero holds it still. Vista's took two.
+  double default_pulse = 0.0;
+  /// How often a light runs along a progress bar's filled part, and how long
+  /// it takes to cross, in seconds; zero for none. Vista's.
+  double progress_shine = 0.0;
+  double progress_shine_crossing = 0.0;
 
   /// How long a view takes to get where it was sent -- a zoom, a scroll by
   /// the wheel -- and how long a popup takes to arrive, in seconds. Zero

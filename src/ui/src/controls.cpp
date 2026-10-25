@@ -2602,6 +2602,25 @@ void ProgressBar::paint_content(Painter& painter, const Theme& theme) const {
     // said otherwise: this is the part that has happened, and every theme has
     // already decided what the active part of a control looks like.
     paint_surface(painter, done, done_style);
+
+    // Vista's light running along what is done: a soft white band that
+    // crosses now and then, and is not there in between.
+    const double period = theme.metrics.progress_shine;
+    const double crossing = theme.metrics.progress_shine_crossing;
+    WidgetHost* owner = host();
+    if (period > 0.0 && crossing > 0.0 && owner != nullptr) {
+      const double at = owner->animator().cycle(this, channel::kShine, period) * period;
+      if (at < crossing) {
+        const double band = std::min(120.0, done.width);
+        const double x = done.x - band + (done.width + band) * (at / crossing);
+        const Color clear{1.0f, 1.0f, 1.0f, 0.0f};
+        const Color light{1.0f, 1.0f, 1.0f, 0.45f};
+        painter.push_clip(done, done_style.corner_radius);
+        painter.fill(Rect{x, done.y, band, done.height}, 0.0,
+                     Fill::gradient({{0.0f, clear}, {0.5f, light}, {1.0f, clear}}, 90.0));
+        painter.pop_clip();
+      }
+    }
   }
 
   if (text_.empty()) return;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numbers>
 #include <string_view>
 #include <vector>
 
@@ -94,6 +95,18 @@ LayoutItem Button::sizing(Axis axis, const LayoutContext& context) const {
 State Button::state() const noexcept {
   const State own = Widget::state();
   return default_ && own == State::Normal ? State::Focused : own;
+}
+
+SurfaceStyle Button::surface_style(const Theme& theme) const {
+  SurfaceStyle style = Widget::surface_style(theme);
+  const double period = theme.metrics.default_pulse;
+  WidgetHost* owner = host();
+  if (!default_ || state() != State::Focused || period <= 0.0 || owner == nullptr) return style;
+  // A sine, brightest a fifth of the way round, as measured from Vista's.
+  const float phase = owner->animator().cycle(this, channel::kPulse, period);
+  const auto glow = static_cast<float>(
+      0.5 + 0.5 * std::cos(2.0 * std::numbers::pi * (static_cast<double>(phase) - 0.2)));
+  return mix(style, theme.style(Part::DefaultGlow), glow);
 }
 
 void Button::paint_content(Painter& painter, const Theme& theme) const {

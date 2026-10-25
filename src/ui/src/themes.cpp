@@ -622,6 +622,9 @@ namespace {
   t.metrics.caption_hangs = true;
   t.metrics.caption_glyphs = CaptionGlyphs::Vista;
   t.metrics.dropdown_is_button = true;
+  t.metrics.default_pulse = 2.0;
+  t.metrics.progress_shine = 3.0;
+  t.metrics.progress_shine_crossing = 1.5;
 
   const Color ink = hex("#000000");
   const Color greyed = hex("#838383");
@@ -724,6 +727,11 @@ namespace {
   button_default.rim = Rim{.width = 1.0, .fill = Fill::solid(hex("#40d7fc"))};
   button_default.border = hex("#3c7fb1");
   t.set(Part::Button, State::Focused, button_default);
+  // The height of its pulse: bluer, the cyan ring brighter.
+  SurfaceStyle button_glow = button_default;
+  button_glow.fill = two_tone("#ebf6fc", "#dff1fb", "#c8e6f6", "#b8ddf2");
+  button_glow.rim = Rim{.width = 1.0, .fill = Fill::solid(hex("#30d4ff"))};
+  t.set(Part::DefaultGlow, State::Normal, button_glow);
 
   // Latched: held down, as a toggle on a command bar stays.
   SurfaceStyle button_selected = button_pressed;
@@ -1546,6 +1554,11 @@ namespace {
   // only where `dropdown_button` says so, and is styled like one regardless.
   theme = with_inherited(std::move(theme), Part::ListHeader, Part::ToolButton);
   theme = with_inherited(std::move(theme), Part::DropButton, Part::ToolButton);
+  // Without a pulse of its own, the default button's glow is how it already
+  // looks, and pulsing towards it changes nothing.
+  if (!theme.defines(Part::DefaultGlow, State::Normal)) {
+    theme.set(Part::DefaultGlow, State::Normal, theme.style(Part::Button, State::Focused));
+  }
   return with_inherited(std::move(theme), Part::CaptionClose, Part::Caption);
 }
 

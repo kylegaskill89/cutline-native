@@ -123,6 +123,8 @@ class Button : public Widget {
   void set_mnemonic(bool on) noexcept { mnemonic_ = on; }
   [[nodiscard]] bool mnemonic() const noexcept { return mnemonic_; }
   [[nodiscard]] State state() const noexcept override;
+  /// The default button pulsing towards its glow where the theme says so.
+  [[nodiscard]] SurfaceStyle surface_style(const Theme& theme) const override;
 
   /// Everything except a resting menu item, which draws nothing at all.
   ///

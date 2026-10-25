@@ -32,6 +32,8 @@ inline constexpr int kPress = 1;
 inline constexpr int kZoom = 2;
 inline constexpr int kScroll = 3;
 inline constexpr int kArrive = 4;
+inline constexpr int kPulse = 5;
+inline constexpr int kShine = 6;
 }  // namespace channel
 
 class Animator {
@@ -62,8 +64,16 @@ class Animator {
   [[nodiscard]] float progress(const void* owner, int channel, std::uint64_t change,
                                double duration);
 
-  /// Whether anything asked about in the last paint had not yet arrived, which
-  /// is what keeps the frame loop painting.
+  /// Where `owner`'s `channel` is in a cycle `period` seconds long, from 0 to
+  /// 1, starting from 0 the first time it is asked about.
+  ///
+  /// For what goes round for as long as it is shown -- Vista's default button
+  /// pulsing, its progress bar's shine -- and keeps the frame loop painting
+  /// only for as long as something goes on asking.
+  [[nodiscard]] float cycle(const void* owner, int channel, double period);
+
+  /// Whether anything asked about in the last paint had not yet arrived, or
+  /// is going round, which is what keeps the frame loop painting.
   [[nodiscard]] bool running() const noexcept;
 
   /// Called by the host before each paint. Forgets whatever was not asked
@@ -81,6 +91,7 @@ class Animator {
     double when = 0.0;
     bool touched = true;
     std::uint64_t change = 0;
+    bool looping = false;
   };
   Clock clock_;
   std::map<std::pair<const void*, int>, Entry> entries_;

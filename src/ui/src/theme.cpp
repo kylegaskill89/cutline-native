@@ -17,7 +17,7 @@ namespace {
 
 [[nodiscard]] float channel(int value) noexcept { return static_cast<float>(value) / 255.0f; }
 
-constexpr std::array<std::pair<Part, std::string_view>, 28> kPartNames{{
+constexpr std::array<std::pair<Part, std::string_view>, 29> kPartNames{{
     {Part::Window, "window"},
     {Part::TitleBar, "title_bar"},
     {Part::Panel, "panel"},
@@ -45,6 +45,7 @@ constexpr std::array<std::pair<Part, std::string_view>, 28> kPartNames{{
     {Part::Caption, "caption"},
     {Part::CaptionClose, "caption_close"},
     {Part::DropButton, "drop_button"},
+    {Part::DefaultGlow, "default_glow"},
     {Part::ListHeader, "list_header"},
 }};
 

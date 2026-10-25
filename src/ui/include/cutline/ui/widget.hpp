@@ -173,7 +173,7 @@ class Widget {
   /// a fade when it has just been hovered, left or pressed and the theme fades.
   /// What a widget paints its own surface and text with, so the two move
   /// together.
-  [[nodiscard]] SurfaceStyle surface_style(const Theme& theme) const;
+  [[nodiscard]] virtual SurfaceStyle surface_style(const Theme& theme) const;
 
   /// Drawn after the surface and before the children. Labels, icons, the
   /// contents of a timeline track.
