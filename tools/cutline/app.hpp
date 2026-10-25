@@ -30,6 +30,7 @@
 #include "cutline/editor/commands.hpp"
 #include "cutline/editor/document.hpp"
 #include "cutline/editor/effects_binding.hpp"
+#include "cutline/editor/export_presets.hpp"
 #include "cutline/editor/generators.hpp"
 #include "cutline/editor/import.hpp"
 #include "cutline/editor/inspector.hpp"
@@ -302,6 +303,15 @@ enum class SettingsKind {
   Application,
   /// Premiere's Project Settings. Belongs to the cut, saved inside it.
   Project,
+};
+
+/// Where a job in the render queue has got to.
+enum class RenderState {
+  Waiting,
+  Rendering,
+  Done,
+  Failed,
+  Cancelled,
 };
 
 struct App;
@@ -985,55 +995,97 @@ struct App {
     return playback_wanted && player != nullptr && (player->playing() || player->finished());
   }
 
-  /// An export in flight.
+  /// The render queue: every export, the one rendering and the ones waiting
+  /// behind it, in the order they run.
   ///
-  /// On its own thread because it is minutes of work and the window has to stay
-  /// answerable throughout — a progress bar that cannot be repainted is worse
-  /// than no progress bar. Everything crossing the thread boundary is either
-  /// atomic or guarded, and the rule is that the worker only ever *writes*
-  /// these and the interface only ever reads them, apart from `cancel`.
-  struct ExportJob {
-    std::thread worker;
-    std::atomic<bool> running{false};
-    /// Set by the interface, read by the worker's progress callback.
+  /// Premiere hands this to Media Encoder, a second application; here it is a
+  /// panel, and the renders run one at a time on a worker thread so the
+  /// editor stays answerable throughout -- a progress bar that cannot be
+  /// repainted is worse than no progress bar. One at a time because each
+  /// render already has the encoder and the GPU to itself, and two would
+  /// only take turns at both.
+  ///
+  /// Held by pointer so a job's address survives the list changing around
+  /// it: the worker holds the one it is rendering. Everything the worker
+  /// touches is atomic, and the rule is that it writes `outcome` before it
+  /// sets `state`, and the interface reads `state` before `outcome`.
+  struct RenderJob {
+    std::uint64_t id = 0;
+    /// What the job is called in the queue: the file it writes.
+    std::filesystem::path path;
+    /// The preset it was queued with, for the queue to show.
+    std::string preset;
+    /// The project as it was when queued. Premiere's queue renders what was
+    /// sent, not whatever the sequence has become since.
+    cutline::core::Project project;
+    cutline::editor::ExportPlan plan;
+    std::optional<cutline::core::MarkedSpan> span;
+    std::atomic<RenderState> state{RenderState::Waiting};
     std::atomic<bool> cancel{false};
     /// 0..1, for the bar.
     std::atomic<double> fraction{0.0};
-    /// Set once, just before `running` goes false. Read after that.
     std::string outcome;
-    bool failed = false;
-    /// Set when the worker has finished and the thread still needs joining.
-    std::atomic<bool> finished{false};
   };
-  ExportJob export_job;
+  std::vector<std::unique_ptr<RenderJob>> render_queue;
+  /// The job being rendered, or null. Only the interface changes it.
+  RenderJob* rendering = nullptr;
+  std::thread render_worker;
+  /// Whether the queue moves on to the next job by itself. Export starts it;
+  /// Queue only adds to it, as Premiere's Queue button does.
+  bool queue_running = false;
+  std::uint64_t next_job_id = 1;
+
   std::unique_ptr<Shell> export_window;
 
   /// What the dialog is set to, kept on the application so reopening it
   /// remembers what was chosen last time.
   struct ExportSetup {
     std::filesystem::path path;
-    std::size_t codec = 0;
-    std::size_t quality = 1;
-    std::size_t rate = 0;
-    std::size_t resolution = 0;
-    std::size_t mixdown = 0;
-    /// 0 matches the sequence; after that, the working spaces in order.
-    std::size_t colour = 0;
-    bool audio = true;
+    /// The settings shown, which are a preset's until one of them is changed
+    /// and then "Custom", as in Premiere.
+    cutline::editor::ExportPreset preset = cutline::editor::built_in_export_presets().front();
     /// Render only what is marked in and out. Ignored, and unpressable, when
     /// nothing is marked — there is no such thing as "the marked range" then,
     /// and a checkbox that means the whole sequence either way is a lie.
     bool marked_only = false;
+    /// The job the window last sent, whose progress it shows.
+    std::uint64_t watching = 0;
   };
   ExportSetup export_setup;
+  cutline::editor::SavedExportPresets export_presets;
 
-  Button* export_output = nullptr;
-  Button* export_start = nullptr;
-  Dropdown* export_mixdown = nullptr;
-  ProgressBar* export_progress = nullptr;
-  Label* export_status = nullptr;
+  /// The Export window's controls, so choosing a preset can set them all.
+  struct ExportControls {
+    Dropdown* preset = nullptr;
+    Button* delete_preset = nullptr;
+    Dropdown* format = nullptr;
+    Dropdown* colour = nullptr;
+    Dropdown* quality = nullptr;
+    Dropdown* resolution = nullptr;
+    Dropdown* rate = nullptr;
+    Dropdown* mixdown = nullptr;
+    Checkbox* audio = nullptr;
+    Button* output = nullptr;
+    Button* start = nullptr;
+    Button* queue = nullptr;
+    ProgressBar* progress = nullptr;
+    Label* status = nullptr;
+  };
+  ExportControls export_controls;
 
-  [[nodiscard]] bool exporting() const noexcept { return export_job.running.load(); }
+  /// The Render Queue panel: its list of rows, and the buttons above it.
+  struct QueueRow {
+    std::uint64_t id = 0;
+    RenderState state = RenderState::Waiting;
+    Label* status = nullptr;
+    ProgressBar* progress = nullptr;
+  };
+  Box* queue_list = nullptr;
+  Button* queue_start = nullptr;
+  Button* queue_clear = nullptr;
+  std::vector<QueueRow> queue_rows;
+
+  [[nodiscard]] bool exporting() const noexcept { return rendering != nullptr; }
   /// Whether any window has something fading, which keeps the loop turning
   /// until it settles.
   [[nodiscard]] bool animating() noexcept;
@@ -1108,7 +1160,7 @@ constexpr std::array<double, 7> kFrameRates{23.976, 24.0, 25.0, 29.97, 30.0, 50.
 /// A panel is a name from here plus whatever `make_panel` builds for it. The
 /// layout only ever moves the name around, which is what lets an arrangement be
 /// saved and restored without saving any widgets.
-constexpr std::array<std::pair<std::string_view, std::string_view>, 9> kPanels{{
+constexpr std::array<std::pair<std::string_view, std::string_view>, 10> kPanels{{
     {"project", "Project"},
     {"effects", "Effect Controls"},
     // Premiere's own two names, which are confusingly similar on purpose: this
@@ -1135,6 +1187,11 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 9> kPanels{{
     // at a time; this is for going back ten, or for seeing what the last few
     // presses actually did.
     {"history", "History"},
+    // Media Encoder's queue, brought into the editor: every export, the one
+    // rendering and the ones waiting. Docked behind the timeline in every
+    // workspace, as Premiere docks its Progress panel: that strip is the one
+    // with room for another tab. "Queue" is Media Encoder's own name for it.
+    {"queue", "Queue"},
 }};
 
 /// The tool palette, in the order it is drawn and offered, and the action in
@@ -1187,15 +1244,34 @@ void apply_canvas(App& app, int width, int height);
 void apply_fps(App& app, double fps);
 [[nodiscard]] std::string fps_label(double fps);
 
-[[nodiscard]] std::optional<std::filesystem::path> choose_movie_file(HWND owner);
+/// `extension` is ".mp4" or ".mov", which sets the filter and the default.
+[[nodiscard]] std::optional<std::filesystem::path> choose_movie_file(
+    HWND owner, std::string_view extension = ".mp4");
 
 // The Export window, in `export_window.cpp`.
 void close_export_dialog(App& app);
 [[nodiscard]] std::unique_ptr<Widget> build_export_interface(App* app, Shell* shell);
+void refresh_export_dialog(App& app);
 /// Its size as designed, which `--check` lays it out at too: sized by guess,
 /// it once left its own Export button below its bottom edge.
-constexpr int kExportWindowWidth = 460;
-constexpr int kExportWindowHeight = 520;
+constexpr int kExportWindowWidth = 480;
+constexpr int kExportWindowHeight = 580;
+
+// The render queue and its panel, in `render_queue.cpp`.
+/// Adds a job to the end of the queue and returns its id, or says why the
+/// settings cannot be rendered. `start` sets the queue going, as Export does.
+[[nodiscard]] std::expected<std::uint64_t, std::string> queue_export(App& app, bool start);
+[[nodiscard]] App::RenderJob* find_job(App& app, std::uint64_t id);
+void start_queue(App& app);
+void pause_queue(App& app);
+/// Cancels a job that is rendering, or takes one that is not out of the queue.
+void remove_job(App& app, std::uint64_t id);
+void clear_finished_jobs(App& app);
+void refresh_queue(App& app);
+[[nodiscard]] std::unique_ptr<Widget> make_queue_panel(App* app);
+/// Whether the person is happy for queued renders to be abandoned by quitting.
+[[nodiscard]] bool confirm_abandon_queue(App& app);
+[[nodiscard]] std::string_view to_string(RenderState state) noexcept;
 
 // Menu rows, defined in `main.cpp`.
 /// A row that runs something, with the keys that do the same written beside

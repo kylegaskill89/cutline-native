@@ -2325,10 +2325,10 @@ commands.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| Presets, built in and saved | yes | **none** — one dialog, codec and quality not remembered | wiring |
-| Match Source | yes | **none** | wiring |
-| A queue running in the background | Media Encoder | **none** — one export at a time, owning the window | machinery |
-| HEVC 10-bit and an intermediate (ProRes or DNxHR) | yes | H.264 and HEVC at 8 bits | wiring, after §7 |
+| Presets, built in and saved | yes | **done** — `editor/export_presets`: a Preset menu at the top of the Export window that sets everything under it, and turns to "Custom" the moment one setting differs, as Premiere's does. Ten built-ins after Premiere's: three Match Source, YouTube 1080p and 2160p, Vimeo 1080p, Social Media 720p, HDR10, Apple ProRes 422 HQ and Avid DNxHR HQ. Save Preset names the settings as they stand and Delete Preset removes a saved one; a built-in's name is refused, so a built-in always means what it says. Saved in `%APPDATA%\Cutline\export_presets.json`, where a preset in a format this build lacks is passed over rather than costing the rest. Driven: saved "mine" at 720p, restarted, chose it, deleted it | wiring |
+| Match Source | yes | **done** — a preset's size is the picture's short side or the sequence's own, so "1080p" of a vertical sequence is 1080 wide and stays vertical; its rate and colour are the sequence's unless it names one. Matching an HDR sequence in H.264 or DNxHR writes Rec. 709, tone mapped, as Premiere does; asking for HDR in one outright is refused, and the window says why before Export is pressed | wiring |
+| A queue running in the background | Media Encoder | **done** — a Queue panel, docked behind the timeline in every workspace. Export adds the render and sets the queue going; Queue adds it and leaves it waiting, as sending to Media Encoder does. Jobs run one after another on a worker, each with the project as it was when sent, each with its own bar, a cross that stops a render or takes a waiting one out, and Show for a finished file. Quitting with renders left asks first. The editor stays usable throughout. Driven: ProRes queued, YouTube 1080p exported behind it, both rendered in turn and checked with ffprobe | machinery |
+| HEVC 10-bit and an intermediate (ProRes or DNxHR) | yes | **done** — HEVC Main10; ProRes 422 HQ (`prores_ks`, 4:2:2 10-bit, Apple's vendor tag) and DNxHR HQ (4:2:2 8-bit), each in a .mov, the output name changing to say so as the format is chosen. Driving the queue found the software encoders running on one thread, FFmpeg's default: ProRes at 4K went from 3.5 frames a second to 28 once given every core | wiring, after §7 |
 | Smart rendering | untouched spans copied rather than re-encoded | **none** | machinery |
 
 ## 12. Titles and Essential Graphics

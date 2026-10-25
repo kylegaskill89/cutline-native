@@ -930,11 +930,7 @@ template <typename T>
         window.paint(*painter, theme);
         walk(window.root());
         frame = Rect{0.0, 0.0, static_cast<double>(kWidth), static_cast<double>(kHeight)};
-        app.export_output = nullptr;
-        app.export_progress = nullptr;
-        app.export_status = nullptr;
-        app.export_start = nullptr;
-        app.export_mixdown = nullptr;
+        app.export_controls = {};
       }
 #endif
     }

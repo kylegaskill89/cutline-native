@@ -520,6 +520,10 @@ std::expected<std::unique_ptr<MediaWriter>, std::string> MediaWriter::create(
       context->time_base = av_inv_q(rational_fps(settings.fps));
       context->framerate = rational_fps(settings.fps);
       context->pix_fmt = *pixel_format;
+      // Every core. FFmpeg's default is one thread, which the hardware
+      // encoders never notice and the software ones are crippled by:
+      // prores_ks wrote 4K at three frames a second with it.
+      context->thread_count = 0;
       if (settings.colour == VideoColour::Bt709) {
         context->colorspace = AVCOL_SPC_BT709;
         context->color_primaries = AVCOL_PRI_BT709;

@@ -1631,6 +1631,7 @@ void refresh_history(App& app) {
   if (id == "effects") return make_effects_panel(app);
   if (id == "library") return make_library_panel(app);
   if (id == "audio") return make_audio_panel(app);
+  if (id == "queue") return make_queue_panel(app);
 
   // A layout naming a panel this build does not have. Saying so beats an empty
   // rectangle, which looks like a panel that failed to draw.

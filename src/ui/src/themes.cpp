@@ -1542,6 +1542,15 @@ namespace {
 }
 
 [[nodiscard]] Theme finished(Theme theme) {
+  // A field that cannot be used has to look it. Only Luna drew one, and the
+  // rest showed a greyed dropdown at full ink -- found when the Export
+  // window's Quality looked choosable for ProRes, which has none. The field at
+  // rest, written in the ink a disabled button is.
+  if (!theme.defines(Part::Input, State::Disabled)) {
+    SurfaceStyle off = theme.style(Part::Input, State::Normal);
+    off.text = theme.style(Part::Button, State::Disabled).text;
+    theme.set(Part::Input, State::Disabled, off);
+  }
   theme = with_inherited(std::move(theme), Part::Check, Part::Input);
   theme = with_inherited(std::move(theme), Part::Radio, Part::Input);
   // A progress bar was a slider's groove, filled with its thumb, and the

@@ -1949,6 +1949,9 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       // two, because "are you sure" with only yes and no makes cancelling and
       // discarding the same button — and one of those loses an afternoon.
       if (app->session.modified() && !confirm_discard(*app)) return 0;
+      // Renders still to come go with the editor, so it asks. Media Encoder
+      // would go on without Premiere; this queue cannot.
+      if (!confirm_abandon_queue(*app)) return 0;
       break;
 
     case WM_DESTROY:
@@ -2083,6 +2086,12 @@ int main(int argc, char** argv) {
       read.has_value()) {
     app.keys = std::move(*read);
   }
+  // A presets file that cannot be read costs the saved presets, not the
+  // built-ins, and not the start.
+  if (auto read = cutline::editor::read_export_presets(cutline::editor::default_export_presets_path());
+      read.has_value()) {
+    app.export_presets = std::move(*read);
+  }
 
   // Read before the tree is built, so the window opens in the arrangement it
   // was last left in rather than flashing the default and then moving.
@@ -2211,7 +2220,7 @@ int main(int argc, char** argv) {
     // does, because nothing wakes to notice.
     const bool animating = app.animating();
     if (app.playback_live() || app.shuttling() || app.source_playing() || app.exporting() ||
-        app.export_job.finished.load() || animating) {
+        animating) {
       while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
         if (message.message == WM_QUIT) {
           running = false;

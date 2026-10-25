@@ -14,6 +14,7 @@ add_library(cutline_editor
   src/document.cpp
   src/edit_names.cpp
   src/effects_binding.cpp
+  src/export_presets.cpp
   src/generators.cpp
   src/import.cpp
   src/inspector.cpp

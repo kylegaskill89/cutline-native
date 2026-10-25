@@ -219,16 +219,19 @@ void add_adjustment(App& app) {
 /// one above, because the filters and the default extension are the whole of
 /// what that function does and threading them through would leave neither
 /// caller readable.
-[[nodiscard]] std::optional<std::filesystem::path> choose_movie_file(HWND owner) {
+[[nodiscard]] std::optional<std::filesystem::path> choose_movie_file(HWND owner,
+                                                                  std::string_view extension) {
   std::array<wchar_t, MAX_PATH> buffer{};
 
+  const bool mov = extension == ".mov";
   OPENFILENAMEW dialog{};
   dialog.lStructSize = sizeof(dialog);
   dialog.hwndOwner = owner;
-  dialog.lpstrFilter = L"MP4 video\0*.mp4\0All files\0*.*\0";
+  dialog.lpstrFilter = mov ? L"QuickTime movie\0*.mov\0All files\0*.*\0"
+                           : L"MP4 video\0*.mp4\0All files\0*.*\0";
   dialog.lpstrFile = buffer.data();
   dialog.nMaxFile = static_cast<DWORD>(buffer.size());
-  dialog.lpstrDefExt = L"mp4";
+  dialog.lpstrDefExt = mov ? L"mov" : L"mp4";
   dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
 
   if (GetSaveFileNameW(&dialog) == FALSE) return std::nullopt;

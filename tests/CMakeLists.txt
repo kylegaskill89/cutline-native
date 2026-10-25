@@ -32,6 +32,7 @@ add_executable(cutline_core_tests
   editor/edit_names_test.cpp
   editor/effects_binding_test.cpp
   editor/generators_test.cpp
+  editor/export_presets_test.cpp
   editor/import_test.cpp
   editor/inspector_test.cpp
   editor/keyframes_test.cpp
