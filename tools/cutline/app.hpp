@@ -1142,6 +1142,12 @@ constexpr std::array kTools{
     ToolEntry{cutline::ui::Tool::Slide, IconButton::Icon::Slide, Key::U, "Slide (U)"},
 };
 
+/// Where a popup opens under the menu bar, at its left edge.
+///
+/// Not at the pointer, and not over the bar it came from — a panel that covers
+/// the menu it was opened from hides the thing you would click to close it.
+[[nodiscard]] constexpr Rect settings_anchor() noexcept { return Rect{8.0, 72.0, 0.0, 0.0}; }
+
 // ----------------------------------------------- calls between the parts --
 
 // The window's own helpers, defined in `main.cpp`.
@@ -1203,6 +1209,23 @@ void toggle_panel(App& app, const PanelId& panel);
 [[nodiscard]] std::vector<MenuEntry> help_menu(App& app);
 /// The Window menu on its own, for `--check`, which measures its ticks.
 [[nodiscard]] std::unique_ptr<Widget> build_window_menu(App& app);
+
+// The window, defined in `main.cpp`.
+[[nodiscard]] cutline::core::Project check_project();
+[[nodiscard]] DockLayout default_layout();
+[[nodiscard]] std::unique_ptr<Widget> build_interface(App* app);
+void refresh_inspector(App& app);
+void show_playback_frame(App& app, double at);
+void run_command(App& app, cutline::editor::Command command);
+void open_speed_dialog(App& app, std::span<const std::string> clips);
+void open_marker_dialog(App& app, std::size_t index);
+[[nodiscard]] sk_sp<SkSurface> draw_cursor_art(cutline::ui::IconButton::Icon icon,
+                                               double scale = 1.0);
+
+// The headless check and the benchmarks, in `check.cpp`.
+[[nodiscard]] int self_check(std::string_view shots = {});
+[[nodiscard]] int benchmark();
+[[nodiscard]] int benchmark_playback(const std::filesystem::path& path);
 
 // The settings windows, in `settings_window.cpp`.
 [[nodiscard]] std::vector<SettingsPage> pages_for(SettingsKind kind);
