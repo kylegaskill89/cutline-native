@@ -50,6 +50,8 @@ namespace {
   t.metrics.font_family = "Tahoma";
   t.metrics.font_size = 12.0;
   t.metrics.small_font_size = 11.0;
+  t.metrics.heading_font_size = 12.0;  // XP headed a section in bold, not larger
+  t.metrics.group_spacing = 10.0;
   t.metrics.scrollbar_width = 17.0;  // XP scrollbars were chunky
   t.metrics.splitter_width = 8.0;    // and its splitters were raised bars
   t.metrics.track_height = 60.0;     // bevelled clips need the room
@@ -372,6 +374,8 @@ namespace {
   t.metrics.font_family = "Segoe UI";
   t.metrics.font_size = 13.0;
   t.metrics.scrollbar_width = 16.0;
+  t.metrics.heading_font_size = 15.0;  // Vista's "main instructions" stood a step up
+  t.metrics.group_spacing = 14.0;
   t.metrics.track_height = 58.0;
   // Vista's buttons glowed in quickly and let go slowly.
   t.metrics.hover_in = 0.15;
@@ -676,6 +680,8 @@ namespace {
   t.metrics.font_family = "Segoe UI";
   t.metrics.font_size = 13.0;
   t.metrics.scrollbar_width = 10.0;
+  t.metrics.heading_font_size = 14.0;
+  t.metrics.group_spacing = 16.0;
   t.metrics.splitter_width = 4.0;  // flat chrome wants a hairline, not a bar
   t.metrics.track_height = 56.0;
   t.metrics.hover_in = 0.1;
@@ -917,6 +923,8 @@ namespace {
   // the sentences that explain things were written to fit a proportional one.
   t.metrics.small_font_size = 11.0;
   t.metrics.line_height = 1.5;  // terminals breathe
+  t.metrics.heading_font_size = 13.0;  // one size of type, as a terminal has
+  t.metrics.group_spacing = 12.0;
   t.metrics.scrollbar_width = 12.0;
   t.metrics.track_height = 52.0;
   // Phosphor: lit at once, and an afterglow on the way out.

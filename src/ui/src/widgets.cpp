@@ -18,21 +18,35 @@ LayoutItem Spacer::sizing(Axis axis, const LayoutContext& context) const {
 }
 
 double Label::font_size(const Metrics& metrics) const noexcept {
+  if (heading_) return metrics.heading_font_size;
   return small_ ? metrics.small_font_size : metrics.font_size;
+}
+
+double Label::lead(const Metrics& metrics) const noexcept {
+  // Only down a column, and not for the heading that opens one: space above
+  // the first thing in a box is the box's padding, which it already has.
+  const auto* column = dynamic_cast<const Box*>(parent());
+  if (!heading_ || column == nullptr || column->axis() != Axis::Vertical) return 0.0;
+  for (const std::unique_ptr<Widget>& sibling : column->children()) {
+    if (!sibling->visible()) continue;
+    if (sibling.get() == this) return 0.0;
+    break;
+  }
+  return std::max(0.0, metrics.group_spacing - metrics.spacing);
 }
 
 LayoutItem Label::sizing(Axis axis, const LayoutContext& context) const {
   const Metrics& metrics = context.metrics();
   const double size = font_size(metrics);
 
-  if (axis == Axis::Vertical) return LayoutItem::fixed(size * metrics.line_height);
+  if (axis == Axis::Vertical) return LayoutItem::fixed(lead(metrics) + size * metrics.line_height);
 
   // Text does not grow, but it will shrink and be clipped rather than force a
   // panel wider than it has room to be. `paint_content` is what makes the
   // second half of that true — without the clip a squeezed label simply draws
   // over whatever is beside it, which is how a parameter row came to read
   // "Opacity100.0%".
-  const double width = std::max(context.text.measure(text_, size, bold_), min_width_);
+  const double width = std::max(context.text.measure(text_, size, bold_ || heading_), min_width_);
   return LayoutItem{.basis = width, .grow = 0.0, .shrink = 1.0, .min = 0.0, .max = kUnbounded};
 }
 
@@ -45,9 +59,13 @@ void Label::paint_content(Painter& painter, const Theme& theme) const {
   // backend, and nearly every label in the application has the room it asked
   // for — but the one that does not must be cut off at its own edge rather than
   // drawn across whatever is beside it.
-  const bool fits = painter.measure(text_, size, bold_) <= bounds().width + 0.5;
-  if (!fits) painter.push_clip(bounds(), 0.0);
-  painter.text(text_run(bounds(), text_, style, size, align_, bold_));
+  Rect area = bounds();
+  const double above = lead(theme.metrics);
+  area.y += above;
+  area.height -= above;
+  const bool fits = painter.measure(text_, size, bold_ || heading_) <= area.width + 0.5;
+  if (!fits) painter.push_clip(area, 0.0);
+  painter.text(text_run(area, text_, style, size, align_, bold_ || heading_));
   if (!fits) painter.pop_clip();
 }
 
@@ -113,10 +131,12 @@ void Button::fire() {
 Box::Box(Axis axis) : axis_(axis) {}
 
 double Box::spacing_for(const LayoutContext& context) const noexcept {
-  return spacing_.value_or(context.metrics().spacing);
+  if (spacing_) return *spacing_;
+  return space(context.metrics(), spacing_step_.value_or(Space::Normal));
 }
 
-Edges Box::padding_for(const LayoutContext&) const noexcept {
+Edges Box::padding_for(const LayoutContext& context) const noexcept {
+  if (padding_step_) return Edges::all(space(context.metrics(), *padding_step_));
   // Nothing by default: a plain box is a grouping, and nesting a few of them
   // would otherwise accumulate padding nobody asked for. `Panel` is the one
   // that surrounds its contents, and takes the amount from the theme.

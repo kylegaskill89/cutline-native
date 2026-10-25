@@ -141,6 +141,44 @@ TEST(Dialog, RowLabelsLineUp) {
   EXPECT_DOUBLE_EQ(first.bounds().x, second.bounds().x);
 }
 
+TEST(Form, AWidePageKeepsItsControlsBesideTheirLabels) {
+  // The settings pages are wider than their rows. A row of label, spring and
+  // control put the control at the far edge with a gap down the middle.
+  Form page;
+  auto& row = page.row("Height");
+  TextField& field = row.emplace<TextField>("540");
+  page.arrange(Rect{0.0, 0.0, 900.0, 300.0}, Fixture::context());
+
+  EXPECT_DOUBLE_EQ(field.bounds().x,
+                   row.label().bounds().right() + Fixture::context().metrics().spacing);
+}
+
+TEST(Form, AFormRebuiltInPlaceLinesUpItsNewRows) {
+  Form page;
+  page.row("A much longer name than any other").emplace<TextField>("old");
+  page.arrange(Rect{0.0, 0.0, 900.0, 300.0}, Fixture::context());
+
+  // What a settings page does when another category is chosen.
+  page.clear_children();
+  TextField& first = page.row("In").emplace<TextField>("1");
+  TextField& second = page.row("Out").emplace<TextField>("2");
+  page.arrange(Rect{0.0, 0.0, 900.0, 300.0}, Fixture::context());
+
+  EXPECT_DOUBLE_EQ(first.bounds().x, second.bounds().x);
+  EXPECT_LT(first.bounds().x, 300.0) << "the old page's label is still being measured";
+}
+
+TEST(Form, AHiddenRowDoesNotWidenTheColumn) {
+  Form page;
+  TextField& shown = page.row("In").emplace<TextField>("1");
+  page.row("A much longer name than any other").set_visible(false);
+  page.arrange(Rect{0.0, 0.0, 900.0, 300.0}, Fixture::context());
+
+  const double label = Fixture::context().text.measure("In", Fixture::context().metrics().font_size,
+                                                       false);
+  EXPECT_DOUBLE_EQ(shown.bounds().x, label + Fixture::context().metrics().spacing);
+}
+
 TEST(Dialog, WithNoCancelThereIsOneButton) {
   auto dialog = std::make_unique<Dialog>("Edits as it goes");
   dialog->set_accept("Close", [] { return std::optional<std::string>{}; });

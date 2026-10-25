@@ -64,6 +64,10 @@ class Label : public Widget {
   void set_bold(bool bold) noexcept { bold_ = bold; }
   /// Uses the theme's smaller size. For secondary text: timecode, hints.
   void set_small(bool small) noexcept { small_ = small; }
+  /// A section's heading: bold, at the theme's heading size, and with the
+  /// theme's group spacing above it rather than the spacing between rows, so a
+  /// page reads as sections before it reads as rows.
+  void set_heading(bool heading) noexcept { heading_ = heading; }
   /// At least this wide, so the labels down a column of rows line up.
   void set_min_width(double width) noexcept { min_width_ = width; }
 
@@ -73,12 +77,15 @@ class Label : public Widget {
 
  private:
   [[nodiscard]] double font_size(const Metrics& metrics) const noexcept;
+  /// The extra room above a heading.
+  [[nodiscard]] double lead(const Metrics& metrics) const noexcept;
 
   std::string text_;
   Part part_;
   TextAlign align_ = TextAlign::Left;
   bool bold_ = false;
   bool small_ = false;
+  bool heading_ = false;
   double min_width_ = 0.0;
 };
 
@@ -154,8 +161,25 @@ class Box : public Widget {
   void set_axis(Axis axis) noexcept { axis_ = axis; }
 
   /// Overrides the theme's spacing. Reset by passing nothing.
-  void set_spacing(std::optional<double> spacing) noexcept { spacing_ = spacing; }
-  void set_padding(std::optional<Edges> padding) noexcept { padding_ = padding; }
+  void set_spacing(std::optional<double> spacing) noexcept {
+    spacing_ = spacing;
+    spacing_step_.reset();
+  }
+  /// One of the theme's steps instead, which follows the theme when it changes
+  /// where a number would stay what it was.
+  void set_spacing(Space step) noexcept {
+    spacing_.reset();
+    spacing_step_ = step;
+  }
+  void set_padding(std::optional<Edges> padding) noexcept {
+    padding_ = padding;
+    padding_step_.reset();
+  }
+  /// The same step all round.
+  void set_padding(Space step) noexcept {
+    padding_.reset();
+    padding_step_ = step;
+  }
   void set_main(Align align) noexcept { main_ = align; }
   void set_cross(Align align) noexcept { cross_ = align; }
 
@@ -181,7 +205,9 @@ class Box : public Widget {
  private:
   Axis axis_;
   std::optional<double> spacing_;
+  std::optional<Space> spacing_step_;
   std::optional<Edges> padding_;
+  std::optional<Space> padding_step_;
   Align main_ = Align::Start;
   Align cross_ = Align::Stretch;
   bool fills_cross_ = false;

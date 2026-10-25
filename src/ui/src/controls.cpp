@@ -543,7 +543,7 @@ void Fader::layout(const LayoutContext& context) {
   const Metrics& metrics = context.metrics();
   thumb_height_ = metrics.control_height * 0.55;
   throw_width_ = metrics.control_height * 0.7;
-  font_size_ = std::max(8.0, metrics.font_size - 3.0);
+  font_size_ = metrics.tiny_font_size;
   // Wide enough for the widest mark it will print. "-48" is three characters
   // and a minus, and measuring it is cheaper than being wrong about the font.
   scale_width_ = shows_scale_ ? context.text.measure("-48", font_size_, false) + metrics.spacing
@@ -723,7 +723,7 @@ double PanKnob::angle_of(double value) const {
 void PanKnob::layout(const LayoutContext& context) {
   const Metrics& metrics = context.metrics();
   dial_size_ = metrics.control_height * 1.4;
-  font_size_ = std::max(8.0, metrics.font_size - 3.0);
+  font_size_ = metrics.tiny_font_size;
   end_width_ = shows_ends_ ? context.text.measure("L", font_size_, false) + metrics.spacing : 0.0;
 }
 
@@ -1462,13 +1462,13 @@ LayoutItem TextField::sizing(Axis axis, const LayoutContext& context) const {
 
   const auto rows = static_cast<double>(std::max<std::size_t>(
       static_cast<std::size_t>(min_lines_), std::max<std::size_t>(lines_.size(), 1)));
-  return LayoutItem::fixed(rows * metrics.font_size * 1.4 + metrics.padding_y * 2.0);
+  return LayoutItem::fixed(rows * metrics.font_size * metrics.line_height + metrics.padding_y * 2.0);
 }
 
 void TextField::layout(const LayoutContext& context) {
   const Metrics& metrics = context.metrics();
   font_size_ = metrics.font_size;
-  line_height_ = metrics.font_size * 1.4;
+  line_height_ = metrics.font_size * metrics.line_height;
   padding_ = metrics.padding_y;
 
   lines_.clear();

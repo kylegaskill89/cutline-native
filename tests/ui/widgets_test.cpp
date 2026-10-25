@@ -223,6 +223,88 @@ TEST(Box, LaysChildrenOutWithTheThemesSpacing) {
   EXPECT_DOUBLE_EQ(second.bounds().x, first.bounds().right() + context.metrics().spacing);
 }
 
+TEST(Box, ANamedStepFollowsTheThemeWhereANumberWouldNot) {
+  Box row(Axis::Horizontal);
+  auto& first = row.emplace<Button>("One");
+  auto& second = row.emplace<Button>("Two");
+  row.set_spacing(Space::Group);
+
+  for (const Theme& theme : built_in_themes()) {
+    const LayoutContext context = context_for(theme);
+    row.arrange(Rect{0.0, 0.0, 400.0, 40.0}, context);
+    EXPECT_DOUBLE_EQ(second.bounds().x - first.bounds().right(), theme.metrics.group_spacing)
+        << theme.name;
+  }
+}
+
+TEST(Box, ANumberReplacesAStepAndAStepReplacesANumber) {
+  const LayoutContext context = flat_context();
+  Box row(Axis::Horizontal);
+  auto& first = row.emplace<Button>("One");
+  auto& second = row.emplace<Button>("Two");
+
+  row.set_spacing(Space::Tight);
+  row.set_spacing(3.0);
+  row.arrange(Rect{0.0, 0.0, 400.0, 40.0}, context);
+  EXPECT_DOUBLE_EQ(second.bounds().x - first.bounds().right(), 3.0);
+
+  row.set_spacing(Space::Tight);
+  row.arrange(Rect{0.0, 0.0, 400.0, 40.0}, context);
+  EXPECT_DOUBLE_EQ(second.bounds().x - first.bounds().right(), context.metrics().tight_spacing);
+}
+
+TEST(Box, PaddingCanBeAStepToo) {
+  const LayoutContext context = flat_context();
+  Box row(Axis::Horizontal);
+  auto& only = row.emplace<Button>("One");
+  row.set_padding(Space::Tight);
+
+  row.arrange(Rect{0.0, 0.0, 400.0, 40.0}, context);
+  EXPECT_DOUBLE_EQ(only.bounds().x, context.metrics().tight_spacing);
+}
+
+TEST(Label, AHeadingIsBoldAtTheThemesHeadingSize) {
+  for (const Theme& theme : built_in_themes()) {
+    const LayoutContext context = context_for(theme);
+    Label heading("Frame rate");
+    heading.set_heading(true);
+    EXPECT_DOUBLE_EQ(heading.sizing(Axis::Vertical, context).basis,
+                     theme.metrics.heading_font_size * theme.metrics.line_height)
+        << theme.name << ": alone, it has nothing above it to stand apart from";
+
+    RecordingPainter painter;
+    heading.arrange(Rect{0.0, 0.0, 300.0, 40.0}, context);
+    heading.paint(painter, theme);
+    const DrawCall* call = painter.first(DrawCall::Kind::Text);
+    ASSERT_TRUE(call != nullptr && call->run.has_value()) << theme.name;
+    EXPECT_TRUE(call->run->bold) << theme.name;
+    EXPECT_DOUBLE_EQ(call->run->size, theme.metrics.heading_font_size) << theme.name;
+  }
+}
+
+TEST(Label, AHeadingAfterRowsStandsAGroupApartFromThem) {
+  const LayoutContext context = flat_context();
+  const Metrics& metrics = context.metrics();
+  Box page(Axis::Vertical);
+  auto& opening = page.emplace<Label>("Sequence size");
+  opening.set_heading(true);
+  auto& row = page.emplace<Button>("Set");
+  auto& next = page.emplace<Label>("Frame rate");
+  next.set_heading(true);
+
+  page.arrange(Rect{0.0, 0.0, 300.0, 400.0}, context);
+
+  EXPECT_DOUBLE_EQ(opening.bounds().y, 0.0) << "the first heading has the box's padding above it";
+  EXPECT_DOUBLE_EQ(row.bounds().y - opening.bounds().bottom(), metrics.spacing);
+
+  // The text itself, not the label's box, is what the eye measures from.
+  RecordingPainter painter;
+  next.paint(painter, default_theme());
+  const DrawCall* call = painter.first(DrawCall::Kind::Text);
+  ASSERT_TRUE(call != nullptr && call->run.has_value());
+  EXPECT_DOUBLE_EQ(call->run->bounds.y - row.bounds().bottom(), metrics.group_spacing);
+}
+
 TEST(Box, ASpacerPushesWhatFollowsToTheEnd) {
   Box row(Axis::Horizontal);
   row.emplace<Button>("Left");

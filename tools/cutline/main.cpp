@@ -173,6 +173,7 @@ using cutline::ui::ScrollView;
 using cutline::ui::ScrubBar;
 using cutline::ui::SkiaPainter;
 using cutline::ui::Slider;
+using cutline::ui::Space;
 using cutline::ui::Spacer;
 using cutline::ui::Splitter;
 using cutline::ui::TextAlign;
@@ -444,7 +445,7 @@ struct App;
 /// with when it is chosen.
 struct SettingsPage {
   std::string name;
-  void (*build)(App& app, cutline::ui::Box& into) = nullptr;
+  void (*build)(App& app, cutline::ui::Form& into) = nullptr;
 };
 
 /// One real window: its widgets, its pixels, and where the two meet.
@@ -692,7 +693,7 @@ struct App {
   SettingsKind settings_kind = SettingsKind::Application;
   /// Which category is showing, and the box its page fills.
   std::size_t settings_page = 0;
-  Box* settings_body = nullptr;
+  cutline::ui::Form* settings_body = nullptr;
   /// The category list, so the chosen row can be lit without rebuilding it —
   /// which would destroy the widget whose click is still running.
   MenuList* settings_tabs = nullptr;
@@ -4891,15 +4892,13 @@ constexpr std::array<double, 7> kFrameRates{23.976, 24.0, 25.0, 29.97, 30.0, 50.
 // of its own, so switching category rebuilds one box instead of the window.
 
 /// The sequence's shape. Premiere's Project Settings ▸ General.
-void build_sequence_page(App& app, Box& into) {
-  into.emplace<Label>("Sequence size").set_bold(true);
+void build_sequence_page(App& app, cutline::ui::Form& into) {
+  into.emplace<Label>("Sequence size").set_heading(true);
 
   // A dropdown, for the same reason the frame rates are one: seven presets are
   // one choice with seven answers rather than seven things to do, and seven
   // buttons down a settings window is a wall.
-  auto& presets = into.emplace<Box>(Axis::Horizontal);
-  presets.emplace<Label>("Preset").set_small(true);
-  presets.emplace<Spacer>();
+  auto& presets = into.row("Preset");
 
   std::vector<std::string> sizes;
   // Past the end when the sequence is at a size nobody preset, which is a state
@@ -4922,7 +4921,7 @@ void build_sequence_page(App& app, Box& into) {
     apply_canvas(app, kCanvasPresets[index].width, kCanvasPresets[index].height);
   });
 
-  auto& custom = into.emplace<Box>(Axis::Horizontal);
+  auto& custom = into.row("Custom");
   auto& width = custom.emplace<TextField>(std::to_string(app.session.project().sequence().canvas_w));
   custom.emplace<Label>("x").set_small(true);
   auto& height = custom.emplace<TextField>(std::to_string(app.session.project().sequence().canvas_h));
@@ -4941,14 +4940,14 @@ void build_sequence_page(App& app, Box& into) {
     apply_canvas(app, wide, tall);
   });
 
-  into.emplace<Label>("Frame rate").set_bold(true);
+  into.emplace<Label>("Frame rate").set_heading(true);
 
   // A dropdown rather than a row of seven buttons. Seven abreast fitted while
   // this was a popup that grew to its contents, and `--check` found four of
   // them squeezed the moment it became a window with a width — and a
   // seven-way exclusive choice is what a dropdown is for anyway, which is what
   // Premiere uses here.
-  auto& rates = into.emplace<Box>(Axis::Horizontal);
+  auto& rates = into.row("Rate");
   std::vector<std::string> names;
   std::size_t chosen = 0;
   for (std::size_t i = 0; i < kFrameRates.size(); ++i) {
@@ -4962,7 +4961,6 @@ void build_sequence_page(App& app, Box& into) {
     if (index < kFrameRates.size()) apply_fps(app, kFrameRates[index]);
   });
 
-  rates.emplace<Spacer>();
   auto& typed = rates.emplace<TextField>(fps_label(app.session.project().sequence().fps));
   rates.emplace<Button>("Set", [&app, field = &typed] {
     double rate = 0.0;
@@ -4977,11 +4975,9 @@ void build_sequence_page(App& app, Box& into) {
   // seconds, and a choice between two spellings of one thing is a control that
   // teaches somebody the wrong lesson about their own sequence.
   if (cutline::core::supports_drop_frame(app.session.project().sequence().fps)) {
-    into.emplace<Label>("Timecode").set_bold(true);
+    into.emplace<Label>("Timecode").set_heading(true);
 
-    auto& counting = into.emplace<Box>(Axis::Horizontal);
-    counting.emplace<Label>("Count").set_small(true);
-    counting.emplace<Spacer>();
+    auto& counting = into.row("Count");
 
     auto& how = counting.emplace<Dropdown>(
         std::vector<std::string>{"Drop frame", "Non-drop frame"},
@@ -4997,12 +4993,10 @@ void build_sequence_page(App& app, Box& into) {
   }
 
   // Premiere's sequence colour management, the same three settings.
-  into.emplace<Label>("Colour").set_bold(true);
+  into.emplace<Label>("Colour").set_heading(true);
   const cutline::core::Sequence& sequence = app.session.project().sequence();
 
-  auto& space = into.emplace<Box>(Axis::Horizontal);
-  space.emplace<Label>("Working space").set_small(true);
-  space.emplace<Spacer>();
+  auto& space = into.row("Working space");
   auto& working = space.emplace<Dropdown>(
       std::vector<std::string>{"Rec. 709", "Rec. 2100 PQ", "Rec. 2100 HLG"},
       static_cast<std::size_t>(sequence.colour));
@@ -5022,9 +5016,7 @@ void build_sequence_page(App& app, Box& into) {
     if (std::abs(sequence.graphics_white - kWhites[i]) < 0.5) chosen_white = i;
   }
   if (chosen_white == kWhites.size()) whites.push_back(std::format("{:.0f} nits", sequence.graphics_white));
-  auto& white_row = into.emplace<Box>(Axis::Horizontal);
-  white_row.emplace<Label>("HDR graphics white").set_small(true);
-  white_row.emplace<Spacer>();
+  auto& white_row = into.row("HDR graphics white");
   auto& white = white_row.emplace<Dropdown>(std::move(whites), chosen_white);
   white.set_on_change([&app, kWhites](std::size_t index) {
     if (index >= kWhites.size()) return;
@@ -5040,13 +5032,11 @@ void build_sequence_page(App& app, Box& into) {
 }
 
 /// The theme. Premiere's Preferences ▸ Appearance.
-void build_appearance_page(App& app, Box& into) {
+void build_appearance_page(App& app, cutline::ui::Form& into) {
   // A dropdown rather than a button per theme. Four buttons in a column read as
   // four things to do; this is one choice with four answers, and a settings
   // window is built out of the control that says so.
-  auto& row = into.emplace<Box>(Axis::Horizontal);
-  row.emplace<Label>("Theme").set_small(true);
-  row.emplace<Spacer>();
+  auto& row = into.row("Theme");
 
   std::vector<std::string> names;
   names.reserve(built_in_themes().size());
@@ -5060,11 +5050,9 @@ void build_appearance_page(App& app, Box& into) {
 ///
 /// Written once because rows of the same shape copied out three times are three
 /// places for the units to drift apart.
-void duration_row(App& app, Box& into, const char* label, double value, double smallest,
+void duration_row(App& app, cutline::ui::Form& into, const char* label, double value, double smallest,
                   double largest, const char* suffix, std::function<void(double)> keep) {
-  auto& row = into.emplace<Box>(Axis::Horizontal);
-  row.emplace<Label>(label).set_small(true);
-  row.emplace<Spacer>();
+  auto& row = into.row(label);
 
   auto& number = row.emplace<cutline::ui::NumericField>(
       cutline::ui::ValueRange{.minimum = smallest, .maximum = largest}, value);
@@ -5080,8 +5068,8 @@ void duration_row(App& app, Box& into, const char* label, double value, double s
 
 /// How long the things with no length of their own last. Premiere's
 /// Preferences ▸ Timeline.
-void build_timeline_page(App& app, Box& into) {
-  into.emplace<Label>("Default durations").set_bold(true);
+void build_timeline_page(App& app, cutline::ui::Form& into) {
+  into.emplace<Label>("Default durations").set_heading(true);
   duration_row(app, into, "Still image", app.settings.still_length,
                cutline::editor::kMinStillLength, cutline::editor::kMaxStillLength, "s",
                [&app](double set) { app.settings.still_length = set; });
@@ -5096,8 +5084,8 @@ void build_timeline_page(App& app, Box& into) {
 }
 
 /// The recovery copy. Premiere's Preferences ▸ Auto Save.
-void build_autosave_page(App& app, Box& into) {
-  into.emplace<Label>("Recovery").set_bold(true);
+void build_autosave_page(App& app, cutline::ui::Form& into) {
+  into.emplace<Label>("Recovery").set_heading(true);
   duration_row(app, into, "Write a copy every",
                static_cast<double>(app.settings.autosave_seconds),
                cutline::editor::kMinAutosaveSeconds, cutline::editor::kMaxAutosaveSeconds, "sec",
@@ -5134,13 +5122,13 @@ void build_autosave_page(App& app, Box& into) {
 
 /// The eight labels, their names, and what each kind of media arrives wearing.
 /// Premiere's Preferences ▸ Labels.
-void build_labels_page(App& app, Box& into) {
+void build_labels_page(App& app, cutline::ui::Form& into) {
   const std::span<const cutline::editor::ClipLabel> palette = cutline::editor::clip_labels();
   app.settings.label_names.resize(palette.size());
 
-  into.emplace<Label>("Label names").set_bold(true);
+  into.emplace<Label>("Label names").set_heading(true);
   for (std::size_t i = 0; i < palette.size(); ++i) {
-    auto& row = into.emplace<Box>(Axis::Horizontal);
+    auto& row = into.row(std::string(palette[i].name));
     // The built-in name stands where Premiere puts a colour swatch, and says
     // the same thing: *which* label this row renames. There is no swatch
     // because there is no read-only one — `ColorSwatch` opens a picker, and a
@@ -5151,10 +5139,7 @@ void build_labels_page(App& app, Box& into) {
     // Violet would leave every clip already wearing it holding the old colour —
     // a palette and a timeline that disagree, which is worse than Premiere,
     // where labels are stored by position and follow.
-    auto& which = row.emplace<Label>(std::string(palette[i].name));
-    which.set_small(true);
-    which.set_tooltip(std::string(palette[i].color));
-    row.emplace<Spacer>();
+    row.label().set_tooltip(std::string(palette[i].color));
 
     auto& field = row.emplace<TextField>(std::string(cutline::editor::label_name(app.settings, i)));
     // A fixed width, so eight fields make a column rather than a ragged edge —
@@ -5177,7 +5162,7 @@ void build_labels_page(App& app, Box& into) {
     });
   }
 
-  into.emplace<Label>("Label defaults").set_bold(true);
+  into.emplace<Label>("Label defaults").set_heading(true);
   app.settings.label_defaults.resize(cutline::ui::kMediaKindCount);
 
   // "None" first, because arriving unlabelled is what every kind does now and
@@ -5190,9 +5175,7 @@ void build_labels_page(App& app, Box& into) {
   }
 
   for (std::size_t kind = 0; kind < cutline::ui::kMediaKindCount; ++kind) {
-    auto& row = into.emplace<Box>(Axis::Horizontal);
-    row.emplace<Label>(kind_label(static_cast<cutline::ui::MediaKind>(kind))).set_small(true);
-    row.emplace<Spacer>();
+    auto& row = into.row(kind_label(static_cast<cutline::ui::MediaKind>(kind)));
 
     const auto at = std::ranges::find(colours, app.settings.label_defaults[kind]);
     auto& choice = row.emplace<Dropdown>(
@@ -5214,12 +5197,10 @@ static_assert(cutline::editor::kDefaultProxyHeight == cutline::media::kProxyHeig
               "the settings default and the transcode default have drifted apart");
 
 /// How big proxies are and where they go. Premiere's Ingest Settings.
-void build_proxies_page(App& app, Box& into) {
-  into.emplace<Label>("Proxy size").set_bold(true);
+void build_proxies_page(App& app, cutline::ui::Form& into) {
+  into.emplace<Label>("Proxy size").set_heading(true);
 
-  auto& size_row = into.emplace<Box>(Axis::Horizontal);
-  size_row.emplace<Label>("Height").set_small(true);
-  size_row.emplace<Spacer>();
+  auto& size_row = into.row("Height");
 
   // A short list of the sizes anybody would pick rather than a free number.
   // What a machine can keep up with is a fact about the desk this is running
@@ -5239,7 +5220,7 @@ void build_proxies_page(App& app, Box& into) {
     save_settings(app);
   });
 
-  into.emplace<Label>("Where they go").set_bold(true);
+  into.emplace<Label>("Where they go").set_heading(true);
 
   // The path on its own row and the buttons under it. A path has no length
   // anybody can plan for, and sharing a row with two buttons is what `--check`
@@ -5279,8 +5260,8 @@ void build_proxies_page(App& app, Box& into) {
 }
 
 /// Which output to play through. Premiere's Preferences ▸ Audio Hardware.
-void build_audio_page([[maybe_unused]] App& app, Box& into) {
-  into.emplace<Label>("Output device").set_bold(true);
+void build_audio_page([[maybe_unused]] App& app, cutline::ui::Form& into) {
+  into.emplace<Label>("Output device").set_heading(true);
 
 #if CUTLINE_HAVE_PREVIEW
   // Asked for each time the page is built rather than kept: devices are
@@ -5348,8 +5329,8 @@ void build_audio_page([[maybe_unused]] App& app, Box& into) {
 }
 
 /// How far back an edit can be taken. Premiere's Preferences ▸ General.
-void build_general_page(App& app, Box& into) {
-  into.emplace<Label>("Undo").set_bold(true);
+void build_general_page(App& app, cutline::ui::Form& into) {
+  into.emplace<Label>("Undo").set_heading(true);
   duration_row(app, into, "Edits kept", static_cast<double>(app.settings.undo_depth),
                cutline::editor::kMinUndoDepth, cutline::editor::kMaxUndoDepth, "",
                [&app](double set) {
@@ -5370,8 +5351,8 @@ void build_general_page(App& app, Box& into) {
 }
 
 /// What plays around a marked range. Premiere's Preferences ▸ Playback.
-void build_playback_page(App& app, Box& into) {
-  into.emplace<Label>("Around the marked range").set_bold(true);
+void build_playback_page(App& app, cutline::ui::Form& into) {
+  into.emplace<Label>("Around the marked range").set_heading(true);
   duration_row(app, into, "Preroll", app.settings.preroll, cutline::editor::kMinRoll,
                cutline::editor::kMaxRoll, "s",
                [&app](double set) { app.settings.preroll = set; });
@@ -5386,12 +5367,10 @@ void build_playback_page(App& app, Box& into) {
 }
 
 /// Which adapter everything draws on. Premiere's Preferences ▸ Graphics.
-void build_graphics_page(App& app, Box& into) {
-  into.emplace<Label>("Renderer").set_bold(true);
+void build_graphics_page(App& app, cutline::ui::Form& into) {
+  into.emplace<Label>("Renderer").set_heading(true);
 
-  auto& row = into.emplace<Box>(Axis::Horizontal);
-  row.emplace<Label>("Draw with").set_small(true);
-  row.emplace<Spacer>();
+  auto& row = into.row("Draw with");
 
   auto& choice = row.emplace<Dropdown>(std::vector<std::string>{"Graphics card", "Software"},
                                        app.settings.software_renderer ? 1u : 0u);
@@ -5444,9 +5423,9 @@ void build_graphics_page(App& app, Box& into) {
 
 /// Where what has already been read out of footage is kept. Premiere's
 /// Preferences ▸ Media Cache.
-void build_media_cache_page([[maybe_unused]] App& app, Box& into) {
+void build_media_cache_page([[maybe_unused]] App& app, cutline::ui::Form& into) {
 #if CUTLINE_HAVE_PREVIEW
-  into.emplace<Label>("Where it goes").set_bold(true);
+  into.emplace<Label>("Where it goes").set_heading(true);
 
   const std::filesystem::path dir =
       cutline::app::media_cache_dir(app.settings.media_cache_folder);
@@ -5480,7 +5459,7 @@ void build_media_cache_page([[maybe_unused]] App& app, Box& into) {
     });
   }
 
-  into.emplace<Label>("What is in it").set_bold(true);
+  into.emplace<Label>("What is in it").set_heading(true);
 
   const std::uintmax_t held = cutline::app::media_cache_bytes(dir);
   into.emplace<Label>(std::format("Holding {}.", bytes_label(held))).set_small(true);
@@ -5583,7 +5562,7 @@ void close_settings_dialog(App& app);
   dialog.set_on_close([&app] { close_settings_dialog(app); });
 
   auto& split = dialog.body().emplace<Box>(Axis::Horizontal);
-  split.set_spacing(12.0);
+  split.set_spacing(Space::Group);
   // Takes the height under the title bar rather than only what its contents
   // need. Without this the category list stops wherever its last row does and
   // the rest of the window is empty background, which reads as unfinished
@@ -5619,8 +5598,11 @@ void close_settings_dialog(App& app);
   // would be mostly empty on every other page, and one sized to the shortest
   // would hide half of Labels with nothing saying so.
   auto& scroller = split.emplace<ScrollView>(Axis::Vertical);
-  auto body = std::make_unique<Box>(Axis::Vertical);
-  body->set_spacing(8.0);
+  auto body = std::make_unique<cutline::ui::Form>();
+  // Across the window rather than at the width of its widest row. A page that
+  // only asked for its own width left a column of empty background down the
+  // right of the window, with the page's scrollbar standing in the middle.
+  body->set_fills_cross(true);
   app.settings_body = body.get();
   scroller.set_content(std::move(body));
   return root;
@@ -8228,7 +8210,7 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
   // floats it over the timeline; a row in the toolbar is the same thing without
   // a second window to keep track of, and it cannot be lost behind anything.
   auto& palette = tools.emplace<Box>(Axis::Horizontal);
-  palette.set_spacing(2.0);
+  palette.set_spacing(Space::Tight);
   if (app != nullptr) app->tool_buttons.clear();
   for (const ToolEntry& entry : kTools) {
     auto& button = palette.emplace<IconButton>(entry.icon, [app, tool = entry.tool] {
@@ -8338,7 +8320,7 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
   // project is a bin of sequences from the start, and this one is not.
   if (app != nullptr && app->session.project().sequences.size() > 1) {
     auto& strip = panel->emplace<Box>(Axis::Horizontal);
-    strip.set_spacing(2.0);
+    strip.set_spacing(Space::Tight);
     const cutline::core::Project& document = app->session.project();
     for (std::size_t i = 0; i < document.sequences.size(); ++i) {
       const cutline::core::Sequence& sequence = document.sequences[i];
@@ -10682,7 +10664,7 @@ void refresh_dock(App& app) {
   // its own, because that is what every other menu here already is — the
   // effects list, the track menu, the right-click on a clip. One idiom.
   auto& bar = shell->emplace<Box>(Axis::Horizontal);
-  bar.set_padding(cutline::ui::Edges::all(4.0));
+  bar.set_padding(Space::Tight);
 
   /// One top-level menu: a button, and the list it drops.
   struct MenuEntry {
@@ -11123,7 +11105,6 @@ constexpr int kExportWindowHeight = 520;
 
   auto& dialog = root->emplace<cutline::ui::Dialog>("");
   Box& body = dialog.body();
-  body.set_spacing(10.0);
 
   // One row per setting, label on the left, control on the right — which is
   // how every settings dialog on the platform reads, Premiere's included —

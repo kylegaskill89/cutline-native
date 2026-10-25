@@ -197,6 +197,14 @@ struct Metrics {
   double padding_y = 4.0;
   /// Space between adjacent controls.
   double spacing = 6.0;
+  /// Space between controls that read as one thing -- a row of tool buttons,
+  /// a strip of sequence tabs. Close, but not touching, so each is still a
+  /// target of its own.
+  double tight_spacing = 2.0;
+  /// Space between groups: one section of a settings page and the next, or a
+  /// list and the page beside it. Larger than `spacing` so the eye sees the
+  /// groups before it sees the controls.
+  double group_spacing = 12.0;
   /// Space between a panel's edge and its contents.
   double panel_padding = 8.0;
 
@@ -218,6 +226,13 @@ struct Metrics {
   std::string font_family;
   double font_size = 13.0;
   double small_font_size = 11.0;
+  /// The marks along a fader's or a knob's scale, which are read in passing
+  /// and have to fit between the ticks.
+  double tiny_font_size = 10.0;
+  /// A section's heading inside a page or a dialog, drawn bold. A step above
+  /// the body where the period did that -- Vista set its headings larger --
+  /// and the body's own size where it did not.
+  double heading_font_size = 14.0;
   /// Multiplied by the font size to get a line's height.
   double line_height = 1.35;
 
@@ -237,6 +252,23 @@ struct Metrics {
 
   friend bool operator==(const Metrics&, const Metrics&) = default;
 };
+
+/// The steps of a theme's spacing, by what the space is between rather than
+/// by how many pixels, so a layout reads the same in every theme and changes
+/// with it.
+enum class Space { Tight, Normal, Group };
+
+[[nodiscard]] constexpr double space(const Metrics& metrics, Space step) noexcept {
+  switch (step) {
+    case Space::Tight:
+      return metrics.tight_spacing;
+    case Space::Normal:
+      return metrics.spacing;
+    case Space::Group:
+      return metrics.group_spacing;
+  }
+  return metrics.spacing;
+}
 
 /// A complete look.
 ///

@@ -25,6 +25,43 @@
 
 namespace cutline::ui {
 
+/// One labelled row of a form: the label, then whatever goes beside it.
+class FormRow : public Box {
+ public:
+  explicit FormRow(std::string label);
+
+  [[nodiscard]] Label& label() noexcept { return *label_; }
+
+ private:
+  Label* label_ = nullptr;
+};
+
+/// A column of labelled rows whose labels all take the widest one's width, so
+/// the controls beside them start in one line -- which is how every settings
+/// dialog on the platform reads, Premiere's included.
+///
+/// Before this each row was a label, a spring and a control, so the controls
+/// lined up on the right edge instead; on a page wider than its rows that put
+/// a gap down the middle with the labels stranded on one side of it.
+///
+/// The rows are found when the form is laid out rather than remembered as
+/// they are added, because a settings page is cleared and rebuilt in place
+/// and remembered rows would outlive it.
+class Form : public Box {
+ public:
+  Form();
+
+  /// A row with this label, for whatever goes beside it.
+  FormRow& row(std::string label);
+
+  [[nodiscard]] LayoutItem sizing(Axis axis, const LayoutContext& context) const override;
+  void layout(const LayoutContext& context) override;
+
+ private:
+  /// Gives every row's label the widest one's width.
+  void align(const LayoutContext& context) const;
+};
+
 class Dialog : public Panel {
  public:
   /// What accepting does. Nothing back means it is done and the dialog closes;
@@ -34,12 +71,10 @@ class Dialog : public Panel {
   explicit Dialog(std::string title);
 
   /// Where the dialog's own content goes, above the buttons.
-  [[nodiscard]] Box& body() noexcept { return *body_; }
+  [[nodiscard]] Form& body() noexcept { return *body_; }
 
-  /// A labelled row in the body: the label on the left, at the width of the
-  /// widest label in the dialog so the controls line up, and the returned box
-  /// for whatever goes beside it.
-  Box& row(std::string label);
+  /// A labelled row in the body, lined up with the others.
+  FormRow& row(std::string label) { return body_->row(std::move(label)); }
 
   /// The accepting button's text and what it does. "OK" for a question,
   /// "Close" for a dialog that edits as it goes and has nothing to undo.
@@ -69,18 +104,16 @@ class Dialog : public Panel {
   /// What is wrong with the answer, or empty.
   [[nodiscard]] const std::string& error() const noexcept;
 
-  void layout(const LayoutContext& context) override;
 
  private:
   void close();
 
-  Box* body_ = nullptr;
+  Form* body_ = nullptr;
   Label* error_ = nullptr;
   Box* buttons_ = nullptr;
   Box* extras_ = nullptr;
   Button* accept_button_ = nullptr;
   Button* cancel_button_ = nullptr;
-  std::vector<Label*> row_labels_;
   Accept accept_;
   std::function<void()> cancel_;
   std::function<void()> on_close_;

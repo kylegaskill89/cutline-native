@@ -12,8 +12,47 @@ constexpr double kMinButtonWidth = 75.0;
 
 }  // namespace
 
+// -------------------------------------------------------------------- form --
+
+FormRow::FormRow(std::string label) : Box(Axis::Horizontal) {
+  label_ = &emplace<Label>(std::move(label));
+}
+
+Form::Form() : Box(Axis::Vertical) {}
+
+FormRow& Form::row(std::string label) { return emplace<FormRow>(std::move(label)); }
+
+void Form::align(const LayoutContext& context) const {
+  std::vector<Label*> labels;
+  for (const std::unique_ptr<Widget>& child : children()) {
+    if (auto* line = dynamic_cast<FormRow*>(child.get()); line != nullptr && line->visible()) {
+      labels.push_back(&line->label());
+    }
+  }
+  double widest = 0.0;
+  for (Label* label : labels) {
+    label->set_min_width(0.0);
+    widest = std::max(widest, label->sizing(Axis::Horizontal, context).basis);
+  }
+  for (Label* label : labels) label->set_min_width(widest);
+}
+
+LayoutItem Form::sizing(Axis axis, const LayoutContext& context) const {
+  // Aligned before being measured as well as before being laid out, or the
+  // first answer about its width would be for ragged labels.
+  if (axis == Axis::Horizontal) align(context);
+  return Box::sizing(axis, context);
+}
+
+void Form::layout(const LayoutContext& context) {
+  align(context);
+  Box::layout(context);
+}
+
+// ------------------------------------------------------------------ dialog --
+
 Dialog::Dialog(std::string title) : Panel(std::move(title)) {
-  body_ = &emplace<Box>(Axis::Vertical);
+  body_ = &emplace<Form>();
 
   error_ = &emplace<Label>();
   error_->set_small(true);
@@ -29,13 +68,6 @@ Dialog::Dialog(std::string title) : Panel(std::move(title)) {
   accept_button_->set_default(true);
   cancel_button_ = &buttons_->emplace<Button>("Cancel", [this] { cancel(); });
   cancel_button_->set_min_width(kMinButtonWidth);
-}
-
-Box& Dialog::row(std::string label) {
-  Box& line = body_->emplace<Box>(Axis::Horizontal);
-  Label& name = line.emplace<Label>(std::move(label));
-  row_labels_.push_back(&name);
-  return line;
 }
 
 Button& Dialog::add_button(std::string text, std::function<void()> on_click) {
@@ -95,18 +127,6 @@ Dialog* find_dialog(Widget& root) noexcept {
     if (Dialog* found = find_dialog(*child); found != nullptr) return found;
   }
   return nullptr;
-}
-
-void Dialog::layout(const LayoutContext& context) {
-  // The labels of every row as wide as the widest, so the controls beside
-  // them start in one column.
-  double widest = 0.0;
-  for (Label* label : row_labels_) {
-    label->set_min_width(0.0);
-    widest = std::max(widest, label->sizing(Axis::Horizontal, context).basis);
-  }
-  for (Label* label : row_labels_) label->set_min_width(widest);
-  Panel::layout(context);
 }
 
 }  // namespace cutline::ui
