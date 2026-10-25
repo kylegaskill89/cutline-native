@@ -146,6 +146,9 @@ struct SurfaceStyle {
   /// top of the one showing and the one under the pointer -- and a rim cannot,
   /// since it goes all the way round.
   std::optional<Rim> cap;
+  /// The same along the bottom: the shaded rows under XP's list headings,
+  /// orange under the pointer.
+  std::optional<Rim> foot;
 
   Color border;
   double border_width = 0.0;
@@ -197,10 +200,12 @@ enum class Part {
   Progress,     ///< a progress bar's trough. `Selected` styles what is done
   Caption,      ///< a title bar's minimise and maximise buttons
   CaptionClose, ///< its close button, which XP and Vista drew in red
+  DropButton,   ///< a dropdown's arrow, where `dropdown_button` draws one
+  ListHeader,   ///< the strip of column headings over a list
 };
 
 /// The last part, for walking every one of them.
-inline constexpr Part kLastPart = Part::CaptionClose;
+inline constexpr Part kLastPart = Part::ListHeader;
 
 [[nodiscard]] std::string_view to_string(Part part) noexcept;
 [[nodiscard]] std::optional<Part> part_from_string(std::string_view name) noexcept;
@@ -360,6 +365,12 @@ struct Metrics {
   double menu_row_height = 0.0;
   double menu_separator_height = 0.0;
   double menu_padding = 4.0;
+  /// Whether a list's headings are divided by a line in the header's border
+  /// colour with a white one beside it, as XP's were.
+  bool header_dividers = false;
+  /// Whether a dropdown's arrow sits on a button of its own, as XP's did,
+  /// rather than being a bare chevron.
+  bool dropdown_button = false;
 
   /// How long a view takes to get where it was sent -- a zoom, a scroll by
   /// the wheel -- and how long a popup takes to arrive, in seconds. Zero

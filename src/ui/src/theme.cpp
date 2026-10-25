@@ -17,7 +17,7 @@ namespace {
 
 [[nodiscard]] float channel(int value) noexcept { return static_cast<float>(value) / 255.0f; }
 
-constexpr std::array<std::pair<Part, std::string_view>, 26> kPartNames{{
+constexpr std::array<std::pair<Part, std::string_view>, 28> kPartNames{{
     {Part::Window, "window"},
     {Part::TitleBar, "title_bar"},
     {Part::Panel, "panel"},
@@ -44,6 +44,8 @@ constexpr std::array<std::pair<Part, std::string_view>, 26> kPartNames{{
     {Part::Progress, "progress"},
     {Part::Caption, "caption"},
     {Part::CaptionClose, "caption_close"},
+    {Part::DropButton, "drop_button"},
+    {Part::ListHeader, "list_header"},
 }};
 
 constexpr std::array<std::pair<State, std::string_view>, 6> kStateNames{{
@@ -250,6 +252,11 @@ SurfaceStyle mix(const SurfaceStyle& a, const SurfaceStyle& b, float t) {
     out.cap = Rim{.width = b.cap->width, .fill = mix_fill(Fill::solid(a.border), b.cap->fill, t)};
   } else if (a.cap && !b.cap) {
     out.cap = Rim{.width = a.cap->width, .fill = mix_fill(a.cap->fill, Fill::solid(b.border), t)};
+  }
+
+  if (a.foot && b.foot) {
+    out.foot = Rim{.width = between(a.foot->width, b.foot->width),
+                   .fill = mix_fill(a.foot->fill, b.foot->fill, t)};
   }
 
   if (a.bevel && b.bevel) {

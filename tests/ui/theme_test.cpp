@@ -335,6 +335,9 @@ TEST(ThemeChrome, ThemesThatDoNotStyleTheNewPartsDrawThemAsBefore) {
       EXPECT_EQ(theme.style(Part::Caption, state), theme.style(Part::ToolButton, state)) << id;
       EXPECT_EQ(theme.style(Part::CaptionClose, state), theme.style(Part::ToolButton, state)) << id;
     }
+    EXPECT_EQ(theme.style(Part::ListHeader), theme.style(Part::ToolButton)) << id;
+    EXPECT_EQ(theme.style(Part::DropButton), theme.style(Part::ToolButton)) << id;
+    EXPECT_FALSE(theme.metrics.dropdown_button) << id;
   }
 }
 

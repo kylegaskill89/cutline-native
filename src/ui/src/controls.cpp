@@ -1583,12 +1583,17 @@ bool MenuList::on_mouse_up(const MouseEvent& event) {
 }
 
 bool MenuList::own_key(const KeyEvent& event) {
+  // With nothing lit yet, the arrows step from the current choice, as a
+  // Windows list does: a dropdown's first Down goes to the option after the
+  // one it shows, not back to the top.
+  const std::size_t from =
+      highlighted_ == kNone && current_ < entries_.size() ? current_ : highlighted_;
   switch (event.key) {
     case Key::Down:
-      highlighted_ = step_from(highlighted_, 1);
+      highlighted_ = step_from(from, 1);
       return true;
     case Key::Up:
-      highlighted_ = step_from(highlighted_, -1);
+      highlighted_ = step_from(from, -1);
       return true;
     case Key::Home:
       highlighted_ = step_from(kNone, 1);
@@ -1737,7 +1742,32 @@ void Dropdown::paint_content(Painter& painter, const Theme& theme) const {
   const Rect mark = arrow();
 
   const Rect text{area.x + 8.0, area.y, std::max(0.0, mark.x - area.x - 8.0), area.height};
-  painter.text(text_run(text, value(), style, 13.0, TextAlign::Left, false));
+  // At the theme's size, which is what `sizing` measured it at.
+  painter.text(text_run(text, value(), style, theme.metrics.font_size, TextAlign::Left, false));
+
+  if (theme.metrics.dropdown_button) {
+    // XP's: a button fifteen pixels by seventeen inside the field's edge,
+    // and a chevron a pixel at a time, two pixels thick.
+    static constexpr std::array<std::string_view, 6> kChevron{{
+        ".#.....#.", "###...###", ".###.###.", "..#####..", "...###...", "....#....",
+    }};
+    const State now = state() == State::Pressed || open_ ? State::Pressed : state();
+    const SurfaceStyle& button = theme.style(Part::DropButton, now);
+    const double inset = style.border_width + 1.0;
+    const Rect face{area.right() - inset - 15.0, area.y + inset, 15.0,
+                    std::max(0.0, area.height - 2.0 * inset)};
+    paint_surface(painter, face, button);
+    const double left = std::round(face.x + (face.width - 9.0) / 2.0);
+    const double top = std::round(face.y + (face.height - 6.0) / 2.0);
+    for (std::size_t row = 0; row < kChevron.size(); ++row) {
+      for (std::size_t col = 0; col < kChevron[row].size(); ++col) {
+        if (kChevron[row][col] != '#') continue;
+        painter.fill(Rect{left + static_cast<double>(col), top + static_cast<double>(row), 1.0, 1.0},
+                     0.0, Fill::solid(button.text));
+      }
+    }
+    return;
+  }
 
   // Two lines rather than a glyph, for the same reason the tick is: no font
   // can be relied on to have one.

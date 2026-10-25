@@ -1811,6 +1811,22 @@ TEST(Dropdown, ChoosingFromTheListChangesTheValueAndClosesIt) {
   EXPECT_FALSE(test.host->popup_open()) << "choosing should have closed the list";
 }
 
+TEST(Dropdown, TheArrowsInAnOpenListStepFromTheCurrentOption) {
+  // As a Windows list does. Stepping from nothing landed the first Down on
+  // the first option, which was usually the one already chosen, so Down and
+  // Enter chose nothing new -- found by driving the monitor's quality list.
+  Chosen test;
+  const Rect area = test.box->bounds();
+  test.host->mouse_down(press(area.x + 5.0, area.y + area.height * 0.5));
+  test.host->mouse_up(press(area.x + 5.0, area.y + area.height * 0.5));
+  test.host->update_layout(flat_context());
+  ASSERT_TRUE(test.host->popup_open());
+
+  test.host->key_down(KeyEvent{.key = Key::Down});
+  test.host->key_down(KeyEvent{.key = Key::Enter});
+  EXPECT_EQ(test.box->selected(), 1u);
+}
+
 TEST(Dropdown, TheArrowNeedsNoFont) {
   Chosen test;
   RecordingPainter painter;
@@ -2406,6 +2422,24 @@ TEST(ProgressBar, LunaDrawsWholeBlocksWithGapsBetweenThem) {
   for (const Rect& block : blocks) EXPECT_DOUBLE_EQ(block.width, 6.0);
   EXPECT_DOUBLE_EQ(blocks[1].x - blocks[0].right(), 2.0);
   EXPECT_LE(blocks.back().right(), 100.0 + 6.0) << "no further than half way, give or take a block";
+}
+
+TEST(Dropdown, LunasArrowIsAButtonAndOtherThemesIsTwoStrokes) {
+  const RecordingPainter measure;
+  for (const char* id : {"xp", "flat"}) {
+    const Theme& theme = *built_in_theme(id);
+    Dropdown dropdown({"Desktop", "Icon"});
+    dropdown.arrange(Rect{0.0, 0.0, 120.0, 21.0}, LayoutContext{theme, measure});
+    RecordingPainter painter;
+    dropdown.paint(painter, theme);
+
+    bool button = false;
+    for (const DrawCall& call : painter.calls()) {
+      if (call.kind == DrawCall::Kind::Fill && call.bounds.width == 15.0) button = true;
+    }
+    EXPECT_EQ(button, std::string_view(id) == "xp") << id;
+    EXPECT_EQ(painter.count(DrawCall::Kind::Line), std::string_view(id) == "xp" ? 0u : 2u) << id;
+  }
 }
 
 TEST(ProgressBar, NothingDoneDrawsNoFill) {

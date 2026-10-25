@@ -108,6 +108,13 @@ void paint_surface(Painter& painter, const Rect& bounds, const SurfaceStyle& sty
                  0.0, style.cap->fill);
     painter.pop_clip();
   }
+  if (style.foot && style.foot->width > 0.0) {
+    const double height = std::min(bounds.height, style.foot->width);
+    painter.push_clip(bounds, radius);
+    painter.fill(Rect{bounds.x, bounds.bottom() - height, bounds.width, height}, 0.0,
+                 style.foot->fill);
+    painter.pop_clip();
+  }
 }
 
 namespace {

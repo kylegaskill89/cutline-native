@@ -626,7 +626,8 @@ void MediaBrowser::paint_content(Painter& painter, const Theme& theme) const {
   // keeps them apart, and drawing it after means a row scrolled to the very top
   // can never leave a pixel above the headings.
   if (const Rect header = header_rect(); !header.empty()) {
-    paint_surface(painter, header, theme.style(Part::ToolButton, State::Normal));
+    const SurfaceStyle& header_style = theme.style(Part::ListHeader, State::Normal);
+    paint_surface(painter, header, header_style);
     const SurfaceStyle& heading_style = theme.style(Part::Panel, State::Normal);
 
     for (const Span& span : spans_) {
@@ -643,6 +644,16 @@ void MediaBrowser::paint_content(Painter& painter, const Theme& theme) const {
         painter.text(text_run(where, std::string(column_heading(span.column)), heading_style,
                               small, cell_align(span.column), sorting));
         painter.pop_clip();
+      }
+
+      if (theme.metrics.header_dividers) {
+        // XP's: a dark line and a white one at each column's end, short of the
+        // shaded rows along the bottom.
+        const double x = std::floor(span.x + span.width) - 2.0;
+        const double top = header.y + 3.0;
+        const double height = std::max(0.0, header.height - 7.0);
+        painter.fill(Rect{x, top, 1.0, height}, 0.0, Fill::solid(header_style.border));
+        painter.fill(Rect{x + 1.0, top, 1.0, height}, 0.0, Fill::solid(Color{1.0f, 1.0f, 1.0f, 1.0f}));
       }
 
       if (sorting) {

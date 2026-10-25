@@ -370,6 +370,42 @@ namespace {
   t.metrics.menu_row_height = 17.0;
   t.metrics.menu_separator_height = 9.0;
   t.metrics.menu_padding = 2.0;
+
+  // A list's headings, measured from Explorer's: beige, with three shaded
+  // rows along the bottom that turn orange under the pointer, and a dark line
+  // and a white one between columns.
+  t.metrics.header_dividers = true;
+  const SurfaceStyle header{
+      .fill = Fill::solid(hex("#ebeadb")),
+      .foot = Rim{.width = 3.0,
+                  .fill = Fill::gradient(
+                      {{0.17f, hex("#e2decd")}, {0.50f, hex("#d6d2c2")}, {0.83f, hex("#cbc7b8")}})},
+      .border = hex("#c7c5b2"),
+      .text = hex("#000000"),
+  };
+  t.set(Part::ListHeader, State::Normal, header);
+  SurfaceStyle header_hover = header;
+  header_hover.fill = Fill::solid(hex("#faf8f3"));
+  header_hover.foot = Rim{.width = 3.0,
+                          .fill = Fill::gradient({{0.17f, hex("#f9a900")},
+                                                  {0.50f, hex("#fcc247")},
+                                                  {0.83f, hex("#f9b119")}})};
+  t.set(Part::ListHeader, State::Hover, header_hover);
+
+  // A dropdown's arrow is a button, lit as the scroll bar's arrows are: from
+  // the top left at rest, brighter under the pointer, from below when held.
+  t.metrics.dropdown_button = true;
+  const auto drop = [](std::string_view light, std::string_view middle, std::string_view dark) {
+    return SurfaceStyle{
+        .fill = Fill::gradient({{0.0f, hex(light)}, {0.5f, hex(middle)}, {1.0f, hex(dark)}},
+                               315.0),
+        .corner_radius = 2.0,
+        .text = hex("#4d6185"),
+    };
+  };
+  t.set(Part::DropButton, State::Normal, drop("#e6eefc", "#c8d6fb", "#b0c5f2"));
+  t.set(Part::DropButton, State::Hover, drop("#fdffff", "#dbe8ff", "#a9c0e0"));
+  t.set(Part::DropButton, State::Pressed, drop("#6e8ef1", "#9db5f5", "#c3d1f5"));
   const Fill luna_well = Fill::gradient({{0.0f, hex("#dcdcd7")}, {1.0f, hex("#ffffff")}}, 315.0);
   const SurfaceStyle check{.fill = luna_well,
                            .border = hex("#1c5180"),
@@ -1366,6 +1402,10 @@ namespace {
   }
   theme = with_inherited(std::move(theme), Part::Progress, Part::Slider);
   theme = with_inherited(std::move(theme), Part::Caption, Part::ToolButton);
+  // A list's headings were a tool button's surface; a dropdown's arrow is one
+  // only where `dropdown_button` says so, and is styled like one regardless.
+  theme = with_inherited(std::move(theme), Part::ListHeader, Part::ToolButton);
+  theme = with_inherited(std::move(theme), Part::DropButton, Part::ToolButton);
   return with_inherited(std::move(theme), Part::CaptionClose, Part::Caption);
 }
 
