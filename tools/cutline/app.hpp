@@ -1233,6 +1233,14 @@ void refresh_library(App& app);
 // The Audio Master panel and the audio dialogs, in `audio_panel.cpp`.
 [[nodiscard]] std::unique_ptr<Widget> make_audio_panel(App* app);
 
+// The project panel's pool, in `pool.cpp`.
+void remove_from_pool(App& app);
+void sort_by_column(App& app, cutline::ui::MediaColumn column);
+void place_from_pool(App& app, std::size_t index,
+                     std::optional<cutline::ui::DropPoint> where = std::nullopt);
+void place_media_from(App& app, const std::string& media_id,
+                      std::optional<cutline::ui::DropPoint> where = std::nullopt);
+
 // The headless check and the benchmarks, in `check.cpp`.
 [[nodiscard]] int self_check(std::string_view shots = {});
 [[nodiscard]] int benchmark();
