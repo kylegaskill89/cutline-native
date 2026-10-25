@@ -80,6 +80,38 @@ TEST(Workspaces, TheBuiltInsAreDifferentArrangements) {
   }
 }
 
+TEST(Workspaces, TheBuiltInsArePremieresTasks) {
+  std::vector<std::string> names;
+  for (const Workspace& workspace : built_in_workspaces()) names.push_back(workspace.name);
+  EXPECT_EQ(names, (std::vector<std::string>{"Editing", "Assembly", "Colour", "Effects", "Audio"}));
+}
+
+TEST(Workspaces, EditingKeepsEffectControlsBehindTheSourceAsPremiereDoes) {
+  // Premiere's default arrangement: Source and Program side by side, with
+  // Effect Controls and the clip mixer as tabs behind the source.
+  const ui::DockLayout layout = built_in_workspaces().front().layout;
+  const ui::DockNode* source = ui::group_of(layout.root, "source");
+  ASSERT_NE(source, nullptr);
+  EXPECT_EQ(source, ui::group_of(layout.root, "effects"));
+  EXPECT_EQ(source, ui::group_of(layout.root, "audio"));
+  EXPECT_NE(source, ui::group_of(layout.root, "monitor")) << "both monitors in view at once";
+}
+
+TEST(Workspaces, EachGivesItsOwnPanelAGroupOfItsOwn) {
+  // What makes each one its task: the panel it is built round is never a tab
+  // hidden behind something else.
+  const std::vector<Workspace> all = built_in_workspaces();
+  const auto alone = [&](std::string_view workspace, std::string_view panel) {
+    const auto found = std::ranges::find(all, workspace, &Workspace::name);
+    if (found == all.end()) return false;
+    const ui::DockNode* group = ui::group_of(found->layout.root, panel);
+    return group != nullptr && ui::panels_in(*group).size() == 1;
+  };
+  EXPECT_TRUE(alone("Colour", "effects")) << "where Premiere keeps Lumetri Color";
+  EXPECT_TRUE(alone("Effects", "library"));
+  EXPECT_TRUE(alone("Assembly", "timeline"));
+}
+
 TEST(Workspaces, TheDefaultsStartOnTheFirstOne) {
   const Workspaces workspaces = default_workspaces();
   EXPECT_EQ(workspaces.active, "Editing");
@@ -157,7 +189,7 @@ TEST(Workspaces, AddingCopiesWhatIsOnScreenAndSwitchesToIt) {
   ASSERT_TRUE(add_workspace(workspaces, "Mine"));
   EXPECT_EQ(workspaces.active, "Mine");
   EXPECT_EQ(*workspaces.current(), showing);
-  EXPECT_EQ(workspaces.named.size(), 4u);
+  EXPECT_EQ(workspaces.named.size(), built_in_workspaces().size() + 1);
 }
 
 TEST(Workspaces, AddingOverAnExistingNameReplacesIt) {
@@ -167,7 +199,8 @@ TEST(Workspaces, AddingOverAnExistingNameReplacesIt) {
   const ui::DockLayout audio = *workspaces.current();
 
   ASSERT_TRUE(add_workspace(workspaces, "Mine"));
-  EXPECT_EQ(workspaces.named.size(), 4u) << "a second workspace called Mine was made";
+  EXPECT_EQ(workspaces.named.size(), built_in_workspaces().size() + 1)
+      << "a second workspace called Mine was made";
   EXPECT_EQ(*workspaces.current(), audio);
 }
 
@@ -182,7 +215,7 @@ TEST(Workspaces, ABuiltInCannotBeRemoved) {
   // There is no other way to get one back.
   Workspaces workspaces = default_workspaces();
   EXPECT_FALSE(remove_workspace(workspaces, "Editing"));
-  EXPECT_EQ(workspaces.named.size(), 3u);
+  EXPECT_EQ(workspaces.named.size(), built_in_workspaces().size());
 }
 
 TEST(Workspaces, RemovingTheActiveOneMovesToAnother) {

@@ -149,76 +149,83 @@ std::vector<Workspace> built_in_workspaces() {
   // alternative is not "the panel is somewhere sensible instead" — it is
   // `reconcile_panels` opening it wherever the first tab group happens to be,
   // which put the master fader in a column too narrow to hold it.
+  //
+  // Each is Premiere's arrangement for the same task, as Adobe describes it,
+  // with this application's panels standing in for Premiere's: the mixer for
+  // its audio mixers, Effect Controls for Lumetri Color until there is one.
+  // Graphics joins them with the Essential Graphics panel it is built round.
 
-  // Editing: the pool and the inspector down the left, the picture over the
-  // timeline. The arrangement most of the work happens in. The scopes and the
-  // master share the monitor's group, since all three are things you look at
-  // rather than work in, and only one at a time.
+  // Editing: Premiere's default. Source and Program side by side over the
+  // project and the timeline, with Effect Controls and the mixer behind the
+  // source -- where Premiere puts Effect Controls and its clip mixer.
   Workspace editing;
   editing.name = "Editing";
   editing.layout.root =
-      split(Axis::Horizontal,
-            {tabs({"project", "effects", "library"}),
-             split(Axis::Vertical,
-                   {// Source beside program, which is Premiere's arrangement and
-                    // the whole reason for a second monitor: what is about to be
-                    // used and what the sequence currently is, both in view.
-                    // Behind a tab they would never be seen together, which is
-                    // the one thing the panel is for.
-                    split(Axis::Horizontal,
-                          {tabs({"source"}), tabs({"monitor", "scopes", "audio"})},
-                          // Not evenly. The program monitor's row carries seven
-                          // controls to the source's four, and split down the
-                          // middle at the default window size `--check` found
-                          // seven of them squeezed and fourteen cut in half.
-                          // The number is set by Aero, whose chrome is the
-                          // roomiest: three of the four themes fit at 0.40 and
-                          // it did not.
-                          {0.34, 0.66}),
-                    tabs({"timeline"})},
-                   {0.58, 0.42})},
-            // Wide enough for the widest row the inspector builds: an animated
-            // Anchor Point carries a name, two numbers, a stopwatch, a
-            // disclosure triangle and the three keyframe controls. At a quarter
-            // of the window that row ran out of room and dropped the name,
-            // leaving two numbers with nothing to say what they were. Narrowing
-            // the keyframe controls recovered most of it and this recovers the
-            // rest; the picture and the timeline can spare fifty pixels, and a
-            // row with no name on it cannot be read at all.
-            {0.30, 0.70});
+      split(Axis::Vertical,
+            {split(Axis::Horizontal,
+                   {tabs({"source", "effects", "audio"}), tabs({"monitor"})}, {0.5, 0.5}),
+             split(Axis::Horizontal, {tabs({"project", "library", "scopes"}), tabs({"timeline"})},
+                   {0.3, 0.7})},
+            {0.55, 0.45});
 
-  // Colour: the picture as large as it will go, the controls beside it, and
-  // the timeline reduced to what is needed to move between shots. The scopes
-  // go in the side column rather than over the picture — grading means reading
-  // both at once.
+  // Assembly: the media first. A large project panel to pick from, the two
+  // monitors beside it, and the timeline the rough cut goes onto.
+  Workspace assembly;
+  assembly.name = "Assembly";
+  assembly.layout.root =
+      split(Axis::Vertical,
+            {split(Axis::Horizontal,
+                   {tabs({"project", "library"}),
+                    split(Axis::Vertical,
+                          {tabs({"source", "effects", "audio"}), tabs({"monitor", "scopes"})},
+                          {0.5, 0.5})},
+                   {0.5, 0.5}),
+             tabs({"timeline"})},
+            {0.66, 0.34});
+
+  // Colour: the scopes beside the picture, so both are read at once, and the
+  // controls in a group of their own on the right, where Premiere keeps
+  // Lumetri Color. Over the project and the timeline rather than beside them:
+  // a column the full height left the timeline too narrow for its own
+  // toolbar, which `--check` found cut off in every theme.
   Workspace colour;
   colour.name = "Colour";
   colour.layout.root =
-      split(Axis::Horizontal,
-            {split(Axis::Vertical, {tabs({"monitor"}), tabs({"timeline"})}, {0.74, 0.26}),
-             // A tab here rather than a second picture: grading is about the
-             // frame in front of you, and the source is only ever glanced at.
-             split(Axis::Vertical, {tabs({"scopes"}),
-                                    tabs({"effects", "library", "project", "audio", "source"})},
-                   {0.5, 0.5})},
-            {0.72, 0.28});
+      split(Axis::Vertical,
+            {split(Axis::Horizontal,
+                   {tabs({"scopes", "source"}), tabs({"monitor"}), tabs({"effects"})},
+                   {0.22, 0.48, 0.30}),
+             split(Axis::Horizontal, {tabs({"project", "library", "audio"}), tabs({"timeline"})},
+                   {0.3, 0.7})},
+            {0.6, 0.4});
 
-  // Audio: the timeline given most of the room, because that is where the
-  // waveforms are, with the picture kept small for reference. The master gets
-  // a column of its own here rather than a tab — a meter behind a tab is a
-  // meter nobody is watching, and this is the arrangement for watching it.
+  // Effects: Effect Controls given the room, with the source behind it, and
+  // the effects to drag from in a group of their own on the right.
+  Workspace effects;
+  effects.name = "Effects";
+  effects.layout.root =
+      split(Axis::Vertical,
+            {split(Axis::Horizontal,
+                   {tabs({"effects", "source"}), tabs({"monitor"}), tabs({"library"})},
+                   {0.32, 0.48, 0.20}),
+             split(Axis::Horizontal, {tabs({"project", "scopes", "audio"}), tabs({"timeline"})},
+                   {0.3, 0.7})},
+            {0.58, 0.42});
+
+  // Audio: the mixer in front where Editing keeps the source, and the
+  // timeline -- where the waveforms are -- given the most room.
   Workspace audio;
   audio.name = "Audio";
   audio.layout.root =
       split(Axis::Vertical,
             {split(Axis::Horizontal,
-                   {tabs({"project", "effects", "library", "scopes", "source"}),
-                    tabs({"monitor"}), tabs({"audio"})},
-                   {0.32, 0.54, 0.14}),
-             tabs({"timeline"})},
-            {0.42, 0.58});
+                   {tabs({"audio", "source", "effects"}), tabs({"monitor"})}, {0.5, 0.5}),
+             split(Axis::Horizontal, {tabs({"project", "library", "scopes"}), tabs({"timeline"})},
+                   {0.3, 0.7})},
+            {0.5, 0.5});
 
-  return {std::move(editing), std::move(colour), std::move(audio)};
+  return {std::move(editing), std::move(assembly), std::move(colour), std::move(effects),
+          std::move(audio)};
 }
 
 Workspaces default_workspaces() {

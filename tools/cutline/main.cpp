@@ -13045,6 +13045,17 @@ template <typename T>
         host.paint(*painter, theme);
         walk(host.root());
       }
+
+      // And every built-in arrangement, not only the default: each gives the
+      // monitors and the timeline a different share of the window, and a row
+      // of controls that fits one of them can be cut in half by another.
+      for (const cutline::editor::Workspace& workspace : cutline::editor::built_in_workspaces()) {
+        dock->set_node(workspace.layout.root);
+        host.resize(client, context);
+        host.paint(*painter, theme);
+        walk(host.root());
+      }
+      dock->set_node(layout.root);
     }
 
     // With a document behind it, and something selected.
@@ -13092,11 +13103,19 @@ template <typename T>
       // so without this the panel under test is never constructed at all.
       if (DockView* dock = find_dock(app.main.host->root()); dock != nullptr) {
         DockLayout layout = layout_of(app);
-        cutline::ui::activate_panel(layout, "effects");
-        // And the mixer, which is a tab behind the monitor and holds a strip
-        // per audio track — an arrangement that grows with the project and so
-        // is worth laying out rather than assuming.
+        // The mixer first, which holds a strip per audio track — an
+        // arrangement that grows with the project and so is worth laying out
+        // rather than assuming. Measured where it is and then put back behind
+        // the inspector: Premiere's Editing keeps both behind the source, and
+        // leaving the mixer in front put the inspector out of the tree, where
+        // opening its colour swatch had no window to open in.
         cutline::ui::activate_panel(layout, "audio");
+        dock->set_node(layout.root);
+        app.main.host->resize(client, context);
+        app.main.host->paint(*painter, theme);
+        walk(app.main.host->root());
+
+        cutline::ui::activate_panel(layout, "effects");
         dock->set_node(layout.root);
       }
       app.main.host->resize(client, context);

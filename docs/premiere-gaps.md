@@ -2276,7 +2276,7 @@ there now.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| Built-in workspaces | Editing, Color, Audio, Graphics, Effects, Assembly, laid out as Premiere does | four, arranged as this application arranged them | wiring |
+| Built-in workspaces | Editing, Color, Audio, Graphics, Effects, Assembly, laid out as Premiere does | **mostly** — Editing, Assembly, Colour, Effects and Audio, each arranged after Adobe's description of it: Editing has Source and Program side by side with Effect Controls and the mixer behind the source; Assembly gives the project the room; Colour puts the scopes beside the picture and the controls in a group of their own where Lumetri Color goes; Effects gives Effect Controls the room and the Effects panel a group; Audio puts the mixer in front. Graphics waits for the Essential Graphics panel it is built round (Phase 3). `--check` now lays out every built-in in every theme, which is how two of them were found leaving the timeline too narrow for its toolbar | wiring |
 | A panel menu on every panel | the ≡ in each header | **none** | control |
 | Every command in the menu bar | yes | most; a few are only on a button or a key | wiring |
 | History panel | the undo list, clickable | **none** | control |
