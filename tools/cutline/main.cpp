@@ -66,6 +66,8 @@
 #include "cutline/ui/scrub_bar.hpp"
 #include "cutline/ui/waveform_view.hpp"
 #include "cutline/ui/skia_painter.hpp"
+
+#include "gallery.hpp"
 #include "cutline/ui/skia_window.hpp"
 #include "cutline/ui/theme.hpp"
 #include "cutline/ui/timeline.hpp"
@@ -14023,6 +14025,11 @@ int main(int argc, char** argv) {
   // theme's frame is written so it can be looked at.
   if (argc > 1 && std::string_view(argv[1]) == "--check") {
     return self_check(argc > 2 ? argv[2] : "");
+  }
+  // `--gallery <dir>`: a sheet of every control in every state per theme, for
+  // matching the period themes against captures of the real thing.
+  if (argc > 2 && std::string_view(argv[1]) == "--gallery") {
+    return cutline::tool::write_gallery(argv[2]);
   }
 #if CUTLINE_HAVE_PREVIEW
   // The Direct3D 11 video device, built on a thread of its own while the window
