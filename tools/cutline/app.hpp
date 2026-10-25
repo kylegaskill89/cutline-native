@@ -1258,6 +1258,11 @@ void new_bin(App& app);
 void set_pool_view(App& app, cutline::ui::BrowserView view);
 void go_to_time(App& app, double at);
 
+// The document's recovery copies, in `document.cpp`.
+void poll_autosave(App& app);
+void clear_autosave(App& app, const std::filesystem::path& document);
+[[nodiscard]] bool offer_recovery(App& app, const std::filesystem::path& document);
+
 // The headless check and the benchmarks, in `check.cpp`.
 [[nodiscard]] int self_check(std::string_view shots = {});
 [[nodiscard]] int benchmark();
