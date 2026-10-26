@@ -5,6 +5,7 @@
   "description": "Native C++ non-linear video editor",
   "homepage": "https://github.com/kylegaskill89/cutline-native",
   "license": "GPL-3.0-or-later",
+  "builtin-baseline": "b9db60d8be5cd434b195da8cffc2ee82e227fac4",
   "dependencies": [
     "gtest",
     "nlohmann-json",

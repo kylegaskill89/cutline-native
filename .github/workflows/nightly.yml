@@ -45,6 +45,14 @@ jobs:
       - name: Point CMake at the preinstalled vcpkg
         run: echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
 
+      # The ports are pinned to the commit vcpkg.json names, so CI builds the
+      # FFmpeg and Skia the tests were run against here. The runner's copy of
+      # vcpkg moves on by itself and may not hold that commit.
+      - name: Fetch the pinned vcpkg baseline
+        run: |
+          $baseline = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+          git -C "$env:VCPKG_INSTALLATION_ROOT" fetch --quiet origin $baseline
+
       # Configure is what builds the dependencies, so the cache is saved
       # immediately afterwards rather than at the end of the job.
       # The ui preset does not set warnings-as-errors itself, because it is

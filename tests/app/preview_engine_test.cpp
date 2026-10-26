@@ -124,9 +124,19 @@ TEST_F(PreviewEngineTest, AskingNeverWaitsForARender) {
 TEST_F(PreviewEngineTest, TheLatestWantWins) {
   // A scrub is a want per mouse move. Rendering every one of them in turn
   // would leave the picture further behind the pointer with every move.
-  const auto slow = slow_project();
+  //
+  // A lighter project than `slow_project`: thirty wants take microseconds, so
+  // any render outlasts them, and on a machine with no graphics card -- CI
+  // renders in software -- the 4K one took over a minute a frame and outran the
+  // wait below rather than testing anything.
+  auto lighter = std::make_shared<Project>(*matte_project("#ff0000", 1280, 720));
+  for (int i = 0; i < 4; ++i) {
+    lighter->sequence().tracks[0].clips[0].effects.push_back(
+        core::ClipEffect{.type = "blur", .params = {{"amount", 20.0}}});
+  }
+  const std::shared_ptr<const Project> slow = lighter;
   for (int i = 0; i < 30; ++i) engine_->want(slow, i / 30.0, 0.0);
-  ASSERT_TRUE(await_picture(29 / 30.0, 30000ms));
+  ASSERT_TRUE(await_picture(29 / 30.0, 120000ms));
   // Settle on the last one, which may be a moment behind the first picture.
   for (int i = 0; i < 100 && engine_->frames_rendered() < 2; ++i) {
     (void)engine_->take(29 / 30.0);
