@@ -2623,9 +2623,17 @@ one.
    sound, every other rate is silent, and it renders ahead in its own
    direction. One transport moves at a time. It stops on the source's last
    frame, where stopping on the end itself showed black.
-5. **Trim Monitor** (medium). Premiere's two-up trim view, outgoing and
-   incoming frames, with its trim buttons and keys. The ripple, roll and slip
-   edits exist; this is the view and the shortcuts round them.
+5. ~~**Trim Monitor**~~ — **done** as Premiere's trim mode. Shift+T selects
+   the edit point nearest the playhead on the targeted track, marks it with
+   Premiere's brackets (red for a roll or trim, yellow for a ripple), and
+   shows the outgoing frame beside the incoming one in the Program Monitor,
+   with a row of -5, -1, Transitions, +1 and +5 under it. Ctrl+T cycles
+   roll, ripple out, ripple in, trim out and trim in; Ctrl+arrows trim a
+   frame and Ctrl+Shift+arrows five; Escape or Shift+T leaves. The offset is
+   read from the document, so an undo counts like any other trim. Premiere
+   has no dedicated trim key set on Windows of its own that all versions
+   agree on, so these are the commonly documented ones, and every one is
+   rebindable.
 6. **Preview render bar** (large). Render a span to preview files, play
    rendered spans from them, and the red, yellow and green bar over the ruler.
    Matters more now that a Lumetri grade can be heavy, and it is the playback

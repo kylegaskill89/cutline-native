@@ -416,8 +416,16 @@ template <typename T>
       // which is nearly always. Counting those as faults would mean the only
       // way to have a control that comes and goes is to rebuild the panel
       // around it.
+      // And everything inside such a widget, which is hidden with it: trim
+      // mode's row of buttons is put away whole whenever it is off.
+      const auto hidden = [](const Widget& from) {
+        for (const Widget* at = &from; at != nullptr; at = at->parent()) {
+          if (!at->visible()) return true;
+        }
+        return false;
+      };
       const bool allowed_to_be_empty =
-          !widget.visible() || dynamic_cast<const Spacer*>(&widget) != nullptr;
+          hidden(widget) || dynamic_cast<const Spacer*>(&widget) != nullptr;
       if (widget.bounds().empty() && !allowed_to_be_empty) {
         ++empty;
         report("empty", widget);
@@ -819,6 +827,19 @@ template <typename T>
         app.main.host->paint(*painter, theme);
         walk(app.main.host->root());
         app.lumetri_open = {"Basic Correction"};
+
+        // Trim mode, whose row of buttons is hidden the rest of the time.
+        if (cutline::ui::activate_panel(layout_of(app), PanelId("monitor"))) refresh_dock(app);
+        toggle_trim_mode(app);
+        if (app.trim_point.has_value()) {
+          app.main.host->update_layout(context);
+          app.main.host->paint(*painter, theme);
+          walk(app.main.host->root());
+          exit_trim_mode(app);
+        } else {
+          std::println("{}: trim mode found no edit point to select", theme.id);
+          ++failures;
+        }
       }
 
       // And the colour picker, which lives on the popup layer and is therefore

@@ -44,6 +44,7 @@
 #include "cutline/editor/timeline_binding.hpp"
 #include "cutline/editor/graphic_templates.hpp"
 #include "cutline/editor/lumetri.hpp"
+#include "cutline/editor/trim.hpp"
 #include "cutline/editor/graphics.hpp"
 #include "cutline/editor/transitions.hpp"
 #include "cutline/editor/workspace.hpp"
@@ -664,6 +665,17 @@ struct App {
   /// picture, where in the sequence it comes from, and its pixels, which the
   /// monitor borrows and Apply Match measures.
   bool lumetri_comparing = false;
+  /// Trim mode's selected edit point, the outgoing frame shown beside the
+  /// incoming one, and the Program Monitor's row of trim buttons.
+  std::optional<cutline::editor::EditPoint> trim_point;
+  std::vector<std::uint8_t> trim_outgoing;
+  int trim_outgoing_width = 0;
+  int trim_outgoing_height = 0;
+  /// Where the cut was when trim mode began, so how far it has moved is read
+  /// from the document and an undo is counted like any other trim.
+  double trim_started = 0.0;
+  Box* trim_row = nullptr;
+  Label* trim_label = nullptr;
   /// Each monitor's Display Mode: the composite, or its alpha. Not kept
   /// between sessions: a monitor left showing a matte is a monitor that looks
   /// broken the next morning.
@@ -1579,6 +1591,15 @@ void show_safe_margins(App& app);
 void show_display_options(App& app);
 /// Colour Match's Comparison View, on or off, from the panel or the menu.
 void toggle_comparison(App& app);
+/// Premiere's Trim Edit: into trim mode on the edit point nearest the
+/// playhead, or out of it.
+void toggle_trim_mode(App& app);
+void exit_trim_mode(App& app);
+/// Trims the selected edit point by `frames`; false when none is selected.
+bool trim_by(App& app, double frames);
+void toggle_trim_type(App& app);
+/// Trim mode's marks and pictures, brought up to date with the document.
+void show_trim(App& app);
 [[nodiscard]] std::optional<std::filesystem::path> choose_lut_to_open(HWND owner);
 /// Measures graphic layers as the renderer will draw them, where there is a
 /// text library to do it with: what the panel pins by and the monitor puts

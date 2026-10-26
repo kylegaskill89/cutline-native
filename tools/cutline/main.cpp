@@ -430,6 +430,8 @@ void show_display_options(App& app) {
 
 void refresh_all(App& app) {
   show_safe_margins(app);
+  // After an undo, or anything else, the cut may have moved or gone.
+  if (app.trim_point.has_value()) show_trim(app);
   refresh_timeline(app);
   refresh_browser(app);
   refresh_title(app);
@@ -672,6 +674,12 @@ void run_action(App& app, Shell& shell, std::string_view id) {
     }
   }
 
+  // Escape leaves trim mode before it deselects anything.
+  if (id == "edit.deselect_all" && app.trim_point.has_value()) {
+    exit_trim_mode(app);
+    return;
+  }
+
   if (action->command.has_value()) {
     run_command(app, *action->command);
     return;
@@ -701,6 +709,18 @@ void run_action(App& app, Shell& shell, std::string_view id) {
     open_export_dialog(app);
   } else if (id == "edit.keyboard_shortcuts") {
     open_keyboard_dialog(app);
+  } else if (id == "sequence.trim_edit") {
+    toggle_trim_mode(app);
+  } else if (id == "sequence.toggle_trim_type") {
+    toggle_trim_type(app);
+  } else if (id == "sequence.trim_backward") {
+    trim_by(app, -1.0);
+  } else if (id == "sequence.trim_forward") {
+    trim_by(app, 1.0);
+  } else if (id == "sequence.trim_backward_many") {
+    trim_by(app, -5.0);
+  } else if (id == "sequence.trim_forward_many") {
+    trim_by(app, 5.0);
   } else if (id == "sequence.snap") {
     toggle_snapping(app);
   } else if (id == "sequence.zoom_in") {

@@ -28,6 +28,7 @@ add_library(cutline_editor
   src/graphics.cpp
   src/graphic_templates.cpp
   src/transitions.cpp
+  src/trim.cpp
   src/updates.cpp
   src/presets.cpp
   src/workspace.cpp

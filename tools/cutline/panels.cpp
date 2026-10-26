@@ -329,6 +329,43 @@ namespace cutline::tool {
   transport.emplace<Button>("Export", [app] {
     if (app != nullptr) open_export_dialog(*app);
   }).set_tooltip("Render the sequence to a file");
+
+  // Trim mode's buttons, Premiere's: back five, back one, the default
+  // transitions, forward one, forward five. Shown only while it is on.
+  auto& trim = panel->emplace<Box>(Axis::Horizontal);
+  trim.set_visible(app != nullptr && app->trim_point.has_value());
+  auto& label = trim.emplace<Label>("");
+  label.set_small(true);
+  trim.emplace<Spacer>();
+  for (const auto& [text, frames, action] :
+       {std::tuple{"-5", -5.0, "sequence.trim_backward_many"},
+        std::tuple{"-1", -1.0, "sequence.trim_backward"}}) {
+    trim.emplace<Button>(text, [app, frames] {
+      if (app != nullptr) trim_by(*app, frames);
+    }).set_tooltip(with_keys(app, frames < -1.0 ? "Trim backward five frames"
+                                                : "Trim backward a frame",
+                             action));
+  }
+  trim.emplace<Button>("Transitions", [app] {
+    if (app != nullptr) run_command(*app, cutline::editor::Command::ApplyDefaultTransitions);
+  }).set_tooltip("Apply the default transitions to the cut");
+  for (const auto& [text, frames, action] :
+       {std::tuple{"+1", 1.0, "sequence.trim_forward"},
+        std::tuple{"+5", 5.0, "sequence.trim_forward_many"}}) {
+    trim.emplace<Button>(text, [app, frames] {
+      if (app != nullptr) trim_by(*app, frames);
+    }).set_tooltip(with_keys(app, frames > 1.0 ? "Trim forward five frames"
+                                               : "Trim forward a frame",
+                             action));
+  }
+  trim.emplace<Spacer>();
+  if (app != nullptr) {
+    app->trim_row = &trim;
+    app->trim_label = &label;
+    // Trim mode shows its outgoing frame where a comparison would, so it is
+    // put back once the rest of the panel is.
+    if (app->trim_point.has_value()) show_trim(*app);
+  }
   return panel;
 }
 

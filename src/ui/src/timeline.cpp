@@ -657,6 +657,21 @@ void TimelineView::set_transition_ghost(std::optional<TransitionGhost> ghost) {
   if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
 }
 
+void TimelineView::set_edit_mark(std::optional<EditMark> mark) {
+  if (edit_mark_ == mark) return;
+  edit_mark_ = mark;
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
+Rect TimelineView::edit_mark_rect() const {
+  if (!edit_mark_.has_value() || edit_mark_->track >= model_.tracks.size()) return {};
+  const Rect row = track_rect(edit_mark_->track);
+  if (row.empty()) return {};
+  constexpr double kReach = 7.0;
+  const double x = row.x + scale_.to_x(edit_mark_->at);
+  return Rect{x - kReach, row.y, kReach * 2.0, row.height};
+}
+
 Rect TimelineView::transition_ghost_rect() const {
   if (!transition_ghost_.has_value()) return {};
   return transition_span(transition_ghost_->track, transition_ghost_->block,
@@ -1531,6 +1546,26 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
         }
       }
     }
+  }
+
+  // Trim mode's brackets, over the clips either side of the cut.
+  if (const Rect mark = edit_mark_rect(); !mark.empty()) {
+    const Color ink = edit_mark_->ripple ? Color{1.0f, 0.82f, 0.15f, 1.0f}
+                                         : Color{0.95f, 0.25f, 0.2f, 1.0f};
+    const double cx = mark.x + mark.width / 2.0;
+    const double top = mark.y + 2.0;
+    const double bottom = mark.bottom() - 2.0;
+    const double arm = mark.width / 2.0 - 1.0;
+    const auto bracket = [&](double side) {
+      const double x = cx + side * 1.5;
+      painter.line(x, top, x, bottom, ink, 3.0);
+      painter.line(x, top, x + side * arm, top, ink, 3.0);
+      painter.line(x, bottom, x + side * arm, bottom, ink, 3.0);
+    };
+    // The outgoing clip's end is the bracket opening left of the cut, the
+    // incoming clip's start the one opening right.
+    if (edit_mark_->out_side) bracket(-1.0);
+    if (edit_mark_->in_side) bracket(1.0);
   }
 
   // Last, and inside the tracks' clip, so it lies over whatever is already

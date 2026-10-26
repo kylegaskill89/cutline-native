@@ -49,6 +49,7 @@ add_executable(cutline_core_tests
   editor/lumetri_test.cpp
   editor/zip_test.cpp
   editor/transitions_test.cpp
+  editor/trim_test.cpp
   editor/updates_test.cpp
   editor/workspace_test.cpp
   render/effect_catalog_test.cpp
