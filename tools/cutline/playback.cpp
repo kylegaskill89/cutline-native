@@ -279,6 +279,7 @@ void toggle_source_playback([[maybe_unused]] App& app) {
   // two is being watched.
   if (app.playing()) stop_playback(app);
   if (app.shuttling()) set_shuttle(app, 0.0);
+  app.source_shuttle = 0.0;
 
   if (app.source_player != nullptr && app.source_player_for != media->id) {
     app.source_player.reset();
@@ -455,7 +456,9 @@ void refresh_source([[maybe_unused]] App& app) {
 
   const double at = std::clamp(app.source_playhead, 0.0, std::max(0.0, media->duration));
   if (app.shares_device()) {
-    engine->want(app.source_snapshot, at, app.source_playing() ? 1.0 : 0.0);
+    // A shuttle renders ahead in its own direction, as the program monitor's does.
+    engine->want(app.source_snapshot, at,
+                 app.source_playing() ? 1.0 : app.source_shuttle);
     poll_source(app);
     return;
   }
@@ -977,6 +980,7 @@ void set_shuttle(App& app, double rate) {
   }
 
   if (app.playing()) stop_playback(app);
+  if (rate != 0.0 && app.source_shuttling()) set_source_shuttle(app, 0.0);
   app.shuttle = rate;
   app.shuttled_at = std::chrono::steady_clock::now();
   app.shuttle_at = app.session.playhead();
@@ -999,6 +1003,69 @@ void set_shuttle(App& app, double rate) {
 /// By elapsed time rather than a fixed step per turn, because the loop's turn
 /// rate depends on how long a frame took to decode — and a shuttle that ran
 /// slower on heavy footage would be a shuttle nobody could aim with.
+void set_source_shuttle(App& app, double rate) {
+#if CUTLINE_HAVE_PREVIEW
+  // As the program monitor's: one is ordinary playback, with its sound, and
+  // every other rate is silent.
+  if (rate == 1.0) {
+    app.source_shuttle = 0.0;
+    if (!app.source_playing()) toggle_source_playback(app);
+    return;
+  }
+  if (app.source_playing()) stop_source_playback(app);
+  // One transport moving at a time, as one sound card plays one thing.
+  if (rate != 0.0 && app.playing()) stop_playback(app);
+  if (rate != 0.0 && app.shuttling()) set_shuttle(app, 0.0);
+  app.source_shuttle = rate;
+  app.source_shuttled_at = std::chrono::steady_clock::now();
+  app.source_shuttle_at = app.source_playhead;
+  if (app.source_play_button != nullptr) {
+    app.source_play_button->set_text(app.source_shuttling() ? "Stop" : "Play");
+  }
+  mark_dirty(app);
+#else
+  (void)app;
+  (void)rate;
+#endif
+}
+
+void advance_source_shuttle(App& app) {
+  if (!app.source_shuttling()) return;
+  const cutline::core::Media* media = source_media_of(app);
+  if (media == nullptr) {
+    set_source_shuttle(app, 0.0);
+    return;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  // Capped for the reason the program monitor's is: one slow turn must not
+  // make the next leap further.
+  constexpr double kMaxShuttleStep = 0.1;
+  const double elapsed =
+      std::min(std::chrono::duration<double>(now - app.source_shuttled_at).count(),
+               kMaxShuttleStep);
+  app.source_shuttled_at = now;
+
+  const std::optional<double> rate = cutline::core::playback_fps(*media);
+  const double fps = rate.value_or(0.0) > 0.0 ? *rate : 30.0;
+  // Stopping on the last frame rather than on the end itself, which is the
+  // moment after it and has no picture.
+  const double last = std::max(0.0, media->duration - 1.0 / fps);
+  app.source_shuttle_at += elapsed * app.source_shuttle;
+  const bool past_the_end = app.source_shuttle_at <= 0.0 || app.source_shuttle_at >= last;
+  app.source_shuttle_at = std::clamp(app.source_shuttle_at, 0.0, last);
+
+  // Once per frame of the source, so the loop is not rendering pictures
+  // nobody sees between them.
+  const double at = std::round(app.source_shuttle_at * fps) / fps;
+  if (past_the_end) set_source_shuttle(app, 0.0);
+  if (std::abs(at - app.source_playhead) < 0.5 / fps && !past_the_end) {
+    Sleep(1);
+    return;
+  }
+  app.source_playhead = at;
+  refresh_source(app);
+}
+
 void advance_shuttle(App& app) {
   if (!app.shuttling()) return;
 

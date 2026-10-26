@@ -926,6 +926,13 @@ struct App {
   std::string source_player_for;
   Button* source_play_button = nullptr;
 
+  /// The source monitor's own J/K/L shuttle, kept as the program monitor's is:
+  /// a rate, when it last moved, and where it has got to.
+  double source_shuttle = 0.0;
+  std::chrono::steady_clock::time_point source_shuttled_at{};
+  double source_shuttle_at = 0.0;
+  [[nodiscard]] bool source_shuttling() const noexcept { return source_shuttle != 0.0; }
+
   [[nodiscard]] bool source_playing() const noexcept {
     return source_player != nullptr && source_player->playing();
   }
@@ -1535,6 +1542,9 @@ void toggle_playback(App& app);
 void toggle_looping(App& app);
 void set_shuttle(App& app, double rate);
 void advance_shuttle(App& app);
+/// The same for the source monitor, which J, K and L drive when it has focus.
+void set_source_shuttle(App& app, double rate);
+void advance_source_shuttle(App& app);
 void import_media(App& app);
 void add_title(App& app);
 void add_matte(App& app);

@@ -648,9 +648,20 @@ void run_action(App& app, Shell& shell, std::string_view id) {
         app.source_playhead = std::max(0.0, media->duration);
         refresh_source(app);
       } else if (id == "playback.play") {
-        toggle_source_playback(app);
+        // A shuttle is playback of a sort, so the space bar stops it too.
+        if (app.source_shuttling()) {
+          set_source_shuttle(app, 0.0);
+        } else {
+          toggle_source_playback(app);
+        }
       } else if (id == "playback.stop") {
+        set_source_shuttle(app, 0.0);
         stop_source_playback(app);
+      } else if (id == "playback.shuttle_left") {
+        set_source_shuttle(app, next_shuttle(app.source_shuttle, -1.0));
+      } else if (id == "playback.shuttle_right") {
+        set_source_shuttle(app, app.source_playing() ? next_shuttle(1.0, 1.0)
+                                                     : next_shuttle(app.source_shuttle, 1.0));
       } else {
         taken = false;
       }
@@ -2300,7 +2311,8 @@ int main(int argc, char** argv) {
     // end still to handle — and a loop that was meant to round again never
     // does, because nothing wakes to notice.
     const bool animating = app.animating();
-    if (app.playback_live() || app.shuttling() || app.source_playing() || app.exporting() ||
+    if (app.playback_live() || app.shuttling() || app.source_shuttling() ||
+        app.source_playing() || app.exporting() ||
         animating) {
       while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
         if (message.message == WM_QUIT) {
@@ -2313,11 +2325,13 @@ int main(int argc, char** argv) {
       if (running) {
         advance_playback(app);
         advance_shuttle(app);
+        advance_source_shuttle(app);
         advance_source_playback(app);
         poll_export(app);
         // Nothing is due this instant when only the export is running, and the
         // encoder wants the core far more than this loop does.
-        if (!app.playback_live() && !app.shuttling() && !app.source_playing()) {
+        if (!app.playback_live() && !app.shuttling() && !app.source_shuttling() &&
+            !app.source_playing()) {
           // A fade is paced by the swapchain's wait for the screen; a
           // millisecond here is only so a hidden window cannot spin.
           Sleep(animating && !app.exporting() ? 1 : 8);

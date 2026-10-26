@@ -1044,7 +1044,7 @@ way to *set* them by eye, which is the panel.
 | | Premiere | Here | Size |
 |---|---|---|---|
 | ~~A panel showing one source~~ | yes | **done** — beside the program monitor, as Premiere has it | — |
-| ~~Its own playhead and transport~~ | play, step, JKL, shuttle | **done** — scrub, step, play with its sound, Home/End; no J/L shuttle | — |
+| ~~Its own playhead and transport~~ | play, step, JKL, shuttle | **done** — scrub, step, play with its sound, Home/End, and J/K/L at 1, 2 and 4 times either way, its own shuttle when the Source Monitor has focus | — |
 | ~~A scrub bar with a marked span~~ | the time ruler under the picture | **done** — `ui::ScrubBar` | — |
 | ~~Mark in and out **on the source**~~ | `I` and `O` while it is focused | **done** — routed by where the keyboard is | — |
 | ~~Marks that belong to the asset~~ | kept per clip, and saved | **done** | — |
@@ -2617,9 +2617,12 @@ one.
    Multi-Camera comes with multicam (11). For the monitor alone, applied as
    the picture is presented: a snapshot, a scope and an export are the
    composite whatever the monitor shows.
-4. **J/K/L on the source monitor** (small to medium). The program monitor's
-   shuttle and reverse playback are a render engine any monitor can own; the
-   source monitor has its own engine and lacks only the transport.
+4. ~~**J/K/L on the source monitor**~~ — **done**. With the Source Monitor
+   in hand, J, K and L shuttle it rather than the sequence, at the program
+   monitor's rates and by its rules: once forward is ordinary playback with
+   sound, every other rate is silent, and it renders ahead in its own
+   direction. One transport moves at a time. It stops on the source's last
+   frame, where stopping on the end itself showed black.
 5. **Trim Monitor** (medium). Premiere's two-up trim view, outgoing and
    incoming frames, with its trim buttons and keys. The ripple, roll and slip
    edits exist; this is the view and the shortcuts round them.
