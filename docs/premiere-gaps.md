@@ -2630,9 +2630,9 @@ one.
    with a row of -5, -1, Transitions, +1 and +5 under it. Ctrl+T cycles
    roll, ripple out, ripple in, trim out and trim in; Ctrl+arrows trim a
    frame and Ctrl+Shift+arrows five; Escape or Shift+T leaves. The offset is
-   read from the document, so an undo counts like any other trim. Premiere
-   has no dedicated trim key set on Windows of its own that all versions
-   agree on, so these are the commonly documented ones, and every one is
+   read from the document, so an undo counts like any other trim. Which
+   keys Premiere gives these has changed between versions and the sources
+   disagree, so these are the ones most often documented, and all are
    rebindable.
 6. **Preview render bar** (large). Render a span to preview files, play
    rendered spans from them, and the red, yellow and green bar over the ruler.
