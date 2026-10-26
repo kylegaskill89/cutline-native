@@ -71,6 +71,10 @@ struct Settings {
   /// monitor, off until it is asked for.
   bool safe_margins_source = false;
   bool safe_margins_program = false;
+  /// And whether a checkerboard shows where the frame is not covered,
+  /// Premiere's Transparency Grid, kept the same way.
+  bool transparency_grid_source = false;
+  bool transparency_grid_program = false;
 
   /// Whether an edge being dragged jumps to the things near it.
   bool snapping = true;

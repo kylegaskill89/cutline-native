@@ -107,6 +107,8 @@ std::string to_json(const Settings& settings, int indent) {
   out["sounds"] = settings.sounds;
   out["safe_margins_source"] = settings.safe_margins_source;
   out["safe_margins_program"] = settings.safe_margins_program;
+  out["transparency_grid_source"] = settings.transparency_grid_source;
+  out["transparency_grid_program"] = settings.transparency_grid_program;
   // Only when somebody has changed one. A fresh file saying "every label is
   // called what it is already called" is eight lines of nothing.
   if (std::ranges::any_of(settings.label_names, [](const std::string& n) { return !n.empty(); })) {
@@ -190,6 +192,10 @@ std::expected<Settings, std::string> settings_from_json(std::string_view text) {
       document.value("safe_margins_source", settings.safe_margins_source);
   settings.safe_margins_program =
       document.value("safe_margins_program", settings.safe_margins_program);
+  settings.transparency_grid_source =
+      document.value("transparency_grid_source", settings.transparency_grid_source);
+  settings.transparency_grid_program =
+      document.value("transparency_grid_program", settings.transparency_grid_program);
 
   // Sized to what this build has rather than to what the file says. A file from
   // a version with one more label would otherwise reach past the palette, and

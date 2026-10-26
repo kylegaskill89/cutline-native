@@ -1534,7 +1534,22 @@ float4 PSPresent(VSOutput input) : SV_Target {
     // So the target is plain UNORM holding sRGB-encoded values that any sampler
     // reads back exactly as stored, and the encoding happens here. It costs a
     // handful of instructions once per frame.
-    const float4 scene = texture0.Sample(linearSampler, input.uv);
+    float4 scene = texture0.Sample(linearSampler, input.uv);
+
+    // Premiere's Display Mode and Transparency Grid, for the monitor alone.
+    // Alpha is shown as its own value, as a matte is read, so it skips the
+    // encoding below and is only scaled to white on an HDR display.
+    if (params.passB.x > 0.5) {
+        if (params.output == OUTPUT_SCRGB) return float4(linearizeSrgb(scene.aaa) * params.passA.x, 1.0);
+        return float4(scene.aaa, 1.0);
+    }
+    if (params.passB.y > 0.5) {
+        // Squares of sixteen canvas pixels, two greys in linear light, showing
+        // through wherever the premultiplied scene does not cover.
+        const float2 square = floor(input.uv * params.canvas / 16.0);
+        const float shade = fmod(square.x + square.y, 2.0) < 0.5 ? 0.38 : 0.18;
+        scene = float4(scene.rgb + shade * (1.0 - scene.a), 1.0);
+    }
 
     if (params.output == OUTPUT_SCRGB) {
         return float4(convertPrimaries(scene.rgb, primariesOf(params.working), PRIMARIES_709) *

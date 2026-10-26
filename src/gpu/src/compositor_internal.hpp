@@ -81,6 +81,7 @@ struct Compositor::Impl {
   /// The scRGB copy for an HDR display, made the first time one is asked for.
   ComPtr<ID3D12Resource> hdr_display;
   std::optional<float> hdr_sdr_white;
+  DisplayOptions display_options;
   ComPtr<ID3D12Resource> readback;
   std::size_t readback_capacity = 0;
 

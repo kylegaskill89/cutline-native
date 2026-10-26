@@ -390,12 +390,7 @@ void build_wheels(App& app, Box& body, const Target& target) {
   // elsewhere in the sequence to match this one to.
   heading(body, "Color Match");
   auto& match = body.emplace<Box>(Axis::Horizontal);
-  auto& compare = match.emplace<Button>("Comparison View", [&app] {
-    app.lumetri_comparing = !app.lumetri_comparing;
-    if (app.lumetri_comparing) capture_reference(app);
-    show_comparison(app);
-    app.lumetri_stale = true;
-  });
+  auto& compare = match.emplace<Button>("Comparison View", [&app] { toggle_comparison(app); });
   compare.set_selected(app.lumetri_comparing);
   compare.set_tooltip("Show a reference frame beside the picture in the Program Monitor");
   const std::string clip_id = target.clip_id;
@@ -586,6 +581,13 @@ void apply_match(App& app, const std::string& clip_id) {
 }
 
 }  // namespace
+
+void toggle_comparison(App& app) {
+  app.lumetri_comparing = !app.lumetri_comparing;
+  if (app.lumetri_comparing) capture_reference(app);
+  show_comparison(app);
+  app.lumetri_stale = true;
+}
 
 void show_comparison(App& app) {
   if (app.monitor == nullptr) return;

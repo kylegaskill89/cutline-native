@@ -1341,8 +1341,16 @@ namespace {
 ///
 /// Leaves `display` in RENDER_TARGET state; the caller transitions it onward
 /// to whatever it wants next.
+/// The display options as the present pass reads them: alpha in the first of
+/// its second row of values, the grid in the second.
+void put_display_options(ShaderParams& params, const DisplayOptions& options) {
+  params.pass_b[0] = options.mode == DisplayMode::Alpha ? 1.0f : 0.0f;
+  params.pass_b[1] = options.transparency_grid ? 1.0f : 0.0f;
+}
+
 void record_display_pass(Compositor::Impl& d, ID3D12GraphicsCommandList* commands,
-                         WorkingColour output = WorkingColour::Rec709) {
+                         WorkingColour output = WorkingColour::Rec709,
+                         const DisplayOptions* options = nullptr) {
   ID3D12DescriptorHeap* heaps[] = {d.srv_heap.Get()};
   commands->SetDescriptorHeaps(1, heaps);
   commands->SetGraphicsRootSignature(d.root_signature.Get());
@@ -1367,6 +1375,7 @@ void record_display_pass(Compositor::Impl& d, ID3D12GraphicsCommandList* command
   // Rec.709 for the monitor on an SDR display, where an HDR sequence is tone
   // mapped; the sequence's own space for its signal.
   d.colour_params(params, output);
+  if (options != nullptr) put_display_options(params, *options);
   commands->SetPipelineState(d.pipeline_present.Get());
   commands->SetGraphicsRootDescriptorTable(0, d.srv_gpu(d.present_slot()));
   commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &params, 0);
@@ -1383,7 +1392,7 @@ std::expected<SceneTexture, std::string> Compositor::display_texture() {
   if (!opened) return std::unexpected(opened.error());
   ID3D12GraphicsCommandList* commands = *opened;
 
-  record_display_pass(d, commands);
+  record_display_pass(d, commands, WorkingColour::Rec709, &d.display_options);
 
   // Straight back to a shader resource: the state it is created in, the state
   // it is left in between frames, and the state Skia will be told it is in.
@@ -1427,6 +1436,7 @@ std::expected<SceneTexture, std::string> Compositor::display_texture() {
                             ? *d.hdr_sdr_white
                             : std::max(d.colour.graphics_white_nits, 1.0f);
     params.pass_a[0] = white / 80.0f;
+    put_display_options(params, d.display_options);
     commands->SetPipelineState(d.pipeline_present_hdr.Get());
     commands->SetGraphicsRootDescriptorTable(0, d.srv_gpu(d.present_slot()));
     commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &params, 0);
@@ -1452,6 +1462,10 @@ std::expected<SceneTexture, std::string> Compositor::display_texture() {
 
 void Compositor::set_hdr_display(std::optional<float> sdr_white_nits) noexcept {
   impl_->hdr_sdr_white = sdr_white_nits;
+}
+
+void Compositor::set_display_options(const DisplayOptions& options) noexcept {
+  impl_->display_options = options;
 }
 
 std::expected<std::vector<float>, std::string> Compositor::read_back_hdr() {

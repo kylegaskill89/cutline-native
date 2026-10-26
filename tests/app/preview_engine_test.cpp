@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+
 #include <chrono>
 #include <memory>
 #include <thread>
@@ -143,6 +145,44 @@ TEST_F(PreviewEngineTest, TheLatestWantWins) {
     std::this_thread::sleep_for(10ms);
   }
   EXPECT_LE(engine_->frames_rendered(), 3u) << "rendered positions nobody was still asking for";
+}
+
+/// The middle of what the monitor is showing.
+[[nodiscard]] std::array<int, 3> shown_middle(PreviewEngine& engine) {
+  auto image = engine.read_shown();
+  if (!image.has_value()) return {-1, -1, -1};
+  const std::size_t at =
+      (static_cast<std::size_t>(image->height / 2) * image->width + image->width / 2) * 4;
+  return {image->pixels[at], image->pixels[at + 1], image->pixels[at + 2]};
+}
+
+/// A red matte at half opacity: half of the frame is covered.
+[[nodiscard]] std::shared_ptr<const Project> half_covered() {
+  auto p = std::make_shared<Project>(*matte_project("#ff0000"));
+  p->sequence().tracks[0].clips[0].opacity = 0.5;
+  return p;
+}
+
+TEST_F(PreviewEngineTest, AlphaModeShowsHowMuchOfTheFrameIsCovered) {
+  engine_->set_display_options({.mode = gpu::DisplayMode::Alpha});
+  engine_->want(half_covered(), 0.0, 0.0);
+  ASSERT_TRUE(await_picture(0.0));
+  const auto pixel = shown_middle(*engine_);
+  // Half, shown as the value it is, and grey rather than red.
+  EXPECT_NEAR(pixel[0], 128, 2);
+  EXPECT_EQ(pixel[0], pixel[1]);
+  EXPECT_EQ(pixel[1], pixel[2]);
+}
+
+TEST_F(PreviewEngineTest, TheTransparencyGridShowsThroughWhatIsNotCovered) {
+  engine_->want(half_covered(), 0.0, 0.0);
+  ASSERT_TRUE(await_picture(0.0));
+  EXPECT_EQ(shown_middle(*engine_)[1], 0) << "a red matte has no green of its own";
+
+  engine_->set_display_options({.transparency_grid = true});
+  engine_->want(half_covered(), 0.0, 0.0);
+  ASSERT_TRUE(await_picture(0.0));
+  EXPECT_GT(shown_middle(*engine_)[1], 40) << "the grey grid shows through the other half";
 }
 
 TEST_F(PreviewEngineTest, PlayingRendersAhead) {

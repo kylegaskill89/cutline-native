@@ -279,6 +279,28 @@ std::vector<MenuEntry> panel_menu_extras(App& app, const PanelId& panel) {
       save_settings(app);
       show_safe_margins(app);
     }));
+    // Premiere's Display Mode, with Comparison View among them as it is there.
+    rows.push_back(MenuEntry{
+        .label = "Display Mode",
+        .submenu = {switch_entry("Composite Video", !app.program_alpha && !app.lumetri_comparing,
+                                 [&app] {
+                                   app.program_alpha = false;
+                                   if (app.lumetri_comparing) toggle_comparison(app);
+                                   show_display_options(app);
+                                 }),
+                    switch_entry("Alpha", app.program_alpha, [&app] {
+                      app.program_alpha = true;
+                      show_display_options(app);
+                    }),
+                    switch_entry("Comparison View", app.lumetri_comparing,
+                                 [&app] { toggle_comparison(app); })}});
+    rows.push_back(switch_entry("Transparency Grid", app.settings.transparency_grid_program,
+                                [&app] {
+                                  app.settings.transparency_grid_program =
+                                      !app.settings.transparency_grid_program;
+                                  save_settings(app);
+                                  show_display_options(app);
+                                }));
     rows.push_back(MenuEntry::divider());
     rows.push_back(plain("Export Frame", [&app] { take_snapshot(app); }));
   } else if (panel == "source") {
@@ -303,6 +325,24 @@ std::vector<MenuEntry> panel_menu_extras(App& app, const PanelId& panel) {
       save_settings(app);
       show_safe_margins(app);
     }));
+    rows.push_back(MenuEntry{
+        .label = "Display Mode",
+        .submenu = {switch_entry("Composite Video", !app.source_alpha,
+                                 [&app] {
+                                   app.source_alpha = false;
+                                   show_display_options(app);
+                                 }),
+                    switch_entry("Alpha", app.source_alpha, [&app] {
+                      app.source_alpha = true;
+                      show_display_options(app);
+                    })}});
+    rows.push_back(switch_entry("Transparency Grid", app.settings.transparency_grid_source,
+                                [&app] {
+                                  app.settings.transparency_grid_source =
+                                      !app.settings.transparency_grid_source;
+                                  save_settings(app);
+                                  show_display_options(app);
+                                }));
   } else if (panel == "timeline") {
     rows.push_back(command_entry(app, "Add Video Track", Command::AddVideoTrack));
     rows.push_back(command_entry(app, "Add Audio Track", Command::AddAudioTrack));

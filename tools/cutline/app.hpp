@@ -664,6 +664,11 @@ struct App {
   /// picture, where in the sequence it comes from, and its pixels, which the
   /// monitor borrows and Apply Match measures.
   bool lumetri_comparing = false;
+  /// Each monitor's Display Mode: the composite, or its alpha. Not kept
+  /// between sessions: a monitor left showing a matte is a monitor that looks
+  /// broken the next morning.
+  bool program_alpha = false;
+  bool source_alpha = false;
   double lumetri_reference_time = 0.0;
   std::vector<std::uint8_t> lumetri_reference;
   int lumetri_reference_width = 0;
@@ -1560,6 +1565,10 @@ void auto_tone_clip(App& app, const std::string& clip_id);
 void show_comparison(App& app);
 /// Gives each monitor its safe margins, at the project's sizes, or none.
 void show_safe_margins(App& app);
+/// Gives each monitor's engine its Display Mode and Transparency Grid.
+void show_display_options(App& app);
+/// Colour Match's Comparison View, on or off, from the panel or the menu.
+void toggle_comparison(App& app);
 [[nodiscard]] std::optional<std::filesystem::path> choose_lut_to_open(HWND owner);
 /// Measures graphic layers as the renderer will draw them, where there is a
 /// text library to do it with: what the panel pins by and the monitor puts

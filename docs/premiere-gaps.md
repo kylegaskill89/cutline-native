@@ -2609,9 +2609,14 @@ one.
    menu, remembered per monitor, draws the action and title safe areas and
    a centre cross over the picture. Their sizes are the project's, in
    Project Settings, at Premiere's 10% and 20% unless changed.
-3. **Monitor display modes** (small to medium). Composite, Alpha, and the
-   scopes on the monitor itself; the readings are already computed for the
-   Scopes panel.
+3. ~~**Monitor display modes**~~ — **done** as current Premiere has them:
+   Display Mode in each monitor's panel menu, Composite Video or Alpha, with
+   Comparison View among them on the Program Monitor, and a Transparency
+   Grid switch each monitor remembers. Premiere took the scopes off its
+   monitors when Lumetri Scopes arrived, so they stay in the Scopes panel;
+   Multi-Camera comes with multicam (11). For the monitor alone, applied as
+   the picture is presented: a snapshot, a scope and an export are the
+   composite whatever the monitor shows.
 4. **J/K/L on the source monitor** (small to medium). The program monitor's
    shuttle and reverse playback are a render engine any monitor can own; the
    source monitor has its own engine and lacks only the transport.

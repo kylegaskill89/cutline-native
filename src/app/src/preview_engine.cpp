@@ -61,6 +61,7 @@ struct PreviewEngine::Impl {
   std::uint64_t serial = 0;
   /// The HDR display's SDR white, when the window is on one.
   std::optional<float> hdr_display;
+  gpu::DisplayOptions display_options;
 
   /// A finished picture waiting to be taken, in the order it was rendered.
   struct Ready {
@@ -156,6 +157,7 @@ std::string PreviewEngine::Impl::render(const core::Project& p, double t) {
   {
     const std::lock_guard<std::mutex> held(lock);
     renderer->compositor().set_hdr_display(hdr_display);
+    renderer->compositor().set_display_options(display_options);
   }
   if (auto ok = renderer->render(p, t); !ok) return ok.error();
 
@@ -270,6 +272,19 @@ void PreviewEngine::set_hdr_display(std::optional<float> sdr_white_nits) {
     if (d.hdr_display == sdr_white_nits) return;
     d.hdr_display = sdr_white_nits;
     // As a new project would: every frame made the old way is the wrong shape.
+    ++d.serial;
+    d.taken.reset();
+    d.prune([](const Impl::Ready&) { return false; });
+  }
+  d.wake.notify_all();
+}
+
+void PreviewEngine::set_display_options(const gpu::DisplayOptions& options) {
+  Impl& d = *impl_;
+  {
+    const std::lock_guard<std::mutex> held(d.lock);
+    if (d.display_options == options) return;
+    d.display_options = options;
     ++d.serial;
     d.taken.reset();
     d.prune([](const Impl::Ready&) { return false; });

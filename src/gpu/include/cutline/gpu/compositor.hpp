@@ -284,6 +284,25 @@ enum class WorkingColour {
 };
 
 /// How a compositor's sequence is colour managed.
+/// How a monitor shows the picture: Premiere's Display Mode and Transparency
+/// Grid. For the monitor alone: a still, a scope and an export are always the
+/// composite.
+enum class DisplayMode {
+  /// The picture.
+  Composite,
+  /// Its alpha, white where it is solid and black where there is nothing.
+  Alpha,
+};
+
+struct DisplayOptions {
+  DisplayMode mode = DisplayMode::Composite;
+  /// A checkerboard wherever the frame is not wholly covered, so transparency
+  /// can be told from black.
+  bool transparency_grid = false;
+
+  friend bool operator==(const DisplayOptions&, const DisplayOptions&) = default;
+};
+
 struct ColourSettings {
   WorkingColour working = WorkingColour::Rec709;
   /// Where SDR white sits in an HDR sequence. BT.2408 says 203 nits, and so
@@ -335,6 +354,9 @@ class Compositor {
   /// an SDR sequence matches the interface around it. An HDR sequence is shown
   /// at its real brightness whatever this says. Nothing means not.
   void set_hdr_display(std::optional<float> sdr_white_nits) noexcept;
+
+  /// How `display_texture` shows the picture. The composite until set.
+  void set_display_options(const DisplayOptions& options) noexcept;
 
   /// How what is composed from here on is colour managed. Rec.709 until set.
   void set_colour(const ColourSettings& colour) noexcept;

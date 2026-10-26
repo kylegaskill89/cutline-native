@@ -409,6 +409,25 @@ void show_safe_margins(App& app) {
   mark_dirty(app);
 }
 
+void show_display_options(App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.preview != nullptr) {
+    app.preview->set_display_options(
+        {.mode = app.program_alpha ? cutline::gpu::DisplayMode::Alpha
+                                   : cutline::gpu::DisplayMode::Composite,
+         .transparency_grid = app.settings.transparency_grid_program});
+  }
+  if (app.source_preview != nullptr) {
+    app.source_preview->set_display_options(
+        {.mode = app.source_alpha ? cutline::gpu::DisplayMode::Alpha
+                                  : cutline::gpu::DisplayMode::Composite,
+         .transparency_grid = app.settings.transparency_grid_source});
+  }
+#endif
+  invalidate_preview(app);
+  mark_dirty(app);
+}
+
 void refresh_all(App& app) {
   show_safe_margins(app);
   refresh_timeline(app);

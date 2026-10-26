@@ -101,6 +101,11 @@ class PreviewEngine {
   /// the next one shown is made the new way.
   void set_hdr_display(std::optional<float> sdr_white_nits);
 
+  /// How the monitor shows the picture: the composite, its alpha, and whether
+  /// a grid shows through. Frames already made are dropped, as for the HDR
+  /// display.
+  void set_display_options(const gpu::DisplayOptions& options);
+
   /// Sources that could not be opened in the last frame rendered.
   [[nodiscard]] std::vector<std::string> missing_media() const;
   [[nodiscard]] engine::FrameRenderer::DecodeStats decode_stats() const;

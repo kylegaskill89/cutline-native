@@ -39,6 +39,7 @@ namespace cutline::tool {
   }
   engine = std::move(*made);
   engine->set_hdr_display(app.hdr_white);
+  show_display_options(app);
   return engine.get();
 #else
   (void)app;
