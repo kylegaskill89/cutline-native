@@ -2605,8 +2605,10 @@ one.
    Dropping a transition from the Effects panel used to ignore the preferred
    length the drag preview showed. A transition at a clip end with nothing
    after it is left to the fade handles, which do the same thing.
-2. **Safe margins** (small). An overlay on both monitors at Premiere's
-   action and title safe sizes, 10% and 20%, set in Project Settings.
+2. ~~**Safe margins**~~ — **done**. Safe Margins in each monitor's panel
+   menu, remembered per monitor, draws the action and title safe areas and
+   a centre cross over the picture. Their sizes are the project's, in
+   Project Settings, at Premiere's 10% and 20% unless changed.
 3. **Monitor display modes** (small to medium). Composite, Alpha, and the
    scopes on the monitor itself; the readings are already computed for the
    Scopes panel.

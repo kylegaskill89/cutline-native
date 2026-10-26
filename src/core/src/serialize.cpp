@@ -532,6 +532,13 @@ json write(const Sequence& s) {
 json write(const Project& p) {
   json j = p.sequences.empty() ? write(Sequence{}) : write(p.sequences.front());
   j["use_proxies"] = p.use_proxies;
+  // Only when they are not Premiere's defaults, which is nearly always.
+  if (p.safe_areas != SafeAreas{}) {
+    j["safe_areas"] = {{"title_width", p.safe_areas.title_width},
+                       {"title_height", p.safe_areas.title_height},
+                       {"action_width", p.safe_areas.action_width},
+                       {"action_height", p.safe_areas.action_height}};
+  }
 
   json media = json::array();
   for (const Media& m : p.media) media.push_back(write(m));
@@ -1042,6 +1049,12 @@ Project read_project(const json& j) {
   // single-sequence project has always kept them.
   p.sequences = {read_sequence(j)};
   p.use_proxies = read_or(j, "use_proxies", p.use_proxies);
+  if (const auto safe = j.find("safe_areas"); safe != j.end() && safe->is_object()) {
+    p.safe_areas.title_width = read_or(*safe, "title_width", p.safe_areas.title_width);
+    p.safe_areas.title_height = read_or(*safe, "title_height", p.safe_areas.title_height);
+    p.safe_areas.action_width = read_or(*safe, "action_width", p.safe_areas.action_width);
+    p.safe_areas.action_height = read_or(*safe, "action_height", p.safe_areas.action_height);
+  }
 
   const auto sequences = j.find("sequences");
   if (sequences != j.end() && sequences->is_array()) {

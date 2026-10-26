@@ -76,6 +76,8 @@ class TempSettings {
   settings.postroll = 2.5;
   settings.software_renderer = true;
   settings.sounds = true;
+  settings.safe_margins_source = true;
+  settings.safe_margins_program = true;
   return settings;
 }
 

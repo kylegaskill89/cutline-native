@@ -555,6 +555,15 @@ Project set_tone_map(Project p, bool tone_map) {
   return p;
 }
 
+Project set_safe_areas(Project p, SafeAreas areas) {
+  for (double* value : {&areas.title_width, &areas.title_height, &areas.action_width,
+                        &areas.action_height}) {
+    *value = std::clamp(*value, 0.0, 50.0);
+  }
+  p.safe_areas = areas;
+  return p;
+}
+
 Project set_media_label(Project p, std::string_view media_id, std::string color) {
   if (Media* media = find_media(p, media_id); media != nullptr) {
     media->label_color = std::move(color);

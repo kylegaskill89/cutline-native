@@ -67,6 +67,11 @@ struct Settings {
   /// says, and nothing where it says nothing.
   bool sounds = false;
 
+  /// Whether each monitor shows its safe margins. Premiere keeps the switch per
+  /// monitor, off until it is asked for.
+  bool safe_margins_source = false;
+  bool safe_margins_program = false;
+
   /// Whether an edge being dragged jumps to the things near it.
   bool snapping = true;
 

@@ -169,6 +169,7 @@ namespace cutline::tool {
   if (app != nullptr) {
     app->monitor = &picture;
     show_comparison(*app);
+    show_safe_margins(*app);
 #if !CUTLINE_HAVE_PREVIEW
     // Only where nothing can be decoded at all. In a build that renders, an
     // empty sequence shows an empty frame — colour bars there read as content
@@ -1548,6 +1549,7 @@ void refresh_history(App& app) {
   picture.set_placeholder("Select something in the project panel.");
   if (app != nullptr) {
     app->source_monitor = &picture;
+    show_safe_margins(*app);
     if (!app->shown_source.empty()) picture.set_texture(app->shown_source);
     // Premiere's shortest statement of "use this": what is in the monitor is
     // what is about to be placed, so drag it where it goes. The marked span

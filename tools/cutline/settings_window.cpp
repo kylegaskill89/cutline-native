@@ -157,6 +157,32 @@ void build_sequence_page(App& app, cutline::ui::Form& into) {
     app.session.apply(cutline::core::set_tone_map(app.session.project(), on));
     refresh_all(app);
   });
+
+  // Premiere's Action and Title Safe Areas, as percentages of the frame.
+  into.emplace<Label>("Safe areas").set_heading(true);
+  const cutline::core::SafeAreas& safe = app.session.project().safe_areas;
+  const auto safe_row = [&app, &into](const char* label, double width, double height,
+                                      double cutline::core::SafeAreas::*across,
+                                      double cutline::core::SafeAreas::*down) {
+    auto& row = into.row(label);
+    const cutline::ui::ValueRange range{.minimum = 0.0, .maximum = 50.0, .step = 1.0};
+    for (const auto& [value, field] : {std::pair{width, across}, std::pair{height, down}}) {
+      auto& number = row.emplace<cutline::ui::NumericField>(range, value);
+      number.set_decimals(0);
+      number.set_suffix("%");
+      number.set_on_commit([&app, field](double set) {
+        cutline::core::SafeAreas areas = app.session.project().safe_areas;
+        areas.*field = set;
+        app.session.apply(cutline::core::set_safe_areas(app.session.project(), areas));
+        show_safe_margins(app);
+      });
+      if (field == across) row.emplace<Label>("x").set_small(true);
+    }
+  };
+  safe_row("Title safe", safe.title_width, safe.title_height,
+           &cutline::core::SafeAreas::title_width, &cutline::core::SafeAreas::title_height);
+  safe_row("Action safe", safe.action_width, safe.action_height,
+           &cutline::core::SafeAreas::action_width, &cutline::core::SafeAreas::action_height);
 }
 
 /// The theme. Premiere's Preferences ▸ Appearance.

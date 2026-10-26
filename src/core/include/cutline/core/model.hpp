@@ -1126,6 +1126,18 @@ struct Sequence {
   friend bool operator==(const Sequence&, const Sequence&) = default;
 };
 
+/// Premiere's Action and Title Safe Areas: how much of the frame's width and
+/// height, in percent, is kept clear inside the edge for each. What the
+/// monitors' Safe Margins draw.
+struct SafeAreas {
+  double title_width = 20.0;
+  double title_height = 20.0;
+  double action_width = 10.0;
+  double action_height = 10.0;
+
+  friend bool operator==(const SafeAreas&, const SafeAreas&) = default;
+};
+
 struct Project {
   /// Every sequence in the project, in the order the tab strip shows them.
   ///
@@ -1172,6 +1184,9 @@ struct Project {
   /// Export ignores it entirely — see `FrameRenderer::set_use_proxies`, which
   /// defaults to off so that nothing has to remember to turn it off.
   bool use_proxies = false;
+
+  /// Project Settings' safe areas, which belong to the project as Premiere's do.
+  SafeAreas safe_areas;
 
   friend bool operator==(const Project&, const Project&) = default;
 };

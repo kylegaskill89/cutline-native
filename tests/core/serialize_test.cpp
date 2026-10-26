@@ -400,6 +400,22 @@ TEST(Serialize, AProxyAndTheSwitchForItSurviveTheFile) {
   EXPECT_EQ(loaded->project.media[0].proxy_path, "D:/proxies/wide.mp4");
 }
 
+TEST(Serialize, SafeAreasSurviveTheFileAndArePremieresWhenNotSaid) {
+  Project p = empty_project();
+  p = set_safe_areas(std::move(p), SafeAreas{.title_width = 15.0, .title_height = 12.0,
+                                             .action_width = 6.0, .action_height = 70.0});
+  // Held to half: past it the two sides would meet.
+  EXPECT_DOUBLE_EQ(p.safe_areas.action_height, 50.0);
+  const auto loaded = from_json(to_json(p));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_EQ(loaded->project.safe_areas, p.safe_areas);
+
+  const auto plain = from_json(to_json(empty_project()));
+  ASSERT_TRUE(plain.has_value());
+  EXPECT_EQ(plain->project.safe_areas, SafeAreas{});
+  EXPECT_DOUBLE_EQ(plain->project.safe_areas.title_width, 20.0);
+}
+
 TEST(Serialize, AProjectWrittenBeforeProxiesReadsAsHavingNone) {
   // The default has to be off, or an older project would come back cutting
   // against small copies that do not exist.

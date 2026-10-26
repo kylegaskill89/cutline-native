@@ -147,6 +147,10 @@ inline constexpr double kMaxFps = 240.0;
 [[nodiscard]] Project set_graphics_white(Project p, double nits);
 [[nodiscard]] Project set_tone_map(Project p, bool tone_map);
 
+/// Project Settings' safe areas, each held to 0 to 50 percent: past half, the
+/// margin from one side would meet the margin from the other.
+[[nodiscard]] Project set_safe_areas(Project p, SafeAreas areas);
+
 /// Makes an **empty** sequence take its shape and rate from a media.
 ///
 /// A sequence starts 1080p at 30, because it has to start as something. Drop

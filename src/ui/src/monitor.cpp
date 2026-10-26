@@ -173,6 +173,17 @@ Rect MonitorView::viewport() const {
 
 void MonitorView::set_reference(const ImageView& reference) { reference_ = reference; }
 
+std::pair<Rect, Rect> MonitorView::safe_areas() const {
+  const Rect area = picture();
+  if (!safe_margins_.has_value() || area.empty()) return {};
+  const auto inside = [&area](double x, double y) {
+    return Rect{area.x + area.width * x, area.y + area.height * y,
+                area.width * (1.0 - 2.0 * x), area.height * (1.0 - 2.0 * y)};
+  };
+  return {inside(safe_margins_->action_x, safe_margins_->action_y),
+          inside(safe_margins_->title_x, safe_margins_->title_y)};
+}
+
 Rect MonitorView::reference_area() const {
   if (!comparing()) return {};
   const Rect whole = bounds().inset(kMonitorInset);
@@ -319,7 +330,25 @@ void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
 
   painter.push_clip(bounds(), 0.0);
   paint_masks(painter, theme);
-  if (has_picture()) paint_overlay(painter, theme);
+  if (has_picture()) {
+    // Under the handles, so a layer's own edges stay what is grabbed.
+    if (const auto [action, title] = safe_areas(); !action.empty()) {
+      // Pale with a dark line beside, so they read on any picture.
+      const Color light{1.0f, 1.0f, 1.0f, 0.75f};
+      const Color dark{0.0f, 0.0f, 0.0f, 0.45f};
+      for (const Rect& box : {action, title}) {
+        painter.stroke(box.inset(-1.0), 0.0, dark, 1.0);
+        painter.stroke(box, 0.0, light, 1.0);
+      }
+      // Premiere's cross at the centre, for lining things up by eye.
+      const double cx = area.x + area.width / 2.0;
+      const double cy = area.y + area.height / 2.0;
+      const double arm = std::min(area.width, area.height) * 0.03;
+      painter.line(cx - arm, cy, cx + arm, cy, light, 1.0);
+      painter.line(cx, cy - arm, cx, cy + arm, light, 1.0);
+    }
+    paint_overlay(painter, theme);
+  }
   // The shape being drawn out, as an outline in the handles' colour.
   if (drawing_box_) {
     const SurfaceStyle& selected = theme.style(Part::Button, State::Selected);

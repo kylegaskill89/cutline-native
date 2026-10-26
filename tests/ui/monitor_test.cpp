@@ -1423,5 +1423,35 @@ TEST(Monitor, AComparisonPutsTheReferenceLeftAndThePictureRight) {
   EXPECT_LT(monitor.picture().x, 430.0);
 }
 
+TEST(Monitor, SafeMarginsAreDrawnInsideThePictureAtTheirSizes) {
+  const Pixels frame(200, 100);
+  MonitorView monitor;
+  monitor.set_frame(frame.view());
+  monitor.arrange(Rect{0.0, 0.0, 440.0, 240.0}, flat_context());
+  EXPECT_TRUE(monitor.safe_areas().first.empty());
+
+  monitor.set_safe_margins(MonitorView::SafeMargins{});
+  const Rect picture = monitor.picture();
+  const auto [action, title] = monitor.safe_areas();
+  // Five percent in from each side for action, ten for title.
+  EXPECT_DOUBLE_EQ(action.x, picture.x + picture.width * 0.05);
+  EXPECT_DOUBLE_EQ(action.width, picture.width * 0.9);
+  EXPECT_DOUBLE_EQ(title.y, picture.y + picture.height * 0.1);
+  EXPECT_DOUBLE_EQ(title.height, picture.height * 0.8);
+
+  // Drawn: more on the picture with them than without, and gone again when
+  // turned off.
+  RecordingPainter with;
+  monitor.paint(with, default_theme());
+  MonitorView plain;
+  plain.set_frame(frame.view());
+  plain.arrange(Rect{0.0, 0.0, 440.0, 240.0}, flat_context());
+  RecordingPainter without;
+  plain.paint(without, default_theme());
+  EXPECT_GT(with.calls().size(), without.calls().size());
+  monitor.set_safe_margins(std::nullopt);
+  EXPECT_TRUE(monitor.safe_areas().second.empty());
+}
+
 }  // namespace
 }  // namespace cutline::ui

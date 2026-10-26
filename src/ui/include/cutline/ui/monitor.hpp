@@ -167,6 +167,25 @@ class MonitorView : public Widget {
   /// Forgets both.
   void clear_frame();
 
+  /// Premiere's Safe Margins: the action and title safe areas drawn over the
+  /// picture, each as the fraction of the frame's width and height kept clear
+  /// inside each edge. Nothing turns them off.
+  struct SafeMargins {
+    double title_x = 0.1;
+    double title_y = 0.1;
+    double action_x = 0.05;
+    double action_y = 0.05;
+
+    friend bool operator==(const SafeMargins&, const SafeMargins&) = default;
+  };
+  void set_safe_margins(std::optional<SafeMargins> margins) { safe_margins_ = margins; }
+  [[nodiscard]] const std::optional<SafeMargins>& safe_margins() const noexcept {
+    return safe_margins_;
+  }
+  /// The two rectangles, action then title, where they are drawn; empty when
+  /// the margins are off or there is no picture.
+  [[nodiscard]] std::pair<Rect, Rect> safe_areas() const;
+
   /// Premiere's Comparison View: a reference frame on the left and the picture
   /// on the right, each in half the panel. Borrowed, as `set_frame` is; an
   /// empty one ends the comparison. Everything that places things on the
@@ -463,6 +482,7 @@ class MonitorView : public Widget {
   ImageView frame_;
   TextureView texture_;
   ImageView reference_;
+  std::optional<SafeMargins> safe_margins_;
   double canvas_aspect_ = 16.0 / 9.0;
   /// Zero until something says otherwise; see `set_canvas_size`.
   int canvas_w_ = 0;

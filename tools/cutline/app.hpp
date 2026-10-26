@@ -1558,6 +1558,8 @@ void refresh_lumetri_panel(App& app);
 void auto_tone_clip(App& app, const std::string& clip_id);
 /// Shows Colour Match's reference beside the picture, or takes it away.
 void show_comparison(App& app);
+/// Gives each monitor its safe margins, at the project's sizes, or none.
+void show_safe_margins(App& app);
 [[nodiscard]] std::optional<std::filesystem::path> choose_lut_to_open(HWND owner);
 /// Measures graphic layers as the renderer will draw them, where there is a
 /// text library to do it with: what the panel pins by and the monitor puts

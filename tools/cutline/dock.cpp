@@ -274,6 +274,11 @@ std::vector<MenuEntry> panel_menu_extras(App& app, const PanelId& panel) {
                                          [&app, scale] { choose_preview_scale(app, scale); }));
     }
     rows.push_back(MenuEntry{.label = "Playback Resolution", .submenu = std::move(resolutions)});
+    rows.push_back(switch_entry("Safe Margins", app.settings.safe_margins_program, [&app] {
+      app.settings.safe_margins_program = !app.settings.safe_margins_program;
+      save_settings(app);
+      show_safe_margins(app);
+    }));
     rows.push_back(MenuEntry::divider());
     rows.push_back(plain("Export Frame", [&app] { take_snapshot(app); }));
   } else if (panel == "source") {
@@ -292,6 +297,12 @@ std::vector<MenuEntry> panel_menu_extras(App& app, const PanelId& panel) {
     rows.push_back(std::move(in));
     rows.push_back(std::move(out));
     rows.push_back(std::move(clear));
+    rows.push_back(MenuEntry::divider());
+    rows.push_back(switch_entry("Safe Margins", app.settings.safe_margins_source, [&app] {
+      app.settings.safe_margins_source = !app.settings.safe_margins_source;
+      save_settings(app);
+      show_safe_margins(app);
+    }));
   } else if (panel == "timeline") {
     rows.push_back(command_entry(app, "Add Video Track", Command::AddVideoTrack));
     rows.push_back(command_entry(app, "Add Audio Track", Command::AddAudioTrack));

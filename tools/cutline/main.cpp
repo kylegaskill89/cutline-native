@@ -383,7 +383,34 @@ void refresh_title(App& app) {
 }
 
 /// Everything a view needs told after the document has been replaced.
+void show_safe_margins(App& app) {
+  const cutline::core::SafeAreas& areas = app.session.project().safe_areas;
+  const cutline::ui::MonitorView::SafeMargins margins{.title_x = areas.title_width / 100.0,
+                                                      .title_y = areas.title_height / 100.0,
+                                                      .action_x = areas.action_width / 100.0,
+                                                      .action_y = areas.action_height / 100.0};
+  // Halved: Premiere's percentages are of the whole width, split between the
+  // two sides.
+  cutline::ui::MonitorView::SafeMargins sides = margins;
+  sides.title_x /= 2.0;
+  sides.title_y /= 2.0;
+  sides.action_x /= 2.0;
+  sides.action_y /= 2.0;
+  if (app.monitor != nullptr) {
+    app.monitor->set_safe_margins(app.settings.safe_margins_program
+                                      ? std::optional(sides)
+                                      : std::nullopt);
+  }
+  if (app.source_monitor != nullptr) {
+    app.source_monitor->set_safe_margins(app.settings.safe_margins_source
+                                             ? std::optional(sides)
+                                             : std::nullopt);
+  }
+  mark_dirty(app);
+}
+
 void refresh_all(App& app) {
+  show_safe_margins(app);
   refresh_timeline(app);
   refresh_browser(app);
   refresh_title(app);
