@@ -66,6 +66,14 @@ namespace cutline::editor {
 [[nodiscard]] std::vector<std::pair<std::string, double>> auto_tone(
     const std::uint8_t* pixels, int width, int height);
 
+/// Premiere's Apply Match: the three wheels, their luma and the saturation
+/// that bring a picture's colour toward a reference's, tone by tone. Both are
+/// 8-bit RGBA. The picture is measured with its wheels off, since they are
+/// set outright, and `saturation_now` is what Basic Correction already has.
+[[nodiscard]] std::vector<std::pair<std::string, double>> colour_match(
+    const std::uint8_t* reference, int reference_width, int reference_height,
+    const std::uint8_t* current, int current_width, int current_height, double saturation_now);
+
 /// Where looks are kept: Cutline's own, and any .cube put there.
 [[nodiscard]] std::filesystem::path default_looks_folder();
 

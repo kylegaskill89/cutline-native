@@ -9,6 +9,7 @@
 #include "app.hpp"
 
 #include "cutline/editor/lumetri.hpp"
+#include "cutline/core/nesting.hpp"
 #include "cutline/render/effect_catalog.hpp"
 #include "cutline/render/lumetri.hpp"
 #include "cutline/render/plan.hpp"
@@ -381,7 +382,43 @@ void build_curves(App& app, Box& body, const Target& target) {
   }
 }
 
+void capture_reference(App& app);
+void apply_match(App& app, const std::string& clip_id);
+
 void build_wheels(App& app, Box& body, const Target& target) {
+  // Premiere's Color Match first, as its section is named for both: a frame
+  // elsewhere in the sequence to match this one to.
+  heading(body, "Color Match");
+  auto& match = body.emplace<Box>(Axis::Horizontal);
+  auto& compare = match.emplace<Button>("Comparison View", [&app] {
+    app.lumetri_comparing = !app.lumetri_comparing;
+    if (app.lumetri_comparing) capture_reference(app);
+    show_comparison(app);
+    app.lumetri_stale = true;
+  });
+  compare.set_selected(app.lumetri_comparing);
+  compare.set_tooltip("Show a reference frame beside the picture in the Program Monitor");
+  const std::string clip_id = target.clip_id;
+  auto& apply = match.emplace<Button>("Apply Match", [&app, clip_id] { apply_match(app, clip_id); });
+  apply.set_enabled(app.lumetri_comparing);
+  apply.set_tooltip("Set the wheels and saturation to match the reference");
+  match.emplace<Spacer>();
+  if (app.lumetri_comparing) {
+    const double length =
+        std::max(0.0, cutline::core::sequence_duration(app.session.project().sequence()));
+    auto& row = body.emplace<Box>(Axis::Horizontal);
+    auto& name = row.emplace<Label>("Reference");
+    name.set_small(true);
+    name.set_min_width(96.0);
+    auto& where = row.emplace<Slider>(ValueRange{.minimum = 0.0, .maximum = length},
+                                      std::clamp(app.lumetri_reference_time, 0.0, length));
+    where.set_on_commit([&app](double t) {
+      app.lumetri_reference_time = t;
+      capture_reference(app);
+      show_comparison(app);
+    });
+  }
+
   auto& wheels = body.emplace<Box>(Axis::Horizontal);
   wheel_column(app, wheels, target, "shadows", "Shadows", true, 92.0);
   wheels.emplace<Spacer>();
@@ -513,7 +550,57 @@ void build_vignette(App& app, Box& body, const Target& target) {
 #endif
 }
 
+void capture_reference(App& app) {
+#if CUTLINE_HAVE_PREVIEW
+  if (app.preview == nullptr) return;
+  // The sequence as it is, graded, at the reference's moment: what this clip
+  // is to be matched to.
+  cutline::core::Project project = app.session.project();
+  if (app.preview_scale != 1.0) project = cutline::render::scaled_canvas(project, app.preview_scale);
+  auto frame = app.preview->capture(
+      std::make_shared<const cutline::core::Project>(std::move(project)),
+      app.lumetri_reference_time);
+  if (!frame.has_value() || frame->empty()) {
+    app.lumetri_reference.clear();
+    return;
+  }
+  app.lumetri_reference = std::move(frame->pixels);
+  app.lumetri_reference_width = frame->width;
+  app.lumetri_reference_height = frame->height;
+#else
+  (void)app;
+#endif
+}
+
+void apply_match(App& app, const std::string& clip_id) {
+  if (app.lumetri_reference.empty()) return;
+  const auto picture = ungraded_picture(app, clip_id, {"wheels"});
+  if (!picture.has_value()) return;
+  const std::optional<Target> target = target_of(app);
+  const double saturation = target.has_value() ? value_of(*target, "saturation") : 100.0;
+  const Values values = cutline::editor::colour_match(
+      app.lumetri_reference.data(), app.lumetri_reference_width, app.lumetri_reference_height,
+      picture->pixels.data(), picture->width, picture->height, saturation);
+  if (!values.empty()) commit(app, clip_id, values);
+  app.lumetri_stale = true;
+}
+
 }  // namespace
+
+void show_comparison(App& app) {
+  if (app.monitor == nullptr) return;
+  if (app.lumetri_comparing && !app.lumetri_reference.empty()) {
+    app.monitor->set_reference(cutline::ui::ImageView{
+        app.lumetri_reference.data(), app.lumetri_reference_width,
+        app.lumetri_reference_height, app.lumetri_reference_width * 4});
+  } else {
+    app.monitor->set_reference({});
+  }
+  for (Shell* shell : app.shells()) {
+    if (shell->host != nullptr) shell->host->request_layout();
+  }
+  mark_dirty(app);
+}
 
 double local_playhead_of(const App& app, const std::string& clip_id) {
   const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), clip_id);

@@ -277,6 +277,86 @@ std::vector<std::pair<std::string, double>> auto_tone(const std::uint8_t* pixels
           {"blacks", std::round(blacks * 100.0)}};
 }
 
+namespace {
+
+/// A picture's colour by tone: for the shadows, the midtones and the
+/// highlights, its luma and its two colour-difference axes, each pixel counted
+/// in all three by how much it belongs to each.
+struct Tones {
+  std::array<double, 3> luma{};
+  std::array<double, 3> cb{};
+  std::array<double, 3> cr{};
+  /// How colourful it is overall: the mean distance from grey.
+  double chroma = 0.0;
+};
+
+[[nodiscard]] Tones tones_of(const std::uint8_t* pixels, int width, int height) {
+  Tones out;
+  std::array<double, 3> weight{};
+  const int count = width * height;
+  for (int i = 0; i < count; ++i) {
+    const std::uint8_t* p = pixels + static_cast<std::ptrdiff_t>(i) * 4;
+    const Rgb c{p[0] / 255.0, p[1] / 255.0, p[2] / 255.0};
+    const double l = luma_of(c);
+    // As the wheels' axes run: B-Y across, R-Y up, in Rec.709's scale.
+    const double cb = (c[2] - l) / 1.8556;
+    const double cr = (c[0] - l) / 1.5748;
+    const std::array<double, 3> share{(1.0 - l) * (1.0 - l), 2.0 * l * (1.0 - l), l * l};
+    for (std::size_t zone = 0; zone < 3; ++zone) {
+      out.luma[zone] += share[zone] * l;
+      out.cb[zone] += share[zone] * cb;
+      out.cr[zone] += share[zone] * cr;
+      weight[zone] += share[zone];
+    }
+    out.chroma += std::hypot(cb, cr);
+  }
+  for (std::size_t zone = 0; zone < 3; ++zone) {
+    if (weight[zone] <= 0.0) continue;
+    out.luma[zone] /= weight[zone];
+    out.cb[zone] /= weight[zone];
+    out.cr[zone] /= weight[zone];
+  }
+  if (count > 0) out.chroma /= count;
+  return out;
+}
+
+}  // namespace
+
+std::vector<std::pair<std::string, double>> colour_match(
+    const std::uint8_t* reference, int reference_width, int reference_height,
+    const std::uint8_t* current, int current_width, int current_height, double saturation_now) {
+  if (reference_width <= 0 || reference_height <= 0 || current_width <= 0 ||
+      current_height <= 0) {
+    return {};
+  }
+  const Tones want = tones_of(reference, reference_width, reference_height);
+  const Tones have = tones_of(current, current_width, current_height);
+
+  // How much of a colour-difference step one unit of each wheel gives, worked
+  // back from the grade: the shadows' lift adds a quarter of the wheel's
+  // offset, the highlights' gain multiplies by half of it, and the midtones'
+  // gamma moves a middle grey by about a third of half of it. A wheel's offset
+  // is half its position on each axis.
+  const std::array<std::string, 3> wheel{"shadows", "midtones", "highlights"};
+  std::vector<std::pair<std::string, double>> out;
+  for (std::size_t zone = 0; zone < 3; ++zone) {
+    const double l = std::clamp(have.luma[zone], 0.05, 0.95);
+    const double reach = zone == 0   ? 0.25 * (1.0 - l)
+                         : zone == 1 ? 0.5 * l * std::log(1.0 / l)
+                                     : 0.5 * l;
+    const auto amount = [reach](double difference, double per_unit) {
+      return std::clamp(difference / (reach * per_unit) * 100.0, -100.0, 100.0);
+    };
+    out.emplace_back(wheel[zone] + "_x", std::round(amount(want.cb[zone] - have.cb[zone], 0.5)));
+    out.emplace_back(wheel[zone] + "_y", std::round(amount(want.cr[zone] - have.cr[zone], 0.5)));
+    out.emplace_back(wheel[zone] + "_luma",
+                     std::round(amount(want.luma[zone] - have.luma[zone], 1.0)));
+  }
+  const double ratio = have.chroma > 1e-4 ? want.chroma / have.chroma : 1.0;
+  out.emplace_back("saturation", std::round(std::clamp(saturation_now * ratio, 0.0, 200.0)));
+  return out;
+}
+
 std::filesystem::path default_looks_folder() {
   const char* roaming = std::getenv("APPDATA");
   const std::filesystem::path base =

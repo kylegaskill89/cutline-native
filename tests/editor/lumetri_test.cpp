@@ -154,6 +154,55 @@ TEST(AutoTone, APictureAlreadySpreadAcrossTheRangeIsLeftNearlyAlone) {
   EXPECT_NEAR(setting(values, "blacks"), 0.0, 25.0);
 }
 
+/// A ramp from black to white with a cast added to the brighter half.
+[[nodiscard]] std::vector<std::uint8_t> ramp_with_cast(int red, int blue) {
+  std::vector<std::uint8_t> pixels;
+  for (int i = 0; i < 256; ++i) {
+    const int bright = i > 128 ? 1 : 0;
+    pixels.insert(pixels.end(),
+                  {static_cast<std::uint8_t>(std::clamp(i + red * bright, 0, 255)),
+                   static_cast<std::uint8_t>(i),
+                   static_cast<std::uint8_t>(std::clamp(i + blue * bright, 0, 255)), 255});
+  }
+  return pixels;
+}
+
+TEST(ColourMatch, APictureMatchedToItselfIsLeftAlone) {
+  const std::vector<std::uint8_t> picture = ramp_with_cast(20, -20);
+  const auto values =
+      colour_match(picture.data(), 256, 1, picture.data(), 256, 1, 100.0);
+  for (const auto& [name, value] : values) {
+    EXPECT_EQ(value, name == "saturation" ? 100.0 : 0.0) << name;
+  }
+}
+
+TEST(ColourMatch, AWarmerReferenceTurnsTheHighlightsWheelTowardsRed) {
+  const std::vector<std::uint8_t> warm = ramp_with_cast(25, -25);
+  const std::vector<std::uint8_t> neutral = ramp_with_cast(0, 0);
+  const auto values = colour_match(warm.data(), 256, 1, neutral.data(), 256, 1, 100.0);
+  // Up the wheel is towards red and left away from blue.
+  EXPECT_GT(setting(values, "highlights_y"), 10.0);
+  EXPECT_LT(setting(values, "highlights_x"), -10.0);
+  // The shadows had no cast to match, so move much less.
+  EXPECT_LT(std::abs(setting(values, "shadows_y")), std::abs(setting(values, "highlights_y")));
+}
+
+TEST(ColourMatch, AMoreColourfulReferenceAsksForMoreSaturation) {
+  const std::vector<std::uint8_t> strong = ramp_with_cast(40, -40);
+  const std::vector<std::uint8_t> weak = ramp_with_cast(10, -10);
+  EXPECT_GT(setting(colour_match(strong.data(), 256, 1, weak.data(), 256, 1, 100.0),
+                    "saturation"),
+            150.0);
+}
+
+TEST(ColourMatch, ADarkerReferenceLowersTheLuma) {
+  const std::vector<std::uint8_t> dark = ramp(0, 160);
+  const std::vector<std::uint8_t> full = ramp(0, 255);
+  const auto values = colour_match(dark.data(), 256, 1, full.data(), 256, 1, 100.0);
+  EXPECT_LT(setting(values, "highlights_luma"), -10.0);
+  EXPECT_LT(setting(values, "midtones_luma"), 0.0);
+}
+
 TEST(Looks, TheLooksThatComeWithCutlineAreWrittenAndRead) {
   const std::filesystem::path folder = std::filesystem::temp_directory_path() /
                                        ("cutline_looks_" + std::to_string(_getpid()));

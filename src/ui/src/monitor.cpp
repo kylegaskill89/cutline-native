@@ -163,7 +163,23 @@ double MonitorView::picture_aspect() const noexcept {
   return canvas_aspect_;
 }
 
-Rect MonitorView::viewport() const { return bounds().inset(kMonitorInset); }
+Rect MonitorView::viewport() const {
+  const Rect whole = bounds().inset(kMonitorInset);
+  if (!comparing() || whole.width <= kMonitorInset) return whole;
+  // The right half, a margin's width from the reference.
+  const double half = (whole.width - kMonitorInset) / 2.0;
+  return Rect{whole.x + half + kMonitorInset, whole.y, half, whole.height};
+}
+
+void MonitorView::set_reference(const ImageView& reference) { reference_ = reference; }
+
+Rect MonitorView::reference_area() const {
+  if (!comparing()) return {};
+  const Rect whole = bounds().inset(kMonitorInset);
+  const double half = (whole.width - kMonitorInset) / 2.0;
+  if (half <= 0.0) return {};
+  return fit_aspect(Rect{whole.x, whole.y, half, whole.height}, reference_.aspect());
+}
 
 std::pair<double, double> MonitorView::picture_size() const {
   const Rect fitted = fit_aspect(viewport(), picture_aspect());
@@ -270,6 +286,14 @@ void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
   // edge — which is the viewport's edge too — and cutting them there would
   // leave half of each one missing at Fit. That border is what `kMonitorInset`
   // is for, and clipping the two to the same rectangle would undo it.
+  if (comparing()) {
+    const Rect left = reference_area();
+    if (!left.empty()) {
+      painter.image(left, reference_);
+      if (style.border.a > 0.0) painter.stroke(left, 0.0, style.border, 1.0);
+    }
+  }
+
   painter.push_clip(viewport(), 0.0);
   if (has_picture()) {
     if (!texture_.empty()) {

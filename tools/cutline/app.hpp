@@ -660,6 +660,14 @@ struct App {
   std::set<std::string> lumetri_open{"Basic Correction"};
   std::size_t lumetri_channel = 0;
   LumetriPick lumetri_picking = LumetriPick::None;
+  /// Colour Match's Comparison View: the reference frame shown beside the
+  /// picture, where in the sequence it comes from, and its pixels, which the
+  /// monitor borrows and Apply Match measures.
+  bool lumetri_comparing = false;
+  double lumetri_reference_time = 0.0;
+  std::vector<std::uint8_t> lumetri_reference;
+  int lumetri_reference_width = 0;
+  int lumetri_reference_height = 0;
   std::string graphic_layer;
   /// Set when the panel needs rebuilding for something that is not a change
   /// to the document: a layer chosen. Deferred, as the inspector is.
@@ -1548,6 +1556,8 @@ void refresh_lumetri_panel(App& app);
 [[nodiscard]] bool pick_for_lumetri(App& app, double x, double y);
 /// Lumetri's Auto: the tone set from the picture as it is without the grade.
 void auto_tone_clip(App& app, const std::string& clip_id);
+/// Shows Colour Match's reference beside the picture, or takes it away.
+void show_comparison(App& app);
 [[nodiscard]] std::optional<std::filesystem::path> choose_lut_to_open(HWND owner);
 /// Measures graphic layers as the renderer will draw them, where there is a
 /// text library to do it with: what the panel pins by and the monitor puts

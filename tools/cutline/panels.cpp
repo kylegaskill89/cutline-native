@@ -168,6 +168,7 @@ namespace cutline::tool {
   auto& picture = panel->emplace<MonitorView>();
   if (app != nullptr) {
     app->monitor = &picture;
+    show_comparison(*app);
 #if !CUTLINE_HAVE_PREVIEW
     // Only where nothing can be decoded at all. In a build that renders, an
     // empty sequence shows an empty frame — colour bars there read as content

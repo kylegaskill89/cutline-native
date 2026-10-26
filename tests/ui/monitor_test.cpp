@@ -1395,5 +1395,33 @@ TEST(MonitorZoom, TheOverlayIsNotCutWhereThePictureIs) {
       << "the overlay was cut to something smaller than the widget";
 }
 
+TEST(Monitor, AComparisonPutsTheReferenceLeftAndThePictureRight) {
+  const Pixels frame(200, 100);
+  const Pixels reference(200, 100);
+  MonitorView monitor;
+  monitor.set_frame(frame.view());
+  monitor.set_reference(reference.view());
+  monitor.arrange(Rect{0.0, 0.0, 860.0, 440.0}, flat_context());
+  ASSERT_TRUE(monitor.comparing());
+
+  const Rect left = monitor.reference_area();
+  const Rect right = monitor.picture();
+  // Each in its half, side by side, the same size.
+  EXPECT_LE(left.x + left.width, right.x);
+  EXPECT_GT(right.x, 430.0);
+  EXPECT_DOUBLE_EQ(left.width, right.width);
+  EXPECT_DOUBLE_EQ(left.height, right.height);
+  // A press is placed against the picture, not the whole panel.
+  const auto at = monitor.to_picture(right.x + right.width / 2.0, right.y + right.height / 2.0);
+  ASSERT_TRUE(at.has_value());
+  EXPECT_NEAR(at->first, 0.5, 1e-9);
+
+  monitor.set_reference({});
+  monitor.arrange(Rect{0.0, 0.0, 860.0, 440.0}, flat_context());
+  EXPECT_FALSE(monitor.comparing());
+  EXPECT_TRUE(monitor.reference_area().empty());
+  EXPECT_LT(monitor.picture().x, 430.0);
+}
+
 }  // namespace
 }  // namespace cutline::ui

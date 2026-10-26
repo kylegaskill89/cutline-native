@@ -167,6 +167,15 @@ class MonitorView : public Widget {
   /// Forgets both.
   void clear_frame();
 
+  /// Premiere's Comparison View: a reference frame on the left and the picture
+  /// on the right, each in half the panel. Borrowed, as `set_frame` is; an
+  /// empty one ends the comparison. Everything that places things on the
+  /// picture follows it into its half, so handles and presses still land.
+  void set_reference(const ImageView& reference);
+  [[nodiscard]] bool comparing() const noexcept { return !reference_.empty(); }
+  /// Where the reference is drawn; empty when not comparing.
+  [[nodiscard]] Rect reference_area() const;
+
   [[nodiscard]] const ImageView& frame() const noexcept { return frame_; }
   [[nodiscard]] const TextureView& texture() const noexcept { return texture_; }
 
@@ -453,6 +462,7 @@ class MonitorView : public Widget {
 
   ImageView frame_;
   TextureView texture_;
+  ImageView reference_;
   double canvas_aspect_ = 16.0 / 9.0;
   /// Zero until something says otherwise; see `set_canvas_size`.
   int canvas_w_ = 0;
