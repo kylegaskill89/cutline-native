@@ -97,6 +97,7 @@ std::string to_json(const Settings& settings, int indent) {
   out["pool_view"] = name_of(settings.pool_view);
   out["still_length"] = settings.still_length;
   out["transition_length"] = settings.transition_length;
+  out["audio_transition_length"] = settings.audio_transition_length;
   out["autosave_seconds"] = settings.autosave_seconds;
   out["autosave_versions"] = settings.autosave_versions;
   out["undo_depth"] = settings.undo_depth;
@@ -164,6 +165,9 @@ std::expected<Settings, std::string> settings_from_json(std::string_view text) {
                                      kMinStillLength, kMaxStillLength);
   settings.transition_length =
       std::clamp(document.value("transition_length", settings.transition_length),
+                 kMinTransitionLength, kMaxTransitionLength);
+  settings.audio_transition_length =
+      std::clamp(document.value("audio_transition_length", settings.audio_transition_length),
                  kMinTransitionLength, kMaxTransitionLength);
   settings.autosave_seconds =
       std::clamp(document.value("autosave_seconds", settings.autosave_seconds),

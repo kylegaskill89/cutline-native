@@ -67,15 +67,31 @@ std::string_view transition_name(core::TransitionKind kind) noexcept {
     case core::TransitionKind::DipBlack: return "Dip to Black";
     case core::TransitionKind::Push: return "Push";
     case core::TransitionKind::Slide: return "Slide";
+    case core::TransitionKind::ConstantPower: return "Constant Power";
+    case core::TransitionKind::ConstantGain: return "Constant Gain";
+    case core::TransitionKind::ExponentialFade: return "Exponential Fade";
   }
   return "Cross Dissolve";
 }
 
 std::span<const core::TransitionKind> transition_kinds() noexcept {
-  static constexpr std::array kKinds{core::TransitionKind::Dissolve,
-                                     core::TransitionKind::DipBlack,
-                                     core::TransitionKind::Push, core::TransitionKind::Slide};
+  static constexpr std::array kKinds{
+      core::TransitionKind::Dissolve,      core::TransitionKind::DipBlack,
+      core::TransitionKind::Push,          core::TransitionKind::Slide,
+      core::TransitionKind::ConstantPower, core::TransitionKind::ConstantGain,
+      core::TransitionKind::ExponentialFade};
   return kKinds;
+}
+
+std::span<const core::TransitionKind> transition_kinds_for(core::TrackKind kind) noexcept {
+  // Premiere's order in each folder, with its default first.
+  const std::span<const core::TransitionKind> all = transition_kinds();
+  return kind == core::TrackKind::Audio ? all.subspan(4) : all.first(4);
+}
+
+core::TransitionKind default_transition_kind(core::TrackKind kind) noexcept {
+  return kind == core::TrackKind::Audio ? core::TransitionKind::ConstantPower
+                                        : core::TransitionKind::Dissolve;
 }
 
 std::string_view transition_id(core::TransitionKind kind) noexcept {
@@ -86,6 +102,9 @@ std::string_view transition_id(core::TransitionKind kind) noexcept {
     case core::TransitionKind::DipBlack: return "dip-black";
     case core::TransitionKind::Push: return "push";
     case core::TransitionKind::Slide: return "slide";
+    case core::TransitionKind::ConstantPower: return "constant-power";
+    case core::TransitionKind::ConstantGain: return "constant-gain";
+    case core::TransitionKind::ExponentialFade: return "exponential-fade";
   }
   return "dissolve";
 }
@@ -101,6 +120,8 @@ double longest_transition(const core::Project& project, std::string_view clip_id
                           core::TransitionKind kind) {
   const Join join = join_at(project, clip_id);
   if (!join.valid()) return 0.0;
+  // The picture's kinds on pictures and the sound's on sound.
+  if (core::is_audio_transition(kind) != (join.out->kind == core::TrackKind::Audio)) return 0.0;
 
   // Neither half may swallow the clip it sits in, whichever kind this is.
   const double by_length =
@@ -110,6 +131,15 @@ double longest_transition(const core::Project& project, std::string_view clip_id
   // and the clips' own lengths are the only limit. It is the transition that
   // always works, and the reason a join with no handles is not a dead end.
   if (kind == core::TransitionKind::DipBlack) return by_length;
+
+  // A crossfade has no frame to hold where one side runs out, so both clips
+  // must lend the whole half. A picture can hold its last frame, so there the
+  // larger handle is the limit.
+  if (core::is_audio_transition(kind)) {
+    const double tail = core::source_handles(project, *join.out).tail;
+    const double head = core::source_handles(project, *join.in).head;
+    return std::min(by_length, 2.0 * std::min(tail, head));
+  }
 
   const double by_handles = 2.0 * borrowable(project, join);
   return std::min(by_length, by_handles);
@@ -156,6 +186,71 @@ core::Project set_transition(core::Project project, std::string_view clip_id,
 double default_transition_length(const core::Project& project, std::string_view clip_id,
                                  core::TransitionKind kind, double preferred) {
   return std::min(preferred, longest_transition(project, clip_id, kind));
+}
+
+namespace {
+
+/// The track's default transition on a clip's out-edge, unless it has one.
+[[nodiscard]] core::Project with_default(core::Project project, const core::Clip& clip,
+                                         const TransitionLengths& lengths) {
+  if (clip.transition_out.has_value()) return project;
+  const core::TransitionKind kind = default_transition_kind(clip.kind);
+  const double length =
+      default_transition_length(project, clip.id, kind, lengths.for_kind(kind));
+  if (length <= core::kTransitionEps) return project;
+  const std::string id = clip.id;
+  return set_transition(std::move(project), id, kind, length);
+}
+
+}  // namespace
+
+core::Project apply_transition_at(core::Project project, double playhead, core::TrackKind kind,
+                                  const TransitionLengths& lengths) {
+  std::vector<std::string> outgoing;
+  for (const core::Track& track : project.sequence().tracks) {
+    if (track.kind != kind || !track.targeted) continue;
+    // The cut nearest the playhead, among those with a clip on either side.
+    const core::Clip* nearest = nullptr;
+    double distance = 0.0;
+    for (const core::Clip& clip : track.clips) {
+      if (!join_at(project, clip.id).valid()) continue;
+      const double away = std::abs(core::clip_end(clip) - playhead);
+      if (nearest == nullptr || away < distance) {
+        nearest = &clip;
+        distance = away;
+      }
+    }
+    if (nearest != nullptr) outgoing.push_back(nearest->id);
+  }
+  for (const std::string& id : outgoing) {
+    if (const core::Clip* clip = core::find_clip(project, id); clip != nullptr) {
+      const core::Clip copy = *clip;
+      project = with_default(std::move(project), copy, lengths);
+    }
+  }
+  return project;
+}
+
+core::Project apply_default_transitions(core::Project project,
+                                        std::span<const std::string> clip_ids,
+                                        const TransitionLengths& lengths) {
+  for (const std::string& id : clip_ids) {
+    const core::Clip* clip = core::find_clip(project, id);
+    if (clip == nullptr) continue;
+    const core::Clip copy = *clip;
+    // Its out-edge, and the out-edge of whatever ends where it begins.
+    project = with_default(std::move(project), copy, lengths);
+    if (const core::Track* track = core::track_of_clip(project, id); track != nullptr) {
+      for (const core::Clip& other : track->clips) {
+        if (other.id == id) continue;
+        if (std::abs(core::clip_end(other) - copy.start) > core::kTransitionEps) continue;
+        const core::Clip before = other;
+        project = with_default(std::move(project), before, lengths);
+        break;
+      }
+    }
+  }
+  return project;
 }
 
 }  // namespace cutline::editor

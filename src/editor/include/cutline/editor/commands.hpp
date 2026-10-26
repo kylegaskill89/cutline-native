@@ -108,6 +108,16 @@ enum class Command {
   NextMarker,
   PreviousMarker,
 
+  // -- transitions
+  /// Premiere's Apply Video Transition and Apply Audio Transition: the default
+  /// transition on the cut nearest the playhead, on every targeted track of
+  /// that kind.
+  ApplyVideoTransition,
+  ApplyAudioTransition,
+  /// Premiere's Apply Default Transitions to Selection: the default at both
+  /// ends of every selected clip where another meets it.
+  ApplyDefaultTransitions,
+
   // -- linking
   /// Ties the selected clips together so they move, trim and cut as one. What
   /// a video clip and the audio that came in with it usually want to be.

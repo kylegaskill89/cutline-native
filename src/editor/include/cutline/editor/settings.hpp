@@ -99,8 +99,14 @@ struct Settings {
 
   /// How long a still is placed for. Premiere's "Still image default duration".
   double still_length = kStillLength;
-  /// How long a transition is when first added, before the join gets a say.
+  /// How long a transition is when first added, before the join gets a say:
+  /// Premiere's video and audio defaults, kept apart as it keeps them.
   double transition_length = kPreferredTransitionLength;
+  double audio_transition_length = kPreferredTransitionLength;
+
+  [[nodiscard]] TransitionLengths transition_lengths() const noexcept {
+    return {.video = transition_length, .audio = audio_transition_length};
+  }
   /// How often a recovery copy is written, in seconds.
   int autosave_seconds = static_cast<int>(kAutosaveInterval.count());
   /// How many recovery copies of one document are kept before the oldest goes.

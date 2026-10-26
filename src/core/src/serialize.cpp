@@ -66,6 +66,11 @@ NLOHMANN_JSON_SERIALIZE_ENUM(TransitionKind, {
                                                  {TransitionKind::DipBlack, "dip-black"},
                                                  {TransitionKind::Push, "push"},
                                                  {TransitionKind::Slide, "slide"},
+                                                 {TransitionKind::ConstantPower,
+                                                  "constant-power"},
+                                                 {TransitionKind::ConstantGain, "constant-gain"},
+                                                 {TransitionKind::ExponentialFade,
+                                                  "exponential-fade"},
                                              })
 
 NLOHMANN_JSON_SERIALIZE_ENUM(TextAlign, {

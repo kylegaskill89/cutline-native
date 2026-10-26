@@ -12,6 +12,10 @@
 
 #include "cutline/editor/transitions.hpp"
 
+#include "cutline/editor/commands.hpp"
+#include "cutline/editor/effects_binding.hpp"
+#include "cutline/editor/session.hpp"
+
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/core/segments.hpp"
@@ -236,6 +240,124 @@ TEST(Transitions, WhatTheLayerRefusesIsWhatTheResolverWouldHaveSkipped) {
   EXPECT_DOUBLE_EQ(segs[1].x_in, 0.0);
   EXPECT_DOUBLE_EQ(segs[1].start, 5.0) << "nothing was borrowed, so nothing moved";
   EXPECT_DOUBLE_EQ(longest_transition(forced, "a", TransitionKind::Dissolve), 0.0);
+}
+
+
+// ------------------------------------------------------------------ audio --
+
+/// The same two clips as `abutting`, on an audio track.
+[[nodiscard]] Project abutting_sound() {
+  Project project = abutting();
+  project.media[0].audio_stream_count = 1;
+  Track& track = project.sequence().tracks[0];
+  track.kind = TrackKind::Audio;
+  for (Clip& clip : track.clips) clip.kind = TrackKind::Audio;
+  return project;
+}
+
+TEST(AudioTransitions, EachTrackOffersItsOwnKindsWithPremieresDefaultFirst) {
+  const auto video = transition_kinds_for(TrackKind::Video);
+  const auto audio = transition_kinds_for(TrackKind::Audio);
+  ASSERT_EQ(video.size(), 4u);
+  ASSERT_EQ(audio.size(), 3u);
+  EXPECT_EQ(audio[0], TransitionKind::ConstantPower);
+  EXPECT_EQ(default_transition_kind(TrackKind::Audio), TransitionKind::ConstantPower);
+  EXPECT_EQ(default_transition_kind(TrackKind::Video), TransitionKind::Dissolve);
+  for (const TransitionKind kind : audio) EXPECT_TRUE(core::is_audio_transition(kind));
+  EXPECT_EQ(transition_name(TransitionKind::ExponentialFade), "Exponential Fade");
+  EXPECT_EQ(transition_from_id("constant-gain"), TransitionKind::ConstantGain);
+}
+
+TEST(AudioTransitions, TheSoundsKindsGoOnSoundAndThePicturesOnPictures) {
+  EXPECT_GT(longest_transition(abutting_sound(), "a", TransitionKind::ConstantPower), 0.0);
+  EXPECT_EQ(longest_transition(abutting_sound(), "a", TransitionKind::Dissolve), 0.0);
+  EXPECT_EQ(longest_transition(abutting(), "a", TransitionKind::ConstantPower), 0.0);
+}
+
+TEST(AudioTransitions, ACrossfadeNeedsBothSidesToLend) {
+  // Five seconds of tail on the first and fifteen of head on the second: the
+  // smaller decides, unlike a dissolve, which can hold a frame.
+  Project p = abutting_sound();
+  p.sequence().tracks[0].clips[0].source_in = 50.0;
+  p.sequence().tracks[0].clips[0].source_out = 55.0;
+  EXPECT_DOUBLE_EQ(longest_transition(p, "a", TransitionKind::ConstantGain), 10.0);
+}
+
+TEST(AudioTransitions, EachKindIsPutDownAtItsOwnPreferredLength) {
+  const TransitionLengths lengths{.video = 0.5, .audio = 2.0};
+  EXPECT_DOUBLE_EQ(lengths.for_kind(TransitionKind::Dissolve), 0.5);
+  EXPECT_DOUBLE_EQ(lengths.for_kind(TransitionKind::ConstantPower), 2.0);
+  const Project p = apply_library_entry(abutting_sound(), "a", "transition:constant-power",
+                                        lengths);
+  const auto row = clip_transition(p, "a");
+  EXPECT_TRUE(row.present);
+  EXPECT_DOUBLE_EQ(row.duration, 2.0);
+}
+
+TEST(AudioTransitions, TheLibraryFilesThemUnderAudioTransitions) {
+  bool found = false;
+  for (const LibraryEntry& entry : effect_library()) {
+    if (entry.id == "transition:constant-power") {
+      EXPECT_EQ(entry.folder, "Audio Transitions");
+      found = true;
+    }
+    if (entry.id == "transition:dissolve") EXPECT_EQ(entry.folder, "Video Transitions");
+  }
+  EXPECT_TRUE(found);
+}
+
+TEST(ApplyTransition, TheNearestCutOnEachTargetedTrackGetsTheDefault) {
+  Project p = abutting();
+  p.sequence().tracks[0].targeted = true;
+  p = apply_transition_at(std::move(p), 4.2, TrackKind::Video, {.video = 1.5});
+  const auto row = clip_transition(p, "a");
+  ASSERT_TRUE(row.present);
+  EXPECT_EQ(row.kind, TransitionKind::Dissolve);
+  EXPECT_DOUBLE_EQ(row.duration, 1.5);
+  // Video's key leaves sound alone, and a track not targeted is not touched.
+  EXPECT_FALSE(clip_transition(apply_transition_at(abutting_sound(), 4.2, TrackKind::Video, {}),
+                               "a")
+                   .present);
+  EXPECT_FALSE(clip_transition(apply_transition_at(abutting(), 4.2, TrackKind::Video, {}), "a")
+                   .present);
+}
+
+TEST(ApplyTransition, OneAlreadyThereIsKept) {
+  Project p = set_transition(abutting(), "a", TransitionKind::Push, 0.5);
+  p.sequence().tracks[0].targeted = true;
+  p = apply_transition_at(std::move(p), 5.0, TrackKind::Video, {});
+  EXPECT_EQ(clip_transition(p, "a").kind, TransitionKind::Push);
+}
+
+TEST(ApplyTransition, TheCommandsUseTheLengthsTheSessionWasGiven) {
+  Project p = abutting_sound();
+  p.sequence().tracks[0].targeted = true;
+  Session session(std::move(p));
+  session.set_playhead(5.0);
+  session.set_transition_lengths({.video = 1.0, .audio = 0.25});
+  EXPECT_FALSE(can_run(session, Command::ApplyVideoTransition));
+  ASSERT_TRUE(can_run(session, Command::ApplyAudioTransition));
+  EXPECT_TRUE(run(session, Command::ApplyAudioTransition));
+  EXPECT_DOUBLE_EQ(clip_transition(session.project(), "a").duration, 0.25);
+  // And once it is there, there is nothing left for the key to do.
+  EXPECT_FALSE(can_run(session, Command::ApplyAudioTransition));
+}
+
+TEST(ApplyTransition, DefaultsToSelectionGoAtBothEndsOfEachClip) {
+  // Three clips in a row; selecting the middle one puts transitions at both
+  // of its cuts.
+  Project p = abutting_sound();
+  Clip third = p.sequence().tracks[0].clips[1];
+  third.id = "c";
+  third.start = 10.0;
+  third.source_in = 40.0;
+  third.source_out = 45.0;
+  p.sequence().tracks[0].clips.push_back(third);
+  const std::vector<std::string> selected{"b"};
+  p = apply_default_transitions(std::move(p), selected, {});
+  EXPECT_EQ(clip_transition(p, "a").kind, TransitionKind::ConstantPower);
+  EXPECT_TRUE(clip_transition(p, "a").present);
+  EXPECT_TRUE(clip_transition(p, "b").present);
 }
 
 }  // namespace

@@ -1159,7 +1159,8 @@ void show_library_drop(App& app, const std::string& id, double x, double y) {
     const std::optional<cutline::ui::BlockRef> block = app.timeline->block_at(x, y);
     if (row.joins && block.has_value()) {
       const double length = cutline::editor::default_transition_length(
-          app.session.project(), *clip_id, *kind, app.settings.transition_length);
+          app.session.project(), *clip_id, *kind,
+          app.settings.transition_lengths().for_kind(*kind));
       if (length > 0.0) {
         ghost = cutline::ui::TransitionGhost{
             .track = block->track,
@@ -1361,7 +1362,8 @@ void open_library_menu(App& app, double x, double y) {
       for (const std::string& clip_id : clip_ids) {
         next = saved != nullptr
                    ? cutline::editor::apply_preset(std::move(next), clip_id, *saved)
-                   : cutline::editor::apply_library_entry(std::move(next), clip_id, id);
+                   : cutline::editor::apply_library_entry(std::move(next), clip_id, id,
+                                                          app->settings.transition_lengths());
       }
       app->session.apply(std::move(next));
       refresh_timeline(*app);

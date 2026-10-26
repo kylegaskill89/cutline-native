@@ -45,7 +45,24 @@ enum class BlendMode {
   Difference,
 };
 
-enum class TransitionKind { Dissolve, DipBlack, Push, Slide };
+/// The first four are pictures and the last three sound, Premiere's Audio
+/// Transitions: a crossfade between two clips on an audio track, each with its
+/// own curve.
+enum class TransitionKind {
+  Dissolve,
+  DipBlack,
+  Push,
+  Slide,
+  ConstantPower,
+  ConstantGain,
+  ExponentialFade,
+};
+
+/// Whether a transition kind is one of the sound's.
+[[nodiscard]] constexpr bool is_audio_transition(TransitionKind kind) noexcept {
+  return kind == TransitionKind::ConstantPower || kind == TransitionKind::ConstantGain ||
+         kind == TransitionKind::ExponentialFade;
+}
 
 enum class TextAlign { Left, Center, Right };
 

@@ -1,5 +1,7 @@
 #include "cutline/editor/commands.hpp"
 
+#include "cutline/editor/transitions.hpp"
+
 #include "cutline/core/edit.hpp"
 #include "cutline/core/nesting.hpp"
 #include "cutline/core/properties.hpp"
@@ -56,6 +58,19 @@ namespace {
 /// Which one: the first targeted track the playhead crosses, and any track it
 /// crosses when nothing is targeted. Targeting is how the sequence is told which
 /// lane an edit is aimed at, and this is exactly such an edit.
+/// The project with the transitions one of the three transition commands puts
+/// down, at the lengths the session was given.
+[[nodiscard]] core::Project transitions_applied(const Session& session, Command command) {
+  if (command == Command::ApplyDefaultTransitions) {
+    const std::vector<std::string> ids(session.selection().begin(), session.selection().end());
+    return apply_default_transitions(session.project(), ids, session.transition_lengths());
+  }
+  return apply_transition_at(session.project(), session.playhead(),
+                             command == Command::ApplyAudioTransition ? core::TrackKind::Audio
+                                                                      : core::TrackKind::Video,
+                             session.transition_lengths());
+}
+
 [[nodiscard]] std::string trim_target(const Session& session) {
   const core::Project& project = session.project();
   const double at = session.playhead();
@@ -204,6 +219,9 @@ std::string_view to_string(Command command) noexcept {
     case Command::GoToEnd: return "go_to_end";
     case Command::PreviousFrame: return "previous_frame";
     case Command::NextFrame: return "next_frame";
+    case Command::ApplyVideoTransition: return "apply_video_transition";
+    case Command::ApplyAudioTransition: return "apply_audio_transition";
+    case Command::ApplyDefaultTransitions: return "apply_default_transitions";
     case Command::LinkClips: return "link_clips";
     case Command::UnlinkClips: return "unlink_clips";
     case Command::AddVideoTrack: return "add_video_track";
@@ -295,6 +313,13 @@ bool can_run(const Session& session, Command command) {
       // its last clip, and the playhead is what says where the next one goes.
       return true;
 
+    // Only where one would land: worked out by trying, so the menu and the key
+    // cannot disagree about which cuts count.
+    case Command::ApplyVideoTransition:
+    case Command::ApplyAudioTransition:
+    case Command::ApplyDefaultTransitions:
+      return transitions_applied(session, command) != session.project();
+
     // Two clips at least, or there is nothing to tie together.
     case Command::LinkClips:
       return session.selection().size() >= 2;
@@ -335,6 +360,9 @@ std::string_view history_name(Command command) noexcept {
     case Command::FitToFill: return "Fit to Fill";
     case Command::ClearMarks: return "Clear In and Out";
     case Command::ClearMarkers: return "Clear All Markers";
+    case Command::ApplyVideoTransition: return "Apply Video Transition";
+    case Command::ApplyAudioTransition: return "Apply Audio Transition";
+    case Command::ApplyDefaultTransitions: return "Apply Default Transitions";
     case Command::LinkClips: return "Link";
     case Command::UnlinkClips: return "Unlink";
     case Command::AddVideoTrack: return "Add Video Track";
@@ -582,6 +610,11 @@ bool run_named(Session& session, Command command) {
     case Command::NextFrame:
       session.set_playhead(session.playhead() + frame);
       return true;
+
+    case Command::ApplyVideoTransition:
+    case Command::ApplyAudioTransition:
+    case Command::ApplyDefaultTransitions:
+      return session.apply(transitions_applied(session, command));
 
     case Command::LinkClips: {
       if (!can_run(session, command)) return false;

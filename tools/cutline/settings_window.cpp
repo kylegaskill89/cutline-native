@@ -209,9 +209,12 @@ void build_timeline_page(App& app, cutline::ui::Form& into) {
   duration_row(app, into, "Still image", app.settings.still_length,
                cutline::editor::kMinStillLength, cutline::editor::kMaxStillLength, "s",
                [&app](double set) { app.settings.still_length = set; });
-  duration_row(app, into, "Transition", app.settings.transition_length,
+  duration_row(app, into, "Video transition", app.settings.transition_length,
                cutline::editor::kMinTransitionLength, cutline::editor::kMaxTransitionLength, "s",
                [&app](double set) { app.settings.transition_length = set; });
+  duration_row(app, into, "Audio transition", app.settings.audio_transition_length,
+               cutline::editor::kMinTransitionLength, cutline::editor::kMaxTransitionLength, "s",
+               [&app](double set) { app.settings.audio_transition_length = set; });
 
   // Said rather than left to be discovered. A still already on the timeline
   // keeps the length it was given, and somebody who changes this expecting the
@@ -870,6 +873,8 @@ void save_settings(App& app) {
   settings.pool_view =
       app.browser == nullptr ? cutline::ui::BrowserView::List : app.browser->view();
   app.settings = settings;
+  // What a command puts a transition down at, kept in step with the file.
+  app.session.set_transition_lengths(settings.transition_lengths());
 
   // Quietly. Losing a preference is not worth a dialog in the middle of an
   // edit, and the one place it would matter — a settings directory that cannot

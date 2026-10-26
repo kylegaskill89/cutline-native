@@ -19,6 +19,7 @@
 /// is no conversion to do.
 
 #include "cutline/core/model.hpp"
+#include "cutline/editor/transitions.hpp"
 #include "cutline/render/effect_catalog.hpp"
 #include "cutline/ui/controls.hpp"
 
@@ -351,9 +352,12 @@ inline constexpr std::string_view kPresetPrefix = "preset:";
 /// on an audio clip, an audio effect on a picture, a transition on a clip with
 /// nothing abutting it. Returns the project unchanged in every one of those
 /// cases, like everything else that edits, so the session can skip the entry.
+/// A transition is put down at its kind's preferred length, or as much of it
+/// as the join allows.
 [[nodiscard]] core::Project apply_library_entry(core::Project project,
                                                 std::string_view clip_id,
-                                                std::string_view id);
+                                                std::string_view id,
+                                                const TransitionLengths& lengths = {});
 
 /// Whether `id` could be applied to `clip_id` as things stand — what greys the
 /// panel's Apply button, and what a double-click checks before doing nothing.

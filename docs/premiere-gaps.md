@@ -2315,7 +2315,7 @@ commands.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| A command table with stable names | yes | **done** — `editor/shortcuts`: every action a key can run, seventy of them, with a stable id ("tool.razor"), its label and heading, the editing command it runs where it is one, and a scope saying when it is offered: always (undo, save), on a bare key before the focused control but never while typing (the tools, J/K/L, Space), or only once the focused control has declined it (the arrows, the marks). One resolver in the window procedure replaces the two tables and the dozen keys it tested one by one, and every menu row and tooltip reads its key from the keymap, so neither can claim a key that does something else. Making it found three keys that never worked: Alt+Left and Alt+Right never nudged, because Windows sends Alt chords as system keys and nothing listened; Space with the Source Monitor in hand played the sequence instead; and F1–F12, Insert, `;`, `/`, `[` and `]` were translated as no key at all | machinery |
+| A command table with stable names | yes | **done** — `editor/shortcuts`: every action a key can run, seventy-three of them, with a stable id ("tool.razor"), its label and heading, the editing command it runs where it is one, and a scope saying when it is offered: always (undo, save), on a bare key before the focused control but never while typing (the tools, J/K/L, Space), or only once the focused control has declined it (the arrows, the marks). One resolver in the window procedure replaces the two tables and the dozen keys it tested one by one, and every menu row and tooltip reads its key from the keymap, so neither can claim a key that does something else. Making it found three keys that never worked: Alt+Left and Alt+Right never nudged, because Windows sends Alt chords as system keys and nothing listened; Space with the Source Monitor in hand played the sequence instead; and F1–F12, Insert, `;`, `/`, `[` and `]` were translated as no key at all | machinery |
 | Rebinding, saved | per person, carried between machines | **done** — `%APPDATA%\Cutline\keys.json`, holding the preset and only what was changed, so a preset that gains a key in a later version gives it to everybody who did not change that action. A file from a newer build costs an older one only what it cannot read. Driven: Razor given F5, closed, F5 picked the razor, and after a restart F5 still did | machinery |
 | Conflict check | yes | **done** — a chord runs one action only; giving it to another takes it away, and the window says which ("Ctrl+K was Add Edit, and now runs …") | wiring |
 | Presets | Premiere's default and others | **done** — Premiere Pro, and Avid Media Composer's splice-in and overwrite on V and B, lift and extract on Z and X, Add Edit on H, marks on E and R as well as I and O, G to clear them. Choosing one, or Reset to Preset, starts from it again | wiring |
@@ -2593,9 +2593,18 @@ is days, medium a week or so, large several. Smaller things first where they
 are used every day, and a tracker built once for the two features that need
 one.
 
-1. **Separate audio and video transition lengths** (small). Premiere has a
-   default for each; there is one `transition_length` setting, and
-   `default_transition_length` already knows which kind it is placing.
+1. ~~**Separate audio and video transition lengths**~~ — **done**, and larger
+   than sized: there were no audio transitions for a length to belong to.
+   Premiere's three are built (Constant Power, Constant Gain, Exponential
+   Fade), each a crossfade the mix plan makes by playing both clips on into
+   their handles, half each side of the cut, as far as both can lend.
+   Preferences has a Video and an Audio transition length; the Effects panel
+   files the new kinds under Audio Transitions; and Apply Video Transition
+   (Ctrl+D), Apply Audio Transition (Ctrl+Shift+D) and Apply Default
+   Transitions to Selection (Shift+D) are commands with Premiere's keys.
+   Dropping a transition from the Effects panel used to ignore the preferred
+   length the drag preview showed. A transition at a clip end with nothing
+   after it is left to the fade handles, which do the same thing.
 2. **Safe margins** (small). An overlay on both monitors at Premiere's
    action and title safe sizes, 10% and 20%, set in Project Settings.
 3. **Monitor display modes** (small to medium). Composite, Alpha, and the

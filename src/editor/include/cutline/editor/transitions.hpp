@@ -29,7 +29,17 @@ namespace cutline::editor {
 /// transitions and calling a cross dissolve something else helps nobody.
 [[nodiscard]] std::string_view transition_name(core::TransitionKind kind) noexcept;
 
-/// The kinds a control should offer, in the order it should offer them.
+/// The kinds a clip on a track of `kind` can have, in the order a control
+/// should offer them: the picture's on a video track, the sound's on an audio
+/// one.
+[[nodiscard]] std::span<const core::TransitionKind> transition_kinds_for(
+    core::TrackKind kind) noexcept;
+
+/// What a track gets when nothing else is said: Premiere's defaults, Cross
+/// Dissolve and Constant Power.
+[[nodiscard]] core::TransitionKind default_transition_kind(core::TrackKind kind) noexcept;
+
+/// Every kind there is, in the order a control should offer them.
 ///
 /// Its own list rather than one written out at each call site: there were two
 /// already — the inspector's dropdown and the effects library — and a third
@@ -93,6 +103,19 @@ struct TransitionRow {
 /// say. A second is Premiere's default and reads clearly at any zoom.
 inline constexpr double kPreferredTransitionLength = 1.0;
 
+/// How long each kind of transition is when first added, as Premiere keeps a
+/// default for video and one for audio.
+struct TransitionLengths {
+  double video = kPreferredTransitionLength;
+  double audio = kPreferredTransitionLength;
+
+  [[nodiscard]] double for_kind(core::TransitionKind kind) const noexcept {
+    return core::is_audio_transition(kind) ? audio : video;
+  }
+
+  friend bool operator==(const TransitionLengths&, const TransitionLengths&) = default;
+};
+
 /// How long a transition should be when one is first added: `preferred`, or as
 /// much of it as the join can manage.
 ///
@@ -103,5 +126,19 @@ inline constexpr double kPreferredTransitionLength = 1.0;
                                                std::string_view clip_id,
                                                core::TransitionKind kind,
                                                double preferred = kPreferredTransitionLength);
+
+/// Premiere's Apply Video Transition and Apply Audio Transition: the track's
+/// default transition, at its preferred length, on the cut nearest `playhead`
+/// on every targeted track of `kind`. A cut that already has one keeps it.
+[[nodiscard]] core::Project apply_transition_at(core::Project project, double playhead,
+                                                core::TrackKind kind,
+                                                const TransitionLengths& lengths);
+
+/// Premiere's Apply Default Transitions to Selection: the default transition
+/// at both ends of each clip, wherever another clip meets it, the picture's on
+/// video and the sound's on audio.
+[[nodiscard]] core::Project apply_default_transitions(core::Project project,
+                                                      std::span<const std::string> clip_ids,
+                                                      const TransitionLengths& lengths);
 
 }  // namespace cutline::editor

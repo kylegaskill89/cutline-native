@@ -684,10 +684,10 @@ std::vector<LibraryEntry> effect_library(std::span<const std::string> preset_nam
   // reaching for a cross-dissolve looks — not in a dropdown three sections down
   // an inspector.
   for (const core::TransitionKind kind : transition_kinds()) {
-    out.push_back(LibraryEntry{.id = std::string(kTransitionPrefix) +
-                                     std::string(transition_id(kind)),
-                               .name = std::string(transition_name(kind)),
-                               .folder = "Video Transitions"});
+    out.push_back(LibraryEntry{
+        .id = std::string(kTransitionPrefix) + std::string(transition_id(kind)),
+        .name = std::string(transition_name(kind)),
+        .folder = core::is_audio_transition(kind) ? "Audio Transitions" : "Video Transitions"});
   }
 
   // Last, and in their own folder, which is where Premiere keeps them. A
@@ -721,7 +721,7 @@ bool library_entry_fits(const core::Project& project, std::string_view clip_id,
 }
 
 core::Project apply_library_entry(core::Project project, std::string_view clip_id,
-                                  std::string_view id) {
+                                  std::string_view id, const TransitionLengths& lengths) {
   if (!library_entry_fits(project, clip_id, id)) return project;
 
   if (const auto type = behind(id, kVideoPrefix)) {
@@ -734,7 +734,8 @@ core::Project apply_library_entry(core::Project project, std::string_view clip_i
     const std::optional<core::TransitionKind> kind = transition_from_id(*type);
     if (!kind.has_value()) return project;
     return set_transition(std::move(project), clip_id, *kind,
-                          default_transition_length(project, clip_id, *kind));
+                          default_transition_length(project, clip_id, *kind,
+                                                    lengths.for_kind(*kind)));
   }
   return project;
 }

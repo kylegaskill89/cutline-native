@@ -2095,6 +2095,7 @@ int main(int argc, char** argv) {
   // those would be visible.
   if (auto read = cutline::editor::read_settings(app.settings_file); read.has_value()) {
     app.settings = *read;
+    app.session.set_transition_lengths(app.settings.transition_lengths());
     const cutline::editor::Settings& settings = app.settings;
     // By name, and quietly ignored when it names one this build does not have.
     const auto theme = std::ranges::find(built_in_themes(), settings.theme, &Theme::name);

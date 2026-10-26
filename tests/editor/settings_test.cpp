@@ -59,6 +59,7 @@ class TempSettings {
   settings.pool_view = ui::BrowserView::Icons;
   settings.still_length = 3.0;
   settings.transition_length = 0.5;
+  settings.audio_transition_length = 2.5;
   settings.autosave_seconds = 120;
   settings.label_names = {"Interview", "", "", "", "", "", "", "B-roll"};
   // Sized to the build rather than written out, because the reader pads to

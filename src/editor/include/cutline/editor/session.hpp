@@ -12,6 +12,7 @@
 #include "cutline/core/edit.hpp"
 #include "cutline/core/history.hpp"
 #include "cutline/core/model.hpp"
+#include "cutline/editor/transitions.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -151,6 +152,13 @@ class Session {
   [[nodiscard]] std::span<const core::ClipCopy> clipboard() const noexcept { return clipboard_; }
   void set_clipboard(std::vector<core::ClipCopy> clips) { clipboard_ = std::move(clips); }
 
+  /// How long a transition is when a command puts one down: the preferences,
+  /// handed over by the application, since a command has no settings of its own.
+  [[nodiscard]] const TransitionLengths& transition_lengths() const noexcept {
+    return transition_lengths_;
+  }
+  void set_transition_lengths(TransitionLengths lengths) { transition_lengths_ = lengths; }
+
   // ---------------------------------------------------------------- source --
 
   /// The media an insert or an overwrite would place.
@@ -205,6 +213,7 @@ class Session {
   std::string next_name_;
   std::vector<std::string> selection_;
   std::vector<core::ClipCopy> clipboard_;
+  TransitionLengths transition_lengths_;
   std::string source_media_;
   double playhead_ = 0.0;
   /// Where the playhead was left in each sequence, by sequence id. Only the

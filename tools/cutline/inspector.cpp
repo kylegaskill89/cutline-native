@@ -1486,11 +1486,6 @@ void build_keyframe_lanes(App& app, const std::string& clip_id) {
   });
 }
 
-/// The four the model renders, in the order the dropdown offers them.
-constexpr std::array kTransitionKinds{
-    cutline::core::TransitionKind::Dissolve, cutline::core::TransitionKind::DipBlack,
-    cutline::core::TransitionKind::Push, cutline::core::TransitionKind::Slide};
-
 /// The transition at a clip's out-edge, when there is a cut for one to sit on.
 ///
 /// Only shown when another clip abuts this one. The model would happily keep a
@@ -1502,11 +1497,16 @@ void build_transition_controls(App& app, const std::string& clip_id) {
   if (!row.joins) return;
 
   inspector_heading(app, "Transition");
+  // The picture's kinds on a video clip and the sound's on an audio one.
+  const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), clip_id);
+  const std::span<const cutline::core::TransitionKind> kinds =
+      cutline::editor::transition_kinds_for(clip != nullptr ? clip->kind
+                                                            : cutline::core::TrackKind::Video);
 
   // "None" first, so removing one is the same control as choosing one rather
   // than a separate button to take it away.
   std::vector<std::string> names{"None"};
-  for (const cutline::core::TransitionKind kind : kTransitionKinds) {
+  for (const cutline::core::TransitionKind kind : kinds) {
     std::string name{cutline::editor::transition_name(kind)};
     // Said out loud rather than left to be discovered. A dissolve overlaps the
     // two clips, and a clip trimmed to the last frame of its footage has
@@ -1519,20 +1519,20 @@ void build_transition_controls(App& app, const std::string& clip_id) {
 
   std::size_t selected = 0;
   if (row.present) {
-    const auto found = std::ranges::find(kTransitionKinds, row.kind);
-    if (found != kTransitionKinds.end()) {
-      selected = static_cast<std::size_t>(found - kTransitionKinds.begin()) + 1;
+    const auto found = std::ranges::find(kinds, row.kind);
+    if (found != kinds.end()) {
+      selected = static_cast<std::size_t>(found - kinds.begin()) + 1;
     }
   }
 
   auto& kind_row = app.inspector->emplace<Box>(Axis::Horizontal);
   kind_row.emplace<Label>("Kind").set_small(true);
   auto& choice = kind_row.emplace<Dropdown>(std::move(names), selected);
-  choice.set_on_change([&app, clip_id](std::size_t index) {
+  choice.set_on_change([&app, clip_id, kinds](std::size_t index) {
     const std::optional<cutline::core::TransitionKind> kind =
-        index == 0 || index > kTransitionKinds.size()
+        index == 0 || index > kinds.size()
             ? std::nullopt
-            : std::optional(kTransitionKinds[index - 1]);
+            : std::optional(kinds[index - 1]);
     // A length of its own when one is first added, and the length it already
     // had when the kind is only being changed.
     const cutline::editor::TransitionRow was =
@@ -1542,7 +1542,7 @@ void build_transition_controls(App& app, const std::string& clip_id) {
             ? was.duration
             : (kind.has_value() ? cutline::editor::default_transition_length(
                                       app.session.project(), clip_id, *kind,
-                                      app.settings.transition_length)
+                                      app.settings.transition_lengths().for_kind(*kind))
                                 : 0.0);
 
     app.session.apply(

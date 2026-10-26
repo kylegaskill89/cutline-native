@@ -20,6 +20,26 @@
 
 namespace cutline::render {
 
+/// One end of an audio transition, as one of the two clips hears it.
+struct PlannedCrossfade {
+  core::TransitionKind kind = core::TransitionKind::ConstantPower;
+  /// The timeline span it runs over. Empty is none.
+  double from = 0.0;
+  double to = 0.0;
+
+  [[nodiscard]] bool active() const noexcept { return to > from; }
+
+  friend bool operator==(const PlannedCrossfade&, const PlannedCrossfade&) = default;
+};
+
+/// How loud a clip is `progress` of the way through a crossfade, 0 to 1: rising
+/// when it is the clip coming in, falling when it is the one going out.
+/// Constant Gain is a straight line, Constant Power a quarter sine so the two
+/// together hold their loudness through the cut, and Exponential Fade a line
+/// in decibels, which sounds even to the ear.
+[[nodiscard]] double crossfade_gain(core::TransitionKind kind, double progress,
+                                    bool rising) noexcept;
+
 /// One audio clip, resolved against its track's mute and solo state.
 struct PlannedAudioClip {
   /// Points into the project the plan was built from and does not outlive it.
@@ -33,8 +53,18 @@ struct PlannedAudioClip {
 
   /// The timeline span it occupies, in seconds. Half-open: `end` is the first
   /// moment it is no longer heard.
+  ///
+  /// Longer than the clip where an audio transition reaches past either end
+  /// of it into its handles: see `clip_start`.
   double start = 0.0;
   double end = 0.0;
+  /// The clip's own span on the timeline, which its fades and keyframes are
+  /// measured from whatever a transition adds either side of it.
+  double clip_start = 0.0;
+  double clip_end = 0.0;
+  /// The transitions at its two ends, when there are any.
+  PlannedCrossfade crossfade_in;
+  PlannedCrossfade crossfade_out;
 
   /// The source range consumed, in **file** seconds, before retiming.
   ///

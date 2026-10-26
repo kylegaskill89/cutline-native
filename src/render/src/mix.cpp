@@ -2,11 +2,60 @@
 
 #include "cutline/core/interpret.hpp"
 #include "cutline/core/query.hpp"
+#include "cutline/core/segments.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <numbers>
 
 namespace cutline::render {
 namespace {
+
+/// An Exponential Fade's range: silence is this many decibels down, which is
+/// below where a fade is still heard as one.
+constexpr double kFadeRangeDb = 60.0;
+
+/// Moves an entry's end later by `seconds`, reading that much more of its file.
+void extend_end(PlannedAudioClip& entry, double seconds) {
+  const double file = seconds * entry.speed * entry.conform;
+  entry.end += seconds;
+  (entry.reverse ? entry.source_in -= file : entry.source_out += file);
+}
+
+/// Moves an entry's start earlier by `seconds`, the same way.
+void extend_start(PlannedAudioClip& entry, double seconds) {
+  const double file = seconds * entry.speed * entry.conform;
+  entry.start -= seconds;
+  (entry.reverse ? entry.source_out += file : entry.source_in -= file);
+}
+
+/// Each audio transition becomes an overlap: the clip going out plays on into
+/// its tail and the one coming in starts early from its head, half the
+/// transition each side of the cut, each fading by the kind's curve. Only as
+/// far as both have media to lend, so the crossfade stays centred on the cut.
+void plan_crossfades(const core::Project& project, std::vector<PlannedAudioClip>& planned) {
+  for (std::size_t i = 0; i + 1 < planned.size(); ++i) {
+    PlannedAudioClip& out = planned[i];
+    PlannedAudioClip& in = planned[i + 1];
+    if (out.track_index != in.track_index) continue;
+    const std::optional<core::Transition>& transition = out.clip->transition_out;
+    if (!transition.has_value() || !core::is_audio_transition(transition->kind)) continue;
+    if (std::abs(in.clip_start - out.clip_end) > core::kTransitionEps) continue;
+
+    double half = transition->duration / 2.0;
+    half = std::min({half, core::source_handles(project, *out.clip).tail,
+                     core::source_handles(project, *in.clip).head,
+                     out.clip_end - out.clip_start, in.clip_end - in.clip_start});
+    if (!(half > core::kTransitionEps)) continue;
+
+    const double cut = out.clip_end;
+    extend_end(out, half);
+    extend_start(in, half);
+    out.crossfade_out = PlannedCrossfade{.kind = transition->kind, .from = cut - half,
+                                         .to = cut + half};
+    in.crossfade_in = out.crossfade_out;
+  }
+}
 
 /// A clip this quiet is silence, and decoding it would be work with no audible
 /// result. Around -100 dB, well below the noise floor of any real recording.
@@ -61,6 +110,8 @@ std::vector<PlannedAudioClip> plan_audio(const core::Project& project) {
       entry.audio_stream = clip.audio_stream;
       entry.start = clip.start;
       entry.end = clip.start + duration;
+      entry.clip_start = entry.start;
+      entry.clip_end = entry.end;
       // Into the file's own time here, once, so that everything downstream —
       // the decode window, the read position, the retime — is talking about
       // the thing a decoder can actually be asked for.
@@ -89,18 +140,43 @@ std::vector<PlannedAudioClip> plan_audio(const core::Project& project) {
                      return a.start < b.start;
                    });
 
+  plan_crossfades(project, planned);
   return planned;
+}
+
+double crossfade_gain(core::TransitionKind kind, double progress, bool rising) noexcept {
+  const double p = std::clamp(rising ? progress : 1.0 - progress, 0.0, 1.0);
+  switch (kind) {
+    case core::TransitionKind::ConstantGain:
+      return p;
+    case core::TransitionKind::ExponentialFade:
+      if (p <= 0.0) return 0.0;
+      return std::pow(10.0, (p - 1.0) * kFadeRangeDb / 20.0);
+    default:
+      return std::sin(p * std::numbers::pi / 2.0);
+  }
 }
 
 double clip_gain_at(const PlannedAudioClip& planned, double t) noexcept {
   if (planned.clip == nullptr) return 0.0;
   const core::Clip& clip = *planned.clip;
 
-  const double local = t - planned.start;
-  const double length = planned.end - planned.start;
-  if (local < 0.0 || local > length) return 0.0;
+  if (t < planned.start || t > planned.end) return 0.0;
+  // From the clip's own start, so its fades and keyframes stay where they are
+  // when a transition lengthens what is heard either side of it.
+  const double length = planned.clip_end - planned.clip_start;
+  const double local = std::clamp(t - planned.clip_start, 0.0, length);
 
   double gain = core::gain_at(clip, local);
+  const auto through = [t](const PlannedCrossfade& fade) {
+    return (t - fade.from) / (fade.to - fade.from);
+  };
+  if (planned.crossfade_in.active() && t < planned.crossfade_in.to) {
+    gain *= crossfade_gain(planned.crossfade_in.kind, through(planned.crossfade_in), true);
+  }
+  if (planned.crossfade_out.active() && t > planned.crossfade_out.from) {
+    gain *= crossfade_gain(planned.crossfade_out.kind, through(planned.crossfade_out), false);
+  }
 
   // Ramps are linear in amplitude, which is what the reference did and what a
   // fade handle in the UI implies. A constant-power ramp would sound smoother
@@ -141,7 +217,7 @@ namespace {
 
 StereoGain clip_pan_at(const PlannedAudioClip& planned, double t) noexcept {
   if (planned.clip == nullptr) return {};
-  return sides(core::pan_at(*planned.clip, t - planned.start));
+  return sides(core::pan_at(*planned.clip, t - planned.clip_start));
 }
 
 StereoGain audio_pan_at(const PlannedAudioClip& planned, double t) noexcept {

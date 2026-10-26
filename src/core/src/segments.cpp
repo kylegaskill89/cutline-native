@@ -54,6 +54,8 @@ std::vector<VideoSeg> resolve_video_segments(
     VideoSeg& seg_a = segs[i];
     VideoSeg& seg_b = segs[i + 1];
     const Transition& transition = *a.transition_out;
+    // A crossfade is the sound's, and a picture has nothing to do with it.
+    if (is_audio_transition(transition.kind)) continue;
     const double half = transition.duration / 2.0;
 
     if (transition.kind == TransitionKind::DipBlack) {

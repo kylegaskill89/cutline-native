@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include <string>
 #include <vector>
 
@@ -425,6 +427,90 @@ TEST(TrackMixer, ANonsenseTrackMixIsClampedRatherThanTrusted) {
   ASSERT_EQ(planned.size(), 1u);
   EXPECT_DOUBLE_EQ(planned[0].track_gain, core::kMaxGain);
   EXPECT_DOUBLE_EQ(planned[0].track_pan, -1.0);
+}
+
+
+// ------------------------------------------------------------- crossfades --
+
+/// Two clips meeting at 5 s, each with ten seconds of file either side to
+/// lend, the first carrying an audio transition into the second.
+[[nodiscard]] Project crossfaded(core::TransitionKind kind, double length = 2.0) {
+  Clip first = clip("a", "m", 0.0, 5.0, 10.0);
+  first.transition_out = core::Transition{.kind = kind, .duration = length};
+  return project({audio_track("a1", {first, clip("b", "m", 5.0, 5.0, 30.0)})});
+}
+
+TEST(Crossfade, BothClipsPlayThroughTheOverlapFromTheirHandles) {
+  const auto planned = plan_audio(crossfaded(core::TransitionKind::ConstantPower));
+  ASSERT_EQ(planned.size(), 2u);
+  // Half the transition each side of the cut.
+  EXPECT_DOUBLE_EQ(planned[0].end, 6.0);
+  EXPECT_DOUBLE_EQ(planned[0].source_out, 16.0);
+  EXPECT_DOUBLE_EQ(planned[1].start, 4.0);
+  EXPECT_DOUBLE_EQ(planned[1].source_in, 29.0);
+  // And each still knows where it really starts and ends.
+  EXPECT_DOUBLE_EQ(planned[0].clip_end, 5.0);
+  EXPECT_DOUBLE_EQ(planned[1].clip_start, 5.0);
+  // Read from the right part of the file throughout the overlap.
+  EXPECT_DOUBLE_EQ(audio_source_time_at(planned[0], 5.5), 15.5);
+  EXPECT_DOUBLE_EQ(audio_source_time_at(planned[1], 4.5), 29.5);
+}
+
+TEST(Crossfade, ConstantPowerHoldsTheLoudnessThroughTheCut) {
+  const auto planned = plan_audio(crossfaded(core::TransitionKind::ConstantPower));
+  for (const double t : {4.0, 4.5, 5.0, 5.5, 6.0}) {
+    const double out = clip_gain_at(planned[0], t);
+    const double in = clip_gain_at(planned[1], t);
+    EXPECT_NEAR(out * out + in * in, 1.0, 1e-9) << t;
+  }
+  EXPECT_NEAR(clip_gain_at(planned[0], 5.0), std::sqrt(0.5), 1e-9);
+  EXPECT_NEAR(clip_gain_at(planned[1], 4.0), 0.0, 1e-9);
+  EXPECT_NEAR(clip_gain_at(planned[0], 6.0), 0.0, 1e-9);
+  // Untouched outside the transition.
+  EXPECT_DOUBLE_EQ(clip_gain_at(planned[0], 3.0), 1.0);
+}
+
+TEST(Crossfade, ConstantGainAddsUpToOne) {
+  const auto planned = plan_audio(crossfaded(core::TransitionKind::ConstantGain));
+  for (const double t : {4.25, 5.0, 5.75}) {
+    EXPECT_NEAR(clip_gain_at(planned[0], t) + clip_gain_at(planned[1], t), 1.0, 1e-9) << t;
+  }
+}
+
+TEST(Crossfade, AnExponentialFadeIsEvenInDecibels) {
+  // A quarter of the way, a quarter of sixty decibels down from full.
+  EXPECT_NEAR(20.0 * std::log10(crossfade_gain(core::TransitionKind::ExponentialFade, 0.75, true)),
+              -15.0, 1e-9);
+  EXPECT_EQ(crossfade_gain(core::TransitionKind::ExponentialFade, 0.0, true), 0.0);
+  EXPECT_EQ(crossfade_gain(core::TransitionKind::ExponentialFade, 0.0, false), 1.0);
+}
+
+TEST(Crossfade, AClipsOwnFadeAndKeyframesStayWhereTheyWere) {
+  Project p = crossfaded(core::TransitionKind::ConstantPower);
+  p.sequence().tracks[0].clips[1].fade_in = 1.0;
+  const auto planned = plan_audio(p);
+  // Its fade in runs from its own start at 5 s, not from where it is first
+  // heard at 4 s: half way through it, and through the crossfade's last half.
+  EXPECT_NEAR(clip_gain_at(planned[1], 5.5),
+              0.5 * crossfade_gain(core::TransitionKind::ConstantPower, 0.75, true), 1e-9);
+}
+
+TEST(Crossfade, OnlyAsLongAsBothSidesCanLend) {
+  // The second clip starts half a second into its file.
+  Clip first = clip("a", "m", 0.0, 5.0, 10.0);
+  first.transition_out =
+      core::Transition{.kind = core::TransitionKind::ConstantGain, .duration = 2.0};
+  const auto planned =
+      plan_audio(project({audio_track("a1", {first, clip("b", "m", 5.0, 5.0, 0.5)})}));
+  EXPECT_DOUBLE_EQ(planned[0].end, 5.5);
+  EXPECT_DOUBLE_EQ(planned[1].start, 4.5);
+}
+
+TEST(Crossfade, APictureTransitionOnSoundAndAGapAreBothIgnored) {
+  EXPECT_DOUBLE_EQ(plan_audio(crossfaded(core::TransitionKind::Dissolve))[0].end, 5.0);
+  Project gap = crossfaded(core::TransitionKind::ConstantPower);
+  gap.sequence().tracks[0].clips[1].start = 6.0;
+  EXPECT_DOUBLE_EQ(plan_audio(gap)[0].end, 5.0);
 }
 
 }  // namespace

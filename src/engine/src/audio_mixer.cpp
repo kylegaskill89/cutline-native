@@ -1158,7 +1158,7 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
 
     // Clip-local, because a clip's effect keyframes are.
     run_chain_over(voice.chain, impl_->voice_block, base + static_cast<std::int64_t>(first), rate,
-                   channels, voice.planned.start);
+                   channels, voice.planned.clip_start);
 
     // Into the lane's own block rather than straight into the mix. A plain sum:
     // `normalize=0`, so clips add rather than being scaled down by how many of
