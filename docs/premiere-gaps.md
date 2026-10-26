@@ -2585,7 +2585,44 @@ colour pipeline beside it), then the interface and themes (§9), then keyboard
 shortcuts (§10), export presets and queue (§11), titles (§12) and Lumetri
 (§13). Engine first because playback and scrubbing are what hurt in daily use;
 the interface before new panels so that the new panels are built on what it
-becomes rather than polished twice.
+becomes rather than polished twice. All of it shipped in 0.6.0, bar importing
+Premiere-made .mogrt files, which waits on samples (§12).
+
+**Phase 4, ordered on 2026-10-26** after 0.6.0, and sized from the code: small
+is days, medium a week or so, large several. Smaller things first where they
+are used every day, and a tracker built once for the two features that need
+one.
+
+1. **Separate audio and video transition lengths** (small). Premiere has a
+   default for each; there is one `transition_length` setting, and
+   `default_transition_length` already knows which kind it is placing.
+2. **Safe margins** (small). An overlay on both monitors at Premiere's
+   action and title safe sizes, 10% and 20%, set in Project Settings.
+3. **Monitor display modes** (small to medium). Composite, Alpha, and the
+   scopes on the monitor itself; the readings are already computed for the
+   Scopes panel.
+4. **J/K/L on the source monitor** (small to medium). The program monitor's
+   shuttle and reverse playback are a render engine any monitor can own; the
+   source monitor has its own engine and lacks only the transport.
+5. **Trim Monitor** (medium). Premiere's two-up trim view, outgoing and
+   incoming frames, with its trim buttons and keys. The ripple, roll and slip
+   edits exist; this is the view and the shortcuts round them.
+6. **Preview render bar** (large). Render a span to preview files, play
+   rendered spans from them, and the red, yellow and green bar over the ruler.
+   Matters more now that a Lumetri grade can be heavy, and it is the playback
+   engine's next step rather than a new subsystem.
+7. **Ultra Key** (medium). Matte generation, cleanup, spill suppression and
+   colour correction, as one pass with its settings in pass data, the way
+   Lumetri carries its own.
+8. **Transform effect** (medium). Motion as an effect in the stack, so it can
+   be reordered, with uniform scale, skew and shutter-angle motion blur.
+9. **Mask tracking** (large). Track a mask forward and backward from frame
+   to frame. The tracker built here is the analysis Warp Stabilizer needs.
+10. **Warp Stabilizer** (large). Analyse on the tracker from 9, smooth the
+    path, and warp or crop to it, with Premiere's result and method controls.
+11. **Multicam** (large). Multi-camera source sequences synchronised by
+    audio, timecode or marks, the multi-camera monitor view, and switching
+    angles live into cuts. The largest and the most self-contained, so last.
 - ~~**Sequences**~~ — **done**. `core::Sequence` holds one cut and `Project`
   holds a list of them with the index of the open one; the pool and the bins
   stay project-wide, because importing a clip once and cutting it into three
