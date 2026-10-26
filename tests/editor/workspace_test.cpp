@@ -26,7 +26,7 @@ const std::vector<ui::PanelId>& known_panels() {
   static const std::vector<ui::PanelId> panels{"project", "effects",  "library",
                                                "monitor", "source",   "timeline",
                                                "scopes",  "audio",    "history",
-                                               "queue",   "graphics"};
+                                               "queue",   "graphics", "lumetri"};
   return panels;
 }
 
@@ -109,7 +109,7 @@ TEST(Workspaces, EachGivesItsOwnPanelAGroupOfItsOwn) {
     const ui::DockNode* group = ui::group_of(found->layout.root, panel);
     return group != nullptr && ui::panels_in(*group).size() == 1;
   };
-  EXPECT_TRUE(alone("Colour", "effects")) << "where Premiere keeps Lumetri Color";
+  EXPECT_TRUE(alone("Colour", "lumetri")) << "where Premiere keeps Lumetri Color";
   EXPECT_TRUE(alone("Effects", "library"));
   EXPECT_TRUE(alone("Assembly", "timeline"));
   EXPECT_TRUE(alone("Graphics", "graphics")) << "the panel the workspace is built round";

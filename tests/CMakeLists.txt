@@ -46,6 +46,7 @@ add_executable(cutline_core_tests
   editor/timeline_binding_test.cpp
   editor/graphics_test.cpp
   editor/graphic_templates_test.cpp
+  editor/lumetri_test.cpp
   editor/zip_test.cpp
   editor/transitions_test.cpp
   editor/updates_test.cpp
@@ -61,6 +62,7 @@ add_executable(cutline_core_tests
   ui/animator_test.cpp
   ui/browser_test.cpp
   ui/color_picker_test.cpp
+  ui/grading_test.cpp
   ui/containers_test.cpp
   ui/controls_test.cpp
   ui/dialog_test.cpp

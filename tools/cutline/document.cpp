@@ -280,6 +280,19 @@ void add_adjustment(App& app) {
   return std::filesystem::path(buffer.data());
 }
 
+[[nodiscard]] std::optional<std::filesystem::path> choose_lut_to_open(HWND owner) {
+  std::array<wchar_t, MAX_PATH> buffer{};
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = owner;
+  dialog.lpstrFilter = L"Cube LUTs\0*.cube\0All files\0*.*\0";
+  dialog.lpstrFile = buffer.data();
+  dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+  dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+  if (GetOpenFileNameW(&dialog) == FALSE) return std::nullopt;
+  return std::filesystem::path(buffer.data());
+}
+
 void install_template_file(App& app, const std::filesystem::path& file) {
   const auto installed =
       cutline::editor::install_template(cutline::editor::default_templates_folder(), file);

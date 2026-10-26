@@ -1045,6 +1045,8 @@ void type_into(App& app, cutline::core::Project base, const std::string& clip_id
 }  // namespace
 
 bool press_on_picture(App& app, double x, double y, int clicks) {
+  // A Lumetri eyedropper waiting for a click takes it before any tool does.
+  if (pick_for_lumetri(app, x, y)) return true;
   const double t = app.session.playhead();
   const std::optional<cutline::editor::LayerHit> hit = cutline::editor::graphic_layer_at(
       app.session.project(), t, x, y, layer_measurer());

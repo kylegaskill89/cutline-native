@@ -806,6 +806,19 @@ template <typename T>
           walk(app.main.host->root());
         }
         app.graphic_layer.clear();
+
+        // Lumetri Color with every section open and a curve with points on
+        // it, as the wheels, curves and range sliders draw nowhere else.
+        app.session.apply(cutline::editor::set_lumetri_curve(
+            app.session.project(), full_clip, "rgb_master", {{.x = 0.3, .y = 0.25}}));
+        if (cutline::ui::activate_panel(layout_of(app), PanelId("lumetri"))) refresh_dock(app);
+        app.lumetri_open = {"Basic Correction", "Creative", "Curves", "Color Wheels",
+                            "HSL Secondary", "Vignette"};
+        refresh_lumetri_panel(app);
+        app.main.host->update_layout(context);
+        app.main.host->paint(*painter, theme);
+        walk(app.main.host->root());
+        app.lumetri_open = {"Basic Correction"};
       }
 
       // And the colour picker, which lives on the popup layer and is therefore

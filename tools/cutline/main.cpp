@@ -1187,12 +1187,17 @@ void settle(App& app) {
   if (app.inspector_stale) {
     app.inspector_stale = false;
     refresh_inspector(app);
-    // Whatever changed what the inspector shows changed what this shows.
+    // Whatever changed what the inspector shows changed what these show.
     app.graphics_stale = true;
+    app.lumetri_stale = true;
   }
   if (app.graphics_stale) {
     app.graphics_stale = false;
     refresh_graphics_panel(app);
+  }
+  if (app.lumetri_stale) {
+    app.lumetri_stale = false;
+    refresh_lumetri_panel(app);
   }
   if (app.mixer_stale) {
     app.mixer_stale = false;

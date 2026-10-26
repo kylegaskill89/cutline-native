@@ -19,6 +19,7 @@ add_library(cutline_editor
   src/import.cpp
   src/inspector.cpp
   src/keyframes.cpp
+  src/lumetri.cpp
   src/monitor_binding.cpp
   src/session.cpp
   src/settings.cpp

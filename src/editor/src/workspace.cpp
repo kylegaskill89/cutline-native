@@ -152,8 +152,8 @@ std::vector<Workspace> built_in_workspaces() {
   //
   // Each is Premiere's arrangement for the same task, as Adobe describes it,
   // with this application's panels standing in for Premiere's: the mixer for
-  // its audio mixers, Effect Controls for Lumetri Color until there is one.
-  // Graphics is built round the Essential Graphics panel.
+  // its audio mixers. Graphics is built round the Essential Graphics panel, and
+  // Colour round Lumetri Color.
 
   // Editing: Premiere's default. Source and Program side by side over the
   // project and the timeline, with Effect Controls and the mixer behind the
@@ -167,7 +167,7 @@ std::vector<Workspace> built_in_workspaces() {
                    {0.5, 0.5}),
              split(Axis::Horizontal,
                    {tabs({"project", "library", "scopes", "history"}),
-                    tabs({"timeline", "queue"})},
+                    tabs({"timeline", "queue", "lumetri"})},
                    {0.3, 0.7})},
             {0.55, 0.45});
 
@@ -181,7 +181,7 @@ std::vector<Workspace> built_in_workspaces() {
                    {tabs({"project", "library", "history", "queue"}),
                     split(Axis::Vertical,
                           {tabs({"source", "effects", "audio", "graphics"}),
-                           tabs({"monitor", "scopes"})},
+                           tabs({"monitor", "scopes", "lumetri"})},
                           {0.5, 0.5})},
                    {0.5, 0.5}),
              tabs({"timeline"})},
@@ -197,11 +197,11 @@ std::vector<Workspace> built_in_workspaces() {
   colour.layout.root =
       split(Axis::Vertical,
             {split(Axis::Horizontal,
-                   {tabs({"scopes", "source"}), tabs({"monitor"}), tabs({"effects"})},
+                   {tabs({"scopes", "source"}), tabs({"monitor"}), tabs({"lumetri"})},
                    {0.22, 0.48, 0.30}),
              split(Axis::Horizontal,
                    {tabs({"project", "library", "audio"}),
-                    tabs({"timeline", "queue", "history", "graphics"})},
+                    tabs({"timeline", "effects", "queue", "history", "graphics"})},
                    {0.3, 0.7})},
             {0.6, 0.4});
 
@@ -216,7 +216,7 @@ std::vector<Workspace> built_in_workspaces() {
                    {0.32, 0.48, 0.20}),
              split(Axis::Horizontal,
                    {tabs({"project", "scopes", "audio"}),
-                    tabs({"timeline", "queue", "history", "graphics"})},
+                    tabs({"timeline", "queue", "history", "graphics", "lumetri"})},
                    {0.3, 0.7})},
             {0.58, 0.42});
 
@@ -227,7 +227,8 @@ std::vector<Workspace> built_in_workspaces() {
   audio.layout.root =
       split(Axis::Vertical,
             {split(Axis::Horizontal,
-                   {tabs({"audio", "source", "effects", "graphics"}), tabs({"monitor"})},
+                   {tabs({"audio", "source", "effects", "graphics"}),
+                    tabs({"monitor", "lumetri"})},
                    {0.5, 0.5}),
              split(Axis::Horizontal,
                    {tabs({"project", "library", "scopes", "history"}), tabs({"timeline", "queue"})},
@@ -247,7 +248,8 @@ std::vector<Workspace> built_in_workspaces() {
              {tabs({"source", "effects"}), tabs({"monitor", "scopes"}), tabs({"graphics"})},
              {0.27, 0.48, 0.25}),
        split(Axis::Horizontal,
-             {tabs({"project", "library", "audio"}), tabs({"timeline", "queue", "history"})},
+             {tabs({"project", "library", "audio"}),
+              tabs({"timeline", "queue", "history", "lumetri"})},
              {0.3, 0.7})},
       {0.6, 0.4});
 

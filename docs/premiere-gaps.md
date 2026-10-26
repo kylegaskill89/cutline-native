@@ -436,11 +436,11 @@ Noise is the one worth naming: grain has to *move*, and the moment is the one
 thing a pass cannot work out for itself. It comes from the time the planner is
 already given, which is why that function takes one beyond resolving keyframes.
 
-Still absent, roughly in the order their absence would be noticed: **Lumetri
-Color** (or an equivalent grading control — curves, wheels, HSL secondaries),
-**Drop Shadow**, **Track Matte Key**, **Ultra Key** (ours is a simple chroma
-key), **Warp Stabilizer**, and **Transform** (the effect, which unlike Motion
-sits in the stack and can be reordered).
+Still absent, roughly in the order their absence would be noticed: ~~**Lumetri
+Color**~~ (done, §13), ~~**Drop Shadow**~~, ~~**Track Matte Key**~~ (done,
+§12), **Ultra Key** (ours is a simple chroma key), **Warp Stabilizer**, and
+**Transform** (the effect, which unlike Motion sits in the stack and can be
+reordered).
 
 Of those, Drop Shadow and Track Matte Key want something the pass chain does not
 have yet — a second texture to read besides the layer itself. The rest are
@@ -2345,13 +2345,13 @@ commands.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| Basic correction | white balance, tone | Exposure, Levels, Colour Balance and friends, as separate effects | control |
-| Creative | look LUT, faded film, vibrance | **none** | wiring |
-| Curves | RGB and hue curves | **none** | control |
-| Colour wheels | shadows, midtones, highlights | **none** | control |
-| HSL secondary | yes | **none** | machinery |
-| `.cube` LUTs | loaded into a 3D texture | **none** | machinery |
-| One panel | yes | **none** — and it is to be built HDR-aware from §8 rather than retrofitted | machinery |
+| Basic correction | white balance, tone | **done** — Input LUT, Temperature and Tint (with the WB selector, which picks from the picture without the grade and neutralises it), Exposure in stops of light, Contrast, Highlights, Shadows, Whites, Blacks, HDR Specular in an HDR sequence, Saturation, Reset and Auto (from the ungraded picture's tones) | control |
+| Creative | look LUT, faded film, vibrance | **done** — Look with Intensity, Faded Film, Sharpen (softening below nought), Vibrance, Saturation, Shadow and Highlight Tint wheels, Tint Balance. Eight looks of Cutline's own are written to `%APPDATA%\Cutline\Looks`, where any .cube put there is listed too; Premiere's own looks are Adobe's to ship | wiring |
+| Curves | RGB and hue curves | **done** — Master, Red, Green and Blue, and Hue vs Sat, Hue vs Hue, Hue vs Luma, Luma vs Sat and Sat vs Sat. Drawn through their points with a monotone cubic, so a curve never overshoots; a hue curve goes round and is bent in one place, as Premiere's are; Ctrl-click removes a point, a double click straightens | control |
+| Colour wheels | shadows, midtones, highlights | **done** — lift, gamma and gain, each a wheel and a luma slider, laid out as the vectorscope is so the wheel and the scope agree about hue. Colour Match is not built yet | control |
+| HSL secondary | yes | **done** — Set Colour from the picture or a preset swatch; hue, saturation and luma ranges with softness on range sliders; Denoise and Blur on the key; Show Mask and Invert; a wheel, Temperature, Tint, Contrast, Sharpen and Saturation inside it | machinery |
+| `.cube` LUTs | loaded into a 3D texture | **done** — 1D and 3D, read once per file and again when it changes, carried in the pass data rather than as textures so a frame can hold any number, and interpolated tetrahedrally | machinery |
+| One panel | yes | **done** — the Lumetri Color panel, given a group of its own in the Colour workspace, editing the clip's first Lumetri Color and adding one on the first change. One effect, rendered as passes; every section grades in the same space, with an HDR sequence's light scaled so graphics white is 1.0 first, so a slider means the same in either | machinery |
 
 ## Found by the 2026-10 review
 

@@ -43,6 +43,7 @@
 #include "cutline/editor/shortcuts.hpp"
 #include "cutline/editor/timeline_binding.hpp"
 #include "cutline/editor/graphic_templates.hpp"
+#include "cutline/editor/lumetri.hpp"
 #include "cutline/editor/graphics.hpp"
 #include "cutline/editor/transitions.hpp"
 #include "cutline/editor/workspace.hpp"
@@ -381,6 +382,10 @@ struct Shell {
   double scale = 1.0;
 };
 
+/// Which of the Lumetri Color panel's eyedroppers is waiting for a click on
+/// the Program Monitor.
+enum class LumetriPick { None, WhiteBalance, Key };
+
 struct App {
   /// The editor's window, and any panels dragged out of it.
   Shell main;
@@ -646,6 +651,15 @@ struct App {
   /// The Essential Graphics panel's column, which it rebuilds, and the layer
   /// of the selected graphic it is showing -- none for the graphic itself.
   Box* graphics_body = nullptr;
+  /// The Lumetri Color panel's column, rebuilt as Essential Graphics' is, and
+  /// what it has open: its sections, the RGB curve channel, and an eyedropper
+  /// waiting for a click on the picture. Basic Correction starts open, as in
+  /// Premiere.
+  Box* lumetri_body = nullptr;
+  bool lumetri_stale = false;
+  std::set<std::string> lumetri_open{"Basic Correction"};
+  std::size_t lumetri_channel = 0;
+  LumetriPick lumetri_picking = LumetriPick::None;
   std::string graphic_layer;
   /// Set when the panel needs rebuilding for something that is not a change
   /// to the document: a layer chosen. Deferred, as the inspector is.
@@ -1182,7 +1196,7 @@ constexpr std::array<double, 7> kFrameRates{23.976, 24.0, 25.0, 29.97, 30.0, 50.
 /// A panel is a name from here plus whatever `make_panel` builds for it. The
 /// layout only ever moves the name around, which is what lets an arrangement be
 /// saved and restored without saving any widgets.
-constexpr std::array<std::pair<std::string_view, std::string_view>, 11> kPanels{{
+constexpr std::array<std::pair<std::string_view, std::string_view>, 12> kPanels{{
     {"project", "Project"},
     {"effects", "Effect Controls"},
     // Premiere's own two names, which are confusingly similar on purpose: this
@@ -1217,6 +1231,8 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 11> kPanels{
     // Premiere's Essential Graphics: the selected graphic's layers and every
     // property of the one chosen.
     {"graphics", "Essential Graphics"},
+    // Premiere's Lumetri Color: the selected clip's grade, section by section.
+    {"lumetri", "Lumetri Color"},
 }};
 
 /// The tool palette, in the order it is drawn and offered, and the action in
@@ -1523,6 +1539,16 @@ void install_template_file(App& app, const std::filesystem::path& file);
 // The Essential Graphics panel, in `graphics_panel.cpp`.
 [[nodiscard]] std::unique_ptr<Widget> make_graphics_panel(App* app);
 void refresh_graphics_panel(App& app);
+[[nodiscard]] std::unique_ptr<Widget> make_lumetri_panel(App* app);
+void refresh_lumetri_panel(App& app);
+/// Where the playhead is within a clip, clamped to it.
+[[nodiscard]] double local_playhead_of(const App& app, const std::string& clip_id);
+/// A click on the picture taken by a Lumetri eyedropper, at a fraction of the
+/// picture across and down; false when none is waiting for one.
+[[nodiscard]] bool pick_for_lumetri(App& app, double x, double y);
+/// Lumetri's Auto: the tone set from the picture as it is without the grade.
+void auto_tone_clip(App& app, const std::string& clip_id);
+[[nodiscard]] std::optional<std::filesystem::path> choose_lut_to_open(HWND owner);
 /// Measures graphic layers as the renderer will draw them, where there is a
 /// text library to do it with: what the panel pins by and the monitor puts
 /// handles round.
