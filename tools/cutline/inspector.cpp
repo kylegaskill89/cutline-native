@@ -6,6 +6,10 @@
 
 #include "app.hpp"
 
+#include "cutline/editor/mask_tracking.hpp"
+
+#include <ranges>
+
 namespace cutline::tool {
 
 /// The scale axis tied to this one by the aspect lock, if it is a scale at all.
@@ -754,6 +758,115 @@ void build_effect_clipboard_row(App& app, const std::string& clip_id) {
 ///
 /// No overlay on the monitor yet: this is numbers, and dragging the shape on
 /// the picture is the obvious next thing and a different piece of work.
+/// Premiere's Mask Path row and its tracking: the path's stopwatch and
+/// keyframes for a drawn path, the four tracking buttons for any mask, and the
+/// Tracking Method they follow.
+void build_mask_tracking(App& app, const std::string& clip_id,
+                         const cutline::editor::EffectRow& row) {
+  const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), clip_id);
+  if (clip == nullptr || row.index >= clip->effects.size()) return;
+  const cutline::core::Mask& mask = clip->effects[row.index].mask;
+  const double here = local_playhead(app, clip_id);
+
+  auto& path_line = app.inspector->emplace<Box>(Axis::Horizontal);
+  if (mask.shape == cutline::core::MaskShape::Path) {
+    const bool animated = !mask.path_keys.empty();
+    auto& stopwatch = path_line.emplace<IconButton>(
+        IconButton::Icon::Stopwatch, [&app, clip_id, index = row.index, animated] {
+          app.session.apply(cutline::editor::set_mask_path_animated(
+              app.session.project(), clip_id, index, !animated, local_playhead(app, clip_id)));
+          invalidate_preview(app);
+          refresh_timeline(app);
+          app.inspector_stale = true;
+        });
+    stopwatch.set_selected(animated);
+    stopwatch.set_tooltip("Toggle animation");
+  }
+  path_line.emplace<Label>("Mask Path").set_small(true);
+  path_line.emplace<Spacer>();
+
+  // Premiere's four: back one frame, back, forward, forward one frame.
+  const struct {
+    IconButton::Icon icon;
+    bool backward;
+    bool one_frame;
+    const char* tip;
+  } kButtons[] = {
+      {IconButton::Icon::TrackBackwardOne, true, true, "Track selected mask 1 frame backward"},
+      {IconButton::Icon::TrackBackward, true, false, "Track selected mask backward"},
+      {IconButton::Icon::TrackForward, false, false, "Track selected mask forward"},
+      {IconButton::Icon::TrackForwardOne, false, true, "Track selected mask 1 frame forward"},
+  };
+  for (const auto& button : kButtons) {
+    auto& track = path_line.emplace<IconButton>(
+        button.icon, [&app, clip_id, index = row.index, backward = button.backward,
+                      one = button.one_frame] {
+          track_mask(app, clip_id, index, backward, one);
+        });
+    track.set_narrow(true);
+    track.set_tooltip(button.tip);
+    track.set_enabled(!tracking_mask(app));
+  }
+
+  if (mask.shape == cutline::core::MaskShape::Path && !mask.path_keys.empty()) {
+    // The path's keyframes, as every other property's: to the one before, a
+    // keyframe here or not, and to the one after.
+    constexpr double kNear = 1e-6;
+    const auto before = std::ranges::find_if(mask.path_keys | std::views::reverse,
+                                             [here](const auto& key) { return key.t < here - kNear; });
+    const auto after = std::ranges::find_if(mask.path_keys,
+                                            [here](const auto& key) { return key.t > here + kNear; });
+    const bool keyed = std::ranges::any_of(
+        mask.path_keys, [here](const auto& key) { return std::abs(key.t - here) <= kNear; });
+    auto& keys = app.inspector->emplace<Box>(Axis::Horizontal);
+    keys.emplace<Spacer>();
+    const double start = clip->start;
+    auto& previous = keys.emplace<IconButton>(IconButton::Icon::ArrowLeft);
+    previous.set_narrow(true);
+    previous.set_enabled(before != (mask.path_keys | std::views::reverse).end());
+    if (before != (mask.path_keys | std::views::reverse).end()) {
+      previous.set_on_click([&app, at = start + before->t] {
+        app.session.set_playhead(at);
+        show_playhead(app);
+        app.inspector_stale = true;
+      });
+    }
+    auto& mark = keys.emplace<IconButton>(IconButton::Icon::Diamond, [&app, clip_id,
+                                                                     index = row.index] {
+      app.session.apply(cutline::editor::toggle_mask_path_key(
+          app.session.project(), clip_id, index, local_playhead(app, clip_id)));
+      invalidate_preview(app);
+      refresh_timeline(app);
+      app.inspector_stale = true;
+    });
+    mark.set_narrow(true);
+    mark.set_selected(keyed);
+    auto& next = keys.emplace<IconButton>(IconButton::Icon::ArrowRight);
+    next.set_narrow(true);
+    next.set_enabled(after != mask.path_keys.end());
+    if (after != mask.path_keys.end()) {
+      next.set_on_click([&app, at = start + after->t] {
+        app.session.set_playhead(at);
+        show_playhead(app);
+        app.inspector_stale = true;
+      });
+    }
+  }
+
+  auto& method_line = app.inspector->emplace<Box>(Axis::Horizontal);
+  method_line.emplace<Label>("Tracking Method").set_small(true);
+  method_line.emplace<Spacer>();
+  auto& method = method_line.emplace<Dropdown>(
+      std::vector<std::string>{"Position", "Position & Rotation", "Position, Scale & Rotation"},
+      static_cast<std::size_t>(mask.tracking));
+  method.set_on_change([&app, clip_id, index = row.index](std::size_t at) {
+    app.session.apply(cutline::editor::set_mask_tracking(
+        app.session.project(), clip_id, index,
+        static_cast<cutline::core::MaskTracking>(std::min<std::size_t>(at, 2))));
+    app.inspector_stale = true;
+  });
+}
+
 void build_effect_mask(App& app, const std::string& clip_id,
                        const cutline::editor::EffectRow& row) {
   const cutline::editor::EffectMaskRow& mask = row.mask;
@@ -786,6 +899,8 @@ void build_effect_mask(App& app, const std::string& clip_id,
   });
 
   if (mask.shape == cutline::core::MaskShape::None) return;
+
+  build_mask_tracking(app, clip_id, row);
 
   // What the pen can do, written down where the shape was chosen. None of it is
   // guessable — a modifier held over a picture leaves no trace until it is

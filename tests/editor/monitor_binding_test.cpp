@@ -10,6 +10,7 @@
 
 #include "cutline/core/animate.hpp"
 #include "cutline/core/effects.hpp"
+#include "cutline/core/mask_path.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/editor/inspector.hpp"
 
@@ -551,6 +552,33 @@ TEST(ScaleToFrame, AudioIsPassedOver) {
   const std::vector<std::string> ids{"s1"};
   const core::Project before = p;
   EXPECT_EQ(scale_to_frame(p, ids, FrameFit::Fill, 2.0), before);
+}
+
+TEST(MaskOverlays, DraggingAnAnimatedPathKeysItAtThePlayhead) {
+  core::Mask mask{.shape = core::MaskShape::Path,
+                  .points = {core::MaskPoint{.x = -0.1, .y = -0.1}, core::MaskPoint{.x = 0.1, .y = -0.1},
+                             core::MaskPoint{.x = 0.0, .y = 0.1}}};
+  core::set_mask_path_animated(mask, true, 0.0);
+  // The clip starts at two seconds, so four is two seconds into it.
+  core::Project p = with_mask(1000, 1000, mask);
+
+  std::vector<MaskOverlayRef> masks = mask_overlays(p, "c1", 4.0);
+  ASSERT_EQ(masks.size(), 1u);
+  ui::MaskOverlay moved = masks[0].overlay;
+  moved.points[2].y += 0.05;
+  core::Project after = apply_mask_overlay(p, "c1", 0, moved, 4.0);
+  const core::Mask& keyed = after.sequence().tracks.front().clips.front().effects.front().mask;
+  ASSERT_EQ(keyed.path_keys.size(), 2u);
+  EXPECT_DOUBLE_EQ(keyed.path_keys[0].points[2].y, 0.1) << "the first keyframe is untouched";
+  EXPECT_NEAR(keyed.path_keys[1].t, 2.0, 1e-9);
+  EXPECT_NEAR(keyed.path_keys[1].points[2].y, 0.15, 1e-9);
+
+  // A point added on the picture is added to every keyframe.
+  ui::MaskOverlay more = mask_overlays(after, "c1", 4.0)[0].overlay;
+  more.points.insert(more.points.begin() + 1, ui::MaskVertex{.x = 0.0, .y = -0.2});
+  after = apply_mask_overlay(after, "c1", 0, more, 4.0);
+  const core::Mask& grown = after.sequence().tracks.front().clips.front().effects.front().mask;
+  for (const core::MaskPathKey& key : grown.path_keys) EXPECT_EQ(key.points.size(), 4u);
 }
 
 }  // namespace

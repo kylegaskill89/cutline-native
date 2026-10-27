@@ -48,6 +48,7 @@ add_executable(cutline_core_tests
   editor/graphics_test.cpp
   editor/graphic_templates_test.cpp
   editor/lumetri_test.cpp
+  editor/mask_tracking_test.cpp
   editor/zip_test.cpp
   editor/transitions_test.cpp
   editor/trim_test.cpp
@@ -63,6 +64,7 @@ add_executable(cutline_core_tests
   render/plan_test.cpp
   render/preview_test.cpp
   render/scopes_test.cpp
+  track/tracker_test.cpp
   ui/animator_test.cpp
   ui/browser_test.cpp
   ui/color_picker_test.cpp
@@ -93,6 +95,7 @@ target_link_libraries(cutline_core_tests PRIVATE
   cutline::core
   cutline::editor
   cutline::render
+  cutline::track
   cutline::ui
   GTest::gtest
   GTest::gtest_main)
@@ -162,6 +165,7 @@ if(CUTLINE_WITH_GPU)
       engine/audio_mixer_test.cpp
       engine/exporter_test.cpp
       engine/frame_renderer_test.cpp
+      engine/mask_tracker_test.cpp
       engine/player_test.cpp)
     target_link_libraries(cutline_engine_tests PRIVATE
       cutline::core

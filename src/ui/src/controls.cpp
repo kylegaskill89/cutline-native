@@ -2555,6 +2555,23 @@ void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const 
                           edge(reach * 1.5)},
                      reach, style.text, width);
       break;
+
+    case Icon::TrackBackwardOne:
+    case Icon::TrackBackward:
+    case Icon::TrackForwardOne:
+    case Icon::TrackForward: {
+      const bool back = icon == Icon::TrackBackward || icon == Icon::TrackBackwardOne;
+      const bool one = icon == Icon::TrackBackwardOne || icon == Icon::TrackForwardOne;
+      // The triangle's point leads; the single-frame bar stands just past it.
+      const double d = back ? -1.0 : 1.0;
+      const double base = cx - d * reach * 0.6;
+      const double tip = cx + d * reach * (one ? 0.3 : 0.7);
+      line(base, cy - reach * 0.8, tip, cy);
+      line(tip, cy, base, cy + reach * 0.8);
+      line(base, cy + reach * 0.8, base, cy - reach * 0.8);
+      if (one) line(cx + d * reach * 0.75, cy - reach * 0.8, cx + d * reach * 0.75, cy + reach * 0.8);
+      break;
+    }
   }
 
 }

@@ -595,6 +595,18 @@ struct MaskPoint {
   friend bool operator==(const MaskPoint&, const MaskPoint&) = default;
 };
 
+/// A path's corners at one moment: Premiere's Mask Path keyframe.
+struct MaskPathKey {
+  /// Clip-local seconds, like every other effect keyframe.
+  double t = 0.0;
+  std::vector<MaskPoint> points;
+
+  friend bool operator==(const MaskPathKey&, const MaskPathKey&) = default;
+};
+
+/// What tracking a mask follows, as Premiere's Tracking Method menu names it.
+enum class MaskTracking { Position, PositionRotation, PositionScaleRotation };
+
 /// The most points one path may carry.
 ///
 /// A cap rather than no cap, because the shape has to reach the shader and the
@@ -641,11 +653,17 @@ struct Mask {
   /// The corners, for `MaskShape::Path` and ignored otherwise. Closed
   /// implicitly: the last point joins the first, because an open mask is not a
   /// region and there would be nothing to fill.
-  ///
-  /// Not keyframed. The numbers above are, and a path that animated would want
-  /// a keyframe per point with the points themselves able to come and go — a
-  /// different feature wearing the same word.
   std::vector<MaskPoint> points;
+
+  /// Premiere's Mask Path keyframes, in time order. Empty when the path is
+  /// not animated, and `points` is the path; otherwise these are, and the path
+  /// between two of them moves each point in a straight line, as Premiere's
+  /// does. A point added or removed is added to or removed from every one, so
+  /// they always have as many points as each other.
+  std::vector<MaskPathKey> path_keys;
+
+  /// What tracking follows. Premiere's default is all three.
+  MaskTracking tracking = MaskTracking::PositionScaleRotation;
 
   [[nodiscard]] bool active() const noexcept { return shape != MaskShape::None; }
 

@@ -2,6 +2,7 @@ add_library(cutline_engine
   src/audio_mixer.cpp
   src/exporter.cpp
   src/frame_renderer.cpp
+  src/mask_tracker.cpp
   src/player.cpp)
 add_library(cutline::engine ALIAS cutline_engine)
 
@@ -15,7 +16,7 @@ target_include_directories(cutline_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc
 # ole32 and propsys are for WASAPI: the device enumerator is a COM object, and
 # the device's friendly name comes from a property store.
 target_link_libraries(cutline_engine
-  PUBLIC cutline::core cutline::gpu cutline::media cutline::audio cutline::options
+  PUBLIC cutline::core cutline::gpu cutline::media cutline::audio cutline::track cutline::options
   PRIVATE cutline::render ole32 propsys)
 
 # Titles, when there is something to draw glyphs with. Without it the renderer

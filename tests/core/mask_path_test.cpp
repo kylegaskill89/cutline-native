@@ -206,5 +206,64 @@ TEST(MaskPath, ASharpPointKnowsItIsSharp) {
   EXPECT_FALSE(curved.sharp());
 }
 
+// --------------------------------------------------------------- animation --
+
+[[nodiscard]] Mask keyed_square() {
+  Mask mask{.shape = MaskShape::Path, .points = square()};
+  set_mask_path_animated(mask, true, 1.0);
+  std::vector<MaskPoint> bigger = square();
+  for (MaskPoint& p : bigger) {
+    p.x *= 2.0;
+    p.y *= 2.0;
+  }
+  set_mask_path_key(mask, 3.0, bigger);
+  return mask;
+}
+
+TEST(MaskPathKeys, APathMovesInAStraightLineBetweenTwoKeyframes) {
+  const Mask mask = keyed_square();
+  ASSERT_EQ(mask.path_keys.size(), 2u);
+  EXPECT_DOUBLE_EQ(mask_path_at(mask, 2.0)[0].x, -0.3);
+  // Held before the first and after the last.
+  EXPECT_DOUBLE_EQ(mask_path_at(mask, 0.0)[0].x, -0.2);
+  EXPECT_DOUBLE_EQ(mask_path_at(mask, 9.0)[0].x, -0.4);
+}
+
+TEST(MaskPathKeys, KeyingWhereThereIsAKeyframeReplacesIt) {
+  Mask mask = keyed_square();
+  set_mask_path_key(mask, 3.0, square());
+  EXPECT_EQ(mask.path_keys.size(), 2u);
+  EXPECT_DOUBLE_EQ(mask_path_at(mask, 3.0)[0].x, -0.2);
+}
+
+TEST(MaskPathKeys, TurningTheStopwatchOffKeepsThePathAsItIsThere) {
+  Mask mask = keyed_square();
+  set_mask_path_animated(mask, false, 2.0);
+  EXPECT_TRUE(mask.path_keys.empty());
+  EXPECT_DOUBLE_EQ(mask.points[0].x, -0.3);
+}
+
+TEST(MaskPathKeys, APointAddedGoesIntoEveryKeyframe) {
+  Mask mask = keyed_square();
+  insert_mask_point_in_keys(mask, 1);
+  for (const MaskPathKey& key : mask.path_keys) {
+    ASSERT_EQ(key.points.size(), 5u);
+    // Halfway along the top edge of that keyframe's square.
+    EXPECT_NEAR(key.points[1].x, 0.0, 1e-12);
+    EXPECT_DOUBLE_EQ(key.points[1].y, key.points[0].y);
+  }
+  remove_mask_point_from_keys(mask, 1);
+  EXPECT_EQ(mask.path_keys[0].points, square());
+}
+
+TEST(MaskPathKeys, RemovingTheLastKeyframeLeavesThePathItHad) {
+  Mask mask{.shape = MaskShape::Path, .points = square()};
+  set_mask_path_key(mask, 1.0, {MaskPoint{.x = 1.0}, MaskPoint{.y = 1.0}, MaskPoint{}});
+  EXPECT_TRUE(remove_mask_path_key(mask, 1.0));
+  EXPECT_TRUE(mask.path_keys.empty());
+  EXPECT_DOUBLE_EQ(mask.points[0].x, 1.0);
+  EXPECT_FALSE(remove_mask_path_key(mask, 1.0));
+}
+
 }  // namespace
 }  // namespace cutline::core

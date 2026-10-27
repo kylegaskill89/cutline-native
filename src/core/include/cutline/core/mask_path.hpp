@@ -38,6 +38,36 @@ namespace cutline::core {
 [[nodiscard]] std::vector<MaskPoint> flatten_mask_path(std::span<const MaskPoint> points,
                                                        std::size_t budget = kMaxMaskPoints);
 
+/// Where tracking found a mask on one frame: the mask as it is there, at
+/// clip-local `t`.
+struct TrackedMask {
+  double t = 0.0;
+  Mask mask;
+};
+
+/// The path at clip-local `t`: its corners when it is not animated, otherwise
+/// its keyframes, held before the first and after the last and moved in a
+/// straight line between two.
+[[nodiscard]] std::vector<MaskPoint> mask_path_at(const Mask& mask, double t);
+
+/// Keys the path at `t`, replacing a keyframe already there.
+void set_mask_path_key(Mask& mask, double t, std::vector<MaskPoint> points);
+
+/// Removes the keyframe at `t`, if there is one. Removing the last leaves the
+/// path as that keyframe had it, unanimated, as turning a stopwatch off does.
+bool remove_mask_path_key(Mask& mask, double t);
+
+/// Turns the path's animation on, keyed at `t` with the path as it is, or off,
+/// keeping the path as it is at `t`.
+void set_mask_path_animated(Mask& mask, bool animated, double t);
+
+/// Puts a point into every keyframe at `index`, between its neighbours there,
+/// for a point added to an animated path.
+void insert_mask_point_in_keys(Mask& mask, std::size_t index);
+
+/// Takes the point at `index` out of every keyframe.
+void remove_mask_point_from_keys(Mask& mask, std::size_t index);
+
 /// The point on the cubic between `from` and `to` at `t` in [0, 1].
 ///
 /// Exposed because the monitor needs it to place a handle's grip on the curve

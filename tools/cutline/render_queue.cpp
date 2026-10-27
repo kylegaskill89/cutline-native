@@ -356,6 +356,9 @@ void settle_export(App& app) {
   // And the preview render, which stops at the end of the piece it is on.
   app.preview_render_cancel = true;
   if (app.preview_render_worker.joinable()) app.preview_render_worker.join();
+  // And mask tracking, which stops at the end of the frame it is on.
+  app.mask_track_cancel = true;
+  if (app.mask_track_worker.joinable()) app.mask_track_worker.join();
 }
 
 bool confirm_abandon_queue(App& app) {

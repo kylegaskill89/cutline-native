@@ -63,6 +63,9 @@ add_subdirectory(src/core)
 add_subdirectory(src/render)
 # Likewise the audio DSP -- arithmetic over sample buffers, no FFmpeg needed.
 add_subdirectory(src/audio)
+# And following pictures from frame to frame, for mask tracking and the
+# stabiliser: arithmetic over grey images.
+add_subdirectory(src/track)
 # And the theme model: data and lookup, with Skia needed only to paint it.
 add_subdirectory(src/ui)
 # The join between the two: the only thing that knows both a project and a

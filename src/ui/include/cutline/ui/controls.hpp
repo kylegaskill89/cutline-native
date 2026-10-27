@@ -969,6 +969,14 @@ class IconButton : public Button {
     /// The shape tools: the outline each draws.
     Rectangle,
     Ellipse,
+
+    // Premiere's mask tracking buttons: a triangle each way, as a transport's
+    // play is drawn, with a bar across the point for the ones that go a
+    // single frame.
+    TrackBackwardOne,
+    TrackBackward,
+    TrackForward,
+    TrackForwardOne,
   };
 
   explicit IconButton(Icon icon, std::function<void()> on_click = {});

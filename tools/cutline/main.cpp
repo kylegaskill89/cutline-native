@@ -275,6 +275,7 @@ void refresh_busy(App& app) {
   // five things, and a number that comes down is the difference between waiting
   // and wondering.
   std::string says = left == 0 ? std::string{} : std::format("Reading media ({})", left);
+  if (tracking_mask(app)) says = "Tracking mask";
   // Rendering previews comes before reading, which it outlasts.
   if (rendering_previews(app)) {
     says = std::format("Rendering previews {} of {}", app.preview_render_done.load() + 1,
@@ -2031,6 +2032,10 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
 
     case kPreviewRendered:
       collect_rendered_previews(*app, wparam == 1);
+      return 0;
+
+    case kMaskTracked:
+      collect_tracked_mask(*app, wparam == 1);
       return 0;
 
     case kPreviewReady:

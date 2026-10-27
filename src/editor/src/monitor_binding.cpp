@@ -239,10 +239,10 @@ core::Project apply_mask_overlay(core::Project project, std::string_view clip_id
     if (moved == nullptr || effect >= moved->effects.size()) return project;
 
     core::Mask mask = moved->effects[effect].mask;
-    mask.points.clear();
-    mask.points.reserve(overlay.points.size());
+    std::vector<core::MaskPoint> drawn;
+    drawn.reserve(overlay.points.size());
     for (const ui::MaskVertex& point : overlay.points) {
-      mask.points.push_back(core::MaskPoint{
+      drawn.push_back(core::MaskPoint{
           .x = point.x / frame->width,
           .y = point.y / frame->height,
           .in_x = point.in_x / frame->width,
@@ -250,6 +250,35 @@ core::Project apply_mask_overlay(core::Project project, std::string_view clip_id
           .out_x = point.out_x / frame->width,
           .out_y = point.out_y / frame->height,
       });
+    }
+
+    if (mask.path_keys.empty()) {
+      mask.points = std::move(drawn);
+    } else {
+      // An animated path is keyed where the playhead is, as Premiere's Mask
+      // Path is. A point added or taken away goes into or out of every
+      // keyframe, so they keep as many points as each other; a path redrawn
+      // from nothing is a new path, and starts unanimated.
+      const std::vector<core::MaskPoint> was = core::mask_path_at(mask, local_t);
+      const auto first_difference = [](const std::vector<core::MaskPoint>& longer,
+                                       const std::vector<core::MaskPoint>& shorter) {
+        std::size_t i = 0;
+        while (i < shorter.size() && longer[i] == shorter[i]) ++i;
+        return i;
+      };
+      if (drawn.size() == was.size() + 1) {
+        core::insert_mask_point_in_keys(mask, first_difference(drawn, was));
+        core::set_mask_path_key(mask, local_t, std::move(drawn));
+      } else if (drawn.size() + 1 == was.size()) {
+        core::remove_mask_point_from_keys(mask, first_difference(was, drawn));
+        core::set_mask_path_key(mask, local_t, std::move(drawn));
+      } else if (drawn.size() == was.size()) {
+        core::set_mask_path_key(mask, local_t, std::move(drawn));
+      } else {
+        mask.path_keys.clear();
+        mask.points = std::move(drawn);
+      }
+      mask.points = core::mask_path_at(mask, local_t);
     }
 
     // And the half-extents are made to describe the corners, because on a path

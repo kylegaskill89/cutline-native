@@ -785,5 +785,27 @@ TEST(Serialize, SharpCornersCostNothingToWriteDown) {
       << "a sharp corner wrote handles it does not have";
 }
 
+TEST(Serialize, AMaskKeepsItsPathKeyframesAndTrackingMethod) {
+  Project p;
+  ClipEffect blur;
+  blur.type = "blur";
+  blur.mask = Mask{.shape = MaskShape::Path,
+                   .points = {MaskPoint{.x = -0.2}, MaskPoint{.x = 0.2}, MaskPoint{.y = 0.2}},
+                   .path_keys = {MaskPathKey{.t = 0.5, .points = {MaskPoint{.x = -0.1},
+                                                                  MaskPoint{.x = 0.1},
+                                                                  MaskPoint{.y = 0.3}}},
+                                 MaskPathKey{.t = 1.5, .points = {MaskPoint{.x = -0.3},
+                                                                  MaskPoint{.x = 0.3},
+                                                                  MaskPoint{.y = 0.1}}}},
+                   .tracking = MaskTracking::PositionRotation};
+  Clip c{.id = "c1", .media_id = "m1", .kind = TrackKind::Video, .source_out = 1.0};
+  c.effects = {blur};
+  p.sequence().tracks = {Track{.id = "v1", .kind = TrackKind::Video, .clips = {c}}};
+
+  const auto loaded = from_json(to_json(p));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_EQ(loaded->project, p);
+}
+
 }  // namespace
 }  // namespace cutline::core

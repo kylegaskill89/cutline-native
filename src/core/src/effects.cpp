@@ -1,5 +1,7 @@
 #include "cutline/core/effects.hpp"
 
+#include "cutline/core/mask_path.hpp"
+
 #include "cutline/core/query.hpp"
 
 #include <algorithm>
@@ -99,6 +101,11 @@ std::vector<ClipEffect> resolved_effects(const Clip& c, double local_t) {
       }
       resolved.params[key] = eval_keyframes(kfs, local_t);
     }
+    // The path, as it is now.
+    if (!effect.mask.path_keys.empty()) {
+      resolved.mask.points = mask_path_at(effect.mask, local_t);
+      resolved.mask.path_keys.clear();
+    }
     // The renderer reads params only, so the animation is fully folded away.
     resolved.keyframes.clear();
     out.push_back(std::move(resolved));
@@ -119,6 +126,7 @@ std::vector<double> effect_keyframe_times(const Clip& c) {
     for (const auto& [key, kfs] : effect.keyframes) {
       for (const Keyframe& k : kfs) out.push_back(k.t);
     }
+    for (const MaskPathKey& key : effect.mask.path_keys) out.push_back(key.t);
   }
   return out;
 }

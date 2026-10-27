@@ -2675,8 +2675,21 @@ one.
    two things for it: a unit (fractions of the layer's frame shown in its
    pixels, as Motion's anchor is) and pairing, so two numbers share a row and
    a stopwatch.
-9. **Mask tracking** (large). Track a mask forward and backward from frame
-   to frame. The tracker built here is the analysis Warp Stabilizer needs.
+9. ~~**Mask tracking**~~ — **done**. Every mask has Premiere's four buttons
+   (back one frame, back, forward, forward one frame) and its Tracking
+   Method (Position; Position & Rotation; Position, Scale & Rotation, the
+   default). Tracking runs on its own thread with a Tracking window and
+   Cancel, keys the mask on every frame as one undoable edit, and leaves the
+   playhead on the last frame tracked. What is tracked is the clip drawn
+   alone, without its effects or Motion, at the size of its own frame, so a
+   nest, a title or a retimed shot is tracked as it is seen. The tracker is
+   its own library (`src/track`): Shi–Tomasi corners inside the mask,
+   pyramidal Lucas–Kanade with a forward–backward check, and a fit to the
+   points that agree with each other, which is the analysis Warp
+   Stabilizer will reuse. A drawn path now has Premiere's Mask Path
+   keyframes, with a stopwatch and keyframe navigator; dragging an animated
+   path keys it at the playhead, and a point added or removed goes into or
+   out of every keyframe. Tracking a path's scale writes its Mask Path.
 10. **Warp Stabilizer** (large). Analyse on the tracker from 9, smooth the
     path, and warp or crop to it, with Premiere's result and method controls.
 11. **Multicam** (large). Multi-camera source sequences synchronised by

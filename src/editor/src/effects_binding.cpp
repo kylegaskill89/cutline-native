@@ -249,8 +249,11 @@ core::Project set_effect_mask(core::Project project, std::string_view clip_id,
   // The corners survive a change to any other number, because the panel's row
   // does not carry them and rewriting the mask from it would otherwise erase a
   // path every time its feather was touched.
+  // Its keyframes and its tracking method likewise.
   if (const core::ClipEffect* effect = effect_at(project, clip_id, index); effect != nullptr) {
     mask.points = effect->mask.points;
+    mask.path_keys = effect->mask.path_keys;
+    mask.tracking = effect->mask.tracking;
   }
 
   // A path chosen with no corners yet starts as the rectangle it replaces, so

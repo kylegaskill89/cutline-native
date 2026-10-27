@@ -208,4 +208,91 @@ std::vector<MaskPoint> flatten_mask_path(std::span<const MaskPoint> points,
   return out;
 }
 
+// -------------------------------------------------------------- animation --
+
+namespace {
+
+/// Keyframes closer than this are the same moment: a millionth of a second is
+/// far inside any frame.
+constexpr double kSameMoment = 1e-6;
+
+[[nodiscard]] MaskPoint between(const MaskPoint& a, const MaskPoint& b, double f) {
+  const auto mix = [f](double x, double y) { return x + (y - x) * f; };
+  return MaskPoint{.x = mix(a.x, b.x),
+                   .y = mix(a.y, b.y),
+                   .in_x = mix(a.in_x, b.in_x),
+                   .in_y = mix(a.in_y, b.in_y),
+                   .out_x = mix(a.out_x, b.out_x),
+                   .out_y = mix(a.out_y, b.out_y)};
+}
+
+}  // namespace
+
+std::vector<MaskPoint> mask_path_at(const Mask& mask, double t) {
+  const std::vector<MaskPathKey>& keys = mask.path_keys;
+  if (keys.empty()) return mask.points;
+  if (t <= keys.front().t) return keys.front().points;
+  if (t >= keys.back().t) return keys.back().points;
+  const auto after = std::ranges::upper_bound(keys, t, {}, &MaskPathKey::t);
+  const MaskPathKey& b = *after;
+  const MaskPathKey& a = *(after - 1);
+  // Keyframes of different sizes cannot be moved between, and should never
+  // exist; held rather than guessed at.
+  if (a.points.size() != b.points.size() || b.t - a.t <= kSameMoment) return a.points;
+  const double f = (t - a.t) / (b.t - a.t);
+  std::vector<MaskPoint> out;
+  out.reserve(a.points.size());
+  for (std::size_t i = 0; i < a.points.size(); ++i) out.push_back(between(a.points[i], b.points[i], f));
+  return out;
+}
+
+void set_mask_path_key(Mask& mask, double t, std::vector<MaskPoint> points) {
+  auto& keys = mask.path_keys;
+  const auto at = std::ranges::lower_bound(keys, t - kSameMoment, {}, &MaskPathKey::t);
+  if (at != keys.end() && std::abs(at->t - t) <= kSameMoment) {
+    at->points = std::move(points);
+  } else {
+    keys.insert(at, MaskPathKey{.t = t, .points = std::move(points)});
+  }
+}
+
+bool remove_mask_path_key(Mask& mask, double t) {
+  auto& keys = mask.path_keys;
+  const auto at = std::ranges::find_if(
+      keys, [t](const MaskPathKey& key) { return std::abs(key.t - t) <= kSameMoment; });
+  if (at == keys.end()) return false;
+  if (keys.size() == 1) mask.points = at->points;
+  keys.erase(at);
+  return true;
+}
+
+void set_mask_path_animated(Mask& mask, bool animated, double t) {
+  if (animated == !mask.path_keys.empty()) return;
+  if (animated) {
+    mask.path_keys = {MaskPathKey{.t = t, .points = mask.points}};
+  } else {
+    mask.points = mask_path_at(mask, t);
+    mask.path_keys.clear();
+  }
+}
+
+void insert_mask_point_in_keys(Mask& mask, std::size_t index) {
+  for (MaskPathKey& key : mask.path_keys) {
+    std::vector<MaskPoint>& points = key.points;
+    if (points.empty() || index > points.size()) continue;
+    // Halfway along the edge it lands on in this keyframe, which is where it
+    // was put in the one being edited.
+    const MaskPoint& before = points[(index + points.size() - 1) % points.size()];
+    const MaskPoint& after = points[index % points.size()];
+    points.insert(points.begin() + static_cast<std::ptrdiff_t>(index),
+                  mask_path_point_at(before, after, 0.5));
+  }
+}
+
+void remove_mask_point_from_keys(Mask& mask, std::size_t index) {
+  for (MaskPathKey& key : mask.path_keys) {
+    if (index < key.points.size()) key.points.erase(key.points.begin() + static_cast<std::ptrdiff_t>(index));
+  }
+}
+
 }  // namespace cutline::core

@@ -49,6 +49,7 @@
 #include "cutline/editor/graphics.hpp"
 #include "cutline/editor/transitions.hpp"
 #include "cutline/editor/workspace.hpp"
+#include "cutline/engine/mask_tracker.hpp"
 #include "cutline/render/preview.hpp"
 #include "cutline/ui/browser.hpp"
 #include "cutline/ui/color_picker.hpp"
@@ -131,6 +132,8 @@
 #include <memory>
 #include <numeric>
 #include <thread>
+#include <expected>
+#include <mutex>
 #include <optional>
 #include <print>
 #include <set>
@@ -304,6 +307,9 @@ constexpr UINT kPreviewReady = WM_APP + 4;
 /// Posted by the preview render thread each time a piece is rendered, and once
 /// more when it stops.
 constexpr UINT kPreviewRendered = WM_APP + 5;
+
+/// Posted by the mask tracking thread as it goes, and once more when it stops.
+constexpr UINT kMaskTracked = WM_APP + 6;
 
 /// Which settings window: the person's, or the cut's.
 enum class SettingsKind {
@@ -1121,6 +1127,19 @@ struct App {
   cutline::ui::Dialog* preview_render_dialog = nullptr;
   cutline::ui::ProgressBar* preview_render_bar = nullptr;
   std::string preview_render_error;
+  /// Mask tracking, on a thread of its own.
+  std::thread mask_track_worker;
+  std::atomic<bool> mask_track_running{false};
+  std::atomic<bool> mask_track_cancel{false};
+  std::atomic<int> mask_track_done{0};
+  std::atomic<int> mask_track_total{0};
+  std::string mask_track_clip;
+  std::size_t mask_track_effect = 0;
+  std::mutex mask_track_lock;
+  std::optional<std::expected<cutline::engine::MaskTrackResult, std::string>> mask_track_result;
+  /// The Tracking window, while it is the popup showing, and its bar.
+  cutline::ui::Dialog* mask_track_dialog = nullptr;
+  cutline::ui::ProgressBar* mask_track_bar = nullptr;
   /// Whether the queue moves on to the next job by itself. Export starts it;
   /// Queue only adds to it, as Premiere's Queue button does.
   bool queue_running = false;
@@ -1634,6 +1653,13 @@ void cancel_preview_render(App& app);
 /// A piece rendered, or only further through one when `progress_only`.
 void collect_rendered_previews(App& app, bool progress_only = false);
 void delete_render_files(App& app);
+/// Premiere's mask tracking buttons: the mask of `effect` on `clip_id` from
+/// the playhead, one frame or to the clip's end, either way.
+void track_mask(App& app, const std::string& clip_id, std::size_t effect, bool backward,
+                bool one_frame);
+[[nodiscard]] bool tracking_mask(const App& app);
+/// Tracking has got further, or finished when not `progress_only`.
+void collect_tracked_mask(App& app, bool progress_only = false);
 [[nodiscard]] std::optional<std::filesystem::path> choose_lut_to_open(HWND owner);
 /// Measures graphic layers as the renderer will draw them, where there is a
 /// text library to do it with: what the panel pins by and the monitor puts
