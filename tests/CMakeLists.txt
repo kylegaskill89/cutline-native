@@ -40,6 +40,7 @@ add_executable(cutline_core_tests
   editor/monitor_binding_test.cpp
   editor/bins_test.cpp
   editor/presets_test.cpp
+  editor/render_previews_test.cpp
   editor/session_test.cpp
   editor/settings_test.cpp
   editor/shortcuts_test.cpp
@@ -192,6 +193,8 @@ if(CUTLINE_WITH_GPU)
       app/waveforms_test.cpp)
     target_link_libraries(cutline_app_tests PRIVATE
       cutline::app
+      cutline::media
+      cutline::engine
       GTest::gtest
       GTest::gtest_main)
     cutline_gpu_shaders(cutline_app_tests)

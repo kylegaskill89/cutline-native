@@ -657,6 +657,25 @@ void TimelineView::set_transition_ghost(std::optional<TransitionGhost> ghost) {
   if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
 }
 
+void TimelineView::set_render_bar(std::vector<RenderBarSpan> spans) {
+  if (render_bar_ == spans) return;
+  render_bar_ = std::move(spans);
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
+Rect TimelineView::render_bar_rect(std::size_t index) const {
+  if (index >= render_bar_.size()) return {};
+  const RenderBarSpan& span = render_bar_[index];
+  const Rect ruler = ruler_area();
+  if (ruler.empty()) return {};
+  // A strip just above the in and out bar, the same height as it, so both
+  // can be read at once.
+  const double height = std::max(3.0, ruler.height * 0.2);
+  const double x = ruler.x + scale_.to_x(span.start);
+  return Rect{x, ruler.bottom() - height * 2.0, scale_.width_of(span.end - span.start),
+              height};
+}
+
 void TimelineView::set_edit_mark(std::optional<EditMark> mark) {
   if (edit_mark_ == mark) return;
   edit_mark_ = mark;
@@ -1640,6 +1659,19 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
 
   // Inside the ruler's clip, so a span running off either end is cut at the
   // edge of the ruler rather than drawn across the track headers.
+  // The render bar, in Premiere's three colours, which are its meaning and
+  // so the same in every theme.
+  for (std::size_t i = 0; i < render_bar_.size(); ++i) {
+    const Rect strip = render_bar_rect(i);
+    if (strip.empty() || strip.right() < ruler.x || strip.x > ruler.right()) continue;
+    const Color colour = render_bar_[i].colour == RenderBarSpan::Colour::Green
+                             ? Color{0.2f, 0.75f, 0.3f, 1.0f}
+                         : render_bar_[i].colour == RenderBarSpan::Colour::Red
+                             ? Color{0.9f, 0.2f, 0.18f, 1.0f}
+                             : Color{0.95f, 0.8f, 0.15f, 1.0f};
+    painter.fill(strip, 0.0, Fill::solid(colour));
+  }
+
   if (const Rect marked = marked_bar(); !marked.empty()) {
     // The playhead's colour: this is the other thing on the ruler that says
     // where something is, and a second accent would be one too many.

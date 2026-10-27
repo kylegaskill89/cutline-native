@@ -121,6 +121,27 @@ namespace cutline::tool {
   rows.push_back(command_entry(app, "Nudge Left One Frame", Command::NudgeLeft));
   rows.push_back(command_entry(app, "Nudge Right One Frame", Command::NudgeRight));
   rows.push_back(MenuEntry::divider());
+  // Premiere's render commands, at the top of its Sequence menu.
+  {
+    MenuEntry render = action_entry("Render In to Out", [&app] { render_in_to_out(app); },
+                                    shortcut_of(&app, "sequence.render_in_to_out"));
+    render.enabled = !rendering_previews(app);
+    rows.push_back(std::move(render));
+    MenuEntry cancel = action_entry("Cancel Rendering", [&app] { cancel_preview_render(app); });
+    cancel.enabled = rendering_previews(app);
+    rows.push_back(std::move(cancel));
+    MenuEntry remove = action_entry("Delete Render Files", [&app] { delete_render_files(app); });
+    remove.enabled = !rendering_previews(app);
+    rows.push_back(std::move(remove));
+  }
+  rows.push_back(MenuEntry::divider());
+  rows.push_back(action_entry("Trim Edit", [&app] { toggle_trim_mode(app); },
+                              shortcut_of(&app, "sequence.trim_edit")));
+  rows.push_back(command_entry(app, "Apply Video Transition", Command::ApplyVideoTransition));
+  rows.push_back(command_entry(app, "Apply Audio Transition", Command::ApplyAudioTransition));
+  rows.push_back(command_entry(app, "Apply Default Transitions to Selection",
+                               Command::ApplyDefaultTransitions));
+  rows.push_back(MenuEntry::divider());
   rows.push_back(switch_entry("Snap in Timeline", app.snapping, [&app] { toggle_snapping(app); },
                               shortcut_of(&app, "sequence.snap")));
   rows.push_back(MenuEntry::divider());

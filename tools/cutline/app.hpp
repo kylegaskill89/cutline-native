@@ -44,6 +44,7 @@
 #include "cutline/editor/timeline_binding.hpp"
 #include "cutline/editor/graphic_templates.hpp"
 #include "cutline/editor/lumetri.hpp"
+#include "cutline/editor/render_previews.hpp"
 #include "cutline/editor/trim.hpp"
 #include "cutline/editor/graphics.hpp"
 #include "cutline/editor/transitions.hpp"
@@ -299,6 +300,10 @@ constexpr UINT kProxyChanged = WM_APP + 3;
 /// sleeps in `GetMessage` while nothing is playing, and a scrub's picture that
 /// waited for the next mouse move would arrive one move late, every time.
 constexpr UINT kPreviewReady = WM_APP + 4;
+
+/// Posted by the preview render thread each time a piece is rendered, and once
+/// more when it stops.
+constexpr UINT kPreviewRendered = WM_APP + 5;
 
 /// Which settings window: the person's, or the cut's.
 enum class SettingsKind {
@@ -1098,6 +1103,24 @@ struct App {
   /// The job being rendered, or null. Only the interface changes it.
   RenderJob* rendering = nullptr;
   std::thread render_worker;
+
+  /// The render bar's pieces, worked out again when the document changes or a
+  /// render finishes one.
+  std::vector<cutline::editor::RenderPiece> render_pieces;
+  std::uint64_t render_pieces_revision = ~std::uint64_t{0};
+  bool render_pieces_stale = true;
+  /// Render In to Out, on a thread of its own.
+  std::thread preview_render_worker;
+  std::atomic<bool> preview_render_running{false};
+  std::atomic<bool> preview_render_cancel{false};
+  std::atomic<int> preview_render_done{0};
+  /// How far into the piece being rendered, 0 to 1.
+  std::atomic<double> preview_render_piece{0.0};
+  int preview_render_total = 0;
+  /// The Rendering window, while it is the popup showing, and its bar.
+  cutline::ui::Dialog* preview_render_dialog = nullptr;
+  cutline::ui::ProgressBar* preview_render_bar = nullptr;
+  std::string preview_render_error;
   /// Whether the queue moves on to the next job by itself. Export starts it;
   /// Queue only adds to it, as Premiere's Queue button does.
   bool queue_running = false;
@@ -1600,6 +1623,17 @@ bool trim_by(App& app, double frames);
 void toggle_trim_type(App& app);
 /// Trim mode's marks and pictures, brought up to date with the document.
 void show_trim(App& app);
+/// The render bar, from the pieces of the document as it is.
+void refresh_render_bar(App& app);
+/// The stretches with preview files, for the program monitor's engine.
+[[nodiscard]] std::vector<cutline::app::PreviewSpan> rendered_spans(App& app);
+[[nodiscard]] bool rendering_previews(const App& app);
+/// Premiere's Render In to Out, Cancel and Delete Render Files.
+void render_in_to_out(App& app);
+void cancel_preview_render(App& app);
+/// A piece rendered, or only further through one when `progress_only`.
+void collect_rendered_previews(App& app, bool progress_only = false);
+void delete_render_files(App& app);
 [[nodiscard]] std::optional<std::filesystem::path> choose_lut_to_open(HWND owner);
 /// Measures graphic layers as the renderer will draw them, where there is a
 /// text library to do it with: what the panel pins by and the monitor puts

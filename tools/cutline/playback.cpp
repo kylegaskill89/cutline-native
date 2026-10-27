@@ -70,6 +70,15 @@ namespace cutline::tool {
   // document's at this revision once the gesture ends.
   app.preview_snapshot_revision = gesture ? ~std::uint64_t{0} : app.session.document_revision();
   app.preview_snapshot_scale = app.preview_scale;
+  // The rendered stretches stand in for this snapshot's picture, and only for
+  // it: a gesture's project is not what was rendered.
+#if CUTLINE_HAVE_PREVIEW
+  if (app.preview != nullptr) {
+    app.preview->set_previews(app.preview_snapshot,
+                              gesture ? std::vector<cutline::app::PreviewSpan>{}
+                                      : rendered_spans(app));
+  }
+#endif
   return app.preview_snapshot;
 }
 

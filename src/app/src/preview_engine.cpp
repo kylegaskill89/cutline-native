@@ -62,6 +62,11 @@ struct PreviewEngine::Impl {
   /// The HDR display's SDR white, when the window is on one.
   std::optional<float> hdr_display;
   gpu::DisplayOptions display_options;
+  /// The preview files, and the project they stand in for.
+  std::shared_ptr<const core::Project> previews_for;
+  std::vector<PreviewSpan> previews;
+  /// A one-clip project per preview file, made once, on the render thread.
+  std::map<std::string, std::shared_ptr<const core::Project>> preview_projects;
 
   /// A finished picture waiting to be taken, in the order it was rendered.
   struct Ready {
@@ -137,7 +142,63 @@ struct PreviewEngine::Impl {
   void run();
   /// Renders one frame on this thread. Returns the error, or empty.
   [[nodiscard]] std::string render(const core::Project& project, double t);
+  /// The same, with a preview file standing in where there is one for this
+  /// project at `t`.
+  [[nodiscard]] std::string render_shown(const std::shared_ptr<const core::Project>& shown,
+                                         double t);
 };
+
+std::string PreviewEngine::Impl::render_shown(const std::shared_ptr<const core::Project>& shown,
+                                             double t) {
+  std::optional<PreviewSpan> span;
+  {
+    const std::lock_guard<std::mutex> held(lock);
+    if (shown == previews_for) {
+      for (const PreviewSpan& each : previews) {
+        if (each.start <= t && t < each.end) {
+          span = each;
+          break;
+        }
+      }
+    }
+  }
+  if (!span.has_value()) return render(*shown, t);
+
+  // The file as the only clip of a sequence shaped like this one, placed over
+  // its stretch, so the renderer reads it as it reads any footage.
+  auto& made = preview_projects[span->path];
+  if (made == nullptr || made->sequence().canvas_w != shown->sequence().canvas_w ||
+      made->sequence().canvas_h != shown->sequence().canvas_h ||
+      made->sequence().tracks.front().clips.front().start != span->start) {
+    core::Project only;
+    core::Sequence& sequence = only.sequence();
+    const core::Sequence& source = shown->sequence();
+    sequence.canvas_w = source.canvas_w;
+    sequence.canvas_h = source.canvas_h;
+    sequence.fps = source.fps;
+    sequence.colour = source.colour;
+    sequence.graphics_white = source.graphics_white;
+    sequence.tone_map = source.tone_map;
+    core::Media media;
+    media.id = "preview:" + span->path;
+    media.path = span->path;
+    media.duration = span->end - span->start;
+    media.has_video = true;
+    only.media = {media};
+    core::Clip clip;
+    clip.id = "preview";
+    clip.media_id = media.id;
+    clip.source_out = media.duration;
+    clip.start = span->start;
+    core::Track track;
+    track.id = "v1";
+    track.kind = core::TrackKind::Video;
+    track.clips = {clip};
+    sequence.tracks = {track};
+    made = std::make_shared<const core::Project>(std::move(only));
+  }
+  return render(*made, t);
+}
 
 std::string PreviewEngine::Impl::render(const core::Project& p, double t) {
   if (renderer == nullptr) {
@@ -196,7 +257,7 @@ void PreviewEngine::Impl::run() {
       continue;
     }
 
-    std::string failed = render(*project_now, time_of(*project_now, frame));
+    std::string failed = render_shown(project_now, time_of(*project_now, frame));
     std::optional<std::size_t> slot;
     if (failed.empty()) {
       if (auto shown = renderer->compositor().display_texture(); !shown) {
@@ -288,6 +349,20 @@ void PreviewEngine::set_display_options(const gpu::DisplayOptions& options) {
     ++d.serial;
     d.taken.reset();
     d.prune([](const Impl::Ready&) { return false; });
+  }
+  d.wake.notify_all();
+}
+
+void PreviewEngine::set_previews(std::shared_ptr<const core::Project> project,
+                                 std::vector<PreviewSpan> spans) {
+  Impl& d = *impl_;
+  {
+    const std::lock_guard<std::mutex> held(d.lock);
+    if (d.previews_for == project && d.previews == spans) return;
+    d.previews_for = std::move(project);
+    d.previews = std::move(spans);
+    // Frames made before are of the same picture, but made the slow way; they
+    // stay, and the next ones come from the files.
   }
   d.wake.notify_all();
 }
@@ -389,7 +464,7 @@ std::expected<gpu::Image, std::string> PreviewEngine::capture(
   {
     const std::lock_guard<std::mutex> held(d.lock);
     d.jobs.push_back([&d, promise, project, t, output] {
-      if (std::string failed = d.render(*project, t); !failed.empty()) {
+      if (std::string failed = d.render_shown(project, t); !failed.empty()) {
         promise->set_value(std::unexpected(std::move(failed)));
         return;
       }

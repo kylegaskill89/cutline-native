@@ -275,6 +275,11 @@ void refresh_busy(App& app) {
   // five things, and a number that comes down is the difference between waiting
   // and wondering.
   std::string says = left == 0 ? std::string{} : std::format("Reading media ({})", left);
+  // Rendering previews comes before reading, which it outlasts.
+  if (rendering_previews(app)) {
+    says = std::format("Rendering previews {} of {}", app.preview_render_done.load() + 1,
+                       app.preview_render_total);
+  }
 
   // Proxies take precedence over the reading, because they take minutes where
   // the reading takes seconds — and a line that flickered between the two would
@@ -317,6 +322,7 @@ void refresh_timeline(App& app) {
 
   request_media(app);
   refresh_busy(app);
+  refresh_render_bar(app);
   app.timeline->set_model(cutline::editor::timeline_model(
       app.session.project(), app.session.selection(), app.timeline_media));
   app.timeline->set_playhead(app.session.playhead());
@@ -674,9 +680,13 @@ void run_action(App& app, Shell& shell, std::string_view id) {
     }
   }
 
-  // Escape leaves trim mode before it deselects anything.
+  // Escape leaves trim mode, or stops a render, before it deselects anything.
   if (id == "edit.deselect_all" && app.trim_point.has_value()) {
     exit_trim_mode(app);
+    return;
+  }
+  if (id == "edit.deselect_all" && rendering_previews(app)) {
+    cancel_preview_render(app);
     return;
   }
 
@@ -709,6 +719,8 @@ void run_action(App& app, Shell& shell, std::string_view id) {
     open_export_dialog(app);
   } else if (id == "edit.keyboard_shortcuts") {
     open_keyboard_dialog(app);
+  } else if (id == "sequence.render_in_to_out") {
+    render_in_to_out(app);
   } else if (id == "sequence.trim_edit") {
     toggle_trim_mode(app);
   } else if (id == "sequence.toggle_trim_type") {
@@ -2016,6 +2028,10 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       refresh_busy(*app);
       return 0;
     }
+
+    case kPreviewRendered:
+      collect_rendered_previews(*app, wparam == 1);
+      return 0;
 
     case kPreviewReady:
       // A monitor's thread has a picture. Taken now rather than at the next

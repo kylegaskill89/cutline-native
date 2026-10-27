@@ -31,6 +31,7 @@ add_library(cutline_editor
   src/trim.cpp
   src/updates.cpp
   src/presets.cpp
+  src/render_previews.cpp
   src/workspace.cpp
   src/zip.cpp)
 add_library(cutline::editor ALIAS cutline_editor)

@@ -353,6 +353,9 @@ void settle_export(App& app) {
   app.queue_running = false;
   if (app.render_worker.joinable()) app.render_worker.join();
   app.rendering = nullptr;
+  // And the preview render, which stops at the end of the piece it is on.
+  app.preview_render_cancel = true;
+  if (app.preview_render_worker.joinable()) app.preview_render_worker.join();
 }
 
 bool confirm_abandon_queue(App& app) {

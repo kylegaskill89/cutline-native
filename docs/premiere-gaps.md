@@ -2634,10 +2634,19 @@ one.
    keys Premiere gives these has changed between versions and the sources
    disagree, so these are the ones most often documented, and all are
    rebindable.
-6. **Preview render bar** (large). Render a span to preview files, play
-   rendered spans from them, and the red, yellow and green bar over the ruler.
-   Matters more now that a Lumetri grade can be heavy, and it is the playback
-   engine's next step rather than a new subsystem.
+6. ~~**Preview render bar**~~ — **done**. The picture is cut into pieces at
+   every edit and transition and each is judged: plain footage the
+   sequence's size has no bar, composited is yellow, and nests, retiming,
+   more than three layers or effects that read neighbouring pixels are red.
+   Render In to Out (Enter, and the Sequence menu) renders the yellow and
+   red pieces within the marks to HEVC preview files in a Rendering window
+   with Cancel, and they turn green and play from their files. A file is
+   named for what is in its piece, so an edit makes it stale by renaming the
+   piece and undo brings it back, with no index to keep. Delete Render Files
+   is in the Sequence menu. ProRes was tried for the files first and wrote
+   over a gigabyte for eight seconds of 4K. Rendering was checked by a test
+   that renders a piece and plays it back through the monitor's engine;
+   driving it on screen was cut short when another window took the focus.
 7. **Ultra Key** (medium). Matte generation, cleanup, spill suppression and
    colour correction, as one pass with its settings in pass data, the way
    Lumetri carries its own.

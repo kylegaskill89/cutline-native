@@ -5,13 +5,17 @@
 /// the hand-off and the threads, which no decoder changes.
 
 #include "cutline/app/preview_engine.hpp"
+#include "cutline/engine/exporter.hpp"
+#include "cutline/media/encoder.hpp"
 
 #include <gtest/gtest.h>
 
 #include <array>
 
 #include <chrono>
+#include <filesystem>
 #include <memory>
+#include <process.h>
 #include <thread>
 
 namespace cutline::app {
@@ -183,6 +187,95 @@ TEST_F(PreviewEngineTest, TheTransparencyGridShowsThroughWhatIsNotCovered) {
   engine_->want(half_covered(), 0.0, 0.0);
   ASSERT_TRUE(await_picture(0.0));
   EXPECT_GT(shown_middle(*engine_)[1], 40) << "the grey grid shows through the other half";
+}
+
+/// A second of green at the matte projects' size, as a preview file would be.
+[[nodiscard]] std::string green_preview() {
+  static const std::string path = [] {
+    const std::string at = (std::filesystem::temp_directory_path() /
+                            ("cutline_preview_green_" + std::to_string(_getpid()) + ".mp4"))
+                               .string();
+    media::VideoEncodeSettings video;
+    video.width = 64;
+    video.height = 64;
+    video.fps = 30.0;
+    video.preference = media::EncoderPreference::Software;
+    media::AudioEncodeSettings audio;
+    audio.enabled = false;
+    auto writer = media::MediaWriter::create(at, video, audio);
+    if (!writer) return std::string{};
+    std::vector<std::uint8_t> frame(64 * 64 * 4, 0);
+    for (std::size_t i = 0; i < frame.size(); i += 4) {
+      frame[i + 1] = 255;
+      frame[i + 3] = 255;
+    }
+    for (int i = 0; i < 30; ++i) {
+      if (!writer.value()->write_frame(frame)) return std::string{};
+    }
+    return writer.value()->finish().has_value() ? at : std::string{};
+  }();
+  return path;
+}
+
+TEST_F(PreviewEngineTest, APreviewFileStandsInForThePictureItWasRenderedFrom) {
+  const std::string file = green_preview();
+  ASSERT_FALSE(file.empty());
+  const auto red = matte_project("#ff0000");
+  engine_->set_previews(red, {PreviewSpan{.start = 0.0, .end = 1.0, .path = file}});
+  engine_->want(red, 0.5, 0.0);
+  ASSERT_TRUE(await_picture(0.5));
+  const auto pixel = shown_middle(*engine_);
+  EXPECT_GT(pixel[1], 200) << "the preview file's green";
+  EXPECT_LT(pixel[0], 60);
+}
+
+TEST_F(PreviewEngineTest, AnotherProjectOrAMomentOutsideTheFileIsRenderedInFull) {
+  const std::string file = green_preview();
+  ASSERT_FALSE(file.empty());
+  const auto red = matte_project("#ff0000");
+  engine_->set_previews(red, {PreviewSpan{.start = 0.0, .end = 1.0, .path = file}});
+  // After the file's stretch.
+  engine_->want(red, 2.0, 0.0);
+  ASSERT_TRUE(await_picture(2.0));
+  EXPECT_EQ(shown_middle(*engine_)[0], 255);
+  // The same picture, as an eyedropper's copy of it: not what was rendered.
+  engine_->want(matte_project("#ff0000"), 0.5, 0.0);
+  ASSERT_TRUE(await_picture(0.5));
+  EXPECT_EQ(shown_middle(*engine_)[0], 255);
+}
+
+TEST_F(PreviewEngineTest, APieceRenderedAsRenderInToOutRendersItPlaysBackTheSame) {
+  // A yellow matte for two seconds, its first second rendered to HEVC the way
+  // Render In to Out renders a piece, then played from that file.
+  auto project = std::make_shared<Project>(*matte_project("#ffff00", 64, 64, 2.0));
+  const std::string file = (std::filesystem::temp_directory_path() /
+                            ("cutline_piece_" + std::to_string(_getpid()) + ".mov"))
+                               .string();
+  engine::ExportSettings settings;
+  settings.path = file;
+  settings.codec = media::VideoCodec::Hevc;
+  settings.preference = media::EncoderPreference::Software;
+  settings.quality = 16;
+  settings.start = 0.0;
+  settings.duration = 1.0;
+  settings.audio = false;
+  const auto rendered = engine::export_project(engine_device(), *project, settings, {});
+  ASSERT_TRUE(rendered.has_value()) << rendered.error();
+  EXPECT_EQ(rendered->frames, 30);
+
+  const std::shared_ptr<const Project> shown = project;
+  engine_->set_previews(shown, {PreviewSpan{.start = 0.0, .end = 1.0, .path = file}});
+  engine_->want(shown, 0.5, 0.0);
+  ASSERT_TRUE(await_picture(0.5));
+  const auto pixel = shown_middle(*engine_);
+  EXPECT_GT(pixel[0], 245);
+  EXPECT_GT(pixel[1], 245);
+  EXPECT_LT(pixel[2], 12);
+  // Let go of it, as Delete Render Files has the engine do first: Windows
+  // will not delete a file that is open.
+  engine_->release_sources();
+  std::error_code error;
+  EXPECT_TRUE(std::filesystem::remove(file, error)) << error.message();
 }
 
 TEST_F(PreviewEngineTest, PlayingRendersAhead) {

@@ -426,6 +426,17 @@ struct DropGhost {
 /// track. A transition lands on a *join*, sits centred on it, and is drawn as
 /// the shape it will become rather than as a block — and what somebody holding
 /// one over a cut is actually asking is how much of it the dissolve will cover.
+/// One stretch of Premiere's render bar: yellow where the picture is
+/// composited, red where it will not keep up, green where it is rendered.
+struct RenderBarSpan {
+  enum class Colour { Yellow, Red, Green };
+  double start = 0.0;
+  double end = 0.0;
+  Colour colour = Colour::Yellow;
+
+  friend bool operator==(const RenderBarSpan&, const RenderBarSpan&) = default;
+};
+
 /// A selected edit point, as trim mode marks it: Premiere's brackets either
 /// side of the cut, on the sides being trimmed, yellow for a ripple and red
 /// for a roll or an ordinary trim.
@@ -921,6 +932,15 @@ class TimelineView : public Widget {
   /// meant.
   [[nodiscard]] std::optional<BlockRef> transition_at(double x, double y) const;
 
+  /// Premiere's render bar, along the foot of the ruler above the in and out
+  /// bar.
+  void set_render_bar(std::vector<RenderBarSpan> spans);
+  [[nodiscard]] const std::vector<RenderBarSpan>& render_bar() const noexcept {
+    return render_bar_;
+  }
+  /// Where a stretch of it is drawn; empty when out of sight.
+  [[nodiscard]] Rect render_bar_rect(std::size_t index) const;
+
   /// The edit point trim mode has selected, or none.
   void set_edit_mark(std::optional<EditMark> mark);
   [[nodiscard]] const std::optional<EditMark>& edit_mark() const noexcept { return edit_mark_; }
@@ -1307,6 +1327,7 @@ class TimelineView : public Widget {
   /// The transition being held over a cut, if one is.
   std::optional<TransitionGhost> transition_ghost_;
   std::optional<EditMark> edit_mark_;
+  std::vector<RenderBarSpan> render_bar_;
 
   /// Where a clip dragged in from outside would land, while it is in the air.
   std::optional<DropGhost> drop_ghost_;

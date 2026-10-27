@@ -37,6 +37,16 @@
 
 namespace cutline::app {
 
+/// A stretch of the sequence with a preview file rendered for it, as the
+/// engine plays it: the file stands in for the whole picture there.
+struct PreviewSpan {
+  double start = 0.0;
+  double end = 0.0;
+  std::string path;
+
+  friend bool operator==(const PreviewSpan&, const PreviewSpan&) = default;
+};
+
 class PreviewEngine {
  public:
   struct Options {
@@ -105,6 +115,11 @@ class PreviewEngine {
   /// a grid shows through. Frames already made are dropped, as for the HDR
   /// display.
   void set_display_options(const gpu::DisplayOptions& options);
+
+  /// The preview files that stand in for `project`'s picture, and for that
+  /// project alone: a frame of any other, such as an eyedropper's ungraded
+  /// copy, is rendered in full.
+  void set_previews(std::shared_ptr<const core::Project> project, std::vector<PreviewSpan> spans);
 
   /// Sources that could not be opened in the last frame rendered.
   [[nodiscard]] std::vector<std::string> missing_media() const;
