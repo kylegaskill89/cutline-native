@@ -74,6 +74,55 @@ constexpr std::array kChromaKey{
 constexpr std::array kChromaKeyColors{
     EffectColorSpec{.key = "color", .name = "Key Colour", .fallback = "#00d000"}};
 
+// Ultra Key, with Premiere's sections, names, ranges and defaults. Output and
+// Setting are menus. Setting's presets write Matte Generation's controls, and
+// moving one of those makes it Custom, which is the editor's business.
+constexpr std::array<std::string_view, 3> kUltraKeyOutputs{"Composite", "Alpha Channel",
+                                                           "Color Channel"};
+constexpr std::array<std::string_view, 4> kUltraKeySettings{"Default", "Relaxed", "Aggressive",
+                                                            "Custom"};
+
+constexpr std::array kUltraKey{
+    Param{.key = "output", .name = "Output", .minimum = 0.0, .maximum = 2.0, .fallback = 0.0,
+          .suffix = "", .choices = kUltraKeyOutputs},
+    Param{.key = "setting", .name = "Setting", .minimum = 0.0, .maximum = 3.0, .fallback = 0.0,
+          .suffix = "", .choices = kUltraKeySettings},
+    Param{.key = "transparency", .name = "Transparency", .minimum = 0.0, .maximum = 100.0,
+          .fallback = 45.0, .suffix = "", .group = "Matte Generation"},
+    Param{.key = "highlight", .name = "Highlight", .minimum = 0.0, .maximum = 100.0,
+          .fallback = 10.0, .suffix = "", .group = "Matte Generation"},
+    Param{.key = "shadow", .name = "Shadow", .minimum = 0.0, .maximum = 100.0,
+          .fallback = 50.0, .suffix = "", .group = "Matte Generation"},
+    Param{.key = "tolerance", .name = "Tolerance", .minimum = 0.0, .maximum = 100.0,
+          .fallback = 50.0, .suffix = "", .group = "Matte Generation"},
+    Param{.key = "pedestal", .name = "Pedestal", .minimum = 0.0, .maximum = 100.0,
+          .fallback = 10.0, .suffix = "", .group = "Matte Generation"},
+    Param{.key = "choke", .name = "Choke", .minimum = 0.0, .maximum = 100.0, .fallback = 0.0,
+          .suffix = "", .group = "Matte Cleanup"},
+    Param{.key = "soften", .name = "Soften", .minimum = 0.0, .maximum = 100.0, .fallback = 0.0,
+          .suffix = "", .group = "Matte Cleanup"},
+    Param{.key = "contrast", .name = "Contrast", .minimum = 0.0, .maximum = 100.0,
+          .fallback = 0.0, .suffix = "", .group = "Matte Cleanup"},
+    Param{.key = "mid_point", .name = "Mid Point", .minimum = 0.0, .maximum = 100.0,
+          .fallback = 50.0, .suffix = "", .group = "Matte Cleanup"},
+    Param{.key = "desaturate", .name = "Desaturate", .minimum = 0.0, .maximum = 100.0,
+          .fallback = 25.0, .suffix = "", .group = "Spill Suppression"},
+    Param{.key = "range", .name = "Range", .minimum = 0.0, .maximum = 100.0, .fallback = 50.0,
+          .suffix = "", .group = "Spill Suppression"},
+    Param{.key = "spill", .name = "Spill", .minimum = 0.0, .maximum = 100.0, .fallback = 50.0,
+          .suffix = "", .group = "Spill Suppression"},
+    Param{.key = "luma", .name = "Luma", .minimum = 0.0, .maximum = 100.0, .fallback = 50.0,
+          .suffix = "", .group = "Spill Suppression"},
+    Param{.key = "saturation", .name = "Saturation", .minimum = 0.0, .maximum = 200.0,
+          .fallback = 100.0, .suffix = "", .group = "Color Correction"},
+    Param{.key = "hue", .name = "Hue", .minimum = -180.0, .maximum = 180.0, .fallback = 0.0,
+          .suffix = "°", .group = "Color Correction"},
+    Param{.key = "luminance", .name = "Luminance", .minimum = 0.0, .maximum = 200.0,
+          .fallback = 100.0, .suffix = "", .group = "Color Correction"}};
+
+constexpr std::array kUltraKeyColors{
+    EffectColorSpec{.key = "color", .name = "Key Color", .fallback = "#00d000"}};
+
 // ---------------------------------------------------------------- grading --
 //
 // Everything from here down arrived after effects became passes, and between
@@ -347,6 +396,8 @@ constexpr std::array kCatalog{
                .category = EffectCategory::BlurAndSharpen, .params = kSharpen},
     EffectSpec{.type = "radialblur", .name = "Radial Blur",
                .category = EffectCategory::BlurAndSharpen, .params = kRadialBlur},
+    EffectSpec{.type = "ultrakey", .name = "Ultra Key", .category = EffectCategory::Keying,
+               .params = kUltraKey, .colors = kUltraKeyColors},
     EffectSpec{.type = "chromakey", .name = "Chroma Key", .category = EffectCategory::Keying,
                .params = kChromaKey, .colors = kChromaKeyColors},
     EffectSpec{.type = "trackmatte", .name = "Track Matte Key", .category = EffectCategory::Keying,

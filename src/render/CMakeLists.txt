@@ -3,6 +3,7 @@ add_library(cutline_render
   src/effect_passes.cpp
   src/effects.cpp
   src/lumetri.cpp
+  src/ultra_key.cpp
   src/mix.cpp
   src/plan.cpp
   src/preview.cpp

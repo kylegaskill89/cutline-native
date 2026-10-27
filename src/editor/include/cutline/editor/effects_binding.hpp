@@ -45,6 +45,9 @@ struct EffectParamRow {
   bool toggle = false;
   /// The section it sits in, for an effect that has them; empty otherwise.
   std::string group;
+  /// A menu's entries, `value` being the index of the one chosen; empty for
+  /// a number.
+  std::vector<std::string> choices;
   /// Animated, so `value` is what the keyframes evaluate to rather than the
   /// stored one — which is ignored entirely while a parameter is animated.
   bool animated = false;

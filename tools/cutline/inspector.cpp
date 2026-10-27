@@ -959,12 +959,41 @@ void build_effect_controls(App& app, const std::string& clip_id) {
       continue;
     }
 
+    // The colours sit after the controls outside any section and before the
+    // first, which is where Ultra Key's Key Color is in Premiere; an effect
+    // with no sections has them last.
+    bool colours_built = false;
+    const auto build_colours = [&app, &clip_id, &row, &colours_built] {
+      if (colours_built) return;
+      colours_built = true;
+      for (const cutline::editor::EffectColorRow& color : row.colors) {
+        auto& colour_line = app.inspector->emplace<Box>(Axis::Horizontal);
+        colour_line.emplace<Label>(color.name).set_small(true);
+
+        auto& swatch = colour_line.emplace<ColorSwatch>(parse_color(color.value));
+        // No alpha strip. The effect colours there are, the keyers' and the
+        // shadow's, are matched on hue or carry their own opacity; a
+        // transparency the shader discards is worse than one never offered.
+        swatch.set_alpha_enabled(false);
+        swatch.set_on_commit(
+            [&app, clip_id, index = row.index, key = color.key](const Color& picked) {
+              app.session.apply(cutline::core::set_clip_effect_color(
+                  app.session.project(), clip_id, index, key, to_hex(picked)));
+              invalidate_preview(app);
+              // Deliberately *not* marking the inspector stale. Rebuilding it
+              // would destroy the swatch, which closes the picker still open
+              // above it — and nothing else in the panel depends on this value.
+            });
+      }
+    };
+
     // An effect with sections, as Lumetri has, folds each away under a twirl
     // as Premiere does: sixty controls in one column is a list nobody can find
     // anything in. A section's own switch sits in its heading.
     std::string group;
     bool showing = true;
     for (const cutline::editor::EffectParamRow& param : row.params) {
+      if (!param.group.empty()) build_colours();
       if (!param.group.empty() && param.group != group) {
         group = param.group;
         const std::string key = std::format("fxgroup.{}.{}.{}", clip_id, row.index, group);
@@ -990,6 +1019,24 @@ void build_effect_controls(App& app, const std::string& clip_id) {
         head.emplace<Spacer>();
       }
       if (!param.group.empty() && !showing) continue;
+
+      if (!param.choices.empty()) {
+        auto& line = app.inspector->emplace<Box>(Axis::Horizontal);
+        line.emplace<Label>(param.name).set_small(true);
+        line.emplace<Spacer>();
+        const auto chosen = static_cast<std::size_t>(
+            std::clamp(std::lround(param.value), 0L,
+                       static_cast<long>(param.choices.size()) - 1));
+        auto& menu = line.emplace<Dropdown>(param.choices, chosen);
+        menu.set_on_change([&app, clip_id, index = row.index, key = param.key](std::size_t at) {
+          app.session.apply(cutline::editor::set_effect_parameter(
+              app.session.project(), clip_id, index, key, static_cast<double>(at),
+              local_playhead(app, clip_id)));
+          invalidate_preview(app);
+          app.inspector_stale = true;
+        });
+        continue;
+      }
 
       if (param.toggle) {
         auto& box = app.inspector->emplace<Checkbox>(param.name, param.value >= 0.5);
@@ -1066,26 +1113,7 @@ void build_effect_controls(App& app, const std::string& clip_id) {
            }});
     }
 
-    for (const cutline::editor::EffectColorRow& color : row.colors) {
-      auto& colour_line = app.inspector->emplace<Box>(Axis::Horizontal);
-      colour_line.emplace<Label>(color.name).set_small(true);
-
-      auto& swatch = colour_line.emplace<ColorSwatch>(parse_color(color.value));
-      // No alpha strip. The only effect colour there is is the keyer's, which
-      // is matched on hue; a transparency the shader discards is worse than
-      // one that was never offered.
-      swatch.set_alpha_enabled(false);
-      swatch.set_on_commit(
-          [&app, clip_id, index = row.index, key = color.key](const Color& picked) {
-            app.session.apply(cutline::core::set_clip_effect_color(
-                app.session.project(), clip_id, index, key, to_hex(picked)));
-            invalidate_preview(app);
-            // Deliberately *not* marking the inspector stale. Rebuilding it
-            // would destroy the swatch, which closes the picker still open
-            // above it — and nothing else in the panel depends on this value.
-          });
-    }
-
+    build_colours();
     build_effect_mask(app, clip_id, row);
   }
 }

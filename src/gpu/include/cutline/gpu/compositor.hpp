@@ -106,6 +106,14 @@ enum class PassKind {
   LumetriSecondary,
   /// Lumetri's vignette.
   LumetriVignette,
+  /// Ultra Key's matte, spill suppression and correction, from the pass's data.
+  UltraKey,
+  /// The alpha eroded: Ultra Key's Choke.
+  MatteChoke,
+  /// The alpha blurred and the colour kept: Ultra Key's Soften.
+  MatteSoften,
+  /// Ultra Key's Contrast, Mid Point and Output.
+  UltraKeyOutput,
 };
 
 /// How many floats a pass carries. Eight, shared by every kind, because only

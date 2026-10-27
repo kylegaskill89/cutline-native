@@ -102,6 +102,10 @@
 #define PASS_LUMETRI   21
 #define PASS_SECONDARY 22
 #define PASS_LVIGNETTE 23
+#define PASS_ULTRAKEY  24
+#define PASS_CHOKE     25
+#define PASS_SOFTEN    26
+#define PASS_ULTRAOUT  27
 
 // Laid out so no member straddles a 16-byte boundary, because these arrive as
 // root constants and HLSL packs a cbuffer in float4 rows.
@@ -1350,6 +1354,135 @@ float3 lumetriVignette(float2 uv, float3 coded) {
     return fromGrading(c);
 }
 
+// ------------------------------------------------------------- ultra key --
+//
+// The layout of the key pass's data is `render/ultra_key.hpp`'s.
+
+/// A colour less its luma: what is left is which way, and how far, it leans.
+float3 leanOf(float3 c) { return c - gradingLuma(c); }
+
+/// How much of the key colour a pixel holds: its lean projected on the key's,
+/// 1 for the key itself, and how far it leans off the key's hue besides, as a
+/// fraction of the key's own lean.
+///
+/// The lean is taken relative to the pixel's brightness, so a screen in shade
+/// counts as screen: a green half as bright leans half as far, and is no less
+/// green. Shadow says how far a darker pixel is brought up to the key's
+/// brightness, which is how it keeps dark parts of the subject opaque.
+float2 screenOf(float3 c, bool lifted) {
+    const float3 k = leanOf(pd3(0.0));
+    const float kk = max(dot(k, k), 1e-5);
+    const float lumaK = gradingLuma(pd3(0.0));
+    const float lift = lifted ? clamp(lumaK / max(gradingLuma(saturate(c)), 1e-3), 0.0,
+                                      lerp(4.0, 1.0, pd(5.0)))
+                              : 1.0;
+    const float3 p = leanOf(c) * lift;
+    const float along = dot(p, k) / kk;
+    const float off = length(p - along * k) / sqrt(kk);
+    return float2(along, off);
+}
+
+float4 ultraKeyPass(float4 before) {
+    float3 c = toGrading(before.rgb);
+    const float3 key = pd3(0.0);
+    const float2 screen = screenOf(c, true);
+
+    // Matte Generation. Tolerance is how much leaning off the key's hue still
+    // counts as screen; Transparency how much screen it takes to be clear.
+    const float amount = screen.x - screen.y * lerp(4.0, 0.5, pd(6.0));
+    float alpha = 1.0 - saturate(amount / lerp(1.0, 0.2, pd(3.0)));
+    // Highlight keeps what is lighter than the screen, which a reflection on
+    // glass is, more opaque. Shadow's part is in `screenOf`.
+    const float lumaC = gradingLuma(saturate(c));
+    const float lumaK = gradingLuma(key);
+    const float lighter = saturate((lumaC - lumaK) / max(1.0 - lumaK, 0.05));
+    alpha = max(alpha, pd(4.0) * lighter);
+    // Pedestal: the noise left in what is nearly clear is taken to nought.
+    const float pedestal = pd(7.0) * 0.5;
+    alpha = saturate((alpha - pedestal) / max(1.0 - pedestal, 1e-3));
+
+    // Spill Suppression. The key's lean, where the pixel leans its way within
+    // Range of its hue, is taken out; that keeps the luma, so Luma at its
+    // middle is the light put back and either side of it less or more.
+    // The lean as it is rather than lifted, since that is what is taken out.
+    const float2 spill = screenOf(c, false);
+    if (spill.x > 0.0) {
+        // An edge is screen mixed with the subject, so it leans well off the
+        // key's hue and still carries its spill; a yellow leans further off
+        // again, and Range at its middle reaches the first and not the second.
+        const float near = saturate(1.0 - spill.y / max(spill.x * (0.5 + pd(9.0) * 3.0), 1e-4));
+        // Never more than the pixel's own lean, or it would swing to the
+        // opposite colour.
+        const float taken = spill.x * min(near * pd(10.0), 1.0);
+        c -= leanOf(key) * taken;
+        c += (pd(11.0) - 1.0) * taken * lumaK;
+    }
+    // Desaturate: what is almost clear loses its colour, so a fringe that is
+    // left carries no green into what it is laid over.
+    const float grey = gradingLuma(c);
+    c = lerp(c, float3(grey, grey, grey), pd(8.0) * (1.0 - smoothstep(0.0, 0.5, alpha)));
+
+    // Color Correction, of what stays.
+    float3 yuv = rgbToYuv601(c);
+    const float hc = cos(pd(13.0));
+    const float hs = sin(pd(13.0));
+    yuv.yz = float2(yuv.y * hc - yuv.z * hs, yuv.y * hs + yuv.z * hc) * pd(12.0);
+    c = max(yuv601ToRgb(yuv) * pd(14.0), 0.0);
+
+    return float4(fromGrading(c), before.a * alpha);
+}
+
+/// Choke: the matte eroded, the smallest alpha within the radius.
+float4 matteChoke(float2 uv, float4 before) {
+    const float radius = params.passA.x;
+    float alpha = before.a;
+    [unroll] for (int y = -4; y <= 4; ++y) {
+        [unroll] for (int x = -4; x <= 4; ++x) {
+            const float2 o = float2(x, y);
+            if (length(o) > radius + 0.25) continue;
+            alpha = min(alpha, texture0.Sample(linearSampler, uv + o * params.passB.zw).a);
+        }
+    }
+    return float4(before.rgb, alpha);
+}
+
+/// Soften: the matte blurred. The colour is averaged by alpha as well, so the
+/// edge it spreads into takes the foreground's colour rather than the clear
+/// screen's.
+float4 matteSoften(float2 uv) {
+    const float radius = max(params.passA.x, 0.5);
+    const float sigma = radius / 2.0;
+    const float stride = max(radius / 4.0, 1.0);
+    float3 colour = 0.0;
+    float alpha = 0.0;
+    float total = 0.0;
+    [unroll] for (int y = -4; y <= 4; ++y) {
+        [unroll] for (int x = -4; x <= 4; ++x) {
+            const float2 o = float2(x, y) * stride;
+            const float w = exp(-dot(o, o) / (2.0 * sigma * sigma));
+            const float4 s = texture0.Sample(linearSampler, uv + o * params.passB.zw);
+            colour += s.rgb * s.a * w;
+            alpha += s.a * w;
+            total += w;
+        }
+    }
+    const float3 rgb = alpha > 0.0 ? colour / alpha : texture0.Sample(linearSampler, uv).rgb;
+    return float4(rgb, alpha / total);
+}
+
+/// Contrast and Mid Point, then what Output shows: the composite, the matte
+/// as grey, or the colour with no matte at all.
+float4 ultraKeyOutput(float2 uv, float4 before) {
+    const float mid = params.passA.y;
+    const float alpha = saturate((before.a - mid) * params.passA.x + mid);
+    const float2 l = layerUv(uv);
+    const float inside = all(l >= 0.0) && all(l <= 1.0) ? 1.0 : 0.0;
+    const int output = (int)(params.passA.z + 0.5);
+    if (output == 1) return float4(fromGrading(float3(alpha, alpha, alpha)), inside);
+    if (output == 2) return float4(before.rgb, inside);
+    return float4(before.rgb, alpha);
+}
+
 float4 PSEffect(VSOutput input) : SV_Target {
     const float4 before = texture0.Sample(linearSampler, input.uv);
 
@@ -1382,6 +1515,14 @@ float4 PSEffect(VSOutput input) : SV_Target {
         after = float4(rgb, alpha);
     } else if (params.passKind == PASS_SECONDARY) {
         after = secondaryPass(input.uv, before);
+    } else if (params.passKind == PASS_ULTRAKEY) {
+        after = ultraKeyPass(before);
+    } else if (params.passKind == PASS_CHOKE) {
+        after = matteChoke(input.uv, before);
+    } else if (params.passKind == PASS_SOFTEN) {
+        after = matteSoften(input.uv);
+    } else if (params.passKind == PASS_ULTRAOUT) {
+        after = ultraKeyOutput(input.uv, before);
     } else if (params.passKind == PASS_SHARPEN) {
         after = float4(sharpenPass(input.uv), texture0.Sample(linearSampler, input.uv).a);
     } else if (params.passKind == PASS_FLIP) {

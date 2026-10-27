@@ -1320,5 +1320,42 @@ TEST(RolePreset, ThePictureHalfOfAPairTakesNeither) {
       << "a role is about sound";
 }
 
+// --------------------------------------------------------------- ultra key --
+
+TEST(UltraKeySetting, ChoosingAPresetWritesMatteGeneration) {
+  Project p = add_effect(one_clip(), "c1", "ultrakey");
+  p = set_effect_parameter(std::move(p), "c1", 0, "setting", 2.0);
+  const core::ClipEffect& key = only_clip(p).effects.front();
+  EXPECT_EQ(key.params.at("setting"), 2.0);
+  EXPECT_EQ(key.params.at("tolerance"), 70.0);
+  EXPECT_EQ(key.params.at("pedestal"), 25.0);
+}
+
+TEST(UltraKeySetting, MovingAMatteControlMakesItCustom) {
+  Project p = add_effect(one_clip(), "c1", "ultrakey");
+  p = set_effect_parameter(std::move(p), "c1", 0, "tolerance", 62.0);
+  const core::ClipEffect& key = only_clip(p).effects.front();
+  EXPECT_EQ(key.params.at("tolerance"), 62.0);
+  EXPECT_EQ(key.params.at("setting"), 3.0);
+}
+
+TEST(UltraKeySetting, ChoosingCustomLeavesTheControlsAlone) {
+  Project p = add_effect(one_clip(), "c1", "ultrakey");
+  p = set_effect_parameter(std::move(p), "c1", 0, "tolerance", 62.0);
+  p = set_effect_parameter(std::move(p), "c1", 0, "setting", 0.0);
+  EXPECT_EQ(only_clip(p).effects.front().params.at("tolerance"), 50.0);
+  p = set_effect_parameter(std::move(p), "c1", 0, "setting", 3.0);
+  EXPECT_EQ(only_clip(p).effects.front().params.at("tolerance"), 50.0);
+}
+
+TEST(UltraKeySetting, OutputAndSettingRowsAreMenus) {
+  const Project p = add_effect(one_clip(), "c1", "ultrakey");
+  const std::vector<EffectRow> rows = clip_effects(p, "c1");
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows[0].params[0].choices,
+            (std::vector<std::string>{"Composite", "Alpha Channel", "Color Channel"}));
+  EXPECT_TRUE(rows[0].params[2].choices.empty());
+}
+
 }  // namespace
 }  // namespace cutline::editor

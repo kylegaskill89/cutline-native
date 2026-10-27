@@ -7,8 +7,10 @@
 #include "cutline/core/roles.hpp"
 #include "cutline/editor/transitions.hpp"
 #include "cutline/render/effect_catalog.hpp"
+#include "cutline/render/ultra_key.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <optional>
@@ -104,6 +106,7 @@ std::vector<EffectRow> clip_effects(const core::Project& project, std::string_vi
 
     for (const render::EffectParamSpec& param : spec->params) {
       const bool animated = core::is_effect_param_animated(effect, param.key);
+      std::vector<std::string> choices(param.choices.begin(), param.choices.end());
       row.params.push_back(EffectParamRow{
           .key = std::string(param.key),
           .name = std::string(param.name),
@@ -116,6 +119,7 @@ std::vector<EffectRow> clip_effects(const core::Project& project, std::string_vi
           .suffix = std::string(param.suffix),
           .toggle = param.toggle,
           .group = std::string(param.group),
+          .choices = std::move(choices),
           .animated = animated,
           .keyed_here = animated && keyed_at(effect, param.key, local_t),
           .interp = core::effect_keyframe_interp_of(effect, param.key)});
@@ -282,6 +286,35 @@ core::Project set_effect_parameter(core::Project project, std::string_view clip_
                                    double local_t) {
   const core::ClipEffect* effect = effect_at(project, clip_id, index);
   if (effect == nullptr) return project;
+
+  // Ultra Key's Setting is a preset for Matte Generation, and moving any of
+  // Matte Generation's controls makes it Custom, as in Premiere.
+  if (effect->type == "ultrakey") {
+    using render::UltraKeySetting;
+    if (key == "setting") {
+      const auto setting = static_cast<UltraKeySetting>(std::clamp(std::lround(value), 0L, 3L));
+      project = core::set_clip_effect_param(std::move(project), clip_id, index, "setting",
+                                            static_cast<double>(setting));
+      if (setting == UltraKeySetting::Custom) return project;
+      const std::array<double, 5> preset = render::ultra_key_preset(setting);
+      for (std::size_t i = 0; i < preset.size(); ++i) {
+        const std::string name(render::kUltraKeyMatteKeys[i]);
+        const core::ClipEffect* now = effect_at(project, clip_id, index);
+        project = now != nullptr && core::is_effect_param_animated(*now, name)
+                      ? core::set_effect_keyframe(std::move(project), clip_id, index, name,
+                                                  local_t, preset[i])
+                      : core::set_clip_effect_param(std::move(project), clip_id, index, name,
+                                                    preset[i]);
+      }
+      return project;
+    }
+    if (std::ranges::find(render::kUltraKeyMatteKeys, key) != render::kUltraKeyMatteKeys.end()) {
+      project = core::set_clip_effect_param(
+          std::move(project), clip_id, index, "setting",
+          static_cast<double>(UltraKeySetting::Custom));
+      effect = effect_at(project, clip_id, index);
+    }
+  }
 
   if (core::is_effect_param_animated(*effect, key)) {
     return core::set_effect_keyframe(std::move(project), clip_id, index, std::string(key),

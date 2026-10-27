@@ -3,6 +3,7 @@
 #include "cutline/core/effects.hpp"
 #include "cutline/core/mask_path.hpp"
 #include "cutline/render/lumetri.hpp"
+#include "cutline/render/ultra_key.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -479,6 +480,9 @@ std::vector<EffectPass> plan_effect_passes(const core::Clip& clip, double local_
 
     } else if (effect.type == "lumetri") {
       plan_lumetri(effect, passes);
+
+    } else if (effect.type == "ultrakey") {
+      plan_ultra_key(effect, passes);
 
     } else if (effect.type == "chromakey") {
       const auto color = effect.colors.find("color");

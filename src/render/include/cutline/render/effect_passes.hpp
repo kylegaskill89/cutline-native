@@ -103,6 +103,17 @@ enum class EffectPassKind {
   LumetriSecondary,
   /// Lumetri's vignette: amount, midpoint, roundness and feather.
   LumetriVignette,
+
+  // Ultra Key. See `ultra_key.hpp`.
+
+  /// The matte, the spill taken out and the foreground corrected, from data.
+  UltraKey,
+  /// The matte eroded by a radius in the layer's pixels.
+  MatteChoke,
+  /// The matte blurred by a radius, the colour left as it is.
+  MatteSoften,
+  /// Contrast and Mid Point on the matte, and what Output shows.
+  UltraKeyOutput,
 };
 
 /// How many floats a pass carries.

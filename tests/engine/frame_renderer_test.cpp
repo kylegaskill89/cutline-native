@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <memory>
 #include <numbers>
 #include <set>
@@ -1777,6 +1778,142 @@ TEST_F(FrameRendererTest, LumetriExposureInAPqSequenceDoublesTheLight) {
                   .has_value());
   EXPECT_NEAR(luma_code_in(*renderer_, gpu::WorkingColour::Rec2100Pq, 32, 32),
               studio_code(pq_of(406.0)), 2);
+}
+
+// --------------------------------------------------------------- ultra key --
+
+[[nodiscard]] core::ClipEffect ultra_key(std::map<std::string, double> params = {}) {
+  return core::ClipEffect{.type = "ultrakey", .params = std::move(params)};
+}
+
+/// A layer keyed over red, which is what shows wherever the key clears it.
+[[nodiscard]] Project keyed_over_red(std::string colour, core::ClipEffect key,
+                                     std::optional<core::Transform> transform = {}) {
+  Project p = canvas_project();
+  p.media = {matte("back", "#ff0000"), matte("front", std::move(colour))};
+  Clip front = clip("f", "front", 0.0, 5.0);
+  front.effects = {std::move(key)};
+  if (transform.has_value()) front.transform = *transform;
+  // Stored top-first.
+  p.sequence().tracks = {video_track("v2", {front}),
+                         video_track("v1", {clip("b", "back", 0.0, 5.0)})};
+  return p;
+}
+
+TEST_F(FrameRendererTest, UltraKeyClearsTheKeyColour) {
+  const Rgba seen = pixel_at(render(keyed_over_red("#00d000", ultra_key()), 1.0), 32, 32);
+  EXPECT_GT(seen.r, 250);
+  EXPECT_LT(seen.g, 5);
+}
+
+TEST_F(FrameRendererTest, UltraKeyClearsADarkerPartOfTheScreenToo) {
+  const Rgba seen = pixel_at(render(keyed_over_red("#00a000", ultra_key()), 1.0), 32, 32);
+  EXPECT_GT(seen.r, 240);
+  EXPECT_LT(seen.g, 15);
+}
+
+TEST_F(FrameRendererTest, UltraKeyKeepsWhatIsNotTheScreen) {
+  for (const char* colour : {"#808080", "#e0a080", "#2040c0"}) {
+    const core::ClipEffect key = ultra_key();
+    const Rgba seen = pixel_at(render(keyed_over_red(colour, key), 1.0), 32, 32);
+    const Rgba plain = pixel_at(render(keyed_over_red(colour, ultra_key({{"desaturate", 0.0}})),
+                                       1.0), 32, 32);
+    EXPECT_EQ(seen.r, plain.r) << colour;
+    // An effect this build does not know draws nothing: the colour as it is.
+    const Rgba alone =
+        pixel_at(render(graded(colour, core::ClipEffect{.type = "none"}), 1.0), 32, 32);
+    EXPECT_NEAR(seen.r, alone.r, 2) << colour;
+    EXPECT_NEAR(seen.g, alone.g, 2) << colour;
+    EXPECT_NEAR(seen.b, alone.b, 2) << colour;
+  }
+}
+
+TEST_F(FrameRendererTest, UltraKeyTakesTheSpillOutOfAGreenishForeground) {
+  // Shown as Color Channel, so the colour is seen whole whatever the matte.
+  const Rgba spilled = pixel_at(
+      render(keyed_over_red("#70a070", ultra_key({{"output", 2.0}, {"spill", 0.0}})), 1.0), 32,
+      32);
+  EXPECT_GT(spilled.g, spilled.r + 30);
+  const Rgba cleaned =
+      pixel_at(render(keyed_over_red("#70a070", ultra_key({{"output", 2.0}})), 1.0), 32, 32);
+  EXPECT_NEAR(cleaned.g, cleaned.r, 6);
+  EXPECT_NEAR(cleaned.g, cleaned.b, 6);
+}
+
+TEST_F(FrameRendererTest, UltraKeyTakesTheSpillOutOfAnEdgeButLeavesAYellow) {
+  // Skin and screen half and half, as the soft edge of a subject is.
+  const Rgba edge =
+      pixel_at(render(keyed_over_red("#64a466", ultra_key({{"output", 2.0}})), 1.0), 32, 32);
+  EXPECT_LE(edge.g, edge.r + 8);
+  const Rgba yellow =
+      pixel_at(render(keyed_over_red("#f0e020", ultra_key({{"output", 2.0}})), 1.0), 32, 32);
+  EXPECT_GT(yellow.g, 200);
+  EXPECT_GT(yellow.r, 220);
+}
+
+TEST_F(FrameRendererTest, UltraKeyAlphaChannelShowsTheMatteInGrey) {
+  const Rgba screen =
+      pixel_at(render(keyed_over_red("#00d000", ultra_key({{"output", 1.0}})), 1.0), 32, 32);
+  EXPECT_LT(screen.r, 5);
+  EXPECT_LT(screen.g, 5);
+  const Rgba kept =
+      pixel_at(render(keyed_over_red("#808080", ultra_key({{"output", 1.0}})), 1.0), 32, 32);
+  EXPECT_GT(kept.r, 250);
+  EXPECT_GT(kept.b, 250);
+}
+
+TEST_F(FrameRendererTest, UltraKeyChokeClearsMoreOfAnEdge) {
+  // Green to grey across the frame: the key clears the left, and choke takes
+  // the edge of what is kept further right.
+  const auto cleared = [this](double choke) {
+    Project p = keyed_over_red("#00d000", ultra_key({{"choke", choke}}));
+    p.media[1].gradient = core::MatteGradient{.color2 = "#808080", .angle = 0.0};
+    const gpu::Image image = render(p, 1.0);
+    int red = 0;
+    for (int x = 0; x < kWidth; ++x) {
+      const Rgba seen = pixel_at(image, x, 32);
+      if (seen.r > 200 && seen.g < 60) ++red;
+    }
+    return red;
+  };
+  const int plain = cleared(0.0);
+  EXPECT_GT(plain, 4);
+  EXPECT_LT(plain, kWidth - 4);
+  EXPECT_GE(cleared(100.0), plain + 3);
+}
+
+TEST_F(FrameRendererTest, UltraKeySoftenSpreadsTheMattePastAHardEdge) {
+  // A grey square in the middle, its edge hard until softened.
+  const core::Transform half{.scale_x = 0.5, .scale_y = 0.5};
+  const auto just_outside = [&](double soften) {
+    return pixel_at(render(keyed_over_red("#808080", ultra_key({{"soften", soften}}), half), 1.0),
+                    15, 32);
+  };
+  EXPECT_GT(just_outside(0.0).r, 250);
+  const Rgba softened = just_outside(100.0);
+  EXPECT_LT(softened.r, 245);
+  EXPECT_GT(softened.g, 10);
+}
+
+TEST_F(FrameRendererTest, UltraKeyLuminanceDarkensWhatStays) {
+  const Rgba seen =
+      pixel_at(render(keyed_over_red("#808080", ultra_key({{"luminance", 50.0}})), 1.0), 32, 32);
+  EXPECT_NEAR(seen.r, 64, 3);
+  EXPECT_NEAR(seen.b, 64, 3);
+}
+
+TEST_F(FrameRendererTest, UltraKeyClearsAScreenInDeepShade) {
+  // Under half the key's brightness, as a vignetted corner of a screen is.
+  const Rgba seen = pixel_at(render(keyed_over_red("#005a00", ultra_key()), 1.0), 32, 32);
+  EXPECT_GT(seen.r, 240);
+  EXPECT_LT(seen.g, 15);
+}
+
+TEST_F(FrameRendererTest, UltraKeyKeepsADarkSubject) {
+  for (const char* colour : {"#202020", "#3a2a20", "#20283a"}) {
+    const Rgba seen = pixel_at(render(keyed_over_red(colour, ultra_key()), 1.0), 32, 32);
+    EXPECT_LT(seen.r, 70) << colour;
+  }
 }
 }  // namespace
 }  // namespace cutline::engine

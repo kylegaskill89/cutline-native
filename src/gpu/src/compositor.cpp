@@ -1106,6 +1106,10 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
         if (effect.kind == PassKind::ShadowShape) {
           moved = std::max(moved, std::abs(effect.values[4]) + std::abs(effect.values[5]));
         }
+        // Soften spreads the matte past the edge by its radius.
+        if (effect.kind == PassKind::MatteSoften) {
+          reach = std::max(reach, std::max(0.0f, effect.values[0]));
+        }
         if (effect.kind != PassKind::Blur && effect.kind != PassKind::DirectionalBlur) continue;
         reach = std::max(reach, 3.0f * std::max(0.0f, effect.values[0]));
       }
@@ -1248,6 +1252,11 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
             const float radius = std::max(0.0f, effect.values[1]) * span;
             pass.pass_a[2] = radius * texel_x;
             pass.pass_a[3] = radius * texel_y;
+          } else if (effect.kind == PassKind::MatteChoke ||
+                     effect.kind == PassKind::MatteSoften) {
+            // One of the layer's pixels as a step, the radius counted in them.
+            pass.pass_b[2] = span * texel_x;
+            pass.pass_b[3] = span * texel_y;
           } else if (effect.kind == PassKind::LumetriSecondary) {
             // One of the layer's pixels as a step across the scratch, for the
             // key's softening taps.

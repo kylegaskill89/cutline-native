@@ -438,7 +438,7 @@ already given, which is why that function takes one beyond resolving keyframes.
 
 Still absent, roughly in the order their absence would be noticed: ~~**Lumetri
 Color**~~ (done, §13), ~~**Drop Shadow**~~, ~~**Track Matte Key**~~ (done,
-§12), **Ultra Key** (ours is a simple chroma key), **Warp Stabilizer**, and
+§12), ~~**Ultra Key**~~ (done, Phase 4 item 7), **Warp Stabilizer**, and
 **Transform** (the effect, which unlike Motion sits in the stack and can be
 reordered).
 
@@ -2647,9 +2647,22 @@ one.
    over a gigabyte for eight seconds of 4K. Rendering was checked by a test
    that renders a piece and plays it back through the monitor's engine;
    driving it on screen was cut short when another window took the focus.
-7. **Ultra Key** (medium). Matte generation, cleanup, spill suppression and
-   colour correction, as one pass with its settings in pass data, the way
-   Lumetri carries its own.
+7. ~~**Ultra Key**~~ — **done**. Premiere's controls under its four
+   twirls, with Output (Composite, Alpha Channel, Color Channel) and Setting
+   (Default, Relaxed, Aggressive, Custom) as menus and Key Color above the
+   sections. Generation, spill suppression and correction are one pass
+   carrying its settings as data; Choke, Soften and Contrast with Mid Point
+   are passes of their own because they read neighbours or come after them.
+   The matte is how far a pixel leans toward the key's hue, measured against
+   its own brightness so a screen in shade still keys, with Shadow limiting
+   how far a dark pixel is lifted. Choosing a Setting writes Matte
+   Generation, and moving one of those controls makes it Custom. Adobe
+   documents the Default numbers (45, 10, 50, 50, 10) but not Relaxed or
+   Aggressive, so those two are the same controls moved the way the names
+   say. Driving it on a generated screen with a vignette and grain found two
+   faults the colour tests had passed: the shaded corners stayed half
+   opaque, and the soft edge kept a green rim because spill was looked for
+   too close to the key's hue. Both are fixed and have tests.
 8. **Transform effect** (medium). Motion as an effect in the stack, so it can
    be reordered, with uniform scale, skew and shutter-angle motion blur.
 9. **Mask tracking** (large). Track a mask forward and backward from frame

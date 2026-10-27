@@ -45,6 +45,9 @@ struct EffectParamSpec {
   /// The heading it sits under, for an effect with enough parameters to need
   /// some: Lumetri's sections. Empty for the rest.
   std::string_view group;
+  /// A menu rather than a number: the value is the index of the one chosen.
+  /// Empty for a number.
+  std::span<const std::string_view> choices;
 };
 
 /// A colour parameter, kept apart from the numeric ones because it is stored
