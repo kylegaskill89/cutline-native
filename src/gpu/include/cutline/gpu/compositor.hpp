@@ -114,6 +114,8 @@ enum class PassKind {
   MatteSoften,
   /// Ultra Key's Contrast, Mid Point and Output.
   UltraKeyOutput,
+  /// Premiere's Transform effect, from the pass's data.
+  Transform,
 };
 
 /// How many floats a pass carries. Eight, shared by every kind, because only

@@ -106,6 +106,7 @@
 #define PASS_CHOKE     25
 #define PASS_SOFTEN    26
 #define PASS_ULTRAOUT  27
+#define PASS_TRANSFORM 28
 
 // Laid out so no member straddles a 16-byte boundary, because these arrive as
 // root constants and HLSL packs a cbuffer in float4 rows.
@@ -1483,6 +1484,88 @@ float4 ultraKeyOutput(float2 uv, float4 before) {
     return float4(before.rgb, alpha);
 }
 
+// ------------------------------------------------------------- transform --
+//
+// The layout of the pass's data is `render/transform_effect.hpp`'s.
+
+float2x2 rotation2(float a) {
+    const float c = cos(a);
+    const float s = sin(a);
+    // Clockwise on the picture, whose y runs down.
+    return float2x2(c, -s, s, c);
+}
+
+/// A point of the layer's frame, 0 to 1, read from the scratch, or nothing
+/// past the frame's edge, which is where Premiere's Transform cuts.
+float4 frameAt(float2 f) {
+    if (any(f < 0.0) || any(f > 1.0)) return float4(0.0, 0.0, 0.0, 0.0);
+    const float2 span = float2(1.0, 1.0) - 2.0 * params.margin;
+    return texture0.Sample(linearSampler, f * span + params.margin);
+}
+
+float cubicWeight(float x) {
+    // Catmull-Rom, which is what a bicubic resample means in practice: sharp,
+    // passing through the pixels it is given.
+    x = abs(x);
+    if (x < 1.0) return 1.5 * x * x * x - 2.5 * x * x + 1.0;
+    if (x < 2.0) return -0.5 * x * x * x + 2.5 * x * x - 4.0 * x + 2.0;
+    return 0.0;
+}
+
+/// Bicubic: sixteen of the frame's pixels about the point, weighted. Read
+/// premultiplied, so a transparent neighbour does not darken an edge.
+float4 frameBicubic(float2 f) {
+    const float2 frameTexel = params.passB.zw / (float2(1.0, 1.0) - 2.0 * params.margin);
+    const float2 pixel = f / frameTexel - 0.5;
+    const float2 base = floor(pixel);
+    const float2 t = pixel - base;
+    float4 sum = 0.0;
+    float total = 0.0;
+    [unroll] for (int j = -1; j <= 2; ++j) {
+        [unroll] for (int i = -1; i <= 2; ++i) {
+            const float w = cubicWeight(i - t.x) * cubicWeight(j - t.y);
+            const float4 s = frameAt((base + float2(i, j) + 0.5) * frameTexel);
+            sum += float4(s.rgb * s.a, s.a) * w;
+            total += w;
+        }
+    }
+    sum /= max(total, 1e-5);
+    const float alpha = saturate(sum.a);
+    return float4(alpha > 0.0 ? max(sum.rgb, 0.0) / max(sum.a, 1e-5) : 0.0, alpha);
+}
+
+float4 transformPass(float2 uv) {
+    const int samples = (int)pd(0.0);
+    const bool bicubic = pd(1.0) > 0.5;
+    const float2 size = max(params.size, float2(1.0, 1.0));
+    // In the frame's pixels, where a rotation is a rotation and not a shear.
+    const float2 p = layerUv(uv) * size;
+
+    float4 sum = 0.0;
+    for (int n = 0; n < samples; ++n) {
+        const float at = 4.0 + 9.0 * (float)n;
+        const float2 anchor = float2(pd(at), pd(at + 1.0)) * size;
+        const float2 position = float2(pd(at + 2.0), pd(at + 3.0)) * size;
+        const float2 scale = float2(pd(at + 4.0), pd(at + 5.0));
+        const float skew = pd(at + 6.0);
+        const float axis = pd(at + 7.0);
+        // Forwards: placed by Position, turned, sheared along the skew axis,
+        // scaled about the anchor. Read backwards, from where a pixel lands
+        // to where it came from.
+        float2 d = mul(rotation2(-pd(at + 8.0)), p - position);
+        d = mul(rotation2(axis), d);
+        d.x += tan(skew) * d.y;
+        d = mul(rotation2(-axis), d);
+        if (any(abs(scale) < 1e-5)) continue;
+        const float2 f = (anchor + d / scale) / size;
+        const float4 s = bicubic ? frameBicubic(f) : frameAt(f);
+        sum += float4(s.rgb * s.a, s.a);
+    }
+    sum /= max((float)samples, 1.0);
+    const float3 rgb = sum.a > 0.0 ? sum.rgb / sum.a : float3(0.0, 0.0, 0.0);
+    return float4(rgb, sum.a * pd(2.0));
+}
+
 float4 PSEffect(VSOutput input) : SV_Target {
     const float4 before = texture0.Sample(linearSampler, input.uv);
 
@@ -1523,6 +1606,8 @@ float4 PSEffect(VSOutput input) : SV_Target {
         after = matteSoften(input.uv);
     } else if (params.passKind == PASS_ULTRAOUT) {
         after = ultraKeyOutput(input.uv, before);
+    } else if (params.passKind == PASS_TRANSFORM) {
+        after = transformPass(input.uv);
     } else if (params.passKind == PASS_SHARPEN) {
         after = float4(sharpenPass(input.uv), texture0.Sample(linearSampler, input.uv).a);
     } else if (params.passKind == PASS_FLIP) {

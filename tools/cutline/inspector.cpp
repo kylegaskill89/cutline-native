@@ -992,7 +992,10 @@ void build_effect_controls(App& app, const std::string& clip_id) {
     // anything in. A section's own switch sits in its heading.
     std::string group;
     bool showing = true;
-    for (const cutline::editor::EffectParamRow& param : row.params) {
+    for (std::size_t at = 0; at < row.params.size(); ++at) {
+      const cutline::editor::EffectParamRow& param = row.params[at];
+      // The second number of a pair rides on the first's row.
+      if (at > 0 && row.params[at - 1].pairs_next) continue;
       if (!param.group.empty()) build_colours();
       if (!param.group.empty() && param.group != group) {
         group = param.group;
@@ -1055,6 +1058,40 @@ void build_effect_controls(App& app, const std::string& clip_id) {
                          : std::vector<cutline::core::Keyframe>{};
       const double here = local_playhead(app, clip_id);
 
+      // Shown in the layer's pixels where the parameter is a fraction of its
+      // frame, so what is typed is turned back before it is stored.
+      const double scale = param.scale > 0.0 ? param.scale : 1.0;
+      std::optional<ParamRow::Partner> partner;
+      std::string mate_key;
+      if (param.pairs_next && at + 1 < row.params.size()) {
+        const cutline::editor::EffectParamRow& mate = row.params[at + 1];
+        mate_key = mate.key;
+        const double mate_scale = mate.scale > 0.0 ? mate.scale : 1.0;
+        partner = ParamRow::Partner{
+            .suffix = mate.suffix,
+            .range = mate.range,
+            .value = mate.value,
+            .fallback = mate.fallback,
+            .commit =
+                [&app, clip_id, index = row.index, key = mate.key, mate_scale](double value) {
+                  app.session.apply(cutline::editor::set_effect_parameter(
+                      app.session.project(), clip_id, index, key, value / mate_scale,
+                      local_playhead(app, clip_id)));
+                  invalidate_preview(app);
+                  app.inspector_stale = true;
+                },
+            .preview =
+                [&app, clip_id, index = row.index, key = mate.key, mate_scale](double value) {
+                  return cutline::editor::set_effect_parameter(
+                      app.session.project(), clip_id, index, key, value / mate_scale,
+                      local_playhead(app, clip_id));
+                }};
+      }
+      // Every key the row's stopwatch and keyframe buttons act on: both halves
+      // of a pair, so its two numbers animate together as Premiere's do.
+      std::vector<std::string> row_keys{param.key};
+      if (!mate_key.empty()) row_keys.push_back(mate_key);
+
       const ParamRow control{
           .name = param.name,
           .suffix = param.suffix,
@@ -1067,44 +1104,58 @@ void build_effect_controls(App& app, const std::string& clip_id) {
           .keyed_here = param.keyed_here,
           .has_previous = cutline::editor::keyframe_before(keys, here).has_value(),
           .has_next = cutline::editor::keyframe_after(keys, here).has_value(),
+          .partner = std::move(partner),
+          .governed = param.governed,
           .interp = param.interp};
 
       build_param_row(
           app, control,
           {.commit =
-               [&app, clip_id, index = row.index, key = param.key](double value) {
+               [&app, clip_id, index = row.index, key = param.key, scale](double value) {
                  app.session.apply(cutline::editor::set_effect_parameter(
-                     app.session.project(), clip_id, index, key, value,
+                     app.session.project(), clip_id, index, key, value / scale,
                      local_playhead(app, clip_id)));
                  invalidate_preview(app);
                  app.inspector_stale = true;
                },
            .preview =
-               [&app, clip_id, index = row.index, key = param.key](double value) {
+               [&app, clip_id, index = row.index, key = param.key, scale](double value) {
                  return cutline::editor::set_effect_parameter(
-                     app.session.project(), clip_id, index, key, value,
+                     app.session.project(), clip_id, index, key, value / scale,
                      local_playhead(app, clip_id));
                },
            .animate =
-               [&app, clip_id, index = row.index, key = param.key](bool animated) {
-                 app.session.apply(cutline::editor::set_effect_parameter_animated(
-                     app.session.project(), clip_id, index, key, animated,
-                     local_playhead(app, clip_id)));
+               [&app, clip_id, index = row.index, row_keys](bool animated) {
+                 cutline::core::Project next = app.session.project();
+                 for (const std::string& key : row_keys) {
+                   next = cutline::editor::set_effect_parameter_animated(
+                       std::move(next), clip_id, index, key, animated,
+                       local_playhead(app, clip_id));
+                 }
+                 app.session.apply(std::move(next));
                  invalidate_preview(app);
                  app.inspector_stale = true;
                },
            .keyframe =
-               [&app, clip_id, index = row.index, key = param.key] {
-                 app.session.apply(cutline::editor::toggle_effect_keyframe(
-                     app.session.project(), clip_id, index, key, local_playhead(app, clip_id)));
+               [&app, clip_id, index = row.index, row_keys] {
+                 cutline::core::Project next = app.session.project();
+                 for (const std::string& key : row_keys) {
+                   next = cutline::editor::toggle_effect_keyframe(
+                       std::move(next), clip_id, index, key, local_playhead(app, clip_id));
+                 }
+                 app.session.apply(std::move(next));
                  refresh_timeline(app);
                  invalidate_preview(app);
                  app.inspector_stale = true;
                },
            .interp =
-               [&app, clip_id, index = row.index, key = param.key](cutline::core::Interp mode) {
-                 app.session.apply(cutline::editor::set_effect_parameter_interp(
-                     app.session.project(), clip_id, index, key, mode));
+               [&app, clip_id, index = row.index, row_keys](cutline::core::Interp mode) {
+                 cutline::core::Project next = app.session.project();
+                 for (const std::string& key : row_keys) {
+                   next = cutline::editor::set_effect_parameter_interp(std::move(next), clip_id,
+                                                                       index, key, mode);
+                 }
+                 app.session.apply(std::move(next));
                  invalidate_preview(app);
                  app.inspector_stale = true;
                },

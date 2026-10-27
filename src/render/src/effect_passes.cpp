@@ -3,6 +3,7 @@
 #include "cutline/core/effects.hpp"
 #include "cutline/core/mask_path.hpp"
 #include "cutline/render/lumetri.hpp"
+#include "cutline/render/transform_effect.hpp"
 #include "cutline/render/ultra_key.hpp"
 
 #include <algorithm>
@@ -297,10 +298,13 @@ std::array<float, 3> pass_balance(const EffectPass& pass) noexcept {
 
 // ------------------------------------------------------------------- plan --
 
-std::vector<EffectPass> plan_effect_passes(const core::Clip& clip, double local_t) {
+std::vector<EffectPass> plan_effect_passes(const core::Clip& clip, double local_t,
+                                           double frame_duration) {
   std::vector<EffectPass> passes;
 
-  for (const core::ClipEffect& effect : core::resolved_effects(clip, local_t)) {
+  const std::vector<core::ClipEffect> resolved = core::resolved_effects(clip, local_t);
+  for (std::size_t index = 0; index < resolved.size(); ++index) {
+    const core::ClipEffect& effect = resolved[index];
     if (!effect.enabled) continue;
     const std::size_t before = passes.size();
 
@@ -483,6 +487,11 @@ std::vector<EffectPass> plan_effect_passes(const core::Clip& clip, double local_
 
     } else if (effect.type == "ultrakey") {
       plan_ultra_key(effect, passes);
+
+    } else if (effect.type == "transform") {
+      // With its keyframes, not resolved: a shutter needs the transform at
+      // moments other than this one.
+      plan_transform(clip.effects[index], local_t, frame_duration, passes);
 
     } else if (effect.type == "chromakey") {
       const auto color = effect.colors.find("color");

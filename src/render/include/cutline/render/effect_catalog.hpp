@@ -28,6 +28,16 @@
 
 namespace cutline::render {
 
+/// What a stored number is shown as.
+enum class EffectParamUnit {
+  /// As stored.
+  Plain,
+  /// A fraction of the layer's frame, shown in its pixels, across or down:
+  /// Transform's Anchor Point and Position, as Motion's anchor is.
+  LayerWidth,
+  LayerHeight,
+};
+
 /// A numeric parameter of an effect, as a control needs it.
 struct EffectParamSpec {
   /// As stored in `ClipEffect::params`.
@@ -48,6 +58,10 @@ struct EffectParamSpec {
   /// A menu rather than a number: the value is the index of the one chosen.
   /// Empty for a number.
   std::span<const std::string_view> choices;
+  EffectParamUnit unit = EffectParamUnit::Plain;
+  /// The next parameter is this one's second number, shown on the same row,
+  /// as Premiere shows Position's x and y.
+  bool pairs_next = false;
 };
 
 /// A colour parameter, kept apart from the numeric ones because it is stored

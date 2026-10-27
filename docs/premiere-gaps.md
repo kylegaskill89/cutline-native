@@ -439,8 +439,7 @@ already given, which is why that function takes one beyond resolving keyframes.
 Still absent, roughly in the order their absence would be noticed: ~~**Lumetri
 Color**~~ (done, §13), ~~**Drop Shadow**~~, ~~**Track Matte Key**~~ (done,
 §12), ~~**Ultra Key**~~ (done, Phase 4 item 7), **Warp Stabilizer**, and
-**Transform** (the effect, which unlike Motion sits in the stack and can be
-reordered).
+~~**Transform**~~ (done, Phase 4 item 8).
 
 Of those, Drop Shadow and Track Matte Key want something the pass chain does not
 have yet — a second texture to read besides the layer itself. The rest are
@@ -2663,8 +2662,19 @@ one.
    faults the colour tests had passed: the shaded corners stayed half
    opaque, and the soft edge kept a green rim because spill was looked for
    too close to the key's hue. Both are fixed and have tests.
-8. **Transform effect** (medium). Motion as an effect in the stack, so it can
-   be reordered, with uniform scale, skew and shutter-angle motion blur.
+8. ~~**Transform effect**~~ — **done**. Premiere's controls in its order:
+   Anchor Point and Position on paired rows in the layer's pixels, Uniform
+   Scale greying Scale Width, Scale Height, Skew, Skew Axis, Rotation,
+   Opacity, Use Composition's Shutter Angle, Shutter Angle and Sampling
+   (Bilinear or Bicubic). It is one pass that resamples the layer inside its
+   own frame, cutting what moves past the edge as Premiere's does, and it
+   sits wherever it is put in the stack. With its own shutter it averages
+   sixteen moments across the opening, read from the keyframes, centred on
+   the frame. Using the composition's shutter angle means no blur, because a
+   Premiere sequence has no shutter angle to use. Effect parameters gained
+   two things for it: a unit (fractions of the layer's frame shown in its
+   pixels, as Motion's anchor is) and pairing, so two numbers share a row and
+   a stopwatch.
 9. **Mask tracking** (large). Track a mask forward and backward from frame
    to frame. The tracker built here is the analysis Warp Stabilizer needs.
 10. **Warp Stabilizer** (large). Analyse on the tracker from 9, smooth the

@@ -3,6 +3,7 @@
 #include "cutline/audio/chain.hpp"
 #include "cutline/core/effects.hpp"
 #include "cutline/core/keyframe.hpp"
+#include "cutline/core/layout.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/core/roles.hpp"
 #include "cutline/editor/transitions.hpp"
@@ -104,22 +105,46 @@ std::vector<EffectRow> clip_effects(const core::Project& project, std::string_vi
       continue;
     }
 
+    // The layer's frame, for parameters shown in its pixels.
+    const auto media = std::ranges::find(project.media, clip->media_id, &core::Media::id);
+    const core::Size frame = core::natural_size(
+        media == project.media.end() ? nullptr : &*media,
+        static_cast<double>(project.sequence().canvas_w),
+        static_cast<double>(project.sequence().canvas_h));
+
     for (const render::EffectParamSpec& param : spec->params) {
       const bool animated = core::is_effect_param_animated(effect, param.key);
       std::vector<std::string> choices(param.choices.begin(), param.choices.end());
+      double scale = 1.0;
+      if (param.unit == render::EffectParamUnit::LayerWidth && frame.width > 0.0) {
+        scale = frame.width;
+      } else if (param.unit == render::EffectParamUnit::LayerHeight && frame.height > 0.0) {
+        scale = frame.height;
+      }
+      // Uniform Scale makes Scale Height the scale both ways and greys Width.
+      // Missing, it is on, which is how it starts.
+      const bool uniform = !effect.params.contains("uniform") &&
+                                   !core::is_effect_param_animated(effect, "uniform")
+                               ? true
+                               : core::effect_param_at(effect, "uniform", local_t) >= 0.5;
+      const bool governed =
+          effect.type == "transform" && param.key == "scale_width" && uniform;
       row.params.push_back(EffectParamRow{
           .key = std::string(param.key),
           .name = std::string(param.name),
-          .range = {.minimum = param.minimum, .maximum = param.maximum},
+          .range = {.minimum = param.minimum * scale, .maximum = param.maximum * scale},
           // Animated parameters ignore what is stored, so showing the stored
           // value would put a number on screen that nothing is using.
-          .value = animated ? core::effect_param_at(effect, param.key, local_t)
-                            : stored_or_default(effect, param),
-          .fallback = param.fallback,
+          .value = scale * (animated ? core::effect_param_at(effect, param.key, local_t)
+                                     : stored_or_default(effect, param)),
+          .fallback = param.fallback * scale,
           .suffix = std::string(param.suffix),
           .toggle = param.toggle,
           .group = std::string(param.group),
           .choices = std::move(choices),
+          .scale = scale,
+          .pairs_next = param.pairs_next,
+          .governed = governed,
           .animated = animated,
           .keyed_here = animated && keyed_at(effect, param.key, local_t),
           .interp = core::effect_keyframe_interp_of(effect, param.key)});

@@ -114,6 +114,9 @@ enum class EffectPassKind {
   MatteSoften,
   /// Contrast and Mid Point on the matte, and what Output shows.
   UltraKeyOutput,
+  /// The layer resampled through Premiere's Transform effect, averaged over a
+  /// shutter when it has one. See `transform_effect.hpp`.
+  Transform,
 };
 
 /// How many floats a pass carries.
@@ -303,7 +306,11 @@ struct EffectPass {
 ///
 /// Empty when nothing in the stack does anything, which is what lets a layer
 /// with no effects keep drawing in exactly one pass.
+///
+/// `frame_duration` is how long one of the sequence's frames lasts, which a
+/// shutter is a share of; nought leaves Transform without motion blur.
 [[nodiscard]] std::vector<EffectPass> plan_effect_passes(const core::Clip& clip,
-                                                         double local_t);
+                                                         double local_t,
+                                                         double frame_duration = 0.0);
 
 }  // namespace cutline::render

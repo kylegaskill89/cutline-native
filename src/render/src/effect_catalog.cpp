@@ -123,6 +123,43 @@ constexpr std::array kUltraKey{
 constexpr std::array kUltraKeyColors{
     EffectColorSpec{.key = "color", .name = "Key Color", .fallback = "#00d000"}};
 
+// Premiere's Transform effect, in its order. Anchor Point and Position are
+// fractions of the layer's frame and shown in its pixels; the centre is where
+// both start, so adding it changes nothing.
+constexpr std::array<std::string_view, 2> kTransformSampling{"Bilinear", "Bicubic"};
+
+constexpr std::array kTransform{
+    Param{.key = "anchor_x", .name = "Anchor Point", .minimum = -2.0, .maximum = 3.0,
+          .fallback = 0.5, .suffix = "", .unit = EffectParamUnit::LayerWidth,
+          .pairs_next = true},
+    Param{.key = "anchor_y", .name = "Anchor Point Y", .minimum = -2.0, .maximum = 3.0,
+          .fallback = 0.5, .suffix = "", .unit = EffectParamUnit::LayerHeight},
+    Param{.key = "position_x", .name = "Position", .minimum = -2.0, .maximum = 3.0,
+          .fallback = 0.5, .suffix = "", .unit = EffectParamUnit::LayerWidth,
+          .pairs_next = true},
+    Param{.key = "position_y", .name = "Position Y", .minimum = -2.0, .maximum = 3.0,
+          .fallback = 0.5, .suffix = "", .unit = EffectParamUnit::LayerHeight},
+    Param{.key = "uniform", .name = "Uniform Scale", .minimum = 0.0, .maximum = 1.0,
+          .fallback = 1.0, .suffix = "", .toggle = true},
+    Param{.key = "scale_height", .name = "Scale Height", .minimum = 0.0, .maximum = 600.0,
+          .fallback = 100.0, .suffix = ""},
+    Param{.key = "scale_width", .name = "Scale Width", .minimum = 0.0, .maximum = 600.0,
+          .fallback = 100.0, .suffix = ""},
+    Param{.key = "skew", .name = "Skew", .minimum = -89.0, .maximum = 89.0, .fallback = 0.0,
+          .suffix = "°"},
+    Param{.key = "skew_axis", .name = "Skew Axis", .minimum = -180.0, .maximum = 180.0,
+          .fallback = 0.0, .suffix = "°"},
+    Param{.key = "rotation", .name = "Rotation", .minimum = -360.0, .maximum = 360.0,
+          .fallback = 0.0, .suffix = "°"},
+    Param{.key = "opacity", .name = "Opacity", .minimum = 0.0, .maximum = 100.0,
+          .fallback = 100.0, .suffix = ""},
+    Param{.key = "composition_shutter", .name = "Use Composition's Shutter Angle",
+          .minimum = 0.0, .maximum = 1.0, .fallback = 1.0, .suffix = "", .toggle = true},
+    Param{.key = "shutter_angle", .name = "Shutter Angle", .minimum = 0.0, .maximum = 360.0,
+          .fallback = 0.0, .suffix = ""},
+    Param{.key = "sampling", .name = "Sampling", .minimum = 0.0, .maximum = 1.0,
+          .fallback = 0.0, .suffix = "", .choices = kTransformSampling}};
+
 // ---------------------------------------------------------------- grading --
 //
 // Everything from here down arrived after effects became passes, and between
@@ -402,6 +439,8 @@ constexpr std::array kCatalog{
                .params = kChromaKey, .colors = kChromaKeyColors},
     EffectSpec{.type = "trackmatte", .name = "Track Matte Key", .category = EffectCategory::Keying,
                .params = kTrackMatte},
+    EffectSpec{.type = "transform", .name = "Transform",
+               .category = EffectCategory::Transform, .params = kTransform},
     EffectSpec{.type = "crop", .name = "Crop", .category = EffectCategory::Transform,
                .params = kCrop},
     EffectSpec{.type = "flip", .name = "Flip", .category = EffectCategory::Transform,

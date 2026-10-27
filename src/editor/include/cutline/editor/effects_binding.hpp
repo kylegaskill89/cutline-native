@@ -48,6 +48,14 @@ struct EffectParamRow {
   /// A menu's entries, `value` being the index of the one chosen; empty for
   /// a number.
   std::vector<std::string> choices;
+  /// What is shown per unit stored: the layer's pixels for a fraction of its
+  /// frame, 1 otherwise. `range`, `value` and `fallback` are already shown
+  /// values; what is typed is divided by this before it is stored.
+  double scale = 1.0;
+  /// The next row is this one's second number, on the same line.
+  bool pairs_next = false;
+  /// Set by another control and greyed, as Scale Width is under Uniform Scale.
+  bool governed = false;
   /// Animated, so `value` is what the keyframes evaluate to rather than the
   /// stored one — which is ignored entirely while a parameter is animated.
   bool animated = false;

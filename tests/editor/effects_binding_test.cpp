@@ -1357,5 +1357,35 @@ TEST(UltraKeySetting, OutputAndSettingRowsAreMenus) {
   EXPECT_TRUE(rows[0].params[2].choices.empty());
 }
 
+// --------------------------------------------------------------- transform --
+
+TEST(TransformRows, AnchorAndPositionAreShownInTheFramesPixelsOnPairedRows) {
+  Project p = add_effect(one_clip(), "c1", "transform");
+  p.sequence().canvas_w = 1920;
+  p.sequence().canvas_h = 1080;
+  const std::vector<EffectRow> rows = clip_effects(p, "c1");
+  ASSERT_EQ(rows.size(), 1u);
+  const EffectParamRow& anchor = rows[0].params[0];
+  EXPECT_EQ(anchor.name, "Anchor Point");
+  EXPECT_TRUE(anchor.pairs_next);
+  EXPECT_DOUBLE_EQ(anchor.value, 960.0);
+  EXPECT_DOUBLE_EQ(anchor.scale, 1920.0);
+  EXPECT_DOUBLE_EQ(rows[0].params[1].value, 540.0);
+  EXPECT_DOUBLE_EQ(rows[0].params[1].fallback, 540.0);
+}
+
+TEST(TransformRows, UniformScaleGreysScaleWidth) {
+  Project p = add_effect(one_clip(), "c1", "transform");
+  const auto width = [](const Project& project) {
+    for (const EffectParamRow& row : clip_effects(project, "c1")[0].params) {
+      if (row.key == "scale_width") return row.governed;
+    }
+    return false;
+  };
+  EXPECT_TRUE(width(p));
+  p = set_effect_parameter(std::move(p), "c1", 0, "uniform", 0.0);
+  EXPECT_FALSE(width(p));
+}
+
 }  // namespace
 }  // namespace cutline::editor

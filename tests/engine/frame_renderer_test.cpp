@@ -1915,5 +1915,92 @@ TEST_F(FrameRendererTest, UltraKeyKeepsADarkSubject) {
     EXPECT_LT(seen.r, 70) << colour;
   }
 }
+// --------------------------------------------------------------- transform --
+
+[[nodiscard]] core::ClipEffect transform_fx(std::map<std::string, double> params) {
+  return core::ClipEffect{.type = "transform", .params = std::move(params)};
+}
+
+/// Black to white across the frame, transformed, over blue.
+[[nodiscard]] Project transformed(core::ClipEffect effect) {
+  Project p = canvas_project();
+  p.media = {matte("back", "#0000ff"), matte("ramp", "#000000")};
+  p.media[1].gradient = core::MatteGradient{.color2 = "#ffffff", .angle = 0.0};
+  Clip front = clip("f", "ramp", 0.0, 5.0);
+  front.effects = {std::move(effect)};
+  // Stored top-first.
+  p.sequence().tracks = {video_track("v2", {front}),
+                         video_track("v1", {clip("b", "back", 0.0, 5.0)})};
+  return p;
+}
+
+TEST_F(FrameRendererTest, TransformScaleShrinksTheLayerWithinItsFrame) {
+  const gpu::Image image = render(transformed(transform_fx({{"scale_height", 50.0}})), 1.0);
+  // Beyond the half-size picture, the frame is empty and the blue shows.
+  EXPECT_GT(pixel_at(image, 4, 32).b, 250);
+  EXPECT_LT(pixel_at(image, 32, 32).b, 200);
+  EXPECT_GT(pixel_at(image, 4, 4).b, 250);
+}
+
+TEST_F(FrameRendererTest, TransformRotationTurnsTheLayer) {
+  const gpu::Image plain = render(transformed(transform_fx({})), 1.0);
+  const gpu::Image turned = render(transformed(transform_fx({{"rotation", 180.0}})), 1.0);
+  // The ramp runs the other way: the left is now the light end.
+  EXPECT_LT(pixel_at(plain, 6, 32).r, pixel_at(plain, 58, 32).r);
+  EXPECT_NEAR(pixel_at(turned, 6, 32).r, pixel_at(plain, 57, 32).r, 6);
+  EXPECT_NEAR(pixel_at(turned, 58, 32).r, pixel_at(plain, 5, 32).r, 6);
+}
+
+TEST_F(FrameRendererTest, TransformPositionMovesTheLayerAndCutsItAtTheFrame) {
+  const gpu::Image image = render(transformed(transform_fx({{"position_x", 0.75}})), 1.0);
+  // Moved a quarter right: the left quarter is empty, and what passed the
+  // right edge is gone rather than drawn past it.
+  EXPECT_GT(pixel_at(image, 8, 32).b, 250);
+  EXPECT_LT(pixel_at(image, 40, 32).r, 140);
+}
+
+TEST_F(FrameRendererTest, TransformOpacityIsTheLayersOwn) {
+  Project p = transformed(transform_fx({{"opacity", 50.0}}));
+  p.media[1].gradient.reset();
+  p.media[1].color = "#ff0000";
+  const Rgba seen = pixel_at(render(p, 1.0), 32, 32);
+  EXPECT_GT(seen.r, 100);
+  EXPECT_GT(seen.b, 100);
+}
+
+TEST_F(FrameRendererTest, TransformBicubicKeepsAFlatColourFlat) {
+  Project p = transformed(transform_fx({{"rotation", 30.0}, {"sampling", 1.0}}));
+  p.media[1].gradient.reset();
+  p.media[1].color = "#808080";
+  const Rgba seen = pixel_at(render(p, 1.0), 32, 32);
+  EXPECT_NEAR(seen.r, 128, 2);
+  EXPECT_NEAR(seen.b, 128, 2);
+}
+
+TEST_F(FrameRendererTest, TransformShutterBlursWhatMoves) {
+  // A red layer sliding right a whole frame width a second, so its left edge
+  // smears across a 360 degree shutter and stays hard without one.
+  const auto edge = [this](double shutter) {
+    core::ClipEffect effect = transform_fx(
+        {{"composition_shutter", shutter > 0.0 ? 0.0 : 1.0}, {"shutter_angle", shutter}});
+    effect.keyframes["position_x"] = {core::Keyframe{.t = 0.0, .v = 0.5},
+                                      core::Keyframe{.t = 1.0, .v = 1.5}};
+    Project p = transformed(std::move(effect));
+    p.media[1].gradient.reset();
+    p.media[1].color = "#ff0000";
+    p.sequence().fps = 4.0;
+    const gpu::Image image = render(p, 0.5);
+    // How many pixels along the row are neither the layer nor the blue.
+    int between = 0;
+    for (int x = 0; x < kWidth; ++x) {
+      const Rgba seen = pixel_at(image, x, 32);
+      if (seen.r > 20 && seen.r < 235) ++between;
+    }
+    return between;
+  };
+  EXPECT_LE(edge(0.0), 2);
+  EXPECT_GE(edge(360.0), 8);
+}
+
 }  // namespace
 }  // namespace cutline::engine

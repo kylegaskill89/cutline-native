@@ -57,6 +57,7 @@ add_executable(cutline_core_tests
   render/effect_passes_test.cpp
   render/effects_test.cpp
   render/lumetri_test.cpp
+  render/transform_effect_test.cpp
   render/ultra_key_test.cpp
   render/mix_test.cpp
   render/plan_test.cpp

@@ -1252,6 +1252,10 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
             const float radius = std::max(0.0f, effect.values[1]) * span;
             pass.pass_a[2] = radius * texel_x;
             pass.pass_a[3] = radius * texel_y;
+          } else if (effect.kind == PassKind::Transform) {
+            // The scratch's own texel, for bicubic's sixteen taps.
+            pass.pass_b[2] = texel_x;
+            pass.pass_b[3] = texel_y;
           } else if (effect.kind == PassKind::MatteChoke ||
                      effect.kind == PassKind::MatteSoften) {
             // One of the layer's pixels as a step, the radius counted in them.
