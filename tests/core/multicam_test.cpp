@@ -252,6 +252,15 @@ TEST(Multicam, SwitchesWhilePlayingCutTheClipAndShowTheCameraAfterEach) {
   EXPECT_EQ(sound[1].group_id, clips[1].group_id);
 }
 
+TEST(Multicam, WithoutFollowingTheSoundStaysOnTheFirstCamera) {
+  const std::vector<CameraSwitch> switches{{.time = 4.0, .camera = 1}};
+  const Project p = record_camera_switches(cutting(), "v1", switches, false);
+  const auto& sound = p.sequence().tracks[1].clips;
+  ASSERT_EQ(sound.size(), 2u) << "the sound is cut with the picture";
+  EXPECT_EQ(sound[1].camera, 0);
+  EXPECT_EQ(camera_tag(p, sound[1]), "[MC1]");
+}
+
 TEST(Multicam, ASwitchAtAClipsStartChangesItWithoutACut) {
   const std::vector<CameraSwitch> switches{{.time = 0.0, .camera = 1}};
   const Project p = record_camera_switches(cutting(), "v1", switches, false);
