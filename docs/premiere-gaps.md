@@ -2428,8 +2428,12 @@ dependent, and for the owner to confirm:
    faces with the tracker that is already here.
 6. **Morph Cut** — last, the largest and the most specialised.
 
-The new effects and transitions of 26.2 and 26.3 fit around these. §14.2
-waits on a decision about running models locally.
+The new effects and transitions of 26.2 and 26.3 fit around these.
+
+**Confirmed by the owner on 2026-10-28**, in that order. §14.2 is to be
+considered later. If it is done, the installer ships without any model, and
+a model is downloaded from inside the application by somebody who chooses to
+have it.
 
 ## Found by the 2026-10 review
 
