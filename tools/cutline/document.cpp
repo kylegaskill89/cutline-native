@@ -26,6 +26,7 @@ void import_media(App& app) {
   dialog.lpstrFilter =
       L"Media\0*.mp4;*.mov;*.mkv;*.avi;*.webm;*.wav;*.mp3;*.flac;*.png;*.jpg\0"
       L"Graphics templates\0*.cutgfx;*.mogrt\0"
+      L"Captions\0*.srt\0"
       L"All files\0*.*\0";
   dialog.lpstrFile = buffer.data();
   dialog.nMaxFile = static_cast<DWORD>(buffer.size());
@@ -58,6 +59,12 @@ void import_media(App& app) {
       } else {
         refused.push_back(path.filename().string() + " — " + installed.error());
       }
+      continue;
+    }
+    // Captions are not media either: they become a caption track, as a
+    // SubRip file imported into Premiere does.
+    if (path.extension() == ".srt" || path.extension() == ".SRT") {
+      import_captions_file(app, path);
       continue;
     }
     auto source = cutline::app::probe_source(path.string());

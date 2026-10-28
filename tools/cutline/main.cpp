@@ -1328,6 +1328,7 @@ void settle(App& app) {
   // apply an edit, and a flag set at each would be a list that has to stay
   // complete for ever. Comparing a hundred short names is nothing.
   refresh_history(app);
+  refresh_text_panel(app);
 #if CUTLINE_HAVE_PREVIEW
   // Once per frame at most, however many mouse moves a scrub produced. A
   // read-back stalls the GPU, so rendering on each one would make the drag

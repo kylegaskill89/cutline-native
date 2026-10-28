@@ -27,6 +27,12 @@ namespace {
 /// What a clip should be called on the timeline. The media's name, falling
 /// back to something rather than a blank block nobody can identify.
 [[nodiscard]] std::string label_for(const core::Project& project, const core::Clip& clip) {
+  // A caption is its words, on one line.
+  if (clip.kind == core::TrackKind::Caption) {
+    std::string words = clip.caption;
+    std::ranges::replace(words, '\n', ' ');
+    return words.empty() ? std::string("(empty caption)") : words;
+  }
   const core::Media* media = media_of(project, clip.media_id);
   if (media == nullptr) return "(missing)";
   // Premiere's "[MC2]" before a multicam's name, saying which camera it shows.
@@ -111,6 +117,15 @@ std::string default_track_label(const core::Project& project, std::size_t index)
   const core::Track& track = project.sequence().tracks[index];
   if (!track.label.empty()) return track.label;
 
+  if (track.kind == core::TrackKind::Caption) {
+    // Counted from the top, as they are stacked: C1 is the one shown.
+    std::size_t above = 0;
+    for (std::size_t i = 0; i < index; ++i) {
+      if (project.sequence().tracks[i].kind == core::TrackKind::Caption) ++above;
+    }
+    return "C" + std::to_string(above + 1);
+  }
+
   if (track.kind == core::TrackKind::Video) {
     // Counted from the bottom: V1 is the base layer everything stacks onto, so
     // the topmost track has the highest number.
@@ -162,6 +177,7 @@ ui::TimelineModel timeline_model(const core::Project& project,
     row.id = track.id;
     row.name = default_track_label(project, i);
     row.audio = audio;
+    row.caption = track.kind == core::TrackKind::Caption;
     row.height = track.height;
     // Two different flags, one appearance: a hidden video track and an
     // inaudible audio one are both "this contributes nothing right now".

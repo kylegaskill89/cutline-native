@@ -26,7 +26,8 @@ const std::vector<ui::PanelId>& known_panels() {
   static const std::vector<ui::PanelId> panels{"project", "effects",  "library",
                                                "monitor", "source",   "timeline",
                                                "scopes",  "audio",    "history",
-                                               "queue",   "graphics", "lumetri"};
+                                               "queue",   "graphics", "lumetri",
+                                               "text"};
   return panels;
 }
 

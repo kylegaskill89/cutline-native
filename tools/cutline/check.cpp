@@ -7,6 +7,8 @@
 
 #include "app.hpp"
 
+#include "cutline/core/captions.hpp"
+
 namespace cutline::tool {
 
 /// The first widget of a kind somewhere in a tree, for the headless check to
@@ -567,6 +569,17 @@ template <typename T>
       app.session.apply(cutline::core::add_marker(app.session.project(), 2.5, "cue"));
       app.session.apply(
           cutline::core::add_marker(app.session.project(), 8.0, "end", "#ffa000"));
+      // A caption track with two captions, one on two lines, so the Text
+      // panel's rows and its style section are laid out, and the timeline draws
+      // a caption lane.
+      {
+        std::string captions;
+        app.session.apply(cutline::core::add_caption_track(app.session.project(), &captions));
+        app.session.apply(cutline::core::add_caption(app.session.project(), captions, 0.5,
+                                                     "A caption long enough to need room"));
+        app.session.apply(cutline::core::add_caption(app.session.project(), captions, 4.0,
+                                                     "Two lines\nof caption"));
+      }
       // A bin with something in it, so the library's own folders and the bar
       // that makes them are laid out rather than only the catalogue's.
       cutline::editor::create_bin(app.bins, "Favourites");
@@ -599,6 +612,16 @@ template <typename T>
         app.main.host->resize(client, context);
         app.main.host->paint(*painter, theme);
         walk(app.main.host->root());
+
+        // The Text panel too, which is behind the timeline in this arrangement.
+        cutline::ui::activate_panel(layout, "text");
+        dock->set_node(layout.root);
+        app.main.host->resize(client, context);
+        refresh_text_panel(app);
+        app.main.host->resize(client, context);
+        app.main.host->paint(*painter, theme);
+        walk(app.main.host->root());
+        cutline::ui::activate_panel(layout, "timeline");
 
         cutline::ui::activate_panel(layout, "effects");
         dock->set_node(layout.root);

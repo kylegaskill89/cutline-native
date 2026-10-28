@@ -10,7 +10,7 @@ if(WIN32)
   list(APPEND CUTLINE_RESOURCES cutline.rc)
 endif()
 
-add_executable(cutline main.cpp gallery.cpp settings_window.cpp export_window.cpp menus.cpp check.cpp inspector.cpp audio_panel.cpp clip_dialogs.cpp pool.cpp playback.cpp panels.cpp document.cpp dock.cpp keyboard_window.cpp render_queue.cpp graphics_panel.cpp lumetri_panel.cpp trim_mode.cpp render_previews.cpp mask_tracking.cpp stabilizer.cpp multicam.cpp ${CUTLINE_RESOURCES})
+add_executable(cutline main.cpp gallery.cpp settings_window.cpp export_window.cpp menus.cpp check.cpp inspector.cpp audio_panel.cpp clip_dialogs.cpp pool.cpp playback.cpp panels.cpp document.cpp dock.cpp keyboard_window.cpp render_queue.cpp graphics_panel.cpp lumetri_panel.cpp trim_mode.cpp render_previews.cpp mask_tracking.cpp stabilizer.cpp multicam.cpp text_panel.cpp ${CUTLINE_RESOURCES})
 
 if(WIN32)
   # The version block wants the number twice in two spellings, and getting them

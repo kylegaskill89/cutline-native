@@ -442,7 +442,7 @@ double TimelineView::track_height(std::size_t track) const noexcept {
   if (row.height.has_value()) {
     return std::clamp(*row.height, kMinTrackHeight, kMaxTrackHeight);
   }
-  return row.audio ? metrics_.audio_track_height : metrics_.track_height;
+  return row.audio || row.caption ? metrics_.audio_track_height : metrics_.track_height;
 }
 
 // -------------------------------------------------------------- geometry --
@@ -2128,10 +2128,12 @@ void TimelineView::relocate_carried(int lanes, double shift) {
   }
 
   /// The tracks of one kind, in the order they are stored.
-  const auto lanes_of = [this](bool audio) {
+  const auto lanes_of = [this](const TimelineTrack& like) {
     std::vector<std::size_t> found;
     for (std::size_t i = 0; i < model_.tracks.size(); ++i) {
-      if (model_.tracks[i].audio == audio) found.push_back(i);
+      if (model_.tracks[i].audio == like.audio && model_.tracks[i].caption == like.caption) {
+        found.push_back(i);
+      }
     }
     return found;
   };
@@ -2143,8 +2145,7 @@ void TimelineView::relocate_carried(int lanes, double shift) {
 
   for (const Moving& one : carried) {
     if (one.ref.track >= model_.tracks.size()) continue;
-    const bool audio = model_.tracks[one.ref.track].audio;
-    const std::vector<std::size_t> same = lanes_of(audio);
+    const std::vector<std::size_t> same = lanes_of(model_.tracks[one.ref.track]);
     const auto here = std::ranges::find(same, one.ref.track);
     if (here == same.end()) continue;
 
@@ -2269,10 +2270,12 @@ void TimelineView::drag_to(double x, double y) {
       int lanes = 0;
       if (const std::optional<std::size_t> over = track_at(y);
           over.has_value() && press_track_ < model_.tracks.size()) {
-        const bool audio = model_.tracks[press_track_].audio;
+        const TimelineTrack& like = model_.tracks[press_track_];
         std::vector<std::size_t> same;
         for (std::size_t i = 0; i < model_.tracks.size(); ++i) {
-          if (model_.tracks[i].audio == audio) same.push_back(i);
+          if (model_.tracks[i].audio == like.audio && model_.tracks[i].caption == like.caption) {
+            same.push_back(i);
+          }
         }
 
         int from = 0;

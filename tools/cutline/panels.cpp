@@ -1705,6 +1705,7 @@ void refresh_history(App& app) {
 [[nodiscard]] std::unique_ptr<Widget> make_panel(App* app, const PanelId& id) {
   if (id == "scopes") return make_scopes_panel(app);
   if (id == "history") return make_history_panel(app);
+  if (id == "text") return make_text_panel(app);
   if (id == "source") return make_source_panel(app);
   if (id == "project") return make_project_panel(app);
   if (id == "monitor") return make_monitor_panel(app);

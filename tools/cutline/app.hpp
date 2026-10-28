@@ -676,6 +676,12 @@ struct App {
   /// The History panel's list, and the steps it was last filled with, so it is
   /// refilled when they change rather than on every frame.
   MenuList* history_list = nullptr;
+  /// The Text panel's contents, rebuilt when the document or the selection
+  /// changes, and the caption track it is showing.
+  Box* text_body = nullptr;
+  std::uint64_t text_revision = ~std::uint64_t{0};
+  std::string text_track;
+  std::string text_shown_track;
   /// The Essential Graphics panel's column, which it rebuilds, and the layer
   /// of the selected graphic it is showing -- none for the graphic itself.
   Box* graphics_body = nullptr;
@@ -1115,6 +1121,8 @@ struct App {
     cutline::core::Project project;
     cutline::editor::ExportPlan plan;
     std::optional<cutline::core::MarkedSpan> span;
+    /// What becomes of the captions: Premiere's Export Options under Captions.
+    cutline::engine::CaptionExport captions = cutline::engine::CaptionExport::None;
     std::atomic<RenderState> state{RenderState::Waiting};
     std::atomic<bool> cancel{false};
     /// 0..1, for the bar.
@@ -1215,6 +1223,8 @@ struct App {
     /// nothing is marked — there is no such thing as "the marked range" then,
     /// and a checkbox that means the whole sequence either way is a lie.
     bool marked_only = false;
+    /// Premiere's Captions section: left out, burned in, or a file beside.
+    cutline::engine::CaptionExport captions = cutline::engine::CaptionExport::None;
     /// The job the window last sent, whose progress it shows.
     std::uint64_t watching = 0;
   };
@@ -1327,7 +1337,7 @@ constexpr std::array<double, 7> kFrameRates{23.976, 24.0, 25.0, 29.97, 30.0, 50.
 /// A panel is a name from here plus whatever `make_panel` builds for it. The
 /// layout only ever moves the name around, which is what lets an arrangement be
 /// saved and restored without saving any widgets.
-constexpr std::array<std::pair<std::string_view, std::string_view>, 12> kPanels{{
+constexpr std::array<std::pair<std::string_view, std::string_view>, 13> kPanels{{
     {"project", "Project"},
     {"effects", "Effect Controls"},
     // Premiere's own two names, which are confusingly similar on purpose: this
@@ -1354,6 +1364,9 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 12> kPanels{
     // at a time; this is for going back ten, or for seeing what the last few
     // presses actually did.
     {"history", "History"},
+    // Premiere's Text panel, for captions: every caption on a track, its
+    // words and its timing, and the track's style.
+    {"text", "Text"},
     // Media Encoder's queue, brought into the editor: every export, the one
     // rendering and the ones waiting. Docked behind the timeline in every
     // workspace, as Premiere docks its Progress panel: that strip is the one
@@ -1433,7 +1446,7 @@ void refresh_export_dialog(App& app);
 /// Its size as designed, which `--check` lays it out at too: sized by guess,
 /// it once left its own Export button below its bottom edge.
 constexpr int kExportWindowWidth = 480;
-constexpr int kExportWindowHeight = 580;
+constexpr int kExportWindowHeight = 620;
 
 // The render queue and its panel, in `render_queue.cpp`.
 /// Adds a job to the end of the queue and returns its id, or says why the
@@ -1548,6 +1561,11 @@ void add_zoom_control(Box& transport, MonitorView& picture, double chosen,
 /// What fills a panel with this name in the layout.
 [[nodiscard]] std::unique_ptr<Widget> make_panel(App* app, const PanelId& id);
 void refresh_history(App& app);
+/// The Text panel, when what it shows has changed.
+void refresh_text_panel(App& app);
+[[nodiscard]] std::unique_ptr<Widget> make_text_panel(App* app);
+/// A SubRip file as a new caption track.
+void import_captions_file(App& app, const std::filesystem::path& file);
 void new_bin(App& app);
 
 // Defined in `main.cpp`, for the panels.

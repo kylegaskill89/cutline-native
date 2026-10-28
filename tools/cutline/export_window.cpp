@@ -415,6 +415,25 @@ void refresh_export_dialog(App& app) {
     controls.mixdown = &choice;
   }
   {
+    // Premiere's Captions section, offered only when there are captions to
+    // do something with.
+    bool any = false;
+    if (app != nullptr) {
+      for (const cutline::core::Track& track : app->session.project().sequence().tracks) {
+        any = any || (track.kind == cutline::core::TrackKind::Caption && !track.clips.empty());
+      }
+    }
+    auto& choice = row("Captions").emplace<Dropdown>(
+        std::vector<std::string>{"None", "Burn Captions Into Video", "Create Sidecar File"},
+        app != nullptr ? static_cast<std::size_t>(app->export_setup.captions) : 0u);
+    choice.set_on_change([app](std::size_t index) {
+      if (app == nullptr) return;
+      app->export_setup.captions =
+          static_cast<cutline::engine::CaptionExport>(std::min<std::size_t>(index, 2));
+    });
+    choice.set_enabled(any);
+  }
+  {
     auto& line = row("Output name");
     auto& output = line.emplace<Button>(app != nullptr ? output_label(*app) : "Choose a file...",
                                         [app] {

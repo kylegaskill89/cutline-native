@@ -309,6 +309,8 @@ struct TimelineTrack {
   std::string name;
   /// Audio tracks are shorter, because the theme says so.
   bool audio = false;
+  /// A caption track: as short as an audio one, and a place only captions go.
+  bool caption = false;
   /// A height somebody dragged this lane to, overriding the theme's. Empty
   /// means the theme decides, which is what every track starts as.
   ///

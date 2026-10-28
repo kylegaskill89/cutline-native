@@ -167,7 +167,7 @@ std::vector<Workspace> built_in_workspaces() {
                    {0.5, 0.5}),
              split(Axis::Horizontal,
                    {tabs({"project", "library", "scopes", "history"}),
-                    tabs({"timeline", "queue", "lumetri"})},
+                    tabs({"timeline", "text", "queue", "lumetri"})},
                    {0.3, 0.7})},
             {0.55, 0.45});
 
@@ -178,7 +178,7 @@ std::vector<Workspace> built_in_workspaces() {
   assembly.layout.root =
       split(Axis::Vertical,
             {split(Axis::Horizontal,
-                   {tabs({"project", "library", "history", "queue"}),
+                   {tabs({"project", "library", "history", "queue", "text"}),
                     split(Axis::Vertical,
                           {tabs({"source", "effects", "audio", "graphics"}),
                            tabs({"monitor", "scopes", "lumetri"})},
@@ -201,7 +201,7 @@ std::vector<Workspace> built_in_workspaces() {
                    {0.22, 0.48, 0.30}),
              split(Axis::Horizontal,
                    {tabs({"project", "library", "audio"}),
-                    tabs({"timeline", "effects", "queue", "history", "graphics"})},
+                    tabs({"timeline", "text", "effects", "queue", "history", "graphics"})},
                    {0.3, 0.7})},
             {0.6, 0.4});
 
@@ -216,7 +216,7 @@ std::vector<Workspace> built_in_workspaces() {
                    {0.32, 0.48, 0.20}),
              split(Axis::Horizontal,
                    {tabs({"project", "scopes", "audio"}),
-                    tabs({"timeline", "queue", "history", "graphics", "lumetri"})},
+                    tabs({"timeline", "text", "queue", "history", "graphics", "lumetri"})},
                    {0.3, 0.7})},
             {0.58, 0.42});
 
@@ -231,7 +231,7 @@ std::vector<Workspace> built_in_workspaces() {
                     tabs({"monitor", "lumetri"})},
                    {0.5, 0.5}),
              split(Axis::Horizontal,
-                   {tabs({"project", "library", "scopes", "history"}), tabs({"timeline", "queue"})},
+                   {tabs({"project", "library", "scopes", "history"}), tabs({"timeline", "text", "queue"})},
                    {0.3, 0.7})},
             {0.5, 0.5});
 
@@ -249,7 +249,7 @@ std::vector<Workspace> built_in_workspaces() {
              {0.27, 0.48, 0.25}),
        split(Axis::Horizontal,
              {tabs({"project", "library", "audio"}),
-              tabs({"timeline", "queue", "history", "lumetri"})},
+              tabs({"timeline", "text", "queue", "history", "lumetri"})},
              {0.3, 0.7})},
       {0.6, 0.4});
 

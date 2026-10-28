@@ -68,6 +68,7 @@ namespace {
   settings.audio = plan.audio;
   settings.audio_channels = plan.channels;
   settings.separate_audio = plan.separate_audio;
+  settings.captions = job.captions;
   if (job.span.has_value()) {
     settings.start = job.span->start;
     settings.duration = job.span->duration;
@@ -245,6 +246,7 @@ std::expected<std::uint64_t, std::string> queue_export(App& app, bool start) {
   job->preset = cutline::editor::matching_preset_name(app.export_presets, setup.preset);
   job->project = project;
   job->plan = *plan;
+  job->captions = setup.captions;
   if (setup.marked_only && cutline::core::has_marks(project)) {
     job->span = cutline::core::marked_span(project);
   }
