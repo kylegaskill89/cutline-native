@@ -129,6 +129,9 @@ class StabilizerTest : public ::testing::Test {
  protected:
   void SetUp() override {
     if (!shared_device()) GTEST_SKIP() << "no Direct3D 12 device available";
+    // The shot is a graphic, and a build without the text library draws
+    // graphics as nothing: a blank shot has nothing to follow.
+    if (!can_draw_text()) GTEST_SKIP() << "this build cannot draw the graphic the shot is made of";
     folder_ = std::filesystem::temp_directory_path() /
               ("cutline_analysis_" + std::to_string(_getpid()));
     std::filesystem::create_directories(folder_);
