@@ -77,7 +77,9 @@ class Dialog : public Panel {
   FormRow& row(std::string label) { return body_->row(std::move(label)); }
 
   /// The accepting button's text and what it does. "OK" for a question,
-  /// "Close" for a dialog that edits as it goes and has nothing to undo.
+  /// "Close" for a dialog that edits as it goes and has nothing to undo. No
+  /// text means no button, for a window that only says how far something has
+  /// got and has Cancel.
   void set_accept(std::string text, Accept accept);
   /// The cancelling button, and anything to do on the way out besides closing.
   /// No text means no button: a dialog that edits as it goes has nothing to

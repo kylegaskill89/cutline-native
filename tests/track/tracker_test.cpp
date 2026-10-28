@@ -150,5 +150,70 @@ TEST(Tracker, TooFewPointsIsNoAnswer) {
   EXPECT_FALSE(fit_motion(two, two, Motion::Translation, {}).has_value());
 }
 
+// ---------------------------------------------------------- dense regions --
+
+TEST(AlignRegion, AMoveIsFoundByEveryPixelInTheRegion) {
+  const Image a = texture();
+  const Image b = moved(a, Similarity{.origin = kCentre, .dx = 4.3, .dy = -2.6});
+  const auto fit =
+      align_region(Pyramid(a), Pyramid(b), box(90, 70, 230, 170), Motion::Translation, kCentre);
+  ASSERT_TRUE(fit.has_value());
+  EXPECT_NEAR(fit->dx, 4.3, 0.05);
+  EXPECT_NEAR(fit->dy, -2.6, 0.05);
+}
+
+TEST(AlignRegion, ATurnAndAScaleAreFoundToo) {
+  const Image a = texture();
+  const double turn = 3.0 * std::numbers::pi / 180.0;
+  const Image b = moved(
+      a, Similarity{.origin = kCentre, .dx = -3.0, .dy = 2.0, .rotation = turn, .scale = 0.96});
+  const auto fit =
+      align_region(Pyramid(a), Pyramid(b), box(80, 60, 240, 180), Motion::Similarity, kCentre);
+  ASSERT_TRUE(fit.has_value());
+  EXPECT_NEAR(fit->rotation, turn, 0.003);
+  EXPECT_NEAR(fit->scale, 0.96, 0.003);
+  EXPECT_NEAR(fit->dx, -3.0, 0.15);
+  EXPECT_NEAR(fit->dy, 2.0, 0.15);
+}
+
+/// A plain box with soft edges on a still, darkening screen with fresh grain
+/// every frame: corners almost nowhere, edges all round.
+[[nodiscard]] Image plain_box(double left, unsigned seed) {
+  Image image{.width = kWidth, .height = kHeight};
+  image.pixels.resize(static_cast<std::size_t>(kWidth) * kHeight);
+  std::mt19937 random(seed);
+  std::normal_distribution<double> grain(0.0, 0.025);
+  for (int y = 0; y < kHeight; ++y) {
+    for (int x = 0; x < kWidth; ++x) {
+      const double vignette = 0.55 - 0.2 * std::hypot(x - 160.0, y - 120.0) / 200.0;
+      // Soft-edged: a smooth step over a few pixels each side.
+      const auto edge = [](double d) { return 1.0 / (1.0 + std::exp(-d / 1.5)); };
+      const double inside = edge(x - left) * edge(left + 70.0 - x) * edge(y - 60.0) *
+                            edge(150.0 - y);
+      image.pixels[static_cast<std::size_t>(y) * kWidth + x] =
+          static_cast<float>(vignette + inside * (0.85 - vignette) + grain(random));
+    }
+  }
+  return image;
+}
+
+TEST(AlignRegion, APlainBoxOnAGrainyScreenIsFollowed) {
+  // The box and a margin of screen round it, as a mask is drawn.
+  const auto fit = align_region(Pyramid(plain_box(120.0, 1)), Pyramid(plain_box(113.5, 2)),
+                                box(105, 45, 205, 165), Motion::Translation, {155.0, 105.0});
+  ASSERT_TRUE(fit.has_value());
+  EXPECT_NEAR(fit->dx, -6.5, 0.3);
+  EXPECT_NEAR(fit->dy, 0.0, 0.3);
+}
+
+TEST(AlignRegion, ARegionThatHasGoneIsLost) {
+  Image other{.width = kWidth, .height = kHeight};
+  other.pixels.assign(static_cast<std::size_t>(kWidth) * kHeight, 0.0f);
+  for (std::size_t i = 0; i < other.pixels.size(); ++i) other.pixels[i] = (i * 7919 % 97) / 97.0f;
+  EXPECT_FALSE(align_region(Pyramid(texture()), Pyramid(other), box(90, 70, 230, 170),
+                            Motion::Translation, kCentre)
+                   .has_value());
+}
+
 }  // namespace
 }  // namespace cutline::track

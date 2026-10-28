@@ -78,6 +78,7 @@ Button& Dialog::add_button(std::string text, std::function<void()> on_click) {
 }
 
 void Dialog::set_accept(std::string text, Accept accept) {
+  accept_button_->set_visible(!text.empty());
   accept_button_->set_text(std::move(text));
   accept_ = std::move(accept);
 }
@@ -89,6 +90,9 @@ void Dialog::set_cancel(std::string text, std::function<void()> cancel) {
 }
 
 void Dialog::accept() {
+  // A window with nothing to answer, such as one saying how far a render has
+  // got, is not closed by Enter.
+  if (!accept_button_->visible()) return;
   std::optional<std::string> wrong;
   if (accept_) wrong = accept_();
   if (wrong.has_value()) {

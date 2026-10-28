@@ -93,6 +93,7 @@ void open_render_window(App& app) {
   if (app.main.host == nullptr) return;
   auto dialog = std::make_unique<cutline::ui::Dialog>("Rendering");
   auto& bar = dialog->body().emplace<cutline::ui::ProgressBar>(0.0);
+  dialog->set_accept("", {});
   dialog->set_cancel("Cancel", [&app] { cancel_preview_render(app); });
   app.preview_render_dialog = dialog.get();
   app.preview_render_bar = &bar;

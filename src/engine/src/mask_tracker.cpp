@@ -129,10 +129,10 @@ std::expected<MaskTrackResult, std::string> track_mask(std::shared_ptr<gpu::Devi
     if (!after.has_value()) return std::unexpected(after.error());
     const track::Point origin{mask.x * width, mask.y * height};
     const std::optional<track::Similarity> motion =
-        track::track_region(*before, *after, mask_outline(mask, width, height),
+        track::align_region(*before, *after, mask_outline(mask, width, height),
                             motion_for(mask.tracking), origin);
     if (!motion.has_value()) {
-      result.stopped = "there was too little inside the mask to follow";
+      result.stopped = "what was inside the mask could not be found on the next frame";
       break;
     }
     mask = moved_mask(mask, *motion, width, height);

@@ -102,6 +102,21 @@ TEST(Dialog, EnterAcceptsAndTheDialogCloses) {
   EXPECT_FALSE(fixture.host->popup_open());
 }
 
+// A window that only says how far something has got has Cancel and nothing
+// to answer, so it has no OK.
+TEST(Dialog, AProgressWindowHasOnlyCancel) {
+  int cancelled = 0;
+  auto made = std::make_unique<Dialog>("Rendering");
+  made->set_accept("", {});
+  made->set_cancel("Cancel", [&cancelled] { ++cancelled; });
+  Fixture fixture(std::move(made));
+  const std::vector<Button*> shown = buttons_of(*fixture.dialog);
+  ASSERT_EQ(shown.size(), 1u);
+  EXPECT_EQ(shown[0]->text(), "Cancel");
+  fixture.key(Key::Escape);
+  EXPECT_EQ(cancelled, 1);
+}
+
 // A mistyped answer used to close most dialogs having done nothing, which
 // looks exactly like the edit having worked.
 TEST(Dialog, AWrongAnswerKeepsItOpenAndSaysWhy) {

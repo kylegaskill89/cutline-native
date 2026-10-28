@@ -143,6 +143,17 @@ class FeatureTracker {
   std::uint32_t next_id_ = 0;
 };
 
+/// One step of tracking a region by every pixel in it: the motion that makes
+/// the region in `from` look most like where it went in `to`, found coarse to
+/// fine. What a mask tracks, because a mask is drawn round a thing, and a
+/// thing with plain faces and soft edges has edges everywhere but corners
+/// almost nowhere. Pixels that disagree by far more than the rest are given
+/// less say, so a hand passing over part of it does not carry it off.
+/// Nothing when the region does not match anywhere near.
+[[nodiscard]] std::optional<Similarity> align_region(const Pyramid& from, const Pyramid& to,
+                                                     std::span<const Point> region,
+                                                     Motion motion, Point origin);
+
 /// One step of tracking a region: its corners found in `from`, followed into
 /// `to`, and the motion fitted to them about `origin`. Nothing when the
 /// region has too little detail to follow, or too little of it was followed.

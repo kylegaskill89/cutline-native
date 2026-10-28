@@ -540,4 +540,124 @@ std::vector<TrackPoint> FeatureTracker::next(const Image& image) {
   return kept;
 }
 
+// ---------------------------------------------------------- dense regions --
+
+std::optional<Similarity> align_region(const Pyramid& from, const Pyramid& to,
+                                       std::span<const Point> region, Motion motion,
+                                       Point origin) {
+  if (region.size() < 3) return std::nullopt;
+  double left = region[0].x;
+  double right = left;
+  double top = region[0].y;
+  double bottom = top;
+  for (const Point& p : region) {
+    left = std::min(left, p.x);
+    right = std::max(right, p.x);
+    top = std::min(top, p.y);
+    bottom = std::max(bottom, p.y);
+  }
+
+  // The motion as a move and a scaled turn about the origin, (1 + a, b)
+  // being the turn's cosine and sine times the scale: linear in all four,
+  // which is what makes each step one small solve.
+  double tx = 0.0;
+  double ty = 0.0;
+  double a = 0.0;
+  double b = 0.0;
+  const int unknowns = motion == Motion::Translation ? 2 : 4;
+  const int levels = std::min(from.levels(), to.levels());
+  double last_error = 0.0;
+  for (int level = levels - 1; level >= 0; --level) {
+    const double f = std::exp2(level);
+    const Image& image = from.level(level);
+    const Image& next = to.level(level);
+    const Point o{origin.x / f, origin.y / f};
+    // The region's pixels at this size, a few thousand at most.
+    std::vector<Point> samples;
+    std::vector<float> values;
+    const double area = (right - left) * (bottom - top) / (f * f);
+    const double step = std::max(1.0, std::sqrt(std::max(area, 1.0) / 3000.0));
+    for (double y = top / f; y <= bottom / f; y += step) {
+      for (double x = left / f; x <= right / f; x += step) {
+        if (x < 1 || y < 1 || x > image.width - 2 || y > image.height - 2) continue;
+        if (!inside(region, {x * f, y * f})) continue;
+        samples.push_back({x, y});
+        values.push_back(image.sample(x, y));
+      }
+    }
+    if (samples.size() < 16) continue;
+    for (int iteration = 0; iteration < 30; ++iteration) {
+      double h[16] = {};
+      double g[4] = {};
+      // How far apart the two looked, to scale how much a stray pixel counts.
+      std::vector<double> errors(samples.size());
+      for (std::size_t k = 0; k < samples.size(); ++k) {
+        const double dx = samples[k].x - o.x;
+        const double dy = samples[k].y - o.y;
+        const double qx = o.x + tx / f + (1 + a) * dx - b * dy;
+        const double qy = o.y + ty / f + b * dx + (1 + a) * dy;
+        errors[k] = next.sample(qx, qy) - values[k];
+      }
+      std::vector<double> sorted(errors.size());
+      std::ranges::transform(errors, sorted.begin(), [](double e) { return std::abs(e); });
+      std::nth_element(sorted.begin(), sorted.begin() + static_cast<std::ptrdiff_t>(sorted.size() / 2),
+                       sorted.end());
+      const double typical = std::max(0.01, 1.5 * sorted[sorted.size() / 2]);
+      double total = 0.0;
+      for (std::size_t k = 0; k < samples.size(); ++k) {
+        const double dx = samples[k].x - o.x;
+        const double dy = samples[k].y - o.y;
+        const double qx = o.x + tx / f + (1 + a) * dx - b * dy;
+        const double qy = o.y + ty / f + b * dx + (1 + a) * dy;
+        const double gx = 0.5 * (next.sample(qx + 1, qy) - next.sample(qx - 1, qy));
+        const double gy = 0.5 * (next.sample(qx, qy + 1) - next.sample(qx, qy - 1));
+        const double e = errors[k];
+        // Huber: full say up to the typical difference, less beyond it.
+        const double w = std::abs(e) <= typical ? 1.0 : typical / std::abs(e);
+        total += std::abs(e);
+        // How the picture changes with each of the four, in this level's
+        // pixels; the move is counted in full-size pixels.
+        const double row[4] = {gx / f, gy / f, gx * dx + gy * dy, -gx * dy + gy * dx};
+        for (int r = 0; r < unknowns; ++r) {
+          for (int c = 0; c < unknowns; ++c) h[r * 4 + c] += w * row[r] * row[c];
+          g[r] -= w * row[r] * e;
+        }
+      }
+      last_error = total / static_cast<double>(samples.size());
+      std::vector<double> m(static_cast<std::size_t>(unknowns * unknowns));
+      std::vector<double> rhs(static_cast<std::size_t>(unknowns));
+      for (int r = 0; r < unknowns; ++r) {
+        rhs[static_cast<std::size_t>(r)] = g[r];
+        for (int c = 0; c < unknowns; ++c) {
+          m[static_cast<std::size_t>(r * unknowns + c)] = h[r * 4 + c];
+        }
+        m[static_cast<std::size_t>(r * unknowns + r)] += 1e-9;
+      }
+      if (!detail::solve(m, rhs, static_cast<std::size_t>(unknowns))) break;
+      tx += rhs[0];
+      ty += rhs[1];
+      if (unknowns == 4) {
+        a += rhs[2];
+        b += rhs[3];
+        // A turn without a scale, when that is all that is asked for.
+        if (motion == Motion::TranslationRotation) {
+          const double s = std::hypot(1 + a, b);
+          a = (1 + a) / s - 1;
+          b /= s;
+        }
+      }
+      const double moved = std::hypot(rhs[0], rhs[1]) +
+                           (unknowns == 4 ? 100.0 * std::hypot(rhs[2], rhs[3]) : 0.0);
+      if (moved < 0.005 * f) break;
+    }
+  }
+  // A region that still does not match is lost rather than followed.
+  if (last_error > 0.12) return std::nullopt;
+  return Similarity{.origin = origin,
+                    .dx = tx,
+                    .dy = ty,
+                    .rotation = std::atan2(b, 1 + a),
+                    .scale = std::hypot(1 + a, b)};
+}
+
 }  // namespace cutline::track

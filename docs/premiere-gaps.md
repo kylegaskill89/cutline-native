@@ -2683,11 +2683,14 @@ one.
    Cancel, keys the mask on every frame as one undoable edit, and leaves the
    playhead on the last frame tracked. What is tracked is the clip drawn
    alone, without its effects or Motion, at the size of its own frame, so a
-   nest, a title or a retimed shot is tracked as it is seen. The tracker is
-   its own library (`src/track`): Shi–Tomasi corners inside the mask,
-   pyramidal Lucas–Kanade with a forward–backward check, and a fit to the
-   points that agree with each other, which is the analysis Warp
-   Stabilizer will reuse. A drawn path now has Premiere's Mask Path
+   nest, a title or a retimed shot is tracked as it is seen. A mask follows
+   every pixel inside it, aligned from frame to frame coarse to fine with
+   pixels that disagree given less say: driving it found that following
+   corners lost a plain box with soft edges on a grainy screen, which has
+   edges all round and almost no corners. The tracker is its own library
+   (`src/track`), and its corner tracking (Shi–Tomasi corners, pyramidal
+   Lucas–Kanade with a forward–backward check, and a fit to the points that
+   agree) is what Warp Stabilizer's analysis uses over the whole frame. A drawn path now has Premiere's Mask Path
    keyframes, with a stopwatch and keyframe navigator; dragging an animated
    path keys it at the playhead, and a point added or removed goes into or
    out of every keyframe. Tracking a path's scale writes its Mask Path.

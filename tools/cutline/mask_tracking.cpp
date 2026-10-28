@@ -57,6 +57,7 @@ void track_mask(App& app, const std::string& clip_id, std::size_t effect, bool b
   if (!one_frame && app.main.host != nullptr) {
     auto dialog = std::make_unique<cutline::ui::Dialog>("Tracking");
     auto& bar = dialog->body().emplace<cutline::ui::ProgressBar>(0.0);
+    dialog->set_accept("", {});
     dialog->set_cancel("Cancel", [&app] { app.mask_track_cancel = true; });
     app.mask_track_dialog = dialog.get();
     app.mask_track_bar = &bar;
