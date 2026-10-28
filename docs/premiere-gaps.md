@@ -438,8 +438,8 @@ already given, which is why that function takes one beyond resolving keyframes.
 
 Still absent, roughly in the order their absence would be noticed: ~~**Lumetri
 Color**~~ (done, §13), ~~**Drop Shadow**~~, ~~**Track Matte Key**~~ (done,
-§12), ~~**Ultra Key**~~ (done, Phase 4 item 7), ~~**Warp Stabilizer**~~ (done
-but for Synthesize Edges, Phase 4 item 10), and
+§12), ~~**Ultra Key**~~ (done, Phase 4 item 7), ~~**Warp Stabilizer**~~ (done,
+Phase 4 item 10), and
 ~~**Transform**~~ (done, Phase 4 item 8).
 
 Of those, Drop Shadow and Track Matte Key want something the pass chain does not
@@ -2694,7 +2694,7 @@ one.
    keyframes, with a stopwatch and keyframe navigator; dragging an animated
    path keys it at the playhead, and a point added or removed goes into or
    out of every keyframe. Tracking a path's scale writes its Mask Path.
-10. ~~**Warp Stabilizer**~~ — **done, except Synthesize Edges**. Applying
+10. ~~**Warp Stabilizer**~~ — **done**. Applying
     it starts the analysis in the background, one clip at a time, with
     Premiere's "Analyzing in background (step 1 of 2)" and "Stabilizing (step
     2 of 2)" banded across the Program Monitor, Analyze and Cancel at the top
@@ -2711,9 +2711,16 @@ one.
     transform cannot. Every method draws through the same mesh, with a
     rolling shutter's lean (its readout found from the footage, coarsely for
     Automatic Reduction and finely for Enhanced) and the framing's crop or
-    zoom folded in. **Stabilize, Synthesize Edges** draws as Stabilize Only
-    for now: it fills the borders from frames up to seconds away, and the
-    renderer draws one moment of a clip per frame.
+    zoom folded in. **Stabilize, Synthesize Edges** fills the borders from a
+    dozen neighbouring frames across Synthesis Input Range, nearest first:
+    the renderer draws the clip alone at each of those moments into one
+    picture, by rendering a made-up sequence of copies of the clip each moved
+    in time to show its moment, and hands it to the layer in Track Matte's
+    slot. Where the frame has no picture, the shader finds it in each
+    neighbour in turn through the camera's move between the two, with
+    Synthesis Edge Cropping taken off each and Synthesis Edge Feather
+    softening the seam with the frame's own picture. It is the slowest way
+    to draw a frame here, as it is in Premiere.
 11. **Multicam** (large). Multi-camera source sequences synchronised by
     audio, timecode or marks, the multi-camera monitor view, and switching
     angles live into cuts. The largest and the most self-contained, so last.

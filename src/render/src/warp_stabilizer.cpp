@@ -166,6 +166,61 @@ std::shared_ptr<const track::Stabilization> stabilization(const std::string& key
   return result;
 }
 
+namespace {
+
+[[nodiscard]] std::size_t frame_of(const track::Stabilization& result, double local_t,
+                                   double fps) {
+  return static_cast<std::size_t>(std::clamp<long long>(
+      std::llround(local_t * fps), 0, static_cast<long long>(result.frames.size()) - 1));
+}
+
+[[nodiscard]] double fps_of(const core::Project& project) {
+  return project.sequence().fps > 0.0 ? project.sequence().fps : 30.0;
+}
+
+/// The neighbouring frames to fill from, as frame numbers, nearest first: the
+/// few either side, which is where a shake's missing edge usually is, then
+/// further off across the range, which is where a pan's is.
+[[nodiscard]] std::vector<std::size_t> neighbours(std::size_t frame, std::size_t count,
+                                                  double range_frames) {
+  const double r = std::max(1.0, range_frames);
+  std::vector<long long> offsets;
+  for (const double d : {1.0, 2.0, 3.0, std::max(4.0, r / 6.0), std::max(5.0, r / 3.0), r}) {
+    const auto k = static_cast<long long>(std::llround(d));
+    offsets.push_back(-k);
+    offsets.push_back(k);
+  }
+  std::vector<std::size_t> out;
+  for (const long long o : offsets) {
+    const long long at = static_cast<long long>(frame) + o;
+    if (at < 0 || at >= static_cast<long long>(count)) continue;
+    const auto f = static_cast<std::size_t>(at);
+    if (f != frame && std::ranges::find(out, f) == out.end()) out.push_back(f);
+    if (out.size() == static_cast<std::size_t>(kSynthesisColumns * kSynthesisRows)) break;
+  }
+  return out;
+}
+
+}  // namespace
+
+std::vector<double> synthesis_times(const core::Project& project, const core::Clip& clip,
+                                    const core::ClipEffect& effect, double local_t) {
+  const track::StabilizeSettings settings = stabilize_settings(effect);
+  if (settings.framing != track::Framing::SynthesizeEdges) return {};
+  const std::string key = analysis_key(project, clip, effect);
+  if (!has_analysis(key)) return {};
+  const std::shared_ptr<const track::Stabilization> result = stabilization(key, settings);
+  if (result == nullptr || result->frames.empty()) return {};
+  const double fps = fps_of(project);
+  const double range = std::max(0.0, param(effect, "synthesis_range", 3.0)) * fps;
+  std::vector<double> out;
+  for (const std::size_t f : neighbours(frame_of(*result, local_t, fps), result->frames.size(),
+                                        range)) {
+    out.push_back(static_cast<double>(f) / fps);
+  }
+  return out;
+}
+
 void plan_warp_stabilizer(const core::Project& project, const core::Clip& clip,
                           const core::ClipEffect& effect, double local_t,
                           std::vector<EffectPass>& passes) {
@@ -175,20 +230,46 @@ void plan_warp_stabilizer(const core::Project& project, const core::Clip& clip,
       stabilization(key, stabilize_settings(effect));
   if (result == nullptr || result->frames.empty()) return;
 
-  const double fps = project.sequence().fps > 0.0 ? project.sequence().fps : 30.0;
-  const auto frame = static_cast<std::size_t>(std::clamp<long long>(
-      std::llround(local_t * fps), 0, static_cast<long long>(result->frames.size()) - 1));
+  const double fps = fps_of(project);
+  const std::size_t frame = frame_of(*result, local_t, fps);
   const track::WarpGrid& grid = result->frames[frame];
+
+  // The neighbours Synthesize Edges fills from, as the renderer draws them.
+  const std::vector<double> times = synthesis_times(project, clip, effect, local_t);
+  const double w = std::max(1, result->width);
+  const double h = std::max(1, result->height);
 
   EffectPass pass;
   pass.kind = EffectPassKind::WarpStabilizer;
   std::vector<float>& data = pass.data;
-  data = {static_cast<float>(grid.columns), static_cast<float>(grid.rows),
-          static_cast<float>(result->visible), 0.0f};
-  data.reserve(kWarpHeader + grid.source.size() * 2);
+  data.assign(kWarpHeader, 0.0f);
+  data[0] = static_cast<float>(grid.columns);
+  data[1] = static_cast<float>(grid.rows);
+  data[2] = static_cast<float>(result->visible);
+  data[3] = static_cast<float>(times.size());
+  // Feather up to a sixth of the frame; cropping in the analysis's pixels.
+  data[4] = static_cast<float>(std::clamp(param(effect, "synthesis_feather", 60.0), 0.0, 100.0) /
+                               100.0 / 6.0);
+  data[5] = project.sequence().colour == core::WorkingColour::Rec709 ? 0.0f : 1.0f;
+  data[6] = static_cast<float>(std::max(0.0, param(effect, "synthesis_left", 0.0)) / w);
+  data[7] = static_cast<float>(std::max(0.0, param(effect, "synthesis_top", 0.0)) / h);
+  data[8] = static_cast<float>(std::max(0.0, param(effect, "synthesis_right", 0.0)) / w);
+  data[9] = static_cast<float>(std::max(0.0, param(effect, "synthesis_bottom", 0.0)) / h);
+  data.reserve(kWarpHeader + grid.source.size() * 2 + times.size() * 9);
   for (const track::Point& p : grid.source) {
     data.push_back(static_cast<float>(p.x));
     data.push_back(static_cast<float>(p.y));
+  }
+  // From this frame's source to a neighbour's: back to the first frame's
+  // scene, and on to where that frame had it, in fractions of the frame.
+  track::Homography to_pixels;
+  to_pixels.m = {w, 0.0, 0.0, 0.0, h, 0.0, 0.0, 0.0, 1.0};
+  const track::Homography to_fractions = to_pixels.inverse();
+  for (const double t : times) {
+    const std::size_t other = frame_of(*result, t, fps);
+    const track::Homography across = to_fractions * result->camera[other] *
+                                     result->camera[frame].inverse() * to_pixels;
+    for (const double v : across.m) data.push_back(static_cast<float>(v));
   }
   passes.push_back(std::move(pass));
 }

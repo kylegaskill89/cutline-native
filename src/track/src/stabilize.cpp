@@ -223,6 +223,8 @@ Point WarpGrid::at(double x, double y) const noexcept {
 
 Stabilization stabilize(const Analysis& a, const StabilizeSettings& settings) {
   Stabilization out;
+  out.width = a.width;
+  out.height = a.height;
   const std::size_t n = a.frames.size();
   const double w = std::max(1, a.width);
   const double h = std::max(1, a.height);
@@ -240,6 +242,7 @@ Stabilization stabilize(const Analysis& a, const StabilizeSettings& settings) {
   };
   if (n < 2) {
     out.frames.assign(n, identity());
+    out.camera.assign(n, Homography{});
     return out;
   }
 
@@ -349,6 +352,8 @@ Stabilization stabilize(const Analysis& a, const StabilizeSettings& settings) {
       wanted[i] = zoom * wanted[i];
     }
   }
+
+  out.camera = camera;
 
   // Each output pixel is drawn from where the camera had it: camera, after the
   // wanted path undone.

@@ -1,6 +1,7 @@
 #include "cutline/engine/frame_renderer.hpp"
 
 #include "cutline/core/graphic.hpp"
+#include "cutline/core/layout.hpp"
 #include "cutline/core/interpret.hpp"
 #include "cutline/core/nesting.hpp"
 #include "cutline/core/sequences.hpp"
@@ -10,6 +11,7 @@
 #include "cutline/render/effect_passes.hpp"
 #include "cutline/render/effects.hpp"
 #include "cutline/render/plan.hpp"
+#include "cutline/render/warp_stabilizer.hpp"
 
 #if CUTLINE_HAVE_TEXT
 #include "cutline/text/raster.hpp"
@@ -22,6 +24,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <format>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -788,6 +791,14 @@ struct FrameRenderer::Impl {
   /// is how a matte track is usually left. Empty when there is no such track.
   [[nodiscard]] gpu::SceneTexture matte_picture(const core::Project& project, int track_number,
                                                 double t);
+
+  /// Warp Stabilizer's neighbouring frames for Synthesize Edges, drawn side by
+  /// side in one picture: the clip alone at each of `times`, laid out as
+  /// `render::kSynthesisColumns` by `kSynthesisRows`, nearest first. Empty
+  /// when there is nothing to draw.
+  [[nodiscard]] gpu::SceneTexture synthesis_picture(const core::Project& project,
+                                                    const core::Clip& clip, double local_t,
+                                                    const std::vector<double>& times);
 
   /// Composites a nested sequence and hands back the picture, still on the
   /// card. Empty when there is nothing to draw, or the nesting is too deep.
@@ -1573,6 +1584,81 @@ gpu::SceneTexture FrameRenderer::Impl::nested_picture(const core::Project& proje
   return picture.has_value() ? *picture : gpu::SceneTexture{};
 }
 
+gpu::SceneTexture FrameRenderer::Impl::synthesis_picture(const core::Project& project,
+                                                         const core::Clip& clip, double local_t,
+                                                         const std::vector<double>& times) {
+  if (depth >= kMaxNestDepth || times.empty()) return {};
+  const auto media = std::ranges::find(project.media, clip.media_id, &core::Media::id);
+  const core::Size frame = core::natural_size(
+      media == project.media.end() ? nullptr : &*media,
+      static_cast<double>(project.sequence().canvas_w),
+      static_cast<double>(project.sequence().canvas_h));
+  if (frame.width <= 0.0 || frame.height <= 0.0) return {};
+  // Each frame at no more than 480 across: these fill edges, which are soft
+  // and moving, and a dozen at full size would be most of a frame's work again.
+  const double shrink = std::min(1.0, 480.0 / frame.width);
+  const int cell_w = std::max(16, static_cast<int>(std::lround(frame.width * shrink)));
+  const int cell_h = std::max(16, static_cast<int>(std::lround(frame.height * shrink)));
+  const int width = cell_w * render::kSynthesisColumns;
+  const int height = cell_h * render::kSynthesisRows;
+
+  // The clip alone, once per moment, each on a track of its own and in a cell
+  // of its own. Each copy is moved in time so that, at this moment, it shows
+  // the one it stands for: the renderer then draws them all as it draws any
+  // sequence.
+  core::Project atlas = project;
+  core::Sequence& sequence = atlas.sequence();
+  sequence.canvas_w = width;
+  sequence.canvas_h = height;
+  sequence.tracks.clear();
+  const double now = clip.start + local_t;
+  for (std::size_t k = 0; k < times.size(); ++k) {
+    core::Clip copy = clip;
+    copy.id = std::format("synthesis{}", k);
+    copy.effects.clear();
+    copy.opacity = 1.0;
+    copy.fade_in = 0.0;
+    copy.fade_out = 0.0;
+    copy.blend = core::BlendMode::Normal;
+    copy.disabled = false;
+    copy.transition_out.reset();
+    for (std::size_t i = 0; i < copy.keyframes.size(); ++i) {
+      if (i != static_cast<std::size_t>(core::AnimProp::Speed)) copy.keyframes[i].clear();
+    }
+    const int column = static_cast<int>(k) % render::kSynthesisColumns;
+    const int row = static_cast<int>(k) / render::kSynthesisColumns;
+    copy.transform = core::Transform{
+        .x = (column + 0.5) / render::kSynthesisColumns,
+        .y = (row + 0.5) / render::kSynthesisRows,
+        .scale_x = 1.0 / render::kSynthesisRows,
+        .scale_y = 1.0 / render::kSynthesisRows};
+    copy.start = now - times[k];
+    core::Track track;
+    track.id = copy.id;
+    track.kind = core::TrackKind::Video;
+    track.clips = {std::move(copy)};
+    sequence.tracks.push_back(std::move(track));
+  }
+
+  // Named for its size as well, so a clip whose frame changes gets a renderer
+  // the new size rather than drawing into the old one.
+  const std::string key = std::format("synthesis:{}:{}x{}", clip.id, width, height);
+  auto found = mattes.find(key);
+  if (found == mattes.end()) {
+    auto made = FrameRenderer::create(device, width, height, queue);
+    if (!made.has_value()) return {};
+    (*made)->impl_->depth = depth + 1;
+    (*made)->set_use_proxies(use_proxies);
+    found = mattes.emplace(key, std::move(*made)).first;
+  }
+  FrameRenderer& renderer = *found->second;
+  const bool hdr = project.sequence().colour != core::WorkingColour::Rec709;
+  renderer.compositor().set_hdr_display(hdr ? std::optional<float>(80.0f) : std::nullopt);
+  if (!renderer.render(atlas, now).has_value()) return {};
+  const auto picture = renderer.compositor().display_texture();
+  return picture.has_value() ? *picture : gpu::SceneTexture{};
+}
+
 gpu::SceneTexture FrameRenderer::Impl::matte_picture(const core::Project& project,
                                                      int track_number, double t) {
   if (depth >= kMaxNestDepth) return {};
@@ -2006,6 +2092,20 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
             static_cast<int>(std::lround(track == effect.params.end() ? 0.0 : track->second));
         const gpu::SceneTexture matte = d.matte_picture(project, number, t);
         if (!matte.empty()) layer.matte = gpu::SourceTexture{.resource = matte.resource};
+      }
+      // Warp Stabilizer's neighbouring frames, in the same slot, for
+      // Synthesize Edges; a track matte on the same clip keeps the slot.
+      for (const core::ClipEffect& effect : source.clip->effects) {
+        if (layer.matte.resource != nullptr) break;
+        if (!effect.enabled || effect.type != "warpstabilizer") continue;
+        const double local_t = t - source.clip->start;
+        const std::vector<double> times =
+            render::synthesis_times(project, *source.clip, effect, local_t);
+        if (times.empty()) continue;
+        const gpu::SceneTexture atlas = d.synthesis_picture(project, *source.clip, local_t, times);
+        if (atlas.empty()) continue;
+        layer.matte = gpu::SourceTexture{
+            .resource = atlas.hdr_resource != nullptr ? atlas.hdr_resource : atlas.resource};
       }
     }
 

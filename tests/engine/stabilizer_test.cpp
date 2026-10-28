@@ -70,7 +70,11 @@ std::shared_ptr<gpu::Device> shared_device() {
   p.sequence().canvas_w = kWidth;
   p.sequence().canvas_h = kHeight;
   p.sequence().fps = 24.0;
-  p.media = {scatter()};
+  Media ground;
+  ground.id = "ground";
+  ground.is_color = true;
+  ground.color = "#405060";
+  p.media = {scatter(), ground};
   p = core::add_sequence(std::move(p), "Inner");
   core::Sequence& inner = p.sequences[1];
   inner.canvas_w = kWidth;
@@ -89,6 +93,18 @@ std::shared_ptr<gpu::Device> shared_device() {
     ys.push_back(core::Keyframe{.t = i / 24.0, .v = 0.5 + shake(random) / kHeight});
   }
   inner.tracks[0].clips = {squares};
+  // Under the squares, a ground that shakes with them, so the picture is
+  // solid everywhere and only the stabiliser's own edges can be empty.
+  Clip under;
+  under.id = "under";
+  under.media_id = "ground";
+  under.source_out = 5.0;
+  under.keyframes = squares.keyframes;
+  core::Track below;
+  below.id = "below";
+  below.kind = core::TrackKind::Video;
+  below.clips = {under};
+  inner.tracks.push_back(below);
 
   Media nest;
   nest.id = "nest";
@@ -178,6 +194,46 @@ TEST_F(StabilizerTest, AnAnalysedShakingShotIsDrawnSteadier) {
   p.sequence().tracks[0].clips[0].effects[0].enabled = false;
   const double shaken = flicker(p);
   EXPECT_LT(steadied, shaken * 0.5) << steadied << " against " << shaken;
+}
+
+TEST_F(StabilizerTest, SynthesizeEdgesFillsWhatStabilizeOnlyLeavesEmpty) {
+  Project p = shaking();
+  const Clip& clip = p.sequence().tracks[0].clips[0];
+  const auto analysis = analyse_for_stabilizer(shared_device(), p, "outer", 0);
+  ASSERT_TRUE(analysis.has_value()) << analysis.error();
+  ASSERT_TRUE(track::save_analysis(
+      *analysis, render::analysis_path(render::analysis_key(p, clip, clip.effects[0]))));
+
+  // How much of the frame is left empty, over a run of frames.
+  const auto empty = [&](double framing) {
+    p.sequence().tracks[0].clips[0].effects[0].params["framing"] = framing;
+    auto renderer = FrameRenderer::create(shared_device(), kWidth, kHeight);
+    EXPECT_TRUE(renderer.has_value());
+    long long holes = 0;
+    for (int i = 8; i < kFrames - 8; i += 4) {
+      EXPECT_TRUE((*renderer)->render(p, i / 24.0).has_value());
+      const auto image = (*renderer)->read_back();
+      EXPECT_TRUE(image.has_value());
+      for (std::size_t at = 3; at < image->pixels.size(); at += 4) {
+        if (image->pixels[at] < 128) ++holes;
+      }
+    }
+    return holes;
+  };
+  const long long only = empty(0.0);
+  const long long synthesized = empty(3.0);
+  EXPECT_GT(only, 500) << "the shake should leave edges for synthesis to fill";
+  EXPECT_LT(synthesized, only / 10) << synthesized << " against " << only;
+  // Neighbouring moments come from inside the clip and never from the frame
+  // itself.
+  const std::vector<double> times = render::synthesis_times(
+      p, p.sequence().tracks[0].clips[0], p.sequence().tracks[0].clips[0].effects[0], 1.0);
+  ASSERT_FALSE(times.empty());
+  for (const double t : times) {
+    EXPECT_GE(t, 0.0);
+    EXPECT_LT(t, kFrames / 24.0);
+    EXPECT_GT(std::abs(t - 1.0), 1e-9);
+  }
 }
 
 TEST_F(StabilizerTest, TrimmingTheClipNamesADifferentAnalysis) {

@@ -87,6 +87,13 @@ struct Stabilization {
   double visible = 1.0;
   /// The rolling shutter's readout as a share of a frame, as it was found.
   double readout = 0.0;
+  /// Where the first frame's scene is on each frame, in the analysis's pixels:
+  /// what Synthesize Edges uses to find where a neighbouring frame's picture
+  /// lands on this one.
+  std::vector<Homography> camera;
+  /// The size the analysis was made at.
+  int width = 0;
+  int height = 0;
 };
 
 /// The mesh is this many cells across and down.

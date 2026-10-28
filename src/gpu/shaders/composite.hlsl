@@ -1567,26 +1567,78 @@ float4 transformPass(float2 uv) {
     return float4(rgb, sum.a * pd(2.0));
 }
 
+// The warp pass's header, as `render/warp_stabilizer.hpp` lays it out.
+static const float kWarpHeader = 12.0;
+#define SYNTHESIS_COLUMNS 4
+#define SYNTHESIS_ROWS 3
+
+/// How far inside the usable part of a frame a point is, as a share of the
+/// frame: negative outside. Synthesis Edge Cropping takes its margins off.
+float synthesisDepth(float2 s) {
+    const float4 crop = float4(pd(6.0), pd(7.0), pd(8.0), pd(9.0));
+    return min(min(s.x - crop.x, s.y - crop.y), min(1.0 - crop.z - s.x, 1.0 - crop.w - s.y));
+}
+
+/// A neighbouring frame's picture at `s`, from its cell of the atlas Track
+/// Matte's slot carries, in the scratch's coded values.
+float4 synthesisAt(int k, float2 s) {
+    const float2 cell = float2(k % SYNTHESIS_COLUMNS, k / SYNTHESIS_COLUMNS);
+    const float2 atlas = (cell + saturate(s)) / float2(SYNTHESIS_COLUMNS, SYNTHESIS_ROWS);
+    float4 v = texture1.Sample(linearSampler, atlas);
+    if (pd(5.0) > 0.5) v.rgb = fromRelative(toRelative(v.rgb, TRANSFER_SCRGB), params.working);
+    return float4(v.rgb, 1.0);
+}
+
 /// Warp Stabilizer: each output point drawn from where the mesh says, read
-/// from the cell it falls in. Outside what Stabilize, Crop leaves showing, and
-/// wherever the source is off the frame, nothing.
+/// from the cell it falls in. Outside what Stabilize, Crop leaves showing,
+/// nothing. Where the source is off the frame, nothing either, unless
+/// Synthesize Edges has neighbouring frames to fill it from: nearest in time
+/// first, each blended in across its feather.
 float4 warpPass(float2 uv) {
     const int columns = (int)pd(0.0);
     const int rows = (int)pd(1.0);
     const float visible = pd(2.0);
+    const int neighbours = (int)pd(3.0);
     const float2 f = layerUv(uv);
     if (any(abs(f - 0.5) > 0.5 * visible)) return float4(0.0, 0.0, 0.0, 0.0);
     const float2 g = saturate(f) * float2(columns, rows);
     const int2 cell = min(int2(g), int2(columns - 1, rows - 1));
     const float2 t = g - float2(cell);
-    const float base = 4.0 + 2.0 * (float)(cell.y * (columns + 1) + cell.x);
+    const float base = kWarpHeader + 2.0 * (float)(cell.y * (columns + 1) + cell.x);
     const float below = 2.0 * (float)(columns + 1);
     const float2 a = float2(pd(base), pd(base + 1.0));
     const float2 b = float2(pd(base + 2.0), pd(base + 3.0));
     const float2 c = float2(pd(base + below), pd(base + below + 1.0));
     const float2 d = float2(pd(base + below + 2.0), pd(base + below + 3.0));
     const float2 source = lerp(lerp(a, b, t.x), lerp(c, d, t.x), t.y);
-    return frameAt(source);
+    const float4 here = frameAt(source);
+    if (neighbours <= 0) return here;
+    // Deep inside this frame there is nothing to fill.
+    const float feather = pd(4.0);
+    const float depth = synthesisDepth(source);
+    if (depth >= feather) return here;
+
+    // Front to back: this frame, faded out over the feather towards its edge
+    // so the seam with what fills it is soft, then each neighbour, whole
+    // wherever it has picture, until the point is covered.
+    const float own = feather > 0.0 ? saturate(depth / feather) : step(0.0, depth);
+    float4 sum = float4(here.rgb * here.a, here.a) * own;
+    const float homographies = kWarpHeader + 2.0 * (float)((columns + 1) * (rows + 1));
+    // A pixel of the frame, for an edge that is smooth rather than stepped.
+    const float pixel = 1.0 / max(params.size.x, 1.0);
+    for (int k = 0; k < neighbours && sum.a < 0.999; ++k) {
+        const float at = homographies + 9.0 * (float)k;
+        const float3 p = float3(source, 1.0);
+        const float w = pd(at + 6.0) * p.x + pd(at + 7.0) * p.y + pd(at + 8.0);
+        const float2 s = float2(pd(at) * p.x + pd(at + 1.0) * p.y + pd(at + 2.0),
+                                pd(at + 3.0) * p.x + pd(at + 4.0) * p.y + pd(at + 5.0)) /
+                         (abs(w) > 1e-6 ? w : 1e-6);
+        const float cover = saturate(synthesisDepth(s) / pixel);
+        if (cover <= 0.0) continue;
+        const float4 there = synthesisAt(k, s);
+        sum += (1.0 - sum.a) * cover * float4(there.rgb, 1.0);
+    }
+    return sum.a > 0.0 ? float4(sum.rgb / sum.a, sum.a) : float4(0.0, 0.0, 0.0, 0.0);
 }
 
 float4 PSEffect(VSOutput input) : SV_Target {

@@ -45,9 +45,28 @@ void set_analysis_folder(std::filesystem::path folder);
 [[nodiscard]] std::shared_ptr<const track::Stabilization> stabilization(
     const std::string& key, const track::StabilizeSettings& settings, bool wait = true);
 
-/// The warp pass's data: columns, rows and the share left showing, then each
-/// vertex's source as two fractions.
-inline constexpr std::size_t kWarpHeader = 4;
+/// The warp pass's data. A header: columns, rows, the share left showing, how
+/// many neighbouring frames Synthesize Edges draws on, its feather as a share
+/// of the frame, whether those frames arrive as scRGB light rather than coded,
+/// and its edge cropping, left, top, right and bottom, as shares of the frame.
+/// Then each vertex's source as two fractions; then, per neighbouring frame,
+/// the perspective from this frame's source to that one's, in fractions, row
+/// by row.
+inline constexpr std::size_t kWarpHeader = 12;
+
+/// The neighbouring frames Synthesize Edges draws are laid out in a grid this
+/// many across and down, nearest in time first.
+inline constexpr int kSynthesisColumns = 4;
+inline constexpr int kSynthesisRows = 3;
+
+/// The clip-local moments Synthesize Edges fills from at `local_t`, nearest
+/// first, within Synthesis Input Range: empty unless the effect is set to
+/// synthesise and the clip has been analysed. The renderer draws these and the
+/// planner places them, and both ask here so they cannot disagree.
+[[nodiscard]] std::vector<double> synthesis_times(const core::Project& project,
+                                                  const core::Clip& clip,
+                                                  const core::ClipEffect& effect,
+                                                  double local_t);
 
 /// Warp Stabilizer's pass for `effect` on `clip` at `local_t`, or none until
 /// the clip has been analysed.
