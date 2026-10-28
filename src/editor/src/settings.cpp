@@ -107,6 +107,7 @@ std::string to_json(const Settings& settings, int indent) {
   out["sounds"] = settings.sounds;
   out["safe_margins_source"] = settings.safe_margins_source;
   out["safe_margins_program"] = settings.safe_margins_program;
+  out["multicam_audio_follows"] = settings.multicam_audio_follows;
   out["transparency_grid_source"] = settings.transparency_grid_source;
   out["transparency_grid_program"] = settings.transparency_grid_program;
   // Only when somebody has changed one. A fresh file saying "every label is
@@ -192,6 +193,8 @@ std::expected<Settings, std::string> settings_from_json(std::string_view text) {
       document.value("safe_margins_source", settings.safe_margins_source);
   settings.safe_margins_program =
       document.value("safe_margins_program", settings.safe_margins_program);
+  settings.multicam_audio_follows =
+      document.value("multicam_audio_follows", settings.multicam_audio_follows);
   settings.transparency_grid_source =
       document.value("transparency_grid_source", settings.transparency_grid_source);
   settings.transparency_grid_program =

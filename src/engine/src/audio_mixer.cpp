@@ -1,5 +1,6 @@
 #include "cutline/engine/audio_mixer.hpp"
 
+#include "cutline/core/multicam.hpp"
 #include "cutline/core/nesting.hpp"
 #include "cutline/core/sequences.hpp"
 
@@ -741,6 +742,17 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
         core::Project within = project;
         within.open = core::sequence_index(project, entry.media->sequence_id);
         usable = usable && settings.depth < kMaxNestDepth && within.open != std::string::npos;
+        // A multicam is heard as the camera it is set to: the other cameras'
+        // tracks are muted inside it.
+        if (usable && entry.clip != nullptr && core::shows_camera(project, *entry.clip)) {
+          core::Sequence& inside = within.sequence();
+          for (std::size_t t = 0; t < inside.tracks.size(); ++t) {
+            if (inside.tracks[t].kind != core::TrackKind::Audio) continue;
+            if (!core::camera_uses_track(inside, t, entry.clip->camera)) {
+              inside.tracks[t].muted = true;
+            }
+          }
+        }
         if (usable) {
           // Reading as it mixes rather than everything up front: a nest of a
           // hundred cuts would otherwise decode a hundred clips before the

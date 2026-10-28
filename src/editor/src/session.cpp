@@ -55,6 +55,21 @@ bool Session::apply(core::Project next) {
   return true;
 }
 
+bool Session::amend(core::Project next) {
+  if (!history_.can_undo()) return apply(std::move(next));
+  next = core::sync_nested_media(std::move(next));
+  next_name_.clear();
+  if (next == project_) return false;
+  // The step before is left as it was, so it still holds the project from
+  // before the first of these, and still has its name.
+  project_ = std::move(next);
+  prune_selection();
+  refresh_modified();
+  ++revision_;
+  ++document_revision_;
+  return true;
+}
+
 void Session::mark_unsaved() {
   // The comparison is against a snapshot, so the flag cannot simply be set: an
   // edit would recompute it and find the project matching what it was told was

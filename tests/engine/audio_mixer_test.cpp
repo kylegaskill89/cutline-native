@@ -1311,6 +1311,43 @@ TEST_F(WithLongTone, ANestIsHeardFromTheRightPartOfItself) {
       << "the nest was read from somewhere else in itself";
 }
 
+TEST_F(WithLongTone, AMulticamIsHeardAsTheCameraItShows) {
+  // Two cameras, the first with the tone on A1 and the second silent on A2.
+  Project p;
+  p.media = {media_};
+  p.sequence().tracks = {audio_track("a1", {})};
+  p = core::add_sequence(std::move(p), "Shoot", 2, 2);
+  core::Sequence& shoot = p.sequences[1];
+  shoot.multicam = true;
+  for (core::Track& track : shoot.tracks) {
+    if (track.kind == TrackKind::Audio) {
+      track.clips = {audio_clip("tone", "long", 0.0, 4.0)};
+      break;
+    }
+  }
+
+  core::Media entry;
+  entry.id = "nest";
+  entry.sequence_id = shoot.id;
+  p.media.push_back(entry);
+  p = core::sync_nested_media(std::move(p));
+
+  const auto heard = [&](int camera, core::MulticamAudio audio) {
+    Project q = p;
+    q.sequences[1].multicam_audio = audio;
+    Clip outer = audio_clip("outer", "nest", 0.0, 4.0);
+    outer.camera = camera;
+    q.sequences[0].tracks = {audio_track("a1", {outer})};
+    auto mixer = AudioMixer::create(q, {.sample_rate = kRate, .channels = kChannels});
+    EXPECT_TRUE(mixer.has_value());
+    return rms_of(mix_span(**mixer, 1.0, 0.2));
+  };
+  EXPECT_GT(heard(0, core::MulticamAudio::Camera1), 0.01) << "the first camera was silent";
+  EXPECT_LT(heard(1, core::MulticamAudio::Switch), 0.001) << "the second camera has no sound";
+  EXPECT_GT(heard(1, core::MulticamAudio::AllCameras), 0.01)
+      << "every camera's sound is mixed when the sequence says so";
+}
+
 // ------------------------------------------------- what is read, and when --
 //
 // A mixer for the sound card reads only the audio about to be heard before it

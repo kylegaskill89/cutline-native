@@ -454,6 +454,12 @@ struct Media {
   /// Belongs to the source, so every clip cut from it is read the same way.
   std::optional<WorkingColour> colour_override;
 
+  /// The timecode of the source's first frame, in seconds, as the file
+  /// records it; nothing for a file that records none. What a multi-camera
+  /// source sequence lines its cameras up by when told to synchronise on
+  /// timecode, since cameras jammed to one clock agree on it.
+  std::optional<double> timecode;
+
   /// A small copy of the same footage, to edit against.
   ///
   /// Empty when there is none, which is the normal state — a proxy is made
@@ -832,6 +838,21 @@ struct Clip {
   /// Disabled clips keep their place on the timeline but are not rendered.
   bool disabled = false;
 
+  /// For a clip of a multi-camera source sequence: which camera it shows,
+  /// counted from zero, and whether it shows one at all.
+  ///
+  /// Premiere's multicam clip is a nest that draws one camera, and switching
+  /// angles is cutting the clip and changing this on the piece after the cut.
+  /// With `multicam_off` it is drawn as an ordinary nest, every track
+  /// composited, which is Premiere's Multi-Camera > Enable unticked. Both are
+  /// ignored on a clip of anything else, so placing a multicam source shows
+  /// its first camera without any placement having to know.
+  ///
+  /// On a sound clip the camera is whose sound is heard, unless the sequence
+  /// mixes every camera; see `MulticamAudio`.
+  int camera = 0;
+  bool multicam_off = false;
+
   /// What colour this clip is drawn, as a hex string. Empty is the theme's.
   ///
   /// A colour rather than a name, the way a marker's is, so the two things that
@@ -855,6 +876,18 @@ struct Clip {
 };
 
 // ------------------------------------------------------------------- track --
+
+/// What a multi-camera source sequence's sound is, from Premiere's Create
+/// Multi-Camera Source Sequence.
+enum class MulticamAudio {
+  /// The first camera's sound throughout, whichever camera is showing:
+  /// usually the one with the good microphone on it.
+  Camera1,
+  /// Every camera's sound mixed, as an ordinary nest's is.
+  AllCameras,
+  /// The sound of whichever camera is showing, cut with the picture.
+  Switch,
+};
 
 /// What a track's fader does with its automation. Premiere's five modes.
 ///
@@ -1130,6 +1163,14 @@ struct Sequence {
   /// bottom-first, so the render order is the reverse of the storage order.
   std::vector<Track> tracks;
   std::vector<Marker> markers;
+
+  /// Whether this is a multi-camera source sequence: one camera on each video
+  /// track, the first on V1, synchronised. A clip of it shows one camera at a
+  /// time; see `Clip::camera`. Its audio tracks follow the cameras in the
+  /// same order, A1 being the first camera's, and any beyond the last camera
+  /// carry sound recorded on its own, which is always heard.
+  bool multicam = false;
+  MulticamAudio multicam_audio = MulticamAudio::Camera1;
 
   /// The span the sequence is marked out for — Premiere's in and out points.
   /// What export offers to render instead of the whole timeline.

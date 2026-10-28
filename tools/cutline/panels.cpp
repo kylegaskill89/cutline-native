@@ -503,6 +503,18 @@ void open_speed_dialog(App& app, std::span<const std::string> clips);
   rows.push_back(command_entry(app, "Link", Command::LinkClips));
   rows.push_back(command_entry(app, "Unlink", Command::UnlinkClips));
   rows.push_back(command_entry(app, "Nest...", Command::Nest));
+  // Premiere's Multi-Camera, for clips of a multi-camera source sequence.
+  {
+    std::vector<MenuEntry> cameras = multicam_entries(app, selected);
+    const bool multicam = std::ranges::any_of(selected, [&app](const std::string& id) {
+      const cutline::core::Clip* clip = cutline::core::find_clip(app.session.project(), id);
+      return clip != nullptr && cutline::core::multicam_source(app.session.project(), *clip);
+    });
+    MenuEntry entry = submenu_entry("Multi-Camera", multicam ? std::move(cameras)
+                                                             : std::vector<MenuEntry>{});
+    entry.enabled = multicam;
+    rows.push_back(std::move(entry));
+  }
   rows.push_back(MenuEntry::divider());
   rows.push_back(submenu_entry("Label", any ? clip_label_entries(app, selected)
                                             : std::vector<MenuEntry>{}));

@@ -7,7 +7,8 @@ add_library(cutline_audio
   src/loudness.cpp
   src/reverb.cpp
   src/meter.cpp
-  src/stretch.cpp)
+  src/stretch.cpp
+  src/sync.cpp)
 add_library(cutline::audio ALIAS cutline_audio)
 
 target_include_directories(cutline_audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

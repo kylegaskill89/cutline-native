@@ -10,6 +10,7 @@
   src/keyframe.cpp
   src/layout.cpp
   src/mask_path.cpp
+  src/multicam.cpp
   src/nesting.cpp
   src/sequences.cpp
   src/pool.cpp

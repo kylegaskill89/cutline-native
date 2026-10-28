@@ -709,6 +709,17 @@ void run_action(App& app, Shell& shell, std::string_view id) {
     go_to_time(app, std::max(0.0, app.session.playhead() + frames / fps));
   };
 
+  // Premiere's camera keys, numbered from 1 as the cameras are.
+  if (id.starts_with("multicam.select_camera_") || id.starts_with("multicam.cut_to_camera_")) {
+    const int camera = id.back() - '1';
+    if (id.starts_with("multicam.select")) {
+      select_camera(app, camera);
+    } else {
+      cut_to_camera(app, camera);
+    }
+    return;
+  }
+
   if (id == "file.new") {
     new_project(app);
   } else if (id == "file.open") {
@@ -2043,6 +2054,14 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
 
     case kStabilizerAnalysed:
       collect_stabilizer_analysis(*app, wparam == 1);
+      return 0;
+
+    case kMulticamSynced:
+      if (wparam == 2) {
+        show_multicam_sync(*app);
+      } else {
+        collect_multicam_sync(*app, wparam == 1);
+      }
       return 0;
 
     case kPreviewReady:

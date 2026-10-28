@@ -813,7 +813,8 @@ for one keystroke.
 | Speed / duration dialogue | a box with both and a ripple option | **done** — speed, duration, reverse and a ripple, from the clip menu | — |
 | Right-click a clip | the menu most edits are actually reached from | **done** — and it offers only what would do something | — |
 | ~~Nesting~~ | a sequence inside a sequence | **done** — Nest on the clip menu, and a sequence is a source in the pool | — |
-| Multi-camera | a multicam source sequence, switched live while it plays | none | machinery |
+| ~~Multi-camera~~ | a multicam source sequence, switched live while it plays | **done** — Phase 4 item 11 | — |
+| Markers on a source | M in the Source Monitor, kept with the clip | none — what Premiere's Clip Marker synchronise point lines cameras up by | small |
 
 **Nesting is a compositing boundary, and that is the whole of why it exists.**
 Six shots with one grade over all of them is one adjustment on a nest and six
@@ -2614,7 +2615,7 @@ one.
    Comparison View among them on the Program Monitor, and a Transparency
    Grid switch each monitor remembers. Premiere took the scopes off its
    monitors when Lumetri Scopes arrived, so they stay in the Scopes panel;
-   Multi-Camera comes with multicam (11). For the monitor alone, applied as
+   Multi-Camera came with multicam (11). For the monitor alone, applied as
    the picture is presented: a snapshot, a scope and an export are the
    composite whatever the monitor shows.
 4. ~~**J/K/L on the source monitor**~~ — **done**. With the Source Monitor
@@ -2721,9 +2722,40 @@ one.
     Synthesis Edge Cropping taken off each and Synthesis Edge Feather
     softening the seam with the frame's own picture. It is the slowest way
     to draw a frame here, as it is in Premiere.
-11. **Multicam** (large). Multi-camera source sequences synchronised by
-    audio, timecode or marks, the multi-camera monitor view, and switching
-    angles live into cuts. The largest and the most self-contained, so last.
+11. ~~**Multicam**~~ — **done**. Clips selected together in the Project
+    panel (Ctrl and Shift now add to its selection) make a multi-camera
+    source sequence from the pool's menu or Clip > Create Multi-Camera Source
+    Sequence, with Premiere's options: the name, the Synchronize Point (In
+    Points, Out Points, Timecode with Ignore Hours, or Audio), the sound
+    (Camera 1, All Cameras or Switch Audio), Enumerate Cameras or the clip
+    names, and moving the sources to a Processed Clips bin. Each camera is a
+    video track from V1 with its sound on the audio track of the same
+    number; a recorder with sound alone goes after them and is always heard.
+    Timecode is read from the file's timecode track or metadata, drop-frame
+    when it says so. Audio is matched by when things happen rather than by
+    the samples, since every microphone hears a room differently: each
+    source's rises in loudness, 2 ms apart, cross-correlated against the
+    first's, on a thread of its own behind a Synchronizing window. A clip of
+    the sequence is a nest that shows one camera, tagged [MC1] on the
+    timeline; with Clip > Multi-Camera > Enable unticked it is an ordinary
+    nest. Each camera has its own nested renderer, so a dissolve between two
+    of them draws both. The Program Monitor's Display Mode > Multi-Camera
+    shows every camera in a square grid beside the picture, rendered on a
+    thread of its own in the source sequence's time, the camera showing
+    outlined in yellow and in red while playing. Clicking a camera, or its
+    number (Premiere's Select Camera, 1 to 9), cuts to it at the playhead
+    while playing and switches the clip under the playhead while stopped;
+    Ctrl and the number is Cut to Camera, playing or not. A pass of switches
+    made while playing is one edit, so one undo takes it all back. Sound
+    switches with the picture under Switch Audio, or with Multi-Camera Audio
+    Follows Video from the monitor's menu. Clip > Multi-Camera also picks a
+    camera and Flattens, putting the camera's own clips in the multicam's
+    place with its effects added. The themes' keys moved from the number row
+    to Ctrl+Alt to leave it to the cameras, as Premiere has it. **Clip
+    Marker** is the one synchronise point missing, because a source here has
+    no markers of its own; that is its own row in §2.3. Premiere's Audio
+    Channels Preset is not offered, since a track here has no channel format
+    to set.
 - ~~**Sequences**~~ — **done**. `core::Sequence` holds one cut and `Project`
   holds a list of them with the index of the open one; the pool and the bins
   stay project-wide, because importing a clip once and cutting it into three

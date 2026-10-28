@@ -71,6 +71,9 @@ struct Settings {
   /// monitor, off until it is asked for.
   bool safe_margins_source = false;
   bool safe_margins_program = false;
+  /// Premiere's Multi-Camera Audio Follows Video: whether choosing a camera
+  /// switches the sound of a multicam to that camera's as well. Off, as there.
+  bool multicam_audio_follows = false;
   /// And whether a checkerboard shows where the frame is not covered,
   /// Premiere's Transparency Grid, kept the same way.
   bool transparency_grid_source = false;

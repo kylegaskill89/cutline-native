@@ -70,6 +70,28 @@ TEST(Probing, AnHdrSourceIsKnownForWhatItIs) {
   EXPECT_EQ(hlg->colour_space, core::WorkingColour::Rec2100Hlg);
 }
 
+// The clock a multi-camera shoot is lined up by, read at the file's rate and
+// counted drop-frame when the file says so.
+TEST(Probing, ASourcesTimecodeIsKnownInSeconds) {
+  const auto plain = probe_source(
+      (std::filesystem::path(CUTLINE_MEDIA_FIXTURES) / "timecode.mov").string());
+  ASSERT_TRUE(plain.has_value()) << plain.error();
+  ASSERT_TRUE(plain->timecode.has_value());
+  EXPECT_NEAR(*plain->timecode, 36001.0 + 12.0 / 25.0, 1e-6);
+
+  // An hour of drop-frame is 107,892 frames, and four more.
+  const auto drop = probe_source(
+      (std::filesystem::path(CUTLINE_MEDIA_FIXTURES) / "timecode-df.mov").string());
+  ASSERT_TRUE(drop.has_value()) << drop.error();
+  ASSERT_TRUE(drop->timecode.has_value());
+  EXPECT_NEAR(*drop->timecode, 107896.0 * 1001.0 / 30000.0, 1e-3);
+
+  const auto none = probe_source(
+      (std::filesystem::path(CUTLINE_MEDIA_FIXTURES) / "vp9.webm").string());
+  ASSERT_TRUE(none.has_value()) << none.error();
+  EXPECT_FALSE(none->timecode.has_value());
+}
+
 TEST(Probing, AFileThatIsNotThereSaysSo) {
   const auto source = probe_source("D:/definitely/not/here.mp4");
   ASSERT_FALSE(source.has_value());

@@ -4,6 +4,7 @@
 #include "cutline/core/edit.hpp"
 #include "cutline/core/effects.hpp"
 #include "cutline/core/keyframe.hpp"
+#include "cutline/core/multicam.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/editor/transitions.hpp"
@@ -28,6 +29,10 @@ namespace {
 [[nodiscard]] std::string label_for(const core::Project& project, const core::Clip& clip) {
   const core::Media* media = media_of(project, clip.media_id);
   if (media == nullptr) return "(missing)";
+  // Premiere's "[MC2]" before a multicam's name, saying which camera it shows.
+  if (const std::string tag = core::camera_tag(project, clip); !tag.empty()) {
+    return tag + " " + media->name;
+  }
   if (!media->name.empty()) return media->name;
   return media->path.empty() ? "(untitled)" : media->path;
 }

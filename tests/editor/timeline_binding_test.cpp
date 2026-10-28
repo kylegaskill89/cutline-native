@@ -18,6 +18,8 @@
 #include "cutline/core/animate.hpp"
 #include "cutline/core/edit.hpp"
 #include "cutline/core/effects.hpp"
+#include "cutline/core/nesting.hpp"
+#include "cutline/core/sequences.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
 
@@ -84,6 +86,24 @@ TEST(Binding, ClipsBecomeBlocksAtTheirOwnTimes) {
   EXPECT_DOUBLE_EQ(block.start, 5.0);
   EXPECT_DOUBLE_EQ(block.end, 12.0);
   EXPECT_EQ(block.label, "wide.mp4");
+}
+
+TEST(Binding, AMulticamIsNamedForTheCameraItShows) {
+  Project project = sample_project();
+  project = core::add_sequence(std::move(project), "Shoot", 3, 0);
+  project.sequences.back().multicam = true;
+  core::Media entry;
+  entry.id = "shoot";
+  entry.sequence_id = project.sequences.back().id;
+  project.media.push_back(entry);
+  project = core::sync_nested_media(std::move(project));
+  core::Clip clip = project.sequence().tracks[1].clips[0];
+  clip.media_id = "shoot";
+  clip.camera = 2;
+  project.sequence().tracks[1].clips[0] = clip;
+
+  const ui::TimelineModel model = timeline_model(project);
+  EXPECT_EQ(model.tracks[1].blocks[0].label, "[MC3] Shoot");
 }
 
 TEST(Binding, ABlockCarriesItsClipIdBack) {

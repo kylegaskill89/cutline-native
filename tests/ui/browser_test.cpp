@@ -201,6 +201,51 @@ TEST(Browser, AClickSelectsAndReports) {
   EXPECT_EQ(calls, 1);
 }
 
+TEST(Browser, CtrlAddsRowsToTheSelectionAndTakesThemAway) {
+  Fixture fixture;
+  const auto at = [&](std::size_t row, bool control) {
+    MouseEvent event = press(20.0, fixture.top() + fixture.row() * static_cast<double>(row) + 1.0);
+    event.modifiers.control = control;
+    return event;
+  };
+  ASSERT_TRUE(fixture.host->mouse_down(at(1, false)));
+  ASSERT_TRUE(fixture.host->mouse_down(at(3, true)));
+  ASSERT_TRUE(fixture.host->mouse_down(at(4, true)));
+  EXPECT_EQ(fixture.view->selected_rows(), (std::vector<std::size_t>{1, 3, 4}));
+  EXPECT_EQ(fixture.view->selection(), std::optional<std::size_t>{4})
+      << "the last one clicked is the one a single action takes";
+  ASSERT_TRUE(fixture.host->mouse_down(at(3, true)));
+  EXPECT_EQ(fixture.view->selected_rows(), (std::vector<std::size_t>{1, 4}));
+  // A plain click starts again.
+  ASSERT_TRUE(fixture.host->mouse_down(at(2, false)));
+  EXPECT_EQ(fixture.view->selected_rows(), (std::vector<std::size_t>{2}));
+}
+
+TEST(Browser, ShiftTakesEveryRowBetween) {
+  Fixture fixture;
+  ASSERT_TRUE(fixture.host->mouse_down(press(20.0, fixture.top() + fixture.row() + 1.0)));
+  MouseEvent event = press(20.0, fixture.top() + fixture.row() * 4.0 + 1.0);
+  event.modifiers.shift = true;
+  ASSERT_TRUE(fixture.host->mouse_down(event));
+  EXPECT_EQ(fixture.view->selected_rows(), (std::vector<std::size_t>{1, 2, 3, 4}));
+}
+
+TEST(Browser, ARightClickOnOneOfSeveralKeepsThemAll) {
+  Fixture fixture;
+  ASSERT_TRUE(fixture.host->mouse_down(press(20.0, fixture.top() + 1.0)));
+  MouseEvent add = press(20.0, fixture.top() + fixture.row() * 2.0 + 1.0);
+  add.modifiers.control = true;
+  ASSERT_TRUE(fixture.host->mouse_down(add));
+  MouseEvent right = press(20.0, fixture.top() + 1.0);
+  right.button = MouseButton::Right;
+  ASSERT_TRUE(fixture.host->mouse_down(right));
+  EXPECT_EQ(fixture.view->selected_rows(), (std::vector<std::size_t>{0, 2}));
+  // Off them, it is a fresh selection of the one clicked.
+  right.y = fixture.top() + fixture.row() * 3.0 + 1.0;
+  ASSERT_TRUE(fixture.host->mouse_down(right));
+  EXPECT_EQ(fixture.view->selected_rows(), (std::vector<std::size_t>{3}));
+}
+
 TEST(Browser, ClickingBelowTheLastRowClearsTheSelection) {
   Fixture fixture(3);
   fixture.view->select(1);

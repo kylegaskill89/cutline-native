@@ -4,6 +4,7 @@ add_library(cutline_engine
   src/exporter.cpp
   src/frame_renderer.cpp
   src/mask_tracker.cpp
+  src/multicam_sync.cpp
   src/stabilizer_analysis.cpp
   src/player.cpp)
 add_library(cutline::engine ALIAS cutline_engine)

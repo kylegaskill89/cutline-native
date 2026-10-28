@@ -209,6 +209,51 @@ TEST_F(FrameRendererTest, ANestDrawsTheSequenceInsideIt) {
   EXPECT_EQ(centre.a, 255);
 }
 
+TEST_F(FrameRendererTest, AMulticamDrawsOnlyTheCameraItShows) {
+  // Camera 1 is red on V1, camera 2 blue on V2 above it. As a nest the blue
+  // would cover the red; as a multicam each piece shows its own camera, and a
+  // dissolve between two of them shows both at once.
+  Project p = canvas_project();
+  p.media = {matte("red", "#ff0000"), matte("blue", "#0000ff")};
+  p = core::add_sequence(std::move(p), "Shoot", 2, 0);
+  core::Sequence& shoot = p.sequences[1];
+  shoot.canvas_w = kWidth;
+  shoot.canvas_h = kHeight;
+  shoot.multicam = true;
+  shoot.tracks[0].clips = {clip("two", "blue", 0.0, 10.0)};
+  shoot.tracks[1].clips = {clip("one", "red", 0.0, 10.0)};
+
+  core::Media entry;
+  entry.id = "shoot";
+  entry.sequence_id = shoot.id;
+  p.media.push_back(entry);
+  p = core::sync_nested_media(std::move(p));
+
+  Clip first = clip("first", "shoot", 0.0, 4.0);
+  first.transition_out = core::Transition{.kind = core::TransitionKind::Dissolve, .duration = 2.0};
+  Clip second = clip("second", "shoot", 4.0, 4.0);
+  second.source_in = 4.0;
+  second.source_out = 8.0;
+  second.camera = 1;
+  p.sequence().tracks = {video_track("v1", {first, second})};
+
+  const Rgba one = pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2);
+  EXPECT_GT(one.r, 250) << "the first camera is red";
+  EXPECT_LT(one.b, 5);
+  const Rgba two = pixel_at(render(p, 6.0), kWidth / 2, kHeight / 2);
+  EXPECT_GT(two.b, 250) << "the second camera is blue";
+  EXPECT_LT(two.r, 5);
+  const Rgba both = pixel_at(render(p, 4.5), kWidth / 2, kHeight / 2);
+  EXPECT_GT(both.r, 10) << "the outgoing camera should still show";
+  EXPECT_GT(both.b, 10) << "the incoming camera should already show";
+
+  // Switched off, it is a nest again, and the top track covers the rest.
+  p.sequence().tracks[0].clips[0].multicam_off = true;
+  const Rgba nest = pixel_at(render(p, 1.0), kWidth / 2, kHeight / 2);
+  EXPECT_GT(nest.b, 250);
+  EXPECT_LT(nest.r, 5);
+}
+
 TEST_F(FrameRendererTest, ANestsEffectAppliesToTheWholePictureAtOnce) {
   // The reason nesting exists. Two clips side by side under one invert: nested,
   // the invert runs on what they composited to. Splicing the inner layers into

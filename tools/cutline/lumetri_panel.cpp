@@ -584,6 +584,8 @@ void apply_match(App& app, const std::string& clip_id) {
 
 void toggle_comparison(App& app) {
   app.lumetri_comparing = !app.lumetri_comparing;
+  // The left half is one thing at a time.
+  if (app.lumetri_comparing && app.multicam_view) toggle_multicam_view(app);
   if (app.lumetri_comparing) capture_reference(app);
   show_comparison(app);
   app.lumetri_stale = true;
@@ -595,6 +597,8 @@ void show_comparison(App& app) {
     app.monitor->set_reference(cutline::ui::ImageView{
         app.lumetri_reference.data(), app.lumetri_reference_width,
         app.lumetri_reference_height, app.lumetri_reference_width * 4});
+  } else if (app.multicam_view) {
+    show_multicam(app);
   } else {
     app.monitor->set_reference({});
   }

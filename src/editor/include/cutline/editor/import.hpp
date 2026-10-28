@@ -43,6 +43,8 @@ struct MediaSource {
   std::optional<double> fps;
   std::optional<int> bit_depth;
   std::optional<core::WorkingColour> colour_space;
+  /// The timecode of the first frame, in seconds, when the file records one.
+  std::optional<double> timecode;
 
   friend bool operator==(const MediaSource&, const MediaSource&) = default;
 };

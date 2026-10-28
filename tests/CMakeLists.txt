@@ -7,6 +7,7 @@ add_executable(cutline_core_tests
   audio/loudness_test.cpp
   audio/meter_test.cpp
   audio/stretch_test.cpp
+  audio/sync_test.cpp
   core/animate_test.cpp
   core/arrange_test.cpp
   core/attributes_test.cpp
@@ -16,6 +17,7 @@ add_executable(cutline_core_tests
   core/keyframe_test.cpp
   core/layout_test.cpp
   core/mask_path_test.cpp
+  core/multicam_test.cpp
   core/nesting_test.cpp
   core/pool_test.cpp
   core/properties_test.cpp
@@ -167,6 +169,7 @@ if(CUTLINE_WITH_GPU)
       engine/exporter_test.cpp
       engine/frame_renderer_test.cpp
       engine/mask_tracker_test.cpp
+      engine/multicam_sync_test.cpp
       engine/stabilizer_test.cpp
       engine/player_test.cpp)
     target_link_libraries(cutline_engine_tests PRIVATE

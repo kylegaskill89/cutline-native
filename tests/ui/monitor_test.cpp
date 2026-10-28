@@ -1423,6 +1423,48 @@ TEST(Monitor, AComparisonPutsTheReferenceLeftAndThePictureRight) {
   EXPECT_LT(monitor.picture().x, 430.0);
 }
 
+TEST(Monitor, TheMultiCameraGridIsCellsOverTheLeftHalfAndAClickPicksOne) {
+  const Pixels frame(160, 90);
+  int fake = 0;
+  MonitorView monitor;
+  monitor.set_frame(frame.view());
+  monitor.set_reference_texture(TextureView{.texture = &fake, .width = 320, .height = 180});
+  monitor.set_angles(MonitorView::Angles{
+      .count = 3, .columns = 2, .active = 1, .recording = false,
+      .names = {"Camera 1", "Camera 2", "Camera 3"}});
+  monitor.arrange(Rect{0.0, 0.0, 860.0, 440.0}, flat_context());
+  ASSERT_TRUE(monitor.comparing());
+
+  const Rect grid = monitor.reference_area();
+  const Rect first = monitor.angle_rect(0);
+  const Rect third = monitor.angle_rect(2);
+  EXPECT_DOUBLE_EQ(first.x, grid.x);
+  EXPECT_DOUBLE_EQ(first.width, grid.width / 2.0);
+  EXPECT_DOUBLE_EQ(third.y, grid.y + grid.height / 2.0) << "the third is on the second row";
+  EXPECT_TRUE(monitor.angle_rect(3).empty()) << "a cell with no camera is nothing";
+
+  int chosen = -1;
+  monitor.set_on_angle([&](int camera) { chosen = camera; });
+  EXPECT_TRUE(monitor.on_mouse_down(MouseEvent{.x = third.x + 5.0, .y = third.y + 5.0}));
+  EXPECT_EQ(chosen, 2);
+
+  // The camera showing is outlined in yellow, and in red while recording.
+  RecordingPainter painter;
+  monitor.paint(painter, default_theme());
+  EXPECT_EQ(painter.count(DrawCall::Kind::Texture), 1u);
+  const auto outlined = [&](const RecordingPainter& p) {
+    for (const DrawCall& call : p.calls()) {
+      if (call.kind == DrawCall::Kind::Stroke && call.width == 3.0) return call.color;
+    }
+    return Color{};
+  };
+  EXPECT_GT(outlined(painter).g, 0.7f);
+  monitor.set_angles(MonitorView::Angles{.count = 3, .columns = 2, .active = 1, .recording = true});
+  RecordingPainter recording;
+  monitor.paint(recording, default_theme());
+  EXPECT_LT(outlined(recording).g, 0.3f);
+}
+
 TEST(Monitor, SafeMarginsAreDrawnInsideThePictureAtTheirSizes) {
   const Pixels frame(200, 100);
   MonitorView monitor;

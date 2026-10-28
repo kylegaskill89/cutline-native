@@ -78,6 +78,7 @@ class TempSettings {
   settings.sounds = true;
   settings.safe_margins_source = true;
   settings.safe_margins_program = true;
+  settings.multicam_audio_follows = true;
   return settings;
 }
 

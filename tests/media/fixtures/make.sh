@@ -27,6 +27,9 @@ ffmpeg $q $bars -c:v libx265 -pix_fmt yuv420p10le -x265-params log-level=none he
 ffmpeg $q $bars -frames:v 6 bars.gif
 ffmpeg $q $bars -frames:v 1 still.jpg
 ffmpeg $q $bars -frames:v 1 still.webp
+# A QuickTime timecode track, counted plainly and drop-frame.
+ffmpeg $q -f lavfi -i testsrc2=s=64x36:r=25:d=0.2 -c:v mjpeg -q:v 10 -timecode 10:00:01:12 timecode.mov
+ffmpeg $q -f lavfi -i testsrc2=s=64x36:r=30000/1001:d=0.2 -c:v mjpeg -q:v 10 -timecode "01:00:00;04" timecode-df.mov
 
 # Exact 10-bit codes, losslessly, so a test can say what each pixel should come
 # out as. Tagged on the frames, which is where a current ffmpeg takes them from.

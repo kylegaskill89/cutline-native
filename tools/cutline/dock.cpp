@@ -282,12 +282,18 @@ std::vector<MenuEntry> panel_menu_extras(App& app, const PanelId& panel) {
     // Premiere's Display Mode, with Comparison View among them as it is there.
     rows.push_back(MenuEntry{
         .label = "Display Mode",
-        .submenu = {switch_entry("Composite Video", !app.program_alpha && !app.lumetri_comparing,
+        .submenu = {switch_entry("Composite Video",
+                                 !app.program_alpha && !app.lumetri_comparing &&
+                                     !app.multicam_view,
                                  [&app] {
                                    app.program_alpha = false;
                                    if (app.lumetri_comparing) toggle_comparison(app);
+                                   if (app.multicam_view) toggle_multicam_view(app);
                                    show_display_options(app);
                                  }),
+                    // Premiere's Multi-Camera: every camera beside the picture.
+                    switch_entry("Multi-Camera", app.multicam_view,
+                                 [&app] { toggle_multicam_view(app); }),
                     switch_entry("Alpha", app.program_alpha, [&app] {
                       app.program_alpha = true;
                       show_display_options(app);
@@ -300,6 +306,12 @@ std::vector<MenuEntry> panel_menu_extras(App& app, const PanelId& panel) {
                                       !app.settings.transparency_grid_program;
                                   save_settings(app);
                                   show_display_options(app);
+                                }));
+    rows.push_back(switch_entry("Multi-Camera Audio Follows Video",
+                                app.settings.multicam_audio_follows, [&app] {
+                                  app.settings.multicam_audio_follows =
+                                      !app.settings.multicam_audio_follows;
+                                  save_settings(app);
                                 }));
     rows.push_back(MenuEntry::divider());
     rows.push_back(plain("Export Frame", [&app] { take_snapshot(app); }));

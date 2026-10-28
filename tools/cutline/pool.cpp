@@ -465,6 +465,9 @@ void open_pool_menu(App& app, double x, double y) {
         refresh_all(app);
         app.dock_stale = true;
       }));
+      // Premiere's, for the clips of every camera selected together.
+      rows.push_back(action_entry("Create Multi-Camera Source Sequence...",
+                                  [&app] { open_multicam_dialog(app); }));
     }
     rows.push_back(MenuEntry::divider());
     rows.push_back(action_entry("Rename...", [&app] { rename_pool_entry(app); }));

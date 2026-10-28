@@ -116,6 +116,7 @@ void refresh_preview(App& app) {
     // A shuttle is the playhead moving too, at its own rate and either way.
     engine->want(project, app.session.playhead(), app.playing() ? 1.0 : app.shuttle);
     poll_preview(app);
+    refresh_angles(app);
     return;
   }
 
@@ -152,6 +153,7 @@ void poll_preview([[maybe_unused]] App& app) {
     app.shown_preview = **taken;
     mark_dirty(app);
   }
+  poll_angles(app);
 
   // A source that will not open is only known once the renderer has tried,
   // and that happens on the other thread now. The pool's offline marks follow
@@ -866,6 +868,7 @@ void stop_playback(App& app) {
   // recorded, so riding a fader through a passage is one edit and one undo
   // rather than one per displayed frame.
   commit_automation(app);
+  end_multicam_pass(app);
   mark_dirty(app);
 #else
   (void)app;

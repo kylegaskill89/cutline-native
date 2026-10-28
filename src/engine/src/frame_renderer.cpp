@@ -3,6 +3,7 @@
 #include "cutline/core/graphic.hpp"
 #include "cutline/core/layout.hpp"
 #include "cutline/core/interpret.hpp"
+#include "cutline/core/multicam.hpp"
 #include "cutline/core/nesting.hpp"
 #include "cutline/core/sequences.hpp"
 #include "cutline/core/query.hpp"
@@ -802,8 +803,10 @@ struct FrameRenderer::Impl {
 
   /// Composites a nested sequence and hands back the picture, still on the
   /// card. Empty when there is nothing to draw, or the nesting is too deep.
+  /// A multicam clip draws only the camera it is set to.
   [[nodiscard]] gpu::SceneTexture nested_picture(const core::Project& project,
-                                                 const core::Media& media, double at);
+                                                 const core::Media& media, double at,
+                                                 const core::Clip* clip = nullptr);
 
   /// Decodes a run at `target`, somewhere else in the source, because the
   /// sequence cuts to it shortly.
@@ -1546,19 +1549,29 @@ void FrameRenderer::Impl::prefetch_cuts(const core::Project& project, double t,
 }
 
 gpu::SceneTexture FrameRenderer::Impl::nested_picture(const core::Project& project,
-                                                      const core::Media& media, double at) {
+                                                      const core::Media& media, double at,
+                                                      const core::Clip* clip) {
   if (depth >= kMaxNestDepth) return {};
 
   const core::Sequence* inner = core::find_sequence(project, media.sequence_id);
   if (inner == nullptr || inner->canvas_w <= 0 || inner->canvas_h <= 0) return {};
 
-  auto found = nested.find(media.sequence_id);
+  // A renderer for each camera rather than one for the sequence: the cut
+  // between two cameras draws both at once through a transition, and each
+  // keeps its own camera's decoders warm for the next time it is shown.
+  const std::optional<int> camera =
+      clip != nullptr && core::shows_camera(project, *clip) ? std::optional<int>(clip->camera)
+                                                            : std::nullopt;
+  const std::string key = camera.has_value()
+                              ? std::format("{}:camera{}", media.sequence_id, *camera)
+                              : media.sequence_id;
+  auto found = nested.find(key);
   if (found == nested.end()) {
     auto made = FrameRenderer::create(device, inner->canvas_w, inner->canvas_h, queue);
     if (!made.has_value()) return {};
     (*made)->impl_->depth = depth + 1;
     (*made)->set_use_proxies(use_proxies);
-    found = nested.emplace(media.sequence_id, std::move(*made)).first;
+    found = nested.emplace(key, std::move(*made)).first;
   }
   FrameRenderer& renderer = *found->second;
 
@@ -1569,6 +1582,13 @@ gpu::SceneTexture FrameRenderer::Impl::nested_picture(const core::Project& proje
   core::Project within = project;
   within.open = core::sequence_index(project, media.sequence_id);
   if (within.open == std::string::npos) return {};
+  if (camera.has_value()) {
+    core::Sequence& inside = within.sequence();
+    for (std::size_t t = 0; t < inside.tracks.size(); ++t) {
+      if (inside.tracks[t].kind != core::TrackKind::Video) continue;
+      if (!core::camera_uses_track(inside, t, *camera)) inside.tracks[t].hidden = true;
+    }
+  }
 
   // An HDR sequence is taken out at its real brightness, from the float copy
   // its compositor makes beside the 8-bit one; an SDR one as it always was.
@@ -2113,7 +2133,7 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
       case render::LayerContent::Nested: {
         if (source.media == nullptr) continue;
         const gpu::SceneTexture picture = d.nested_picture(project, *source.media,
-                                                           source.source_time);
+                                                           source.source_time, source.clip);
         if (picture.empty()) continue;
 
         gpu::FrameView view;

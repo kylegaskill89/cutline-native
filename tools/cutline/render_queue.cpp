@@ -362,6 +362,8 @@ void settle_export(App& app) {
   // And Warp Stabilizer's analysis, which stops at the end of the frame.
   app.stabilize_cancel = true;
   if (app.stabilize_worker.joinable()) app.stabilize_worker.join();
+  app.multicam_sync_cancel = true;
+  if (app.multicam_sync_worker.joinable()) app.multicam_sync_worker.join();
 }
 
 App::~App() { settle_export(*this); }

@@ -33,6 +33,13 @@ NLOHMANN_JSON_SERIALIZE_ENUM(AutomationMode, {
                                                  {AutomationMode::Touch, "touch"},
                                              })
 
+// Camera 1 first, Premiere's default, for anything written by something newer.
+NLOHMANN_JSON_SERIALIZE_ENUM(MulticamAudio, {
+                                                {MulticamAudio::Camera1, "camera1"},
+                                                {MulticamAudio::AllCameras, "all"},
+                                                {MulticamAudio::Switch, "switch"},
+                                            })
+
 // None first, so a role written by something newer reads as an unlabelled clip
 // rather than as a wrong label — being told nothing is better than being told
 // that the music is dialogue.
@@ -376,6 +383,7 @@ json write(const Media& m) {
   put_if_set(j, "bit_depth", m.bit_depth);
   if (m.colour_space.has_value()) j["colour_space"] = *m.colour_space;
   if (m.colour_override.has_value()) j["colour_override"] = *m.colour_override;
+  put_if_set(j, "timecode", m.timecode);
   put_if_set(j, "file_duration", m.file_duration);
   put_if_set(j, "in_point", m.in_point);
   put_if_set(j, "out_point", m.out_point);
@@ -420,6 +428,9 @@ json write(const Clip& c) {
   // Only when it has one, so a project from before roles existed writes exactly
   // the JSON it always did.
   if (c.role != AudioRole::None) j["role"] = c.role;
+  // Only on a clip that shows another camera than the first, or none.
+  if (c.camera != 0) j["camera"] = c.camera;
+  if (c.multicam_off) j["multicam_off"] = true;
 
   if (c.transition_out.has_value()) {
     j["transition_out"] = json{{"kind", c.transition_out->kind},
@@ -515,6 +526,10 @@ json write(const Sequence& s) {
   if (s.colour != WorkingColour::Rec709) j["colour"] = s.colour;
   if (s.graphics_white != kDefaultGraphicsWhite) j["graphics_white"] = s.graphics_white;
   if (!s.tone_map) j["tone_map"] = false;
+  if (s.multicam) {
+    j["multicam"] = true;
+    j["multicam_audio"] = s.multicam_audio;
+  }
 
   json master_effects = json::array();
   for (const AudioClipEffect& e : s.master_effects) master_effects.push_back(write(e));
@@ -897,6 +912,7 @@ Media read_media(const json& j) {
   m.file_duration = read_optional<double>(j, "file_duration");
   m.in_point = read_optional<double>(j, "in_point");
   m.out_point = read_optional<double>(j, "out_point");
+  m.timecode = read_optional<double>(j, "timecode");
   m.sequence_id = read_or(j, "sequence_id", std::string{});
   m.proxy_path = read_or(j, "proxy_path", std::string{});
   m.bin = read_or(j, "bin", std::string{});
@@ -925,6 +941,8 @@ Clip read_clip(const json& j) {
   c.disabled = read_or(j, "disabled", false);
   c.label_color = read_or(j, "label_color", std::string{});
   c.hold = read_optional<double>(j, "hold");
+  c.camera = std::max(0, read_or(j, "camera", 0));
+  c.multicam_off = read_or(j, "multicam_off", false);
 
   const auto transform = j.find("transform");
   if (transform != j.end() && transform->is_object()) c.transform = read_transform(*transform);
@@ -1040,6 +1058,8 @@ Sequence read_sequence(const json& j) {
   s.colour = read_or(j, "colour", WorkingColour::Rec709);
   s.graphics_white = std::clamp(read_or(j, "graphics_white", kDefaultGraphicsWhite), 1.0, 10000.0);
   s.tone_map = read_or(j, "tone_map", true);
+  s.multicam = read_or(j, "multicam", false);
+  s.multicam_audio = read_or(j, "multicam_audio", MulticamAudio::Camera1);
 
   const auto master_keys = j.find("master_gain_keyframes");
   if (master_keys != j.end()) s.master_gain_keyframes = read_keyframes(*master_keys);

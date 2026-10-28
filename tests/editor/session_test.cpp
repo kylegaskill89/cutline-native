@@ -49,6 +49,26 @@ TEST(Session, StartsWithNoHistory) {
   EXPECT_EQ(session.revision(), 0u);
 }
 
+TEST(Session, AnAmendmentIsUndoneWithTheEditBeforeIt) {
+  Session session(sample_project());
+  const std::vector<std::string> first{"c1"};
+  const std::vector<std::string> second{"c2"};
+  session.name_next_edit("Multi-Camera Edit");
+  ASSERT_TRUE(session.apply(core::set_clips_label(session.project(), first, "#ff0000")));
+  ASSERT_TRUE(session.amend(core::set_clips_label(session.project(), second, "#00ff00")));
+  EXPECT_EQ(session.undo_names(), (std::vector<std::string>{"Multi-Camera Edit"}));
+  ASSERT_TRUE(session.undo());
+  EXPECT_FALSE(session.can_undo());
+  EXPECT_EQ(session.project(), sample_project());
+}
+
+TEST(Session, AmendingWithNothingToUndoIsAnEdit) {
+  Session session(sample_project());
+  const std::vector<std::string> ids{"c1"};
+  ASSERT_TRUE(session.amend(core::set_clips_label(session.project(), ids, "#ff0000")));
+  EXPECT_TRUE(session.can_undo());
+}
+
 TEST(Session, ApplyingAnEditRecordsIt) {
   Session session(sample_project());
   const std::vector<std::string> ids{"c1"};

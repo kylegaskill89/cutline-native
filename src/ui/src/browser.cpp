@@ -113,13 +113,24 @@ void MediaBrowser::set_items(std::vector<MediaItem> items) {
   // whatever slid into its place.
   std::string kept;
   if (selection_.has_value() && *selection_ < items_.size()) kept = items_[*selection_].id;
+  std::vector<std::string> kept_too;
+  for (const std::size_t row : also_) {
+    if (row < items_.size()) kept_too.push_back(items_[row].id);
+  }
 
   items_ = std::move(items);
   selection_.reset();
+  also_.clear();
   if (!kept.empty()) {
     const auto found = std::ranges::find(items_, kept, &MediaItem::id);
     if (found != items_.end()) {
       selection_ = static_cast<std::size_t>(found - items_.begin());
+    }
+  }
+  for (const std::string& id : kept_too) {
+    const auto found = std::ranges::find(items_, id, &MediaItem::id);
+    if (found != items_.end() && selection_.has_value()) {
+      also_.push_back(static_cast<std::size_t>(found - items_.begin()));
     }
   }
 
@@ -134,9 +145,19 @@ const MediaItem* MediaBrowser::selected() const noexcept {
   return &items_[*selection_];
 }
 
+std::vector<std::size_t> MediaBrowser::selected_rows() const {
+  std::vector<std::size_t> rows = also_;
+  if (selection_.has_value()) rows.push_back(*selection_);
+  std::erase_if(rows, [this](std::size_t row) { return row >= items_.size(); });
+  std::ranges::sort(rows);
+  rows.erase(std::ranges::unique(rows).begin(), rows.end());
+  return rows;
+}
+
 void MediaBrowser::select(std::optional<std::size_t> index) {
   if (index.has_value() && *index >= items_.size()) index.reset();
   selection_ = index;
+  also_.clear();
   if (!index.has_value()) return;
 
   const double top = static_cast<double>(*index) * row_height();
@@ -409,7 +430,8 @@ void MediaBrowser::paint_tiles(Painter& painter, const Theme& theme) const {
     if (tile.empty()) continue;
 
     const MediaItem& item = items_[i];
-    const bool chosen = selection_.has_value() && *selection_ == i;
+    const bool chosen = (selection_.has_value() && *selection_ == i) ||
+                        std::ranges::find(also_, i) != also_.end();
     if (chosen) paint_surface(painter, tile, theme.style(Part::Clip, State::Selected));
 
     const Rect picture{tile.x + 3.0, tile.y + 3.0, std::max(0.0, tile.width - 6.0),
@@ -519,7 +541,8 @@ void MediaBrowser::paint_content(Painter& painter, const Theme& theme) const {
     if (row.empty()) continue;
 
     const MediaItem& item = items_[i];
-    const bool chosen = selection_.has_value() && *selection_ == i;
+    const bool chosen = (selection_.has_value() && *selection_ == i) ||
+                        std::ranges::find(also_, i) != also_.end();
 
     // A selected row is a themed surface rather than a colour wash, so a theme
     // with bevelled selection gets one.
@@ -702,8 +725,17 @@ bool MediaBrowser::on_mouse_down(const MouseEvent& event) {
     // clears the selection for exactly that reason — found by driving, where a
     // right-click below the last row offered Remove and would have removed
     // something the pointer was nowhere near.
+    // A row already among several selected keeps them all, as Windows does,
+    // so a menu can act on the lot.
     const auto row = row_at(event.x, event.y);
-    if (row != selection_) {
+    const std::vector<std::size_t> rows = selected_rows();
+    const bool among = row.has_value() && std::ranges::find(rows, *row) != rows.end();
+    if (among && row != selection_) {
+      also_.push_back(*selection_);
+      std::erase(also_, *row);
+      selection_ = row;
+      if (on_select_) on_select_(selection_);
+    } else if (!among && row != selection_) {
       select(row);
       if (on_select_) on_select_(selection_);
     }
@@ -730,6 +762,7 @@ bool MediaBrowser::on_mouse_down(const MouseEvent& event) {
     // empty space anywhere else.
     if (selection_.has_value()) {
       selection_.reset();
+      also_.clear();
       if (on_select_) on_select_(std::nullopt);
     }
     return true;
@@ -740,6 +773,34 @@ bool MediaBrowser::on_mouse_down(const MouseEvent& event) {
   // under somebody merely looking inside a folder.
   if (const Rect twist = twist_rect(*row); !twist.empty() && twist.contains(event.x, event.y)) {
     if (on_toggle_) on_toggle_(*row);
+    return true;
+  }
+
+  // Ctrl adds a row or takes it away; Shift takes every row from the last
+  // one clicked to this one. Bins are left out of both: what several are
+  // selected for is acting on several sources.
+  if ((event.modifiers.control || event.modifiers.shift) && selection_.has_value() &&
+      !items_[*row].is_bin && event.click_count < 2) {
+    pressed_row_.reset();
+    if (event.modifiers.shift) {
+      const std::size_t anchor = *selection_;
+      also_.clear();
+      for (std::size_t i = std::min(anchor, *row); i <= std::max(anchor, *row); ++i) {
+        if (i != *row && !items_[i].is_bin) also_.push_back(i);
+      }
+      selection_ = row;
+    } else if (*row == *selection_ || std::ranges::find(also_, *row) != also_.end()) {
+      std::erase(also_, *row);
+      if (*row == *selection_) {
+        selection_ = also_.empty() ? std::nullopt : std::optional<std::size_t>(also_.back());
+        if (!also_.empty()) also_.pop_back();
+      }
+    } else {
+      if (!items_[*selection_].is_bin) also_.push_back(*selection_);
+      selection_ = row;
+    }
+    if (on_select_) on_select_(selection_);
+    if (host() != nullptr) host()->request_paint();
     return true;
   }
 

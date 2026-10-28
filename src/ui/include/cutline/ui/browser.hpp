@@ -217,6 +217,12 @@ class MediaBrowser : public Widget {
   /// Selects by entry id. Reports whether one matched.
   bool select_id(std::string_view id);
 
+  /// Every selected row, in list order: the one `selection` names and any
+  /// added to it with Ctrl or Shift held, as Premiere's Project panel takes
+  /// several clips at once for a multi-camera source sequence. Whatever acts
+  /// on one entry acts on `selection`, which is the last one clicked.
+  [[nodiscard]] std::vector<std::size_t> selected_rows() const;
+
   void set_on_select(std::function<void(std::optional<std::size_t>)> on_select) {
     on_select_ = std::move(on_select);
   }
@@ -322,6 +328,8 @@ class MediaBrowser : public Widget {
   std::vector<MediaItem> items_;
   Viewport vertical_;
   std::optional<std::size_t> selection_;
+  /// Rows selected beside `selection_`, with Ctrl or Shift.
+  std::vector<std::size_t> also_;
 
   /// The row a press landed on, before it is known whether this is a click or
   /// a drag. Held separately from `drag_` so a click never reports a drop.

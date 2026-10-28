@@ -141,6 +141,21 @@ TEST(Formats, TenBitFootageSaysSo) {
   EXPECT_EQ(info->primary_video()->color.bits_per_component, 10);
 }
 
+TEST(Formats, ATimecodeTrackIsRead) {
+  // What a multi-camera source sequence lines cameras up by, written as the
+  // file writes it; a file with none says nothing.
+  const auto plain = probe(fixture("timecode.mov"));
+  ASSERT_TRUE(plain.has_value()) << plain.error();
+  EXPECT_EQ(plain->timecode, "10:00:01:12");
+  const auto drop = probe(fixture("timecode-df.mov"));
+  ASSERT_TRUE(drop.has_value()) << drop.error();
+  EXPECT_EQ(drop->timecode, "01:00:00;04");
+  EXPECT_EQ(drop->video.size(), 1u) << "the timecode track is not a picture";
+  const auto none = probe(fixture("vp9.webm"));
+  ASSERT_TRUE(none.has_value()) << none.error();
+  EXPECT_EQ(none->timecode, "");
+}
+
 TEST(Formats, FootageWithSoundKeepsBoth) {
   const auto info = probe(fixture("prores.mov"));
   ASSERT_TRUE(info.has_value()) << info.error();

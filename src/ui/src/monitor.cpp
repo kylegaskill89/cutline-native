@@ -171,7 +171,39 @@ Rect MonitorView::viewport() const {
   return Rect{whole.x + half + kMonitorInset, whole.y, half, whole.height};
 }
 
-void MonitorView::set_reference(const ImageView& reference) { reference_ = reference; }
+void MonitorView::set_reference(const ImageView& reference) {
+  reference_ = reference;
+  reference_texture_ = {};
+}
+
+void MonitorView::set_reference_texture(const TextureView& reference) {
+  reference_texture_ = reference;
+  reference_ = {};
+}
+
+void MonitorView::set_angles(std::optional<Angles> angles) {
+  if (angles_ == angles) return;
+  angles_ = std::move(angles);
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
+Rect MonitorView::angle_rect(int camera) const {
+  if (!angles_.has_value() || camera < 0 || camera >= angles_->count) return {};
+  const Rect grid = reference_area();
+  if (grid.empty()) return {};
+  const int columns = std::max(1, angles_->columns);
+  const double w = grid.width / columns;
+  const double h = grid.height / columns;
+  return Rect{grid.x + w * (camera % columns), grid.y + h * (camera / columns), w, h};
+}
+
+std::optional<int> MonitorView::angle_at(double x, double y) const {
+  if (!angles_.has_value()) return std::nullopt;
+  for (int k = 0; k < angles_->count; ++k) {
+    if (angle_rect(k).contains(x, y)) return k;
+  }
+  return std::nullopt;
+}
 
 std::pair<Rect, Rect> MonitorView::safe_areas() const {
   const Rect area = picture();
@@ -189,7 +221,9 @@ Rect MonitorView::reference_area() const {
   const Rect whole = bounds().inset(kMonitorInset);
   const double half = (whole.width - kMonitorInset) / 2.0;
   if (half <= 0.0) return {};
-  return fit_aspect(Rect{whole.x, whole.y, half, whole.height}, reference_.aspect());
+  const double aspect =
+      !reference_texture_.empty() ? reference_texture_.aspect() : reference_.aspect();
+  return fit_aspect(Rect{whole.x, whole.y, half, whole.height}, aspect);
 }
 
 std::pair<double, double> MonitorView::picture_size() const {
@@ -306,8 +340,35 @@ void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
   if (comparing()) {
     const Rect left = reference_area();
     if (!left.empty()) {
-      painter.image(left, reference_);
+      if (!reference_texture_.empty()) {
+        painter.texture(left, reference_texture_);
+      } else {
+        painter.image(left, reference_);
+      }
       if (style.border.a > 0.0) painter.stroke(left, 0.0, style.border, 1.0);
+    }
+    if (angles_.has_value()) {
+      SurfaceStyle ink = style;
+      ink.text = Color{1.0f, 1.0f, 1.0f, 0.9f};
+      for (int k = 0; k < angles_->count; ++k) {
+        const Rect cell = angle_rect(k);
+        if (cell.empty()) continue;
+        if (k < static_cast<int>(angles_->names.size())) {
+          const double tall = theme.metrics.small_font_size * 1.6;
+          const Rect strip{cell.x, cell.bottom() - tall, cell.width, tall};
+          painter.fill(strip, 0.0, Fill::solid(Color{0.0f, 0.0f, 0.0f, 0.45f}));
+          painter.text(text_run(Rect{strip.x + 4.0, strip.y, std::max(0.0, strip.width - 8.0), strip.height}, angles_->names[static_cast<std::size_t>(k)],
+                                ink, theme.metrics.small_font_size, TextAlign::Left, false));
+        }
+      }
+      // Premiere's colours: yellow for the camera showing, red while a pass
+      // is being recorded.
+      const Rect active = angle_rect(angles_->active);
+      if (!active.empty()) {
+        const Color edge = angles_->recording ? Color{0.92f, 0.16f, 0.12f, 1.0f}
+                                              : Color{0.98f, 0.82f, 0.10f, 1.0f};
+        painter.stroke(active.inset(1.5), 0.0, edge, 3.0);
+      }
     }
   }
 
@@ -986,6 +1047,12 @@ TransformHandle MonitorView::handle_at(double x, double y) const {
 }
 
 bool MonitorView::on_mouse_down(const MouseEvent& event) {
+  if (event.button == MouseButton::Left && on_angle_) {
+    if (const std::optional<int> camera = angle_at(event.x, event.y); camera.has_value()) {
+      on_angle_(*camera);
+      return true;
+    }
+  }
   // The middle button pans, and it is the middle button because the left one
   // is already spoken for: the body of a selected layer *is* its move handle,
   // so on the program monitor there would be nowhere left to push the picture

@@ -1,5 +1,6 @@
 #include "cutline/app/preview.hpp"
 
+#include "cutline/core/time.hpp"
 #include "cutline/engine/frame_renderer.hpp"
 #include "cutline/gpu/compositor.hpp"
 #include "cutline/gpu/device.hpp"
@@ -47,6 +48,13 @@ std::expected<editor::MediaSource, std::string> probe_source(std::string_view pa
                           : video->color.transfer == media::TransferCharacteristic::AribStdB67
                               ? core::WorkingColour::Rec2100Hlg
                               : core::WorkingColour::Rec709;
+  }
+  // Read at the file's own rate, which is what its frames are counted in; a
+  // ";" before the frames is how a file says they are counted drop-frame.
+  if (!info->timecode.empty()) {
+    const double rate = source.fps.value_or(30.0);
+    source.timecode = core::timecode_to_seconds(info->timecode, rate,
+                                                info->timecode.find(';') != std::string::npos);
   }
   return source;
 }

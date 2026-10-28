@@ -191,7 +191,12 @@ class MonitorView : public Widget {
   /// empty one ends the comparison. Everything that places things on the
   /// picture follows it into its half, so handles and presses still land.
   void set_reference(const ImageView& reference);
-  [[nodiscard]] bool comparing() const noexcept { return !reference_.empty(); }
+  /// The same, from a picture already on the graphics card, for one that
+  /// changes every frame. Setting either forgets the other.
+  void set_reference_texture(const TextureView& reference);
+  [[nodiscard]] bool comparing() const noexcept {
+    return !reference_.empty() || !reference_texture_.empty();
+  }
   /// Where the reference is drawn; empty when not comparing.
   [[nodiscard]] Rect reference_area() const;
 
@@ -250,6 +255,27 @@ class MonitorView : public Widget {
 
   /// What is shown under the picture when there is none.
   void set_placeholder(std::string text) { placeholder_ = std::move(text); }
+
+  /// Premiere's Multi-Camera view: the reference is every camera in a grid
+  /// of `columns` by `columns` cells, the active one outlined in yellow, or
+  /// in red while switches are being recorded as it plays.
+  struct Angles {
+    int count = 0;
+    int columns = 1;
+    int active = 0;
+    bool recording = false;
+    std::vector<std::string> names;
+
+    friend bool operator==(const Angles&, const Angles&) = default;
+  };
+  void set_angles(std::optional<Angles> angles);
+  [[nodiscard]] const std::optional<Angles>& angles() const noexcept { return angles_; }
+  /// A camera's cell, where it is drawn; empty when there is no such camera.
+  [[nodiscard]] Rect angle_rect(int camera) const;
+  /// The camera whose cell is under a point, if any.
+  [[nodiscard]] std::optional<int> angle_at(double x, double y) const;
+  /// A camera clicked in the grid.
+  void set_on_angle(std::function<void(int)> on_angle) { on_angle_ = std::move(on_angle); }
 
   /// A band of text across the middle of the picture, as Premiere puts Warp
   /// Stabilizer's "Analyzing in background" over the frame it is working on.
@@ -488,6 +514,9 @@ class MonitorView : public Widget {
   ImageView frame_;
   TextureView texture_;
   ImageView reference_;
+  TextureView reference_texture_;
+  std::optional<Angles> angles_;
+  std::function<void(int)> on_angle_;
   std::optional<SafeMargins> safe_margins_;
   double canvas_aspect_ = 16.0 / 9.0;
   /// Zero until something says otherwise; see `set_canvas_size`.

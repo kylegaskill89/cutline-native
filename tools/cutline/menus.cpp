@@ -94,6 +94,8 @@ namespace cutline::tool {
   // about the cut — Fit to Fill is only the first of five.
   rows.push_back(action_entry("Fit Clip...", [&app] { open_fit_dialog(app); }, {},
                               cutline::editor::can_run(app.session, Command::FitToFill)));
+  rows.push_back(action_entry("Create Multi-Camera Source Sequence...",
+                              [&app] { open_multicam_dialog(app); }));
   rows.push_back(MenuEntry::divider());
   // The two halves kept apart, as Premiere keeps them: making proxies is a job
   // that runs for minutes, and reading from them is a switch.

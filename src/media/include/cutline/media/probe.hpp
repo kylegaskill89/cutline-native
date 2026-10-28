@@ -71,6 +71,10 @@ struct MediaInfo {
   std::string format;
   double duration = 0.0;  ///< seconds
   long long bit_rate = 0;
+  /// The timecode of the first frame as the file writes it, "HH:MM:SS:FF" or
+  /// with a ";" before the frames for drop-frame; empty when it records none.
+  /// Cameras write it into a timecode track or the container's metadata.
+  std::string timecode;
   std::vector<VideoStreamInfo> video;
   std::vector<AudioStreamInfo> audio;
 

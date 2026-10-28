@@ -113,6 +113,17 @@ std::expected<MediaInfo, std::string> probe(std::string_view path) {
                       ? 0.0
                       : static_cast<double>(context->duration) / AV_TIME_BASE;
   info.bit_rate = context->bit_rate;
+  // The container's, or failing that the first stream's that has one: a
+  // QuickTime timecode track carries it on its own stream.
+  if (const AVDictionaryEntry* tag = av_dict_get(context->metadata, "timecode", nullptr, 0);
+      tag != nullptr && tag->value != nullptr) {
+    info.timecode = tag->value;
+  }
+  for (unsigned i = 0; i < context->nb_streams && info.timecode.empty(); ++i) {
+    const AVDictionaryEntry* tag =
+        av_dict_get(context->streams[i]->metadata, "timecode", nullptr, 0);
+    if (tag != nullptr && tag->value != nullptr) info.timecode = tag->value;
+  }
 
   for (unsigned i = 0; i < context->nb_streams; ++i) {
     const AVStream* stream = context->streams[i];

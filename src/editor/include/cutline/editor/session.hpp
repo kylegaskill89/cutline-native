@@ -43,6 +43,13 @@ class Session {
   /// `describe_edit`), unless `name_next_edit` has given it a name already.
   bool apply(core::Project next);
 
+  /// Applies an edit as part of the last one, so one undo takes back both:
+  /// what a pass of camera switches made while playing is, however many cuts
+  /// it made. With nothing to undo it is an ordinary `apply`. Only for
+  /// following straight on from an `apply` of the caller's own; amending
+  /// somebody else's step would make it undo something it never did.
+  bool amend(core::Project next);
+
   /// The name the next applied edit is listed under, in place of one worked out
   /// from what changed. For a command that knows what it is called. Used once
   /// and forgotten, and an empty name forgets it unused.

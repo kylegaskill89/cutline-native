@@ -13,6 +13,7 @@
 #include "cutline/core/version.hpp"
 #include "cutline/core/effects.hpp"
 #include "cutline/core/model.hpp"
+#include "cutline/core/multicam.hpp"
 #include "cutline/core/pool.hpp"
 #include "cutline/audio/chain.hpp"
 #include "cutline/audio/loudness.hpp"
@@ -314,6 +315,9 @@ constexpr UINT kMaskTracked = WM_APP + 6;
 /// Posted by Warp Stabilizer's analysis as it goes, and once more when it
 /// stops.
 constexpr UINT kStabilizerAnalysed = WM_APP + 7;
+/// A multi-camera source sequence's sound has been read further, or
+/// synchronised (wparam 0) and the sequence can be made.
+constexpr UINT kMulticamSynced = WM_APP + 8;
 
 /// Which settings window: the person's, or the cut's.
 enum class SettingsKind {
@@ -1152,6 +1156,33 @@ struct App {
   /// The Tracking window, while it is the popup showing, and its bar.
   cutline::ui::Dialog* mask_track_dialog = nullptr;
   cutline::ui::ProgressBar* mask_track_bar = nullptr;
+  /// Premiere's Multi-Camera view: every camera of the multicam under the
+  /// playhead, beside the picture, from a render thread of its own; the grid
+  /// project it renders, kept while the document and the multicam stay the
+  /// same, and the moment of the source sequence last asked for. A pass of
+  /// switches made while playing is one edit, amended at each switch, for as
+  /// long as the document is still the one it left.
+  bool multicam_view = false;
+  std::unique_ptr<cutline::app::PreviewEngine> angles_preview;
+  bool angles_failed = false;
+  std::shared_ptr<const cutline::core::Project> angles_snapshot;
+  std::uint64_t angles_revision = ~std::uint64_t{0};
+  std::string angles_media;
+  double angles_time = 0.0;
+  std::optional<std::uint64_t> multicam_pass;
+  /// Synchronising a new multicam by sound, on a thread of its own, with the
+  /// sources and options it was asked for and what it found.
+  std::thread multicam_sync_worker;
+  std::atomic<bool> multicam_sync_running{false};
+  std::atomic<bool> multicam_sync_cancel{false};
+  std::atomic<int> multicam_sync_done{0};
+  std::atomic<int> multicam_sync_total{0};
+  std::vector<std::string> multicam_sync_sources;
+  cutline::core::MulticamOptions multicam_sync_options;
+  std::mutex multicam_sync_lock;
+  std::optional<std::expected<std::vector<double>, std::string>> multicam_sync_result;
+  cutline::ui::Dialog* multicam_sync_dialog = nullptr;
+  cutline::ui::ProgressBar* multicam_sync_bar = nullptr;
   /// Warp Stabilizer's analysis, one clip at a time on a thread of its own.
   std::thread stabilize_worker;
   std::atomic<bool> stabilize_running{false};
@@ -1699,6 +1730,34 @@ void cancel_stabilizer_analysis(App& app);
                                             std::size_t effect);
 /// The Program Monitor's banner, for a Warp Stabilizer still being worked on.
 void show_stabilizer_banner(App& app);
+/// Premiere's Create Multi-Camera Source Sequence, for the pool's selection.
+void open_multicam_dialog(App& app);
+/// The Program Monitor's Multi-Camera display mode, on or off, and what it
+/// shows: the camera grid on the left, kept up to date as the playhead moves.
+void toggle_multicam_view(App& app);
+void show_multicam(App& app);
+void refresh_angles(App& app);
+void poll_angles(App& app);
+/// A camera chosen in the grid or by its number: while playing, a cut to it
+/// at the playhead; while stopped, the multicam under the playhead shows it.
+void select_camera(App& app, int camera);
+/// Premiere's Cut to Camera: a cut at the playhead to that camera, playing or
+/// not.
+void cut_to_camera(App& app, int camera);
+/// Playback has stopped, so the next switch starts a new edit.
+void end_multicam_pass(App& app);
+/// The sound of a new multicam has been read further, or all of it.
+void collect_multicam_sync(App& app, bool progress_only = false);
+/// The Synchronizing window, with Cancel, while the sound is being read.
+void show_multicam_sync(App& app);
+/// Makes a monitor's render thread on first use; null when it cannot be made,
+/// and then `failed` is set so it is not tried again.
+[[nodiscard]] cutline::app::PreviewEngine* engine_for(
+    App& app, std::unique_ptr<cutline::app::PreviewEngine>& engine, bool& failed,
+    const char* what);
+/// Clip > Multi-Camera: Enable, each camera, and Flatten.
+[[nodiscard]] std::vector<MenuEntry> multicam_entries(App& app,
+                                                      const std::vector<std::string>& clips);
 [[nodiscard]] std::optional<std::filesystem::path> choose_lut_to_open(HWND owner);
 /// Measures graphic layers as the renderer will draw them, where there is a
 /// text library to do it with: what the panel pins by and the monitor puts
