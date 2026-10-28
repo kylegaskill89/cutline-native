@@ -2589,7 +2589,7 @@ the interface before new panels so that the new panels are built on what it
 becomes rather than polished twice. All of it shipped in 0.6.0, bar importing
 Premiere-made .mogrt files, which waits on samples (§12).
 
-**Phase 4, ordered on 2026-10-26** after 0.6.0, and sized from the code: small
+**Phase 4, ordered on 2026-10-26** after 0.6.0 and shipped whole in 0.7.0, sized from the code: small
 is days, medium a week or so, large several. Smaller things first where they
 are used every day, and a tracker built once for the two features that need
 one.
