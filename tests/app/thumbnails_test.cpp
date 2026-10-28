@@ -306,6 +306,35 @@ TEST(Thumbnails, ASourceThatWillNotDecodeStopsBeingOutstanding) {
   EXPECT_EQ(cache.pending(), 0u);
 }
 
+TEST(Thumbnails, AFileThatCannotBeReadStillWakesTheLoopWithNothingLeft) {
+  // The interface reads the count when woken; woken with one still counted,
+  // or not woken at all, it says it is reading for ever.
+  ThumbnailCache cache;
+  std::atomic<int> woken{0};
+  std::atomic<std::size_t> left{99};
+  cache.set_on_arrival([&] {
+    left = cache.pending();
+    woken.fetch_add(1);
+  });
+  cache.request("nowhere", "Z:/definitely/not/here.mp4", 0.0, 10.0);
+  for (int i = 0; i < 300 && woken.load() == 0; ++i) std::this_thread::sleep_for(10ms);
+  EXPECT_GE(woken.load(), 1);
+  EXPECT_EQ(left.load(), 0u);
+}
+
+TEST_F(WithVideoFootage, AStretchOnceTakenIsNotAskedForAgain) {
+  // The timeline asks again after every arrival. A stretch counted as
+  // covered only up to its last frame left a sliver at the end that was asked
+  // for after every one of them, and the pool said "Reading media" for ever.
+  ThumbnailCache cache;
+  for (int round = 0; round < 3; ++round) {
+    cache.request("boiler", path_, 0.0, 8.0);
+    for (int i = 0; i < 1000 && cache.pending() > 0; ++i) std::this_thread::sleep_for(10ms);
+  }
+  cache.request("boiler", path_, 0.0, 8.0);
+  EXPECT_EQ(cache.pending(), 0u) << "a stretch already taken was queued again";
+}
+
 TEST_F(WithVideoFootage, TheWakeUpFires) {
   ThumbnailCache cache;
   std::atomic<int> woken{0};

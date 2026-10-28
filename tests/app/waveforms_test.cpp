@@ -190,6 +190,20 @@ TEST(Waveforms, ClearingForgetsWhatWasOutstanding) {
   EXPECT_EQ(cache.pending(), 0u);
 }
 
+TEST(Waveforms, AFileThatCannotBeReadStillWakesTheLoopWithNothingLeft) {
+  WaveformCache cache;
+  std::atomic<int> woken{0};
+  std::atomic<std::size_t> left{99};
+  cache.set_on_arrival([&] {
+    left = cache.pending();
+    woken.fetch_add(1);
+  });
+  cache.request("nowhere", "Z:/definitely/not/here.wav", 0);
+  for (int i = 0; i < 300 && woken.load() == 0; ++i) std::this_thread::sleep_for(10ms);
+  EXPECT_GE(woken.load(), 1);
+  EXPECT_EQ(left.load(), 0u);
+}
+
 TEST_F(WithAudioFootage, TheWakeUpFires) {
   WaveformCache cache;
   std::atomic<int> woken{0};

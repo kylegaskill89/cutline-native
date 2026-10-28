@@ -4,6 +4,7 @@
 #include "cutline/media/thumbnail.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace cutline::app {
@@ -195,11 +196,19 @@ void ThumbnailCache::run() {
     // frames — it stops being outstanding. Done here rather than at each of the
     // three ways out of the loop, which is how one of them gets forgotten and
     // the interface says it is still working long after it stopped.
+    // The interface is told afterwards, every way out, failures included: it
+    // reads the count when told, and a count that came down silently left it
+    // saying "Reading media (1)" over a machine that had stopped.
     struct Done {
       ThumbnailCache* cache;
       ~Done() {
-        const std::lock_guard<std::mutex> lock(cache->mutex_);
-        if (cache->outstanding_ > 0) --cache->outstanding_;
+        std::function<void()> tell;
+        {
+          const std::lock_guard<std::mutex> lock(cache->mutex_);
+          if (cache->outstanding_ > 0) --cache->outstanding_;
+          if (!cache->stopping_) tell = cache->on_arrival_;
+        }
+        if (tell) tell();
       }
     } done{this};
 
@@ -292,13 +301,17 @@ void ThumbnailCache::run() {
       // grow without limit. What goes is what is furthest from the stretch just
       // asked for, which is the part of the file nobody is looking at.
       const double middle = (job.span.from + job.span.to) * 0.5;
+      bool dropped_front = false;
+      bool dropped_back = false;
       while (strip->frames.size() > kFramesPerSource) {
         const bool front_is_further =
             std::abs(strip->frames.front().t - middle) > std::abs(strip->frames.back().t - middle);
         if (front_is_further) {
           strip->frames.erase(strip->frames.begin());
+          dropped_front = true;
         } else {
           strip->frames.pop_back();
+          dropped_back = true;
         }
       }
 
@@ -310,8 +323,13 @@ void ThumbnailCache::run() {
       cover(entry.covered, Span{job.span.from, job.span.to, job.span.seconds_per_frame});
       // And what the cap dropped is no longer covered, or it would never be
       // asked for again and the strip would have a hole nothing could fill.
-      if (!strip->frames.empty()) {
-        const Span kept_span{strip->frames.front().t, strip->frames.back().t,
+      // Only at an end it dropped from: the last frame of a stretch is a
+      // little before its end, and trimming to it anyway left a sliver that
+      // every rebuild of the timeline asked for again, for ever.
+      if (!strip->frames.empty() && (dropped_front || dropped_back)) {
+        constexpr double kAll = std::numeric_limits<double>::infinity();
+        const Span kept_span{dropped_front ? strip->frames.front().t : -kAll,
+                             dropped_back ? strip->frames.back().t : kAll,
                              job.span.seconds_per_frame};
         std::erase_if(entry.covered, [&](const Span& span) {
           return span.to < kept_span.from - 1e-6 || span.from > kept_span.to + 1e-6;

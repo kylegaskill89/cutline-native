@@ -150,9 +150,15 @@ void WaveformCache::run() {
       // path being retried on every rebuild for the life of the session — and
       // is why `outstanding_` has to come down here too, or one unreadable file
       // would leave the interface saying it was still working for ever.
-      const std::lock_guard<std::mutex> lock(mutex_);
-      if (outstanding_ >= batch.size()) outstanding_ -= batch.size();
-      else outstanding_ = 0;
+      std::function<void()> tell;
+      {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        if (outstanding_ >= batch.size()) outstanding_ -= batch.size();
+        else outstanding_ = 0;
+        if (!stopping_) tell = on_arrival_;
+      }
+      // Told, as an arrival is, so the count it reads has come down.
+      if (tell) tell();
       continue;
     }
 
