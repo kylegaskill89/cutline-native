@@ -15,6 +15,11 @@
 namespace cutline::tool {
 namespace {
 
+/// Where this project's previews go, by its Video Previews scratch disk.
+[[nodiscard]] std::filesystem::path previews_of(const App& app) {
+  return cutline::editor::previews_folder(app.session.project(), app.session.path());
+}
+
 using cutline::editor::RenderPiece;
 using cutline::editor::RenderStatus;
 
@@ -33,8 +38,7 @@ void update_pieces(App& app) {
   if (revision == app.render_pieces_revision && !app.render_pieces_stale) return;
   app.render_pieces_revision = revision;
   app.render_pieces_stale = false;
-  app.render_pieces = cutline::editor::render_pieces(app.session.project(),
-                                                     cutline::editor::default_previews_folder());
+  app.render_pieces = cutline::editor::render_pieces(app.session.project(), previews_of(app));
 }
 
 }  // namespace
@@ -54,7 +58,7 @@ void refresh_render_bar(App& app) {
 std::vector<cutline::app::PreviewSpan> rendered_spans(App& app) {
   update_pieces(app);
   std::vector<cutline::app::PreviewSpan> spans;
-  const std::filesystem::path folder = cutline::editor::default_previews_folder();
+  const std::filesystem::path folder = previews_of(app);
   for (const RenderPiece& piece : app.render_pieces) {
     if (piece.status != RenderStatus::Rendered) continue;
     spans.push_back(cutline::app::PreviewSpan{
@@ -128,7 +132,7 @@ void render_in_to_out(App& app) {
 
   const bool software = app.settings.software_renderer;
   const cutline::core::Project project = app.session.project();
-  const std::filesystem::path folder = cutline::editor::default_previews_folder();
+  const std::filesystem::path folder = previews_of(app);
   HWND window = app.main.window;
   app.preview_render_worker = std::thread([&app, project, pieces, folder, software, window] {
     auto device = cutline::gpu::Device::create({.force_software = software});
@@ -220,7 +224,7 @@ void delete_render_files(App& app) {
     app.preview->release_sources();
   }
 #endif
-  cutline::editor::delete_preview_files(cutline::editor::default_previews_folder());
+  cutline::editor::delete_preview_files(previews_of(app));
   app.render_pieces_stale = true;
   refresh_render_bar(app);
   invalidate_preview(app);

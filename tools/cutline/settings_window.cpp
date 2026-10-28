@@ -6,6 +6,8 @@
 
 #include "app.hpp"
 
+#include "cutline/render/warp_stabilizer.hpp"
+
 namespace cutline::tool {
 
 // --------------------------------------------------------------- settings --
@@ -654,13 +656,76 @@ void build_media_cache_page([[maybe_unused]] App& app, cutline::ui::Form& into) 
 #endif
 }
 
+/// Where the files this writes for the project go. Premiere's Project
+/// Settings ▸ Scratch Disks, for the one kind of file here that is the
+/// project's: rendered previews. Autosaves stay in the one folder crash
+/// recovery looks in when the application starts, before any project is open.
+void build_scratch_page(App& app, cutline::ui::Form& into) {
+  into.emplace<Label>("Video Previews").set_heading(true);
+
+  const cutline::core::ScratchDisk& disk = app.session.project().video_previews;
+  const auto set = [&app](cutline::core::ScratchDisk to) {
+    cutline::core::Project next = app.session.project();
+    next.video_previews = std::move(to);
+    app.session.name_next_edit("Scratch Disks");
+    app.session.apply(std::move(next));
+    // Previews made somewhere else are not these previews.
+    app.render_pieces_stale = true;
+    refresh_timeline(app);
+    app.settings_page_stale = true;
+  };
+
+  auto& where = into.row("Location");
+  auto& choice = where.emplace<Dropdown>(
+      std::vector<std::string>{"Application data", "Same as Project", "Chosen folder"},
+      static_cast<std::size_t>(disk.where));
+  choice.set_on_change([&app, set](std::size_t index) {
+    cutline::core::ScratchDisk to = app.session.project().video_previews;
+    to.where = static_cast<cutline::core::ScratchDisk::Where>(std::min<std::size_t>(index, 2));
+    if (to.where == cutline::core::ScratchDisk::Where::Folder && to.folder.empty()) {
+      const auto folder = choose_folder(app.settings_window == nullptr
+                                            ? app.main.window
+                                            : app.settings_window->window);
+      if (!folder.has_value()) {
+        app.settings_page_stale = true;
+        return;
+      }
+      to.folder = folder->string();
+    }
+    set(std::move(to));
+  });
+
+  // The path on a row of its own, elided from the front, as the media cache's.
+  constexpr std::size_t kLongestPath = 44;
+  std::string shown =
+      cutline::editor::previews_folder(app.session.project(), app.session.path()).generic_string();
+  if (shown.size() > kLongestPath) shown = "..." + shown.substr(shown.size() - kLongestPath + 3);
+  into.emplace<Label>(shown).set_small(true);
+  if (disk.where == cutline::core::ScratchDisk::Where::SameAsProject &&
+      app.session.path().empty()) {
+    into.emplace<Label>("Until the project is saved, previews go in application data.")
+        .set_small(true);
+  }
+  if (disk.where == cutline::core::ScratchDisk::Where::Folder) {
+    auto& row = into.emplace<Box>(Axis::Horizontal);
+    row.emplace<Button>("Choose...", [&app, set] {
+      const auto folder = choose_folder(app.settings_window == nullptr
+                                            ? app.main.window
+                                            : app.settings_window->window);
+      if (!folder.has_value()) return;
+      set(cutline::core::ScratchDisk{.where = cutline::core::ScratchDisk::Where::Folder,
+                                     .folder = folder->string()});
+    });
+  }
+}
+
 /// The pages a settings window offers, in the order they are listed.
 [[nodiscard]] std::vector<SettingsPage> pages_for(SettingsKind kind) {
   if (kind == SettingsKind::Project) {
-    // One for now. Premiere's Project Settings also has Scratch Disks and
-    // Ingest Settings, and neither has anything to say here yet — the list down
-    // the side appears on its own once a second page does.
-    return {SettingsPage{"General", build_sequence_page}};
+    // Premiere's Ingest Settings are not here: there is no ingest, since
+    // footage is used where it lies and proxies are made on request.
+    return {SettingsPage{"General", build_sequence_page},
+            SettingsPage{"Scratch Disks", build_scratch_page}};
   }
   return {SettingsPage{"General", build_general_page},
           SettingsPage{"Appearance", build_appearance_page},
@@ -804,7 +869,7 @@ void open_settings_dialog(App& app, SettingsKind kind) {
   // Or as big as it was last left.
   const auto [units_wide, units_tall] =
       dialog_size(app, kind == SettingsKind::Project ? "Project Settings" : "Preferences",
-                  kind == SettingsKind::Project ? 470 : 580,
+                  kind == SettingsKind::Project ? 600 : 580,
                   kind == SettingsKind::Project ? 430 : 420);
   // On the editor's display, which is where it opens.
   shell->scale = app.main.scale;
@@ -872,6 +937,10 @@ void apply_media_cache([[maybe_unused]] App& app) {
       cutline::app::media_cache_dir(app.settings.media_cache_folder);
   app.waveforms.set_cache_dir(dir);
   app.filmstrips.set_cache_dir(dir);
+  // Warp Stabilizer's analyses are read out of footage too, so they go where
+  // the cache was moved to; left alone, where they have always been.
+  cutline::render::set_analysis_folder(
+      app.settings.media_cache_folder.empty() ? std::filesystem::path{} : dir / "Analysis");
 #endif
 }
 

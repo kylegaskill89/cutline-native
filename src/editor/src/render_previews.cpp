@@ -237,6 +237,20 @@ std::filesystem::path default_previews_folder() {
   return base / "Cutline" / "Preview Files";
 }
 
+std::filesystem::path previews_folder(const core::Project& project,
+                                      const std::filesystem::path& project_file) {
+  switch (project.video_previews.where) {
+    case core::ScratchDisk::Where::SameAsProject:
+      if (!project_file.empty()) return project_file.parent_path() / "Cutline Video Previews";
+      break;
+    case core::ScratchDisk::Where::Folder:
+      if (!project.video_previews.folder.empty()) return project.video_previews.folder;
+      break;
+    case core::ScratchDisk::Where::Default: break;
+  }
+  return default_previews_folder();
+}
+
 std::vector<RenderPiece> pieces_to_render(const std::vector<RenderPiece>& pieces, double from,
                                           double to) {
   std::vector<RenderPiece> out;

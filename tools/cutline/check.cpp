@@ -1003,7 +1003,7 @@ template <typename T>
           app.settings_page = page;
           WidgetHost dialog(build_settings_interface(app, nullptr, kind));
           refresh_settings_page(app);
-          frame = Rect{0.0, 0.0, kind == SettingsKind::Project ? 470.0 : 580.0,
+          frame = Rect{0.0, 0.0, kind == SettingsKind::Project ? 600.0 : 580.0,
                        kind == SettingsKind::Project ? 430.0 : 420.0};
           dialog.resize(frame, context);
           dialog.paint(*painter, theme);

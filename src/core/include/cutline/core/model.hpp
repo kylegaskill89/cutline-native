@@ -1204,6 +1204,24 @@ struct SafeAreas {
   friend bool operator==(const SafeAreas&, const SafeAreas&) = default;
 };
 
+/// Where a kind of file this writes for a project goes: Premiere's Scratch
+/// Disks, in Project Settings.
+struct ScratchDisk {
+  enum class Where {
+    /// The application's own folder, which is where everything went before
+    /// there was a choice.
+    Default,
+    /// Beside the project file, which is Premiere's default.
+    SameAsProject,
+    /// `folder`.
+    Folder,
+  };
+  Where where = Where::Default;
+  std::string folder;
+
+  friend bool operator==(const ScratchDisk&, const ScratchDisk&) = default;
+};
+
 struct Project {
   /// Every sequence in the project, in the order the tab strip shows them.
   ///
@@ -1253,6 +1271,9 @@ struct Project {
 
   /// Project Settings' safe areas, which belong to the project as Premiere's do.
   SafeAreas safe_areas;
+
+  /// Where rendered previews are kept: Premiere's Video Previews scratch disk.
+  ScratchDisk video_previews;
 
   friend bool operator==(const Project&, const Project&) = default;
 };

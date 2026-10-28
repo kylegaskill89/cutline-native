@@ -174,15 +174,25 @@ void poll_preview([[maybe_unused]] App& app) {
 /// nothing new composites, and what the source monitor shows is by construction
 /// what the sequence would show — which is the property that makes it worth
 /// trusting when deciding what to place.
-[[nodiscard]] cutline::core::Project source_project(const cutline::core::Media& media) {
+///
+/// A sequence is shown the same way, as Premiere opens one in the Source
+/// Monitor: it needs the sequence and everything in it, so its one-clip
+/// sequence is added to a copy of the document rather than to nothing.
+[[nodiscard]] cutline::core::Project source_project(const cutline::core::Project& document,
+                                                   const cutline::core::Media& media) {
   cutline::core::Project project;
+  if (cutline::core::is_nested_sequence(media)) {
+    project = document;
+    project.sequences.push_back(cutline::core::Sequence{.id = "source-monitor"});
+    project.open = project.sequences.size() - 1;
+  }
   project.sequence().canvas_w = std::max(1, media.width.value_or(1280));
   project.sequence().canvas_h = std::max(1, media.height.value_or(720));
   // The rate it is *played* at, so a conformed source steps and scrubs on the
   // grid it will actually be cut on rather than on the file's.
   const std::optional<double> rate = cutline::core::playback_fps(media);
   project.sequence().fps = rate.value_or(0.0) > 0.0 ? *rate : 30.0;
-  project.media = {media};
+  if (!cutline::core::is_nested_sequence(media)) project.media = {media};
 
   cutline::core::Track track;
   track.id = "v1";
@@ -312,7 +322,8 @@ void toggle_source_playback([[maybe_unused]] App& app) {
   }
 
   const cutline::core::Media* media = source_media_of(app);
-  if (media == nullptr || media->path.empty()) return;
+  const bool sequence = media != nullptr && cutline::core::is_nested_sequence(*media);
+  if (media == nullptr || (media->path.empty() && !sequence)) return;
   if (app.player_failed) return;
 
   // One sound card, so one thing playing. Stopping the sequence rather than
@@ -322,11 +333,15 @@ void toggle_source_playback([[maybe_unused]] App& app) {
   if (app.shuttling()) set_shuttle(app, 0.0);
   app.source_shuttle = 0.0;
 
-  if (app.source_player != nullptr && app.source_player_for != media->id) {
+  // A sequence is heard as it stands now, so an edit inside it since the
+  // player was made makes a new one.
+  const std::string playing_for =
+      sequence ? std::format("{}@{}", media->id, app.session.document_revision()) : media->id;
+  if (app.source_player != nullptr && app.source_player_for != playing_for) {
     app.source_player.reset();
   }
   if (app.source_player == nullptr) {
-    auto made = cutline::engine::Player::create(source_project(*media),
+    auto made = cutline::engine::Player::create(source_project(app.session.project(), *media),
                                                {.device_id = app.settings.audio_device});
     if (!made.has_value()) {
       app.player_failed = true;
@@ -334,7 +349,7 @@ void toggle_source_playback([[maybe_unused]] App& app) {
       return;
     }
     app.source_player = std::move(*made);
-    app.source_player_for = media->id;
+    app.source_player_for = playing_for;
   }
 
   app.source_player->seek(app.source_playhead);
@@ -436,7 +451,8 @@ void refresh_source([[maybe_unused]] App& app) {
   if (app.source_monitor == nullptr) return;
 
   const cutline::core::Media* media = source_media_of(app);
-  if (media == nullptr || cutline::core::is_generated_media(*media) || media->path.empty()) {
+  if (media == nullptr || cutline::core::is_generated_media(*media) ||
+      (media->path.empty() && !cutline::core::is_nested_sequence(*media))) {
     // Nothing chosen, or something with no file behind it. The panel keeps its
     // placeholder rather than showing the last source, which would be a picture
     // of something nobody is pointing at.
@@ -494,7 +510,7 @@ void refresh_source([[maybe_unused]] App& app) {
   // engine can render ahead of a playing source rather than starting over at
   // every frame. Compared by value, since the media itself can change — a
   // relink, a conform — and that is a different picture.
-  cutline::core::Project wanted = source_project(*media);
+  cutline::core::Project wanted = source_project(app.session.project(), *media);
   if (app.source_snapshot == nullptr || *app.source_snapshot != wanted) {
     app.source_snapshot = std::make_shared<const cutline::core::Project>(std::move(wanted));
   }

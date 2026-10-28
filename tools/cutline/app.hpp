@@ -1620,7 +1620,8 @@ void toggle_source_playback(App& app);
 void stop_source_playback(App& app);
 void stop_playback(App& app);
 void advance_source_playback(App& app);
-[[nodiscard]] cutline::core::Project source_project(const cutline::core::Media& media);
+[[nodiscard]] cutline::core::Project source_project(const cutline::core::Project& document,
+                                                   const cutline::core::Media& media);
 void refresh_browser(App& app);
 void refresh_dock(App& app);
 void reconcile_windows(App& app);

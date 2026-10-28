@@ -53,9 +53,16 @@ struct RenderPiece {
 [[nodiscard]] std::filesystem::path preview_file(const std::filesystem::path& folder,
                                                  const std::string& key);
 
-/// Where preview files are kept: beside the other caches, as Premiere keeps
-/// them apart from the project.
+/// Where preview files are kept when nobody has said: beside the other
+/// caches, in the application's own folder.
 [[nodiscard]] std::filesystem::path default_previews_folder();
+
+/// Where this project's preview files are kept, by its Video Previews scratch
+/// disk: the default folder, a folder beside the project file as Premiere's
+/// "Same as Project" makes one, or the folder chosen. A project never saved
+/// has nowhere to be beside, and uses the default.
+[[nodiscard]] std::filesystem::path previews_folder(const core::Project& project,
+                                                    const std::filesystem::path& project_file);
 
 /// The pieces a Render In to Out would render: the unrendered ones that
 /// overlap [from, to), whole.

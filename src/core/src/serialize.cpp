@@ -33,6 +33,14 @@ NLOHMANN_JSON_SERIALIZE_ENUM(AutomationMode, {
                                                  {AutomationMode::Touch, "touch"},
                                              })
 
+// The application's folder first, which is what a project from before there
+// was a choice used.
+NLOHMANN_JSON_SERIALIZE_ENUM(ScratchDisk::Where, {
+                                                     {ScratchDisk::Where::Default, "default"},
+                                                     {ScratchDisk::Where::SameAsProject, "project"},
+                                                     {ScratchDisk::Where::Folder, "folder"},
+                                                 })
+
 // Camera 1 first, Premiere's default, for anything written by something newer.
 NLOHMANN_JSON_SERIALIZE_ENUM(MulticamAudio, {
                                                 {MulticamAudio::Camera1, "camera1"},
@@ -564,6 +572,11 @@ json write(const Project& p) {
   json j = p.sequences.empty() ? write(Sequence{}) : write(p.sequences.front());
   j["use_proxies"] = p.use_proxies;
   // Only when they are not Premiere's defaults, which is nearly always.
+  // Only when somebody has chosen somewhere, so a project that never did is
+  // written as it always was.
+  if (p.video_previews != ScratchDisk{}) {
+    j["video_previews"] = {{"where", p.video_previews.where}, {"folder", p.video_previews.folder}};
+  }
   if (p.safe_areas != SafeAreas{}) {
     j["safe_areas"] = {{"title_width", p.safe_areas.title_width},
                        {"title_height", p.safe_areas.title_height},
@@ -1109,6 +1122,10 @@ Project read_project(const json& j) {
   // single-sequence project has always kept them.
   p.sequences = {read_sequence(j)};
   p.use_proxies = read_or(j, "use_proxies", p.use_proxies);
+  if (const auto disk = j.find("video_previews"); disk != j.end() && disk->is_object()) {
+    p.video_previews.where = read_or(*disk, "where", ScratchDisk::Where::Default);
+    p.video_previews.folder = read_or(*disk, "folder", std::string{});
+  }
   if (const auto safe = j.find("safe_areas"); safe != j.end() && safe->is_object()) {
     p.safe_areas.title_width = read_or(*safe, "title_width", p.safe_areas.title_width);
     p.safe_areas.title_height = read_or(*safe, "title_height", p.safe_areas.title_height);

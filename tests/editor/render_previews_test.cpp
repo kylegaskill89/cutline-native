@@ -145,4 +145,19 @@ TEST_F(RenderBarTest, RenderInToOutTakesTheUnrenderedPiecesItTouches) {
 }
 
 }  // namespace
+TEST(PreviewsFolder, FollowsTheProjectsScratchDisk) {
+  core::Project project;
+  const std::filesystem::path file = "D:/Work/Interview/cut.cutline";
+  EXPECT_EQ(previews_folder(project, file), default_previews_folder());
+
+  project.video_previews.where = core::ScratchDisk::Where::SameAsProject;
+  EXPECT_EQ(previews_folder(project, file),
+            std::filesystem::path("D:/Work/Interview") / "Cutline Video Previews");
+  EXPECT_EQ(previews_folder(project, {}), default_previews_folder())
+      << "a project never saved has nowhere to be beside";
+
+  project.video_previews = {.where = core::ScratchDisk::Where::Folder, .folder = "E:/Scratch"};
+  EXPECT_EQ(previews_folder(project, file), std::filesystem::path("E:/Scratch"));
+}
+
 }  // namespace cutline::editor

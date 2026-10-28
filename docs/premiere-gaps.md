@@ -753,7 +753,7 @@ you want the mode to stay.
 | Ripple trim (edge drag that closes the gap) | yes | **done** — a tool, on Premiere's B | — |
 | Rolling edit (both sides of a cut at once) | yes | **done** — a tool, on Premiere's N | — |
 | Trim to playhead (`Q` / `W`) | yes | **done** — both, rippling, on the targeted track | — |
-| The trim monitor (two-up while trimming) | yes | none | machinery |
+| ~~The trim monitor (two-up while trimming)~~ | yes | **done** — Phase 4 item 5, as Premiere's trim mode | — |
 | Nudge by frame | yes | **done** | — |
 
 Ripple and roll were the two that mattered, and both are done — as tools, on
@@ -1053,10 +1053,12 @@ way to *set* them by eye, which is the panel.
 | ~~Drag from the picture to the timeline~~ | yes | **done** — with the same ghost the pool's drag shows | — |
 | ~~A list of recently opened sources~~ | a dropdown of them | **done** — the name of what is showing *is* the chooser | — |
 | ~~Audio-only sources shown as a waveform~~ | yes | **done** — `ui::WaveformView` | — |
-| Display mode, safe margins, zoom | yes | **zoom is done**, on both monitors; the other two are not — and not this section's, since they are both monitors' | audit |
+| ~~Display mode, safe margins, zoom~~ | yes | **done** — zoom first, then safe margins and display mode in Phase 4, on both monitors | — |
+| ~~Clip markers~~ | `M` while it is focused, kept with the source | **done** — see §2.3 | — |
+| ~~A sequence as the source~~ | open a sequence, a nest or a multicam in it | **done** — shown and played from a copy of the document with the one-clip sequence added, since a sequence needs everything in it; heard as it stands, so an edit inside it makes the player again | — |
 
-**Section 3 is closed but for the last row, and the useful third of that row is
-now done.** Display mode, safe margins and monitor zoom belong to the program
+**Section 3 is closed.** What follows is how the last row stood before Phase 4
+built it. Display mode, safe margins and monitor zoom belong to the program
 monitor as much as to this one, so building them into the source monitor alone
 would be building them twice; they are carried in *Found by audit* below, as
 **Safe margins**, **Monitor zoom level** and **Display mode**. Zoom was built
@@ -1385,8 +1387,15 @@ control on top of it — and it would buy a dimmer Luna, which nobody has asked
 for. Somebody who wants a lighter interface wants a light theme, which is a new
 theme and a much smaller piece of work.
 
-**Scratch disks — not yet, and worth doing when there is a second thing to
-place.** Proxies have a folder, on their own page, because proxies are the one
+**Scratch disks — done for Video Previews, once there was a second thing to
+place** (see below for what this said before). Project Settings has a Scratch
+Disks page, as Premiere's does, setting where the project's rendered previews
+go: application data as before, Same as Project (a folder beside the project
+file, Premiere's default), or a chosen folder. Autosaves stay where they are,
+because crash recovery looks for them in one folder when the application
+starts, before there is a project to ask; and Warp Stabilizer's analyses, read
+out of footage as the waveforms and filmstrips are, follow the Media Cache
+folder once one is chosen. Before: Proxies have a folder, on their own page, because proxies are the one
 thing this writes that can be large and can want to be elsewhere. A "Scratch
 Disks" page today would be that one row moved and given a grander name. The
 moment a second kind of file needs a home — a disk cache, rendered previews —
@@ -2396,10 +2405,10 @@ had been written down anywhere:
 | Frame hold / freeze frame | a still from one frame, in place | **done** — held at the playhead, picture only | — |
 | ~~Interpret footage~~ | override a source's frame rate, alpha, channels | **done** for the rate; alpha does not exist in this pipeline and channels already had a home — see below | — |
 | ~~Paste attributes~~ | pick which properties travel | **done** — nine groups, Ctrl+Alt+V, and Premiere's keyframe stretch | — |
-| Preview render bar | red/yellow over the ruler, Enter renders it | none, and nothing caches a rendered span | machinery |
-| Safe margins | title-safe and action-safe overlays | none | control |
+| ~~Preview render bar~~ | red/yellow over the ruler, Enter renders it | **done** — Phase 4 item 6 | — |
+| ~~Safe margins~~ | title-safe and action-safe overlays | **done** — Phase 4 item 2 | — |
 | ~~Monitor zoom level~~ | Fit, 10%…400%, and scroll | **done** — on both monitors, with the wheel and the middle button to pan | — |
-| Display mode | composite, alpha, and the scopes, over the picture | the Scopes panel instead, docked | control |
+| ~~Display mode~~ | composite, alpha, and the scopes, over the picture | **done** — Phase 4 item 3, with Multi-Camera from item 11; the scopes stay in their panel, as Premiere's do now | — |
 | ~~Maximise a panel~~ | `~` over any panel | **done** — the panel under the pointer, and again to put it back | — |
 
 **The three monitor rows are §3's last row**, moved here rather than left there:

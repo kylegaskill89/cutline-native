@@ -457,6 +457,16 @@ TEST(Serialize, ClipMarkersSurviveTheFile) {
   EXPECT_EQ(loaded->project.media[0].markers, m.markers);
 }
 
+TEST(Serialize, TheVideoPreviewsScratchDiskTravelsWithTheProject) {
+  Project p = empty_project();
+  p.video_previews = ScratchDisk{.where = ScratchDisk::Where::Folder, .folder = "E:/Previews"};
+  const auto loaded = from_json(to_json(p));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_EQ(loaded->project.video_previews, p.video_previews);
+  EXPECT_EQ(to_json(empty_project()).find("video_previews"), std::string::npos)
+      << "a project that never chose is written as it always was";
+}
+
 TEST(Serialize, AProjectWrittenBeforeBinsReadsAsOneFlatPool) {
   Media m;
   m.id = "m1";
