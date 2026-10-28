@@ -1837,7 +1837,7 @@ the work happens and what waits for it.
 | Frames in flight on the card | yes | **deferred, with a measurement** — each compositor has its own command list and waits only on its own fence; the drains themselves measured at a millisecond or two, see below | — |
 | Editing while it plays | playback carries on through an edit | **mostly** — the row was stale: `rebuild_playback` resumes after an edit with a gap of about 25 ms. Seamless means replanning the mixer while its device runs | machinery |
 | Export pipelined | render, convert and encode overlap; the card feeds the hardware encoder | **yes** — converted to NV12 on the card, a third of the readback, encoded on a thread of its own with up to three frames on their way back, and a 4K HEVC frame split across both NVENC engines: 4K60 at **4.4× realtime**, from 0.62×; see §7.2 | done |
-| Precision on the way out | 10-bit and float paths to the encoder | **half** — the card converts from the float scene straight to P010 as well as NV12, tested to a code; the writer still takes 8 bits only, which is the 10-bit encoder §8 needs | wiring |
+| ~~Precision on the way out~~ | 10-bit and float paths to the encoder | **done** — the card converts from the float scene straight to P010 as well as NV12, and §8.2 gave the writer its 10-bit path: HEVC Main 10 and ProRes | — |
 | A large pool is cheap until looked at | yes | **yes** — forty 4K sources: 231 MB in the list, 307 MB in icons once the strips are in. The 1.36 GB was not there to find; what was, was 200 MB the driver kept per decoding device after decoding, now given back when a device goes quiet; see §7.3 | done |
 | Filmstrips for a folder of rushes | seconds | **yes** — 0.74 s a source, flat across forty, from 11.6 s rising to 14: every tile frame went back to the same keyframe and decoded the same pictures again, in software. Now on the card, seeking only forward; see §7.3 | done |
 | Nested and retimed audio | streamed | **yes** — made ten seconds of timeline at a time around the playhead, with a 50 ms crossfade where pieces meet; Play on a 140-second clip at half speed went from 8.1 s to 0.28 s; see §7.4 | done |
@@ -2362,6 +2362,74 @@ commands.
 | HSL secondary | yes | **done** — Set Colour from the picture or a preset swatch; hue, saturation and luma ranges with softness on range sliders; Denoise and Blur on the key; Show Mask and Invert; a wheel, Temperature, Tint, Contrast, Sharpen and Saturation inside it | machinery |
 | `.cube` LUTs | loaded into a 3D texture | **done** — 1D and 3D, read once per file and again when it changes, carried in the pass data rather than as textures so a frame can hold any number, and interpolated tetrahedrally | machinery |
 | One panel | yes | **done** — the Lumetri Color panel, given a group of its own in the Colour workspace, editing the clip's first Lumetri Color and adding one on the first change. One effect, rendered as passes; every section grades in the same space, with an HDR sequence's light scaled so graphics white is 1.0 first, so a slider means the same in either | machinery |
+
+## 14. Premiere's newer and assistive features
+
+Audited on 2026-10-28, after 0.7.0, against Premiere as it stands at 26.5
+(September 2026) rather than against this page. Sections 1 to 13 walked
+Premiere's panels and menus as they were when this was begun; what they never
+listed is the run of features Premiere has added since, most of them built on
+analysis of the picture or the sound, and several of them on machine learning.
+Everything here was absent from this page, which is how it went unplanned.
+
+Sorted by what each one needs, because that is the decision it turns on.
+
+### 14.1 Built from what is here
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Captions | a caption track; the Text panel to write, retime and split them; caption styles; Subtitle and CEA-608/708 formats; import and export of SRT; burned into the picture or written beside it on export; single-word captions for short-form (26.3) | none | large |
+| Scene Edit Detection | on a clip: find the cuts in footage that was edited before it arrived, and cut there, make subclips in a bin, or put a clip marker at each | none, and clip markers now exist for it to write | small |
+| Audio repair | Essential Sound's Repair: Reduce Noise, Reduce Rumble, DeHum, DeEss, Reduce Reverb; and DeNoise, DeHummer and DeEsser as effects | Reduce Rumble's high-pass only; the others are missing, which `audio::role_preset` already says | medium |
+| Auto Reframe | a sequence re-cut for another shape (vertical, square), the crop following what matters in each shot, keyframed on Motion | none; the tracker that mask tracking and Warp Stabilizer share can follow a region, but choosing *what* matters in a shot is Premiere's model's job | medium, with a heuristic for the subject |
+| Remix | a music clip lengthened or shortened to a target by cutting at beats and phrases so the seams cannot be heard | none; the stretch and loudness code is here, beat and phrase finding is not | medium |
+| Morph Cut | a transition that hides a jump cut in an interview by morphing between the two frames | none; needs dense motion between frames and face-aware warping | large |
+| Shape Dissolve, Magnify and the Film Impact transitions (26.2, 26.3) | new effects and transitions | none of these | small each |
+
+### 14.2 Needs a model
+
+These are Premiere's machine-learning features. Each needs a trained model
+running on this machine, a dependency of its own and a large download beside
+the installer, which is a decision before it is a plan.
+
+| | Premiere | Here | Size |
+|---|---|---|---|
+| Speech to Text | a transcript of every clip's speech, with speakers, in many languages | none | large, and a model (Whisper-class) |
+| Text-based editing and Paper Edit (26.5) | cut the sequence by editing its transcript: delete words, find pauses and filler words, build a rough cut from chosen passages | none; needs the transcript | large, after Speech to Text |
+| Captions from the transcript | auto-captions, with line length and duration rules | none; captions themselves are §14.1 | small, after both |
+| Enhance Speech | dialogue recleaned as though recorded in a studio | none; §14.1's Reduce Noise is the classical half of it | large, and a model |
+| Object Mask (26.0) | a mask drawn round a subject by pointing at it, and tracked | masks are drawn and tracked by hand | large, and a segmentation model |
+| Audio category tagging | Essential Sound labels clips Dialogue, Music, SFX or Ambience on its own | roles are set by hand | small, and a classifier model |
+| Media Intelligence search | find footage by describing what is in it | the pool searches names and paths | large, and a vision-language model |
+
+### 14.3 Not for here
+
+| | Premiere | Why not |
+|---|---|---|
+| Generative Extend, the Generative Media Tool (26.5) | new frames and sound generated by Adobe's cloud models | they are Adobe's service, not something an editor contains; an equivalent would be a cloud service of our own |
+| Team Projects, Frame.io review, Productions | shared projects and review through Adobe's services | the same; Productions' purpose — many projects sharing media — is a project format question for another day |
+
+### 14.4 Phase 5, proposed
+
+Ordered as Phase 4 was, used every day first and self-contained before
+dependent, and for the owner to confirm:
+
+1. **Captions** — the track, the Text panel, styles, SRT both ways, burned in
+   or beside the export. Large, and the base for everything in §14.2 that
+   writes captions.
+2. **Scene Edit Detection** — small, and immediately useful on footage from
+   anywhere else.
+3. **Audio repair** — Reduce Noise (spectral, learned from a quiet stretch or
+   adaptively), DeHum, DeEss and Reduce Reverb, as effects and in Essential
+   Sound's Repair, completing the dialogue preset.
+4. **Remix** — beats and phrases found by onset analysis and self-similarity,
+   cut and crossfaded to a target length.
+5. **Auto Reframe** — a sequence re-cut to a new shape, following motion and
+   faces with the tracker that is already here.
+6. **Morph Cut** — last, the largest and the most specialised.
+
+The new effects and transitions of 26.2 and 26.3 fit around these. §14.2
+waits on a decision about running models locally.
 
 ## Found by the 2026-10 review
 
