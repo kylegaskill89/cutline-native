@@ -1673,18 +1673,6 @@ float4 PSEffect(VSOutput input) : SV_Target {
         after = float4(rgb, alpha);
     } else if (params.passKind == PASS_SECONDARY) {
         after = secondaryPass(input.uv, before);
-    } else if (params.passKind == PASS_ULTRAKEY) {
-        after = ultraKeyPass(before);
-    } else if (params.passKind == PASS_CHOKE) {
-        after = matteChoke(input.uv, before);
-    } else if (params.passKind == PASS_SOFTEN) {
-        after = matteSoften(input.uv);
-    } else if (params.passKind == PASS_ULTRAOUT) {
-        after = ultraKeyOutput(input.uv, before);
-    } else if (params.passKind == PASS_TRANSFORM) {
-        after = transformPass(input.uv);
-    } else if (params.passKind == PASS_WARP) {
-        after = warpPass(input.uv);
     } else if (params.passKind == PASS_SHARPEN) {
         after = float4(sharpenPass(input.uv), texture0.Sample(linearSampler, input.uv).a);
     } else if (params.passKind == PASS_FLIP) {
@@ -1740,6 +1728,35 @@ float4 PSEffect(VSOutput input) : SV_Target {
     // what was there, by how much of this pixel the mask covers. An effect
     // never has to know it is masked, which is what makes masking something the
     // whole catalogue gets rather than something each entry implements.
+    const float coverage = maskCoverage(layerUv(input.uv));
+    if (coverage >= 1.0) return after;
+    return lerp(before, after, coverage);
+}
+
+/// The heavier passes, Ultra Key's, Transform and Warp Stabilizer, in an entry
+/// point of their own. Kept in `PSEffect` they made one shader of every pass,
+/// and the software device miscompiled it once it grew past a size: the
+/// blurs, which had not changed at all, came out wrong. Each compiles on its
+/// own now, and a light pass no longer pays for the heaviest one's registers.
+float4 PSEffectHeavy(VSOutput input) : SV_Target {
+    const float4 before = texture0.Sample(linearSampler, input.uv);
+
+    float4 after = before;
+    if (params.passKind == PASS_ULTRAKEY) {
+        after = ultraKeyPass(before);
+    } else if (params.passKind == PASS_CHOKE) {
+        after = matteChoke(input.uv, before);
+    } else if (params.passKind == PASS_SOFTEN) {
+        after = matteSoften(input.uv);
+    } else if (params.passKind == PASS_ULTRAOUT) {
+        after = ultraKeyOutput(input.uv, before);
+    } else if (params.passKind == PASS_TRANSFORM) {
+        after = transformPass(input.uv);
+    } else if (params.passKind == PASS_WARP) {
+        after = warpPass(input.uv);
+    }
+
+    // The mask, as `PSEffect` applies it.
     const float coverage = maskCoverage(layerUv(input.uv));
     if (coverage >= 1.0) return after;
     return lerp(before, after, coverage);

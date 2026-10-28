@@ -54,6 +54,9 @@ struct Compositor::Impl {
   /// One effect over the scratch. Which effect is a root constant, so there is
   /// one pipeline for all of them.
   ComPtr<ID3D12PipelineState> pipeline_effect;
+  /// Ultra Key's passes, Transform and Warp Stabilizer, in a shader of their
+  /// own; see `PSEffectHeavy`.
+  ComPtr<ID3D12PipelineState> pipeline_heavy;
   ComPtr<ID3D12PipelineState> pipeline_present;
   ComPtr<ID3D12PipelineState> pipeline_present_hdr;
   /// The two halves of the encoder's conversion, at each depth: luma into a

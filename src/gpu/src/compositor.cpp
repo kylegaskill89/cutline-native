@@ -751,6 +751,8 @@ std::expected<std::unique_ptr<Compositor>, std::string> Compositor::create(
   if (!adjust_source_ps) return std::unexpected(adjust_source_ps.error());
   const auto effect_ps = read_file(shaders / "composite_effect_ps.cso");
   if (!effect_ps) return std::unexpected(effect_ps.error());
+  const auto heavy_ps = read_file(shaders / "composite_heavy_ps.cso");
+  if (!heavy_ps) return std::unexpected(heavy_ps.error());
   const auto present_ps = read_file(shaders / "composite_present_ps.cso");
   if (!present_ps) return std::unexpected(present_ps.error());
   const auto luma_ps = read_file(shaders / "composite_luma_ps.cso");
@@ -829,6 +831,11 @@ std::expected<std::unique_ptr<Compositor>, std::string> Compositor::create(
   }
   if (auto ok = make_pipeline(*fullscreen_vs, *effect_ps, kSceneFormat, D3D12_BLEND_ONE,
                               D3D12_BLEND_ZERO, false, impl->pipeline_effect);
+      !ok) {
+    return std::unexpected(ok.error());
+  }
+  if (auto ok = make_pipeline(*fullscreen_vs, *heavy_ps, kSceneFormat, D3D12_BLEND_ONE,
+                              D3D12_BLEND_ZERO, false, impl->pipeline_heavy);
       !ok) {
     return std::unexpected(ok.error());
   }
@@ -1283,7 +1290,11 @@ std::expected<void, std::string> Compositor::compose(std::span<const Layer> laye
           commands->OMSetRenderTargets(1, &scratch_rtv[destination], FALSE, nullptr);
           commands->ClearRenderTargetView(scratch_rtv[destination], transparent, 0, nullptr);
 
-          commands->SetPipelineState(d.pipeline_effect.Get());
+          const bool heavy =
+              effect.kind == PassKind::UltraKey || effect.kind == PassKind::MatteChoke ||
+              effect.kind == PassKind::MatteSoften || effect.kind == PassKind::UltraKeyOutput ||
+              effect.kind == PassKind::Transform || effect.kind == PassKind::WarpStabilizer;
+          commands->SetPipelineState(heavy ? d.pipeline_heavy.Get() : d.pipeline_effect.Get());
           commands->SetGraphicsRootDescriptorTable(
               0, d.srv_gpu(d.pass_slot(static_cast<UINT>(i), source)));
           commands->SetGraphicsRoot32BitConstants(1, kShaderParamCount, &pass, 0);
