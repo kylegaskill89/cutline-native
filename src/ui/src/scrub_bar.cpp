@@ -3,6 +3,7 @@
 #include "cutline/ui/theme.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace cutline::ui {
@@ -103,6 +104,20 @@ Rect ScrubBar::playhead_area() const {
               area.height + overhang * 2.0};
 }
 
+void ScrubBar::set_markers(std::vector<Marker> markers) {
+  if (markers_ == markers) return;
+  markers_ = std::move(markers);
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
+Rect ScrubBar::marker_rect(std::size_t index) const {
+  const Rect area = track_area();
+  if (area.empty() || index >= markers_.size() || duration_ <= 0.0) return {};
+  // A little taller than the trough, so it reads against the playhead's fill.
+  constexpr double kWide = 3.0;
+  return Rect{x_of(markers_[index].time) - kWide / 2.0, area.y - 2.0, kWide, area.height + 4.0};
+}
+
 void ScrubBar::paint_content(Painter& painter, const Theme& theme) const {
   const Rect area = track_area();
   if (area.empty()) return;
@@ -122,6 +137,14 @@ void ScrubBar::paint_content(Painter& painter, const Theme& theme) const {
 
   painter.stroke(area, radius, fade(style.text, 0.25f), 1.0);
 
+  for (std::size_t i = 0; i < markers_.size(); ++i) {
+    const Rect tick = marker_rect(i);
+    if (tick.empty()) continue;
+    const Color color = markers_[i].color.empty() ? style.text
+                                                  : parse_color(markers_[i].color, style.text);
+    painter.fill(tick, 1.0, Fill::solid(color));
+  }
+
   if (duration_ > 0.0) {
     painter.fill(playhead_area(), 0.0, mark.fill);
   }
@@ -135,6 +158,17 @@ void ScrubBar::scrub_to(double x) {
 bool ScrubBar::on_mouse_down(const MouseEvent& event) {
   if (event.button != MouseButton::Left) return false;
   if (duration_ <= 0.0) return false;
+
+  // A double-click on a marker is for the marker, and moves nothing.
+  if (event.click_count >= 2 && on_marker) {
+    for (std::size_t i = 0; i < markers_.size(); ++i) {
+      const Rect tick = marker_rect(i);
+      if (!tick.empty() && std::abs(event.x - (tick.x + tick.width / 2.0)) <= 4.0) {
+        on_marker(i);
+        return true;
+      }
+    }
+  }
 
   // Anywhere on the strip, not only on the playhead. Premiere's scrub bars jump
   // to the click and carry on dragging from there, which is one gesture for

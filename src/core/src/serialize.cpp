@@ -358,6 +358,15 @@ json write(const AudioClipEffect& e) {
   return j;
 }
 
+json write(const Marker& m) {
+  json j{{"id", m.id}, {"time", m.time}};
+  if (!m.label.empty()) j["label"] = m.label;
+  if (!m.color.empty()) j["color"] = m.color;
+  if (m.duration > 0.0) j["duration"] = m.duration;
+  if (!m.comment.empty()) j["comment"] = m.comment;
+  return j;
+}
+
 json write(const Media& m) {
   json j{{"id", m.id},
          {"path", m.path},
@@ -384,6 +393,9 @@ json write(const Media& m) {
   if (m.colour_space.has_value()) j["colour_space"] = *m.colour_space;
   if (m.colour_override.has_value()) j["colour_override"] = *m.colour_override;
   put_if_set(j, "timecode", m.timecode);
+  json markers = json::array();
+  for (const Marker& marker : m.markers) markers.push_back(write(marker));
+  put_unless_empty(j, "markers", markers);
   put_if_set(j, "file_duration", m.file_duration);
   put_if_set(j, "in_point", m.in_point);
   put_if_set(j, "out_point", m.out_point);
@@ -494,15 +506,6 @@ json write(const Track& t) {
   json clips = json::array();
   for (const Clip& c : t.clips) clips.push_back(write(c));
   put_unless_empty(j, "clips", clips);
-  return j;
-}
-
-json write(const Marker& m) {
-  json j{{"id", m.id}, {"time", m.time}};
-  if (!m.label.empty()) j["label"] = m.label;
-  if (!m.color.empty()) j["color"] = m.color;
-  if (m.duration > 0.0) j["duration"] = m.duration;
-  if (!m.comment.empty()) j["comment"] = m.comment;
   return j;
 }
 
@@ -866,6 +869,17 @@ AudioClipEffect read_audio_effect(const json& j) {
   return e;
 }
 
+Marker read_marker(const json& m) {
+  return Marker{
+      .id = read_or(m, "id", std::string{}),
+      .time = read_or(m, "time", 0.0),
+      .label = read_or(m, "label", std::string{}),
+      .color = read_or(m, "color", std::string{}),
+      .duration = read_or(m, "duration", 0.0),
+      .comment = read_or(m, "comment", std::string{}),
+  };
+}
+
 Media read_media(const json& j) {
   Media m;
   m.id = read_or(j, "id", std::string{});
@@ -913,6 +927,9 @@ Media read_media(const json& j) {
   m.in_point = read_optional<double>(j, "in_point");
   m.out_point = read_optional<double>(j, "out_point");
   m.timecode = read_optional<double>(j, "timecode");
+  if (const auto markers = j.find("markers"); markers != j.end() && markers->is_array()) {
+    for (const json& marker : *markers) m.markers.push_back(read_marker(marker));
+  }
   m.sequence_id = read_or(j, "sequence_id", std::string{});
   m.proxy_path = read_or(j, "proxy_path", std::string{});
   m.bin = read_or(j, "bin", std::string{});
@@ -1077,14 +1094,7 @@ Sequence read_sequence(const json& j) {
   const auto markers = j.find("markers");
   if (markers != j.end() && markers->is_array()) {
     for (const json& m : *markers) {
-      s.markers.push_back(Marker{
-          .id = read_or(m, "id", std::string{}),
-          .time = read_or(m, "time", 0.0),
-          .label = read_or(m, "label", std::string{}),
-          .color = read_or(m, "color", std::string{}),
-          .duration = read_or(m, "duration", 0.0),
-          .comment = read_or(m, "comment", std::string{}),
-      });
+      s.markers.push_back(read_marker(m));
     }
   }
 

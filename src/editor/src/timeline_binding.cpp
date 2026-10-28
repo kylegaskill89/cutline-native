@@ -37,6 +37,40 @@ namespace {
   return media->path.empty() ? "(untitled)" : media->path;
 }
 
+/// The source's clip markers that the clip shows, in seconds from its start.
+///
+/// Found by working back from the source time to the moment the clip plays
+/// it. That mapping only ever runs one way through a clip -- forwards, or
+/// backwards when reversed, at whatever speed -- so halving the interval
+/// finds it for a retimed clip as surely as for a plain one.
+[[nodiscard]] std::vector<ui::TimelineBlock::ClipMarker> clip_markers(const core::Project& project,
+                                                                      const core::Clip& clip) {
+  const core::Media* media = media_of(project, clip.media_id);
+  if (media == nullptr || media->markers.empty() || clip.hold.has_value()) return {};
+  const double length = core::clip_duration(clip);
+  if (!(length > 0.0)) return {};
+  const double first = core::source_time_at(clip, clip.start);
+  const double last = core::source_time_at(clip, clip.start + length);
+  const double low = std::min(first, last);
+  const double high = std::max(first, last);
+  std::vector<ui::TimelineBlock::ClipMarker> found;
+  for (const core::Marker& marker : media->markers) {
+    if (marker.time < low - 1e-9 || marker.time > high + 1e-9) continue;
+    double a = 0.0;
+    double b = length;
+    for (int step = 0; step < 48; ++step) {
+      const double middle = (a + b) / 2.0;
+      const double at = core::source_time_at(clip, clip.start + middle);
+      // Whether the source runs past the marker by here, which way round the
+      // clip plays it.
+      if ((at < marker.time) == !clip.reverse) a = middle;
+      else b = middle;
+    }
+    found.push_back({.at = (a + b) / 2.0, .color = marker.color});
+  }
+  return found;
+}
+
 /// Every moment a clip is animated at, from every property and every effect,
 /// deduplicated and in order.
 ///
@@ -200,6 +234,7 @@ ui::TimelineModel timeline_model(const core::Project& project,
           // it as a video clip's are.
           .has_effects = !clip.effects.empty() || !clip.audio_effects.empty(),
           .keyframes = keyframe_times(clip, audio),
+          .markers = clip_markers(project, clip),
           .transition = std::move(transition),
           .gain = std::move(band),
           .waveform = std::move(waveform),

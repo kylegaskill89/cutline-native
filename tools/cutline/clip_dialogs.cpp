@@ -380,12 +380,19 @@ void open_fit_dialog(App& app) {
 /// Delete is on it rather than only on a key, because a marker with a note in
 /// it is a thing somebody made and the place to throw it away is the place they
 /// are looking at it.
-void open_marker_dialog(App& app, std::size_t index) {
+void open_marker_dialog(App& app, std::size_t index, const std::string& media_id) {
   if (app.main.host == nullptr || app.timeline == nullptr) return;
-  const std::vector<cutline::core::Marker>& markers = app.session.project().sequence().markers;
+  // A source's own markers when one is named, a clip marker, and the
+  // sequence's otherwise: the same box for both, as Premiere has one.
+  const auto source = std::ranges::find(app.session.project().media, media_id,
+                                        &cutline::core::Media::id);
+  const bool on_source = !media_id.empty() && source != app.session.project().media.end();
+  const std::vector<cutline::core::Marker>& markers =
+      on_source ? source->markers : app.session.project().sequence().markers;
   if (index >= markers.size()) return;
   const cutline::core::Marker marker = markers[index];
-  const double fps = app.session.project().sequence().fps;
+  const double fps = on_source ? cutline::core::playback_fps(*source).value_or(30.0)
+                               : app.session.project().sequence().fps;
 
   auto dialog = std::make_unique<cutline::ui::Dialog>(
       "Marker at " + cutline::core::seconds_to_timecode(
@@ -441,27 +448,37 @@ void open_marker_dialog(App& app, std::size_t index) {
   }
 
   dialog->set_accept("OK", [&app, id = marker.id, fps, chosen, n = &name, c = &comment,
-                            d = &span]() -> std::optional<std::string> {
+                            d = &span, media_id, on_source]() -> std::optional<std::string> {
     // A duration that does not parse leaves the one it had rather than
     // becoming zero, which would silently turn a span back into a point.
     const std::optional<double> length =
         cutline::core::timecode_to_seconds(d->text(), fps, app.session.project().sequence().drop_frame);
     const cutline::core::Marker* was = nullptr;
-    for (const cutline::core::Marker& m : app.session.project().sequence().markers) {
+    const cutline::core::Media* media = nullptr;
+    for (const cutline::core::Media& m : app.session.project().media) {
+      if (m.id == media_id) media = &m;
+    }
+    for (const cutline::core::Marker& m :
+         on_source && media != nullptr ? media->markers : app.session.project().sequence().markers) {
       if (m.id == id) was = &m;
     }
     const double duration = length.value_or(was != nullptr ? was->duration : 0.0);
 
-    app.session.apply(cutline::core::set_marker(app.session.project(), id, n->text(),
-                                                c->text(), *chosen, duration));
-    refresh_timeline(app);
+    app.session.apply(on_source ? cutline::core::set_source_marker(app.session.project(), media_id,
+                                                                   id, n->text(), c->text(),
+                                                                   *chosen, duration)
+                                : cutline::core::set_marker(app.session.project(), id, n->text(),
+                                                            c->text(), *chosen, duration));
+    refresh_all(app);
     mark_dirty(app);
     return std::nullopt;
   });
-  dialog->add_button("Delete", [&app, id = marker.id] {
+  dialog->add_button("Delete", [&app, id = marker.id, media_id, on_source] {
     if (app.main.host != nullptr) app.main.host->close_popup();
-    app.session.apply(cutline::core::remove_marker(app.session.project(), id));
-    refresh_timeline(app);
+    app.session.apply(on_source ? cutline::core::remove_source_marker(app.session.project(),
+                                                                      media_id, id)
+                                : cutline::core::remove_marker(app.session.project(), id));
+    refresh_all(app);
     mark_dirty(app);
   });
 
@@ -469,7 +486,9 @@ void open_marker_dialog(App& app, std::size_t index) {
   // on the ruler that opens at the far corner of the window makes you look away
   // from what you are editing and then find your way back — and the marker is
   // usually the very thing you want to see while typing what it means.
-  const Rect tab = app.timeline->marker_rect(index);
+  const Rect tab = on_source ? (app.source_scrub != nullptr ? app.source_scrub->marker_rect(index)
+                                                            : Rect{})
+                             : app.timeline->marker_rect(index);
 
   app.main.host->open_popup(std::move(dialog),
                             tab.empty() ? settings_anchor() : Rect{tab.x, tab.bottom(), 0.0, 0.0});

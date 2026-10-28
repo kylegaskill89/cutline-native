@@ -70,6 +70,33 @@ TEST(ScrubBar, TheWholeWidthIsTheWholeDuration) {
   EXPECT_NEAR(fixture.bar->x_of(5.0), area.x + area.width * 0.5, 0.001);
 }
 
+TEST(ScrubBar, ClipMarkersAreDrawnWhereTheyAreInTheirColour) {
+  Fixture fixture;
+  fixture.bar->set_markers({{.time = 2.5, .color = "#ff0000"}, {.time = 7.5}});
+  const Rect first = fixture.bar->marker_rect(0);
+  EXPECT_NEAR(first.x + first.width / 2.0, fixture.bar->x_of(2.5), 0.001);
+  EXPECT_TRUE(fixture.bar->marker_rect(2).empty());
+  int red = 0;
+  for (const DrawCall& call : fixture.painted()) {
+    if (call.kind == DrawCall::Kind::Fill && call.bounds == first && call.fill.color.r > 0.9f &&
+        call.fill.color.g < 0.1f) {
+      ++red;
+    }
+  }
+  EXPECT_EQ(red, 1);
+}
+
+TEST(ScrubBar, DoubleClickingAMarkerOpensIt) {
+  Fixture fixture;
+  fixture.bar->set_markers({{.time = 2.5}, {.time = 7.5}});
+  std::vector<std::size_t> opened;
+  fixture.bar->on_marker = [&](std::size_t i) { opened.push_back(i); };
+  const double x = fixture.bar->x_of(7.5) + 1.0;
+  fixture.host->mouse_down(MouseEvent{.x = x, .y = 15.0, .click_count = 2});
+  EXPECT_EQ(opened, (std::vector<std::size_t>{1}));
+  EXPECT_TRUE(fixture.scrubbed.empty()) << "the playhead stays where it was";
+}
+
 TEST(ScrubBar, TimeAndPositionAgreeBothWays) {
   const Fixture fixture;
   for (const double time : {0.0, 2.5, 7.25, 10.0}) {

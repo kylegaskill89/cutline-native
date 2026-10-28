@@ -1506,6 +1506,21 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
         painter.pop_clip();
       }
 
+      // Clip markers, as small tabs along the top of the block in their own
+      // colours, where the footage they mark is.
+      if (!clip.markers.empty()) {
+        painter.push_clip(box, style.corner_radius);
+        for (const TimelineBlock::ClipMarker& marker : clip.markers) {
+          const double x = box.x + marker.at * scale_.pixels_per_second;
+          if (x < box.x - 4.0 || x > box.right() + 4.0) continue;
+          const Color color =
+              marker.color.empty() ? style.text : parse_color(marker.color, style.text);
+          painter.fill(Rect{x - 3.0, box.y + 1.0, 6.0, 5.0}, 1.0, Fill::solid(color));
+          painter.line(x, box.y + 6.0, x, box.y + 11.0, fade(color, 0.7f), 1.0);
+        }
+        painter.pop_clip();
+      }
+
       // The clip a drop is about to land on, last, over its picture and its
       // name: washed rather than repainted, so what is being aimed at still
       // shows through.

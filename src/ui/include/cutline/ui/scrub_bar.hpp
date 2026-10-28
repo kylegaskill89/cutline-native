@@ -18,6 +18,8 @@
 
 #include <functional>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace cutline::ui {
 
@@ -42,6 +44,19 @@ class ScrubBar : public Widget {
   [[nodiscard]] std::optional<double> in_point() const noexcept { return in_; }
   [[nodiscard]] std::optional<double> out_point() const noexcept { return out_; }
 
+  /// The source's clip markers, drawn as ticks across the trough in their own
+  /// colours, or the text colour for one with none.
+  struct Marker {
+    double time = 0.0;
+    std::string color;
+
+    friend bool operator==(const Marker&, const Marker&) = default;
+  };
+  void set_markers(std::vector<Marker> markers);
+  [[nodiscard]] const std::vector<Marker>& markers() const noexcept { return markers_; }
+  /// Where a marker is drawn; empty when there is no such marker.
+  [[nodiscard]] Rect marker_rect(std::size_t index) const;
+
   /// Called with a time whenever the playhead is dragged to it, including the
   /// press that starts the drag.
   ///
@@ -50,6 +65,9 @@ class ScrubBar : public Widget {
   /// the end of a source — and sets it back. A bar that moved itself would show
   /// a position nothing else agreed with for as long as the drag lasted.
   std::function<void(double)> on_scrub;
+
+  /// A marker double-clicked, to be named or described.
+  std::function<void(std::size_t)> on_marker;
 
   // ------------------------------------------------------------- geometry --
 
@@ -92,6 +110,7 @@ class ScrubBar : public Widget {
   double playhead_ = 0.0;
   std::optional<double> in_;
   std::optional<double> out_;
+  std::vector<Marker> markers_;
   bool scrubbing_ = false;
   Metrics metrics_;
 };

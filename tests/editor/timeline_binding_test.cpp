@@ -106,6 +106,26 @@ TEST(Binding, AMulticamIsNamedForTheCameraItShows) {
   EXPECT_EQ(model.tracks[1].blocks[0].label, "[MC3] Shoot");
 }
 
+TEST(Binding, ClipMarkersAreDrawnWhereTheClipPlaysThem) {
+  Project project = sample_project();
+  project = core::add_source_marker(std::move(project), "m1", 7.0);
+  project = core::add_source_marker(std::move(project), "m1", 30.0);
+  // c2 plays 5 to 12 of the source from 5 on the timeline, so 7 is two seconds
+  // in, and 30 is not in it at all.
+  ui::TimelineModel model = timeline_model(project);
+  const auto& markers = model.tracks[1].blocks[1].markers;
+  ASSERT_EQ(markers.size(), 1u);
+  EXPECT_NEAR(markers[0].at, 2.0, 1e-6);
+
+  // Reversed at double speed, 7 is played 2.5 seconds in.
+  core::Clip* c2 = core::find_clip(project, "c2");
+  c2->reverse = true;
+  c2->speed = 2.0;
+  model = timeline_model(project);
+  ASSERT_EQ(model.tracks[1].blocks[1].markers.size(), 1u);
+  EXPECT_NEAR(model.tracks[1].blocks[1].markers[0].at, 2.5, 1e-6);
+}
+
 TEST(Binding, ABlockCarriesItsClipIdBack) {
   // Which is the whole reason the block has an id: it is how a drag finds its
   // way to the project without the timeline knowing a project exists.

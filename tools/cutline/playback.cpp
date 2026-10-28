@@ -262,6 +262,36 @@ void mark_source(App& app, bool out_point) {
   refresh_all(app);
 }
 
+/// Premiere's M with the Source Monitor in hand: a clip marker at the
+/// source's playhead, or the one there taken away, as the sequence's M does.
+void mark_source_marker(App& app) {
+  const cutline::core::Media* media = source_media_of(app);
+  if (media == nullptr) return;
+  const double fps = cutline::core::playback_fps(*media).value_or(30.0);
+  if (const cutline::core::Marker* here =
+          cutline::core::source_marker_near(*media, app.source_playhead, 0.5 / fps);
+      here != nullptr) {
+    app.session.apply(
+        cutline::core::remove_source_marker(app.session.project(), media->id, here->id));
+  } else {
+    app.session.apply(
+        cutline::core::add_source_marker(app.session.project(), media->id, app.source_playhead));
+  }
+  refresh_all(app);
+}
+
+/// The source's next or previous clip marker, for Shift+M and Ctrl+Shift+M.
+void jump_source_marker(App& app, bool forward) {
+  const cutline::core::Media* media = source_media_of(app);
+  if (media == nullptr) return;
+  const cutline::core::Marker* to =
+      forward ? cutline::core::next_source_marker(*media, app.source_playhead)
+              : cutline::core::previous_source_marker(*media, app.source_playhead);
+  if (to == nullptr) return;
+  app.source_playhead = to->time;
+  refresh_source(app);
+}
+
 /// Stops the source playing, and says so on the button.
 void stop_source_playback(App& app) {
 #if CUTLINE_HAVE_PREVIEW
@@ -416,6 +446,7 @@ void refresh_source([[maybe_unused]] App& app) {
     if (app.source_scrub != nullptr) {
       app.source_scrub->set_duration(0.0);
       app.source_scrub->set_marks(std::nullopt, std::nullopt);
+      app.source_scrub->set_markers({});
     }
     refresh_source_list(app);
     app.source_snapshot.reset();
@@ -426,6 +457,11 @@ void refresh_source([[maybe_unused]] App& app) {
   if (app.source_scrub != nullptr) {
     app.source_scrub->set_duration(media->duration);
     app.source_scrub->set_marks(media->in_point, media->out_point);
+    std::vector<cutline::ui::ScrubBar::Marker> ticks;
+    for (const cutline::core::Marker& marker : media->markers) {
+      ticks.push_back({.time = marker.time, .color = marker.color});
+    }
+    app.source_scrub->set_markers(std::move(ticks));
     app.source_scrub->set_playhead(app.source_playhead);
   }
 

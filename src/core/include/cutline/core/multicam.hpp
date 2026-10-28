@@ -66,8 +66,7 @@ namespace cutline::core {
 
 // --------------------------------------------------------------- making --
 
-/// What the cameras are lined up by. Premiere's Synchronize Point, less Clip
-/// Marker, since a source here carries no markers of its own.
+/// What the cameras are lined up by: Premiere's Synchronize Point.
 enum class MulticamSync {
   /// Each source's marked In point is the same moment.
   InPoints,
@@ -75,6 +74,9 @@ enum class MulticamSync {
   OutPoints,
   /// The timecode each file records.
   Timecode,
+  /// Each source's first clip marker is the same moment: a clap marked in
+  /// the Source Monitor on every camera.
+  ClipMarker,
   /// The sound each camera recorded, matched; measured by the engine, which
   /// can decode it, and handed to `create_multicam_sequence` as start times.
   Audio,
@@ -105,7 +107,8 @@ struct MulticamOptions {
 /// Where each source starts in the sequence to be made, in seconds, so that
 /// its synchronise point lands at the same moment as every other's. The
 /// earliest starts at zero. Fails for audio, which needs the sound decoded,
-/// and for timecode when a source records none.
+/// for timecode when a source records none, and for clip markers when a
+/// source has none.
 [[nodiscard]] std::expected<std::vector<double>, std::string> multicam_starts(
     const Project& p, std::span<const std::string> media_ids, MulticamSync sync,
     bool ignore_hours = false);

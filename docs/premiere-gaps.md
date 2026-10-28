@@ -814,7 +814,7 @@ for one keystroke.
 | Right-click a clip | the menu most edits are actually reached from | **done** — and it offers only what would do something | — |
 | ~~Nesting~~ | a sequence inside a sequence | **done** — Nest on the clip menu, and a sequence is a source in the pool | — |
 | ~~Multi-camera~~ | a multicam source sequence, switched live while it plays | **done** — Phase 4 item 11 | — |
-| Markers on a source | M in the Source Monitor, kept with the clip | none — what Premiere's Clip Marker synchronise point lines cameras up by | small |
+| ~~Markers on a source~~ | M in the Source Monitor, kept with the clip | **done** — Premiere's clip markers: M, Shift+M and Ctrl+Shift+M with the Source Monitor in hand, and Clear Markers, on the source in source time; ticks on its scrub bar, double-clicked for the Marker box; tabs on every clip cut from it, where the clip plays the marked moment however it is retimed; and the Clip Marker synchronise point for multicam | — |
 
 **Nesting is a compositing boundary, and that is the whole of why it exists.**
 Six shots with one grade over all of them is one adjustment on a nest and six
@@ -2752,8 +2752,8 @@ one.
     camera and Flattens, putting the camera's own clips in the multicam's
     place with its effects added. The themes' keys moved from the number row
     to Ctrl+Alt to leave it to the cameras, as Premiere has it. **Clip
-    Marker** is the one synchronise point missing, because a source here has
-    no markers of its own; that is its own row in §2.3. Premiere's Audio
+    Marker** came afterwards with clip markers themselves (§2.3), and lines
+    the cameras up by each source's first one. Premiere's Audio
     Channels Preset is not offered, since a track here has no channel format
     to set.
 - ~~**Sequences**~~ — **done**. `core::Sequence` holds one cut and `Project`

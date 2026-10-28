@@ -327,10 +327,23 @@ std::vector<MenuEntry> panel_menu_extras(App& app, const PanelId& panel) {
         refresh_all(app);
       }
     });
-    for (MenuEntry* each : {&in, &out, &clear}) each->enabled = has_source;
+    // Premiere's clip markers, on the source itself.
+    MenuEntry marker = plain("Add Marker", [&app] { mark_source_marker(app); },
+                             shortcut_of(&app, "markers.add"));
+    MenuEntry clear_markers = plain("Clear Markers", [&app] {
+      if (const cutline::core::Media* media = source_media_of(app); media != nullptr) {
+        app.session.apply(cutline::core::clear_source_markers(app.session.project(), media->id));
+        refresh_all(app);
+      }
+    }, shortcut_of(&app, "markers.clear_all"));
+    for (MenuEntry* each : {&in, &out, &clear, &marker, &clear_markers}) {
+      each->enabled = has_source;
+    }
     rows.push_back(std::move(in));
     rows.push_back(std::move(out));
     rows.push_back(std::move(clear));
+    rows.push_back(std::move(marker));
+    rows.push_back(std::move(clear_markers));
     rows.push_back(MenuEntry::divider());
     rows.push_back(switch_entry("Safe Margins", app.settings.safe_margins_source, [&app] {
       app.settings.safe_margins_source = !app.settings.safe_margins_source;

@@ -221,6 +221,17 @@ struct TimelineBlock {
   /// something to be remembered rather than something that can be seen.
   std::vector<double> keyframes;
 
+  /// The source's clip markers that fall inside this clip, in seconds from its
+  /// own start, with their colours: Premiere draws them on the clip, since
+  /// they belong to the footage wherever it is cut.
+  struct ClipMarker {
+    double at = 0.0;
+    std::string color;
+
+    friend bool operator==(const ClipMarker&, const ClipMarker&) = default;
+  };
+  std::vector<ClipMarker> markers;
+
   BlockTransition transition;
 
   /// The volume rubber band, on audio clips only. A video clip has no gain to

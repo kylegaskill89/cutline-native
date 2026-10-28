@@ -372,6 +372,30 @@ enum class WorkingColour {
   Rec2100Hlg,
 };
 
+/// A named point on the timeline ruler (a Premiere-style sequence marker), or
+/// on a source, in its own time, as Premiere keeps clip markers.
+struct Marker {
+  std::string id;
+  double time = 0.0;
+  std::string label;
+  std::string color;
+
+  /// How long the marker covers. Zero is a point, which is what most are and
+  /// what every marker written before there was a duration reads back as.
+  ///
+  /// A span rather than a pair of markers because it is one thing somebody
+  /// meant — "this whole passage is the problem" — and two markers would be two
+  /// things to move, delete and keep in step.
+  double duration = 0.0;
+
+  /// The longer note. `label` is what fits on the ruler; this is what somebody
+  /// actually wanted to say, and keeping them apart is what stops a name being
+  /// either too long to draw or too short to mean anything.
+  std::string comment;
+
+  friend bool operator==(const Marker&, const Marker&) = default;
+};
+
 struct Media {
   std::string id;
   std::string path;  ///< absolute; empty for generated media
@@ -483,6 +507,11 @@ struct Media {
   /// to the end of the source, an out alone means from the start to there.
   std::optional<double> in_point;
   std::optional<double> out_point;
+
+  /// Markers on the source itself, Premiere's clip markers, in source time:
+  /// put down in the Source Monitor and shown on every clip cut from it, since
+  /// they belong to the footage rather than to any one cut. In time order.
+  std::vector<Marker> markers;
 
   /// The colour this entry is labelled with, as "#rrggbb", or empty for none.
   ///
@@ -1059,28 +1088,6 @@ struct Track {
   friend bool operator==(const Track&, const Track&) = default;
 };
 
-/// A named point on the timeline ruler (a Premiere-style sequence marker).
-struct Marker {
-  std::string id;
-  double time = 0.0;
-  std::string label;
-  std::string color;
-
-  /// How long the marker covers. Zero is a point, which is what most are and
-  /// what every marker written before there was a duration reads back as.
-  ///
-  /// A span rather than a pair of markers because it is one thing somebody
-  /// meant — "this whole passage is the problem" — and two markers would be two
-  /// things to move, delete and keep in step.
-  double duration = 0.0;
-
-  /// The longer note. `label` is what fits on the ruler; this is what somebody
-  /// actually wanted to say, and keeping them apart is what stops a name being
-  /// either too long to draw or too short to mean anything.
-  std::string comment;
-
-  friend bool operator==(const Marker&, const Marker&) = default;
-};
 
 // ----------------------------------------------------------------- project --
 

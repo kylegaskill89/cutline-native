@@ -130,7 +130,8 @@ void open_multicam_dialog(App& app) {
 
   body.emplace<Label>("Synchronize Point").set_small(true);
   auto& sync = body.emplace<RadioGroup>(
-      std::vector<std::string>{"In Points", "Out Points", "Timecode", "Audio"}, 0u);
+      std::vector<std::string>{"In Points", "Out Points", "Timecode", "Clip Marker", "Audio"},
+      0u);
   auto& hours = body.emplace<Checkbox>("Ignore Hours", false);
 
   auto& audio_row = body.emplace<Box>(Axis::Horizontal);
@@ -152,7 +153,7 @@ void open_multicam_dialog(App& app) {
                             processed = &processed]() -> std::optional<std::string> {
     const cutline::core::MulticamOptions options{
         .name = name->text(),
-        .sync = static_cast<cutline::core::MulticamSync>(std::min<std::size_t>(sync->selected(), 3)),
+        .sync = static_cast<cutline::core::MulticamSync>(std::min<std::size_t>(sync->selected(), 4)),
         .ignore_hours = hours->checked(),
         .audio = static_cast<cutline::core::MulticamAudio>(std::min<std::size_t>(audio->selected(), 2)),
         .naming = naming->selected() == 1 ? cutline::core::CameraNaming::ClipNames

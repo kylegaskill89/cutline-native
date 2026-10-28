@@ -224,6 +224,43 @@ TEST(SourceMarks, TheMarksAreKeptOnTheSourceRatherThanTheSequence) {
   EXPECT_FALSE(p.sequence().out_point.has_value());
 }
 
+TEST(ClipMarkers, AreKeptOnTheSourceInTimeOrder) {
+  Project p = one_source_project();
+  p = add_source_marker(std::move(p), "f1", 12.0);
+  p = add_source_marker(std::move(p), "f1", 3.0);
+  p = add_source_marker(std::move(p), "f1", 99.0);
+  ASSERT_EQ(p.media[0].markers.size(), 3u);
+  EXPECT_DOUBLE_EQ(p.media[0].markers[0].time, 3.0);
+  EXPECT_DOUBLE_EQ(p.media[0].markers[2].time, 30.0) << "clamped into the source";
+  EXPECT_TRUE(p.sequence().markers.empty()) << "the sequence's own are untouched";
+}
+
+TEST(ClipMarkers, AreFoundNearAndAfterAndBefore) {
+  Project p = one_source_project();
+  p = add_source_marker(std::move(p), "f1", 3.0);
+  p = add_source_marker(std::move(p), "f1", 12.0);
+  const Media& m = p.media[0];
+  ASSERT_NE(source_marker_near(m, 3.01, 0.02), nullptr);
+  EXPECT_EQ(source_marker_near(m, 4.0, 0.02), nullptr);
+  EXPECT_DOUBLE_EQ(next_source_marker(m, 3.0)->time, 12.0);
+  EXPECT_DOUBLE_EQ(previous_source_marker(m, 12.0)->time, 3.0);
+  EXPECT_EQ(next_source_marker(m, 12.0), nullptr);
+}
+
+TEST(ClipMarkers, CanBeNamedRemovedAndCleared) {
+  Project p = one_source_project();
+  p = add_source_marker(std::move(p), "f1", 3.0);
+  p = add_source_marker(std::move(p), "f1", 5.0);
+  const std::string first = p.media[0].markers[0].id;
+  p = set_source_marker(std::move(p), "f1", first, "Clap", "Take two", "#ff0000", -1.0);
+  EXPECT_EQ(p.media[0].markers[0].label, "Clap");
+  EXPECT_DOUBLE_EQ(p.media[0].markers[0].duration, 0.0);
+  p = remove_source_marker(std::move(p), "f1", first);
+  ASSERT_EQ(p.media[0].markers.size(), 1u);
+  p = clear_source_markers(std::move(p), "f1");
+  EXPECT_TRUE(p.media[0].markers.empty());
+}
+
 TEST(SourceMarks, AMarkPastTheEndOfTheSourceLandsOnTheEnd) {
   // A sequence grows to hold what is put in it; a file does not.
   Project p = one_source_project();

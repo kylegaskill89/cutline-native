@@ -645,6 +645,15 @@ void run_action(App& app, Shell& shell, std::string_view id) {
         mark_source(app, false);
       } else if (id == "markers.mark_out") {
         mark_source(app, true);
+      } else if (id == "markers.add") {
+        mark_source_marker(app);
+      } else if (id == "markers.next") {
+        jump_source_marker(app, true);
+      } else if (id == "markers.previous") {
+        jump_source_marker(app, false);
+      } else if (id == "markers.clear_all") {
+        app.session.apply(cutline::core::clear_source_markers(app.session.project(), media->id));
+        refresh_all(app);
       } else if (id == "playback.step_back") {
         step_source(app, -1.0);
       } else if (id == "playback.step_forward") {

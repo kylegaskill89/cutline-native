@@ -98,6 +98,22 @@ TEST(Multicam, IgnoringHoursComparesTheRestOfTheClock) {
   EXPECT_DOUBLE_EQ((*starts)[1], 1.0);
 }
 
+TEST(Multicam, ClipMarkersLineUpTheFirstMarkerOnEach) {
+  Project p = a_shoot();
+  p = add_source_marker(std::move(p), "a", 3.0);
+  p = add_source_marker(std::move(p), "a", 9.0);
+  p = add_source_marker(std::move(p), "b", 1.0);
+  const std::vector<std::string> ids{"a", "b"};
+  const auto starts = multicam_starts(p, ids, MulticamSync::ClipMarker);
+  ASSERT_TRUE(starts.has_value());
+  EXPECT_DOUBLE_EQ((*starts)[0], 0.0);
+  EXPECT_DOUBLE_EQ((*starts)[1], 2.0);
+  const std::vector<std::string> unmarked{"a", "c"};
+  const auto none = multicam_starts(p, unmarked, MulticamSync::ClipMarker);
+  ASSERT_FALSE(none.has_value());
+  EXPECT_NE(none.error().find("side.mp4"), std::string::npos);
+}
+
 TEST(Multicam, TimecodeFailsForASourceThatRecordsNone) {
   Project p = a_shoot();
   p.media[1].timecode.reset();

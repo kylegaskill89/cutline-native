@@ -1638,6 +1638,11 @@ void refresh_history(App& app) {
       app->source_playhead = fps > 0.0 ? cutline::core::snap_to_frame(time, fps) : time;
       refresh_source(*app);
     };
+    bar.on_marker = [app](std::size_t index) {
+      if (const cutline::core::Media* media = source_media_of(*app); media != nullptr) {
+        open_marker_dialog(*app, index, media->id);
+      }
+    };
   }
 
   auto& row = panel->emplace<Box>(Axis::Horizontal);

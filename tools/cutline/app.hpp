@@ -1513,7 +1513,8 @@ void refresh_inspector(App& app);
 void show_playback_frame(App& app, double at);
 void run_command(App& app, cutline::editor::Command command);
 void open_speed_dialog(App& app, std::span<const std::string> clips);
-void open_marker_dialog(App& app, std::size_t index);
+/// The Marker box, for a sequence marker, or for a clip marker on `media_id`.
+void open_marker_dialog(App& app, std::size_t index, const std::string& media_id = {});
 [[nodiscard]] sk_sp<SkSurface> draw_cursor_art(cutline::ui::IconButton::Icon icon,
                                                double scale = 1.0);
 
@@ -1610,6 +1611,10 @@ void show_source(App& app, const std::string& media_id);
 [[nodiscard]] const cutline::core::Media* source_media_of(const App& app);
 void step_source(App& app, double frames);
 void mark_source(App& app, bool out_point);
+/// Clip markers on the source in hand: M, and the jumps to the next and the
+/// previous.
+void mark_source_marker(App& app);
+void jump_source_marker(App& app, bool forward);
 [[nodiscard]] bool source_has_focus(const App& app);
 void toggle_source_playback(App& app);
 void stop_source_playback(App& app);

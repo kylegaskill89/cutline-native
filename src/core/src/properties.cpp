@@ -528,6 +528,66 @@ Project clear_source_marks(Project p, std::string_view media_id) {
   return p;
 }
 
+// ------------------------------------------------------------ clip markers --
+
+Project add_source_marker(Project p, std::string_view media_id, double time) {
+  Media* media = media_to_mark(p, media_id);
+  if (media == nullptr) return p;
+  media->markers.push_back(Marker{.id = new_id("mark"),
+                                  .time = std::clamp(time, 0.0, std::max(0.0, media->duration))});
+  std::ranges::stable_sort(media->markers, {}, &Marker::time);
+  return p;
+}
+
+Project set_source_marker(Project p, std::string_view media_id, std::string_view marker_id,
+                          std::string label, std::string comment, std::string color,
+                          double duration) {
+  Media* media = media_to_mark(p, media_id);
+  if (media == nullptr) return p;
+  const auto it = std::ranges::find(media->markers, marker_id, &Marker::id);
+  if (it == media->markers.end()) return p;
+  it->label = std::move(label);
+  it->comment = std::move(comment);
+  it->color = std::move(color);
+  it->duration = std::max(0.0, duration);
+  return p;
+}
+
+Project remove_source_marker(Project p, std::string_view media_id, std::string_view marker_id) {
+  if (Media* media = media_to_mark(p, media_id); media != nullptr) {
+    std::erase_if(media->markers, [&](const Marker& m) { return m.id == marker_id; });
+  }
+  return p;
+}
+
+Project clear_source_markers(Project p, std::string_view media_id) {
+  if (Media* media = media_to_mark(p, media_id); media != nullptr) media->markers.clear();
+  return p;
+}
+
+const Marker* source_marker_near(const Media& media, double time, double tolerance) noexcept {
+  const Marker* best = nullptr;
+  for (const Marker& m : media.markers) {
+    const double off = std::abs(m.time - time);
+    if (off <= tolerance && (best == nullptr || off < std::abs(best->time - time))) best = &m;
+  }
+  return best;
+}
+
+const Marker* next_source_marker(const Media& media, double time) noexcept {
+  const auto it = std::ranges::find_if(media.markers,
+                                       [&](const Marker& m) { return m.time > time + 1e-4; });
+  return it == media.markers.end() ? nullptr : &*it;
+}
+
+const Marker* previous_source_marker(const Media& media, double time) noexcept {
+  const Marker* found = nullptr;
+  for (const Marker& m : media.markers) {
+    if (m.time < time - 1e-4) found = &m;
+  }
+  return found;
+}
+
 Project set_proxy_path(Project p, std::string_view media_id, std::string path) {
   if (Media* media = find_media(p, media_id); media != nullptr) {
     media->proxy_path = std::move(path);

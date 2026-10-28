@@ -287,6 +287,27 @@ struct TrackPropsPatch {
                                            std::optional<double> time);
 [[nodiscard]] Project clear_source_marks(Project p, std::string_view media_id);
 
+// ----------------------------------------------------------- clip markers --
+
+/// Premiere's clip markers: markers on a source, in source time, put down in
+/// the Source Monitor. The same rules as a sequence's, applied to one source:
+/// kept in time order, clamped into the source, and naming a media that is not
+/// in the project changes nothing.
+[[nodiscard]] Project add_source_marker(Project p, std::string_view media_id, double time);
+[[nodiscard]] Project set_source_marker(Project p, std::string_view media_id,
+                                        std::string_view marker_id, std::string label,
+                                        std::string comment, std::string color, double duration);
+[[nodiscard]] Project remove_source_marker(Project p, std::string_view media_id,
+                                           std::string_view marker_id);
+[[nodiscard]] Project clear_source_markers(Project p, std::string_view media_id);
+
+/// The source's marker nearest `time` within `tolerance`, and the nearest
+/// strictly after or before it, for M and its jumps in the Source Monitor.
+[[nodiscard]] const Marker* source_marker_near(const Media& media, double time,
+                                               double tolerance) noexcept;
+[[nodiscard]] const Marker* next_source_marker(const Media& media, double time) noexcept;
+[[nodiscard]] const Marker* previous_source_marker(const Media& media, double time) noexcept;
+
 [[nodiscard]] Project clear_marks(Project p);
 
 // ------------------------------------------------------------------ proxies --

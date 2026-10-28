@@ -181,6 +181,12 @@ std::expected<std::vector<double>, std::string> multicam_starts(
         points.push_back(-clock);
         break;
       }
+      case MulticamSync::ClipMarker:
+        if (media->markers.empty()) {
+          return std::unexpected(std::format("{} has no clip marker", media->name));
+        }
+        points.push_back(media->markers.front().time);
+        break;
       case MulticamSync::Audio: break;
     }
   }

@@ -443,6 +443,20 @@ TEST(Serialize, BinsAndWhatIsFiledInThemSurviveTheFile) {
   EXPECT_EQ(loaded->project.media[0].bin, "bin_2");
 }
 
+TEST(Serialize, ClipMarkersSurviveTheFile) {
+  Project p = empty_project();
+  Media m;
+  m.id = "m1";
+  m.path = "D:/footage/wide.mp4";
+  m.duration = 20.0;
+  m.markers = {Marker{.id = "k1", .time = 2.5, .label = "Clap", .color = "#ff0000",
+                      .duration = 1.0, .comment = "slate"}};
+  p.media = {m};
+  const auto loaded = from_json(to_json(p));
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  EXPECT_EQ(loaded->project.media[0].markers, m.markers);
+}
+
 TEST(Serialize, AProjectWrittenBeforeBinsReadsAsOneFlatPool) {
   Media m;
   m.id = "m1";
