@@ -2378,13 +2378,31 @@ Sorted by what each one needs, because that is the decision it turns on.
 
 | | Premiere | Here | Size |
 |---|---|---|---|
-| Captions | a caption track; the Text panel to write, retime and split them; caption styles; Subtitle and CEA-608/708 formats; import and export of SRT; burned into the picture or written beside it on export; single-word captions for short-form (26.3) | none | large |
+| ~~Captions~~ | a caption track; the Text panel to write, retime and split them; caption styles; Subtitle and CEA-608/708 formats; import and export of SRT; burned into the picture or written beside it on export; single-word captions for short-form (26.3) | **done** for Subtitle captions — see below | — |
 | Scene Edit Detection | on a clip: find the cuts in footage that was edited before it arrived, and cut there, make subclips in a bin, or put a clip marker at each | none, and clip markers now exist for it to write | small |
 | Audio repair | Essential Sound's Repair: Reduce Noise, Reduce Rumble, DeHum, DeEss, Reduce Reverb; and DeNoise, DeHummer and DeEsser as effects | Reduce Rumble's high-pass only; the others are missing, which `audio::role_preset` already says | medium |
 | Auto Reframe | a sequence re-cut for another shape (vertical, square), the crop following what matters in each shot, keyframed on Motion | none; the tracker that mask tracking and Warp Stabilizer share can follow a region, but choosing *what* matters in a shot is Premiere's model's job | medium, with a heuristic for the subject |
 | Remix | a music clip lengthened or shortened to a target by cutting at beats and phrases so the seams cannot be heard | none; the stretch and loudness code is here, beat and phrase finding is not | medium |
 | Morph Cut | a transition that hides a jump cut in an interview by morphing between the two frames | none; needs dense motion between frames and face-aware warping | large |
 | Shape Dissolve, Magnify and the Film Impact transitions (26.2, 26.3) | new effects and transitions | none of these | small each |
+
+**Captions, Phase 5 item 1 — done** for Premiere's Subtitle format. A caption
+track is a track above the picture, C1 first, and a caption is a clip on it
+with text and no media, so moving, trimming, splitting, rippling, locking and
+undoing one are what they are for any clip. The track carries the style its
+captions are drawn in, as Premiere's track style: face, size, bold, italic,
+colour, a background box fitted to the words, an outline, and Bottom, Middle
+or Top. The caption showing on the topmost visible caption track is drawn over
+every picture, through the title renderer. The Text panel lists a track's
+captions with their two lines, a start that goes there, Add Caption at the
+playhead (three seconds or up to the next), Split (both halves keep the words),
+Merge (joined in time order), SubRip in and out, and the style. File > Import
+takes a SubRip file as a new caption track; the Export window's Captions row
+leaves them out, burns them in, or writes a SubRip file beside the export, cut
+to the exported span. Not done: CEA-608 and 708, which embed captions in the
+video stream for broadcast delivery; a style for one caption apart from its
+track's; and 26.3's single-word captions, which are a way of making captions
+from a transcript and wait with §14.2.
 
 ### 14.2 Needs a model
 
