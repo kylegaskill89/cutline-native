@@ -1,5 +1,6 @@
 #include "cutline/media/audio.hpp"
 
+#include "cutline/media/encoder.hpp"
 #include "cutline/media/probe.hpp"
 #include "cutline/media/thumbnail.hpp"
 
@@ -11,6 +12,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <numbers>
+#include <process.h>
 #include <string>
 
 namespace cutline::media {
@@ -408,4 +410,112 @@ TEST(Thumbnails, RejectAMissingFile) {
 }
 
 }  // namespace
+}  // namespace cutline::media
+
+namespace cutline::media {
+namespace {
+
+// ----------------------------------------------------- reads that agree --
+//
+// The release build under FFmpeg 9 found an AAC file read from its start and
+// read from a second in disagreeing by 1024 samples, the encoder's priming:
+// one kept it and the other did not. A cut into AAC sound would land 21 ms
+// out. These write their own file, so the check runs wherever an encoder does.
+
+/// Four seconds of noise, the same every time: no two stretches of it alike,
+/// so there is exactly one offset at which two reads of it match.
+[[nodiscard]] std::string noise_file() {
+  static const std::string path = [] {
+    const std::string file = (fs::temp_directory_path() /
+                              ("cutline_aac_noise_" + std::to_string(_getpid()) + ".mp4"))
+                                 .string();
+    VideoEncodeSettings video;
+    video.width = 32;
+    video.height = 32;
+    video.fps = 10;
+    video.preference = EncoderPreference::Software;
+    AudioEncodeSettings audio;
+    audio.enabled = true;
+    audio.sample_rate = 48000;
+    audio.channels = 1;
+    auto writer = MediaWriter::create(file, video, audio);
+    if (!writer) return std::string{};
+    std::uint32_t state = 12345;
+    const std::vector<std::uint8_t> frame(32 * 32 * 4, 100);
+    for (int second = 0; second < 4; ++second) {
+      std::vector<float> samples(48000);
+      for (float& s : samples) {
+        state = state * 1664525u + 1013904223u;
+        s = (static_cast<float>(state >> 8) / 16777216.0f - 0.5f) * 0.6f;
+      }
+      for (int f = 0; f < 10; ++f) {
+        if (!(*writer)->write_frame(frame)) return std::string{};
+      }
+      if (!(*writer)->write_audio(samples)) return std::string{};
+    }
+    return (*writer)->finish().has_value() ? file : std::string{};
+  }();
+  return path;
+}
+
+/// The shift, in samples, that best lines `part` up against `whole` starting
+/// at `at`, searched a few thousand samples either way.
+[[nodiscard]] int best_shift(const std::vector<float>& whole, const std::vector<float>& part,
+                             std::size_t at) {
+  constexpr int kReach = 3000;
+  constexpr std::size_t kCompared = 4800;
+  int best = 0;
+  double best_score = -1e300;
+  for (int shift = -kReach; shift <= kReach; ++shift) {
+    double score = 0.0;
+    for (std::size_t i = 0; i < kCompared && i < part.size(); ++i) {
+      const auto w = static_cast<std::ptrdiff_t>(at + i) + shift;
+      if (w < 0 || static_cast<std::size_t>(w) >= whole.size()) continue;
+      score += static_cast<double>(part[i]) * whole[static_cast<std::size_t>(w)];
+    }
+    if (score > best_score) {
+      best_score = score;
+      best = shift;
+    }
+  }
+  return best;
+}
+
+}  // namespace
+
+TEST(AacReads, AReadFromPartWayAgreesWithTheWholeRead) {
+  const std::string path = noise_file();
+  if (path.empty()) GTEST_SKIP() << "no AAC encoder to write the file with";
+  const AudioDecodeOptions mono{.sample_rate = 48000, .channels = 1};
+  const auto whole = decode_audio(path, 0, mono);
+  ASSERT_TRUE(whole.has_value()) << whole.error();
+  for (const double from : {1.0, 2.37}) {
+    AudioDecodeOptions ranged = mono;
+    ranged.start = from;
+    ranged.duration = 0.5;
+    const auto part = decode_audio(path, 0, ranged);
+    ASSERT_TRUE(part.has_value()) << part.error();
+    EXPECT_EQ(best_shift(whole->samples, part->samples,
+                         static_cast<std::size_t>(std::llround(from * 48000.0))),
+              0)
+        << "a read from " << from << " s lands that many samples away from the whole read";
+  }
+}
+
+TEST(AacReads, TheWholeReadStartsAtTheFirstSampleWritten) {
+  // Against the noise as generated, so a read that kept the priming, or one
+  // that dropped real samples, is caught whichever read it is.
+  const std::string path = noise_file();
+  if (path.empty()) GTEST_SKIP() << "no AAC encoder to write the file with";
+  const auto whole = decode_audio(path, 0, {.sample_rate = 48000, .channels = 1});
+  ASSERT_TRUE(whole.has_value()) << whole.error();
+  std::vector<float> written(48000);
+  std::uint32_t state = 12345;
+  for (float& s : written) {
+    state = state * 1664525u + 1013904223u;
+    s = (static_cast<float>(state >> 8) / 16777216.0f - 0.5f) * 0.6f;
+  }
+  EXPECT_EQ(best_shift(written, whole->samples, 0), 0);
+}
+
 }  // namespace cutline::media

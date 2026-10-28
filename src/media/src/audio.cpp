@@ -106,6 +106,13 @@ using namespace detail;
     return std::unexpected(std::format("cannot configure decoder: {}", av_error_string(rc)));
   }
   decoder->pkt_timebase = stream->time_base;
+  // Every sample decoded, and each frame stamped with the time the file gives
+  // its packet: the decoder trims nothing on its own. Left to it, an encoder's
+  // priming was trimmed differently from one FFmpeg to the next -- under 9 a
+  // read after a seek came back stamped a frame later than the sound it held,
+  // and an AAC cut landed up to 21 ms out. What comes before the time asked
+  // for is dropped by whoever asked, by time, the same way for every read.
+  decoder->flags2 |= AV_CODEC_FLAG2_SKIP_MANUAL;
   if (const int rc = avcodec_open2(decoder.get(), codec, nullptr); rc < 0) {
     return std::unexpected(std::format("cannot open audio decoder: {}", av_error_string(rc)));
   }
@@ -139,21 +146,29 @@ using namespace detail;
                              : std::numeric_limits<double>::infinity();
 
   if (ranged && wanted_start > 0.0) {
-    // Backwards, to the keyframe at or before the target: a compressed audio
-    // stream cannot be entered mid-packet, so the decode starts early and the
-    // surplus is trimmed off below.
-    const auto target =
-        static_cast<std::int64_t>(std::llround(wanted_start / av_q2d(stream->time_base)));
+    // Backwards, to the keyframe at or before a little before the target: a
+    // compressed audio stream cannot be entered mid-packet, and the first
+    // frame decoded after a jump is not clean -- AAC builds each frame partly
+    // from the one before -- so the decode starts early enough for that frame
+    // to be among what is trimmed off below.
+    constexpr double kPreRoll = 0.25;
+    const auto target = static_cast<std::int64_t>(
+        std::llround(std::max(0.0, wanted_start - kPreRoll) / av_q2d(stream->time_base)));
     if (av_seek_frame(format.get(), index, target, AVSEEK_FLAG_BACKWARD) >= 0) {
       avcodec_flush_buffers(decoder.get());
     }
   }
 
   // Where the first decoded sample actually landed, which is at or before what
-  // was asked for.
+  // was asked for, and how many resampled values before what was asked for
+  // are still to be dropped: what a seek overshot backwards into, and on a
+  // read from the start an encoder's priming, which the file stamps before
+  // zero.
   double decoded_start = wanted_start;
   bool have_start = false;
   bool past_end = false;
+  std::size_t to_drop = 0;
+  const auto lanes = static_cast<std::size_t>(options.channels);
 
   const auto pump = [&]() -> std::expected<void, std::string> {
     while (true) {
@@ -168,13 +183,40 @@ using namespace detail;
         if (!have_start) {
           decoded_start = at;
           have_start = true;
+          if (const double lead = wanted_start - at; lead > 0.0) {
+            to_drop = static_cast<std::size_t>(std::llround(lead * options.sample_rate)) * lanes;
+          }
         }
         if (at >= wanted_end) past_end = true;
       }
 
+      const std::size_t before = out.size();
       if (auto ok = drain_resampler(resampler.get(), frame.get(), options.channels, out);
           !ok) {
         return ok;
+      }
+      // The padding an encoder adds after the last real sample, which the
+      // file declares on the frame that carries it.
+      if (const AVFrameSideData* skip =
+              av_frame_get_side_data(frame.get(), AV_FRAME_DATA_SKIP_SAMPLES);
+          skip != nullptr && skip->size >= 8 && frame->sample_rate > 0) {
+        // Two little-endian 32-bit counts: samples to skip at the start, and
+        // at the end.
+        const std::uint8_t* end = skip->data + 4;
+        const std::uint32_t padding =
+            static_cast<std::uint32_t>(end[0]) | (static_cast<std::uint32_t>(end[1]) << 8) |
+            (static_cast<std::uint32_t>(end[2]) << 16) | (static_cast<std::uint32_t>(end[3]) << 24);
+        const auto tail = static_cast<std::size_t>(std::llround(
+                              static_cast<double>(padding) * options.sample_rate /
+                              frame->sample_rate)) *
+                          lanes;
+        out.resize(out.size() - std::min(tail, out.size() - before));
+      }
+      if (to_drop > 0) {
+        const std::size_t gone = std::min(to_drop, out.size() - before);
+        out.erase(out.begin() + static_cast<std::ptrdiff_t>(before),
+                  out.begin() + static_cast<std::ptrdiff_t>(before + gone));
+        to_drop -= gone;
       }
       consume();
     }
@@ -210,7 +252,9 @@ using namespace detail;
   }
   consume();
 
-  return decoded_start;
+  // Where the first sample kept is, now that everything before the time asked
+  // for has gone.
+  return std::max(decoded_start, wanted_start);
 }
 
 }  // namespace
@@ -234,18 +278,12 @@ std::expected<AudioBuffer, std::string> decode_audio(std::string_view path, int 
   const bool ranged = options.duration > 0.0 || options.start > 0.0;
   const double wanted_start = std::max(0.0, options.start);
 
+  // The reader has already dropped what came before the time asked for.
+  (void)decoded_start;
+
   if (ranged) {
     const auto lanes = static_cast<std::size_t>(options.channels);
     const auto rate = static_cast<double>(options.sample_rate);
-
-    // Drop what the seek overshot backwards into, so the first sample really is
-    // the one asked for.
-    if (const double lead = wanted_start - decoded_start; lead > 0.0) {
-      const auto extra = std::min(buffer.samples.size(),
-                                  static_cast<std::size_t>(lead * rate) * lanes);
-      buffer.samples.erase(buffer.samples.begin(),
-                           buffer.samples.begin() + static_cast<std::ptrdiff_t>(extra));
-    }
     if (options.duration > 0.0) {
       const auto keep = static_cast<std::size_t>(options.duration * rate) * lanes;
       if (buffer.samples.size() > keep) buffer.samples.resize(keep);
