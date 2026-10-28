@@ -1,6 +1,7 @@
 ﻿add_library(cutline_core
   src/animate.cpp
   src/attributes.cpp
+  src/captions.cpp
   src/edit.cpp
   src/effects.cpp
   src/graphic.cpp

@@ -12,6 +12,8 @@
 
 #include "cutline/engine/exporter.hpp"
 
+#include "cutline/core/captions.hpp"
+
 #include "cutline/core/model.hpp"
 #include "cutline/media/decoder.hpp"
 #include "cutline/media/encoder.hpp"
@@ -26,6 +28,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <process.h>
 #include <numbers>
 #include <memory>
@@ -313,6 +317,32 @@ TEST_F(ExportTest, TheFileHoldsTheColourTheProjectShows) {
   EXPECT_NEAR(luma, 63, 2);
   EXPECT_NEAR(cb, 102, 2);
   EXPECT_NEAR(cr, 240, 2);
+}
+
+TEST_F(ExportTest, CaptionsCanBeWrittenBesideTheFile) {
+  Project p = matte_project();
+  std::string track;
+  p = core::add_caption_track(std::move(p), &track);
+  p = core::add_caption(std::move(p), track, 0.1, "Beside", 0.2);
+  const TempFile file(".mp4");
+  ExportSettings settings;
+  settings.audio = false;
+  settings.path = file.string();
+  settings.captions = CaptionExport::Sidecar;
+  ASSERT_TRUE(export_project(device_, p, settings).has_value());
+
+  std::filesystem::path beside(file.string());
+  beside.replace_extension(".srt");
+  std::ifstream in(beside, std::ios::binary);
+  ASSERT_TRUE(in.good()) << "no captions beside the file";
+  const std::string written((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  in.close();
+  std::filesystem::remove(beside);
+  const auto cues = core::parse_srt(written);
+  ASSERT_TRUE(cues.has_value());
+  ASSERT_EQ(cues->size(), 1u);
+  EXPECT_EQ((*cues)[0].text, "Beside");
+  EXPECT_NEAR((*cues)[0].start, 0.1, 1e-3);
 }
 
 TEST_F(ExportTest, CancellingPartWayStopsPromptlyAndSaysSo) {

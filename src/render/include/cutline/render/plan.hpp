@@ -35,6 +35,9 @@ enum class LayerContent {
   /// splicing the inner ones in would apply the nest's effects to each of them
   /// separately.
   Nested,
+  /// A caption, over every picture: `clip` is the caption, and it is drawn as
+  /// its track's style makes it. See `core::caption_graphic`.
+  Caption,
 };
 
 /// One entry in the draw order, resolved at a single instant.

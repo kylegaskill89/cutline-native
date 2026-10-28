@@ -127,6 +127,12 @@ class FrameRenderer {
   void set_use_proxies(bool use_proxies);
   [[nodiscard]] bool use_proxies() const noexcept;
 
+  /// Whether the caption showing is drawn over the picture. On, as the
+  /// Program Monitor shows captions; an export turns it off unless it is
+  /// burning them in. A nest's own captions are never drawn in the sequence
+  /// it is cut into, as Premiere's are not.
+  void set_draw_captions(bool draw);
+
   [[nodiscard]] gpu::Compositor& compositor() noexcept;
 
   /// Changes the canvas size, discarding the current contents.

@@ -32,7 +32,9 @@
 
 namespace cutline::core {
 
-enum class TrackKind { Video, Audio };
+/// What a track holds. Caption tracks hold Premiere's captions: clips with
+/// text and no media, drawn over every picture track.
+enum class TrackKind { Video, Audio, Caption };
 
 enum class BlendMode {
   Normal,
@@ -221,6 +223,29 @@ struct GraphicStyle {
   std::optional<GraphicShadow> shadow;
 
   friend bool operator==(const GraphicStyle&, const GraphicStyle&) = default;
+};
+
+/// How a caption track's captions look and where they sit: Premiere's caption
+/// track style. The text is drawn as a graphic's text layer is, so everything
+/// a title can be -- face, size, colour, outline, a box behind, a shadow --
+/// a caption can be.
+struct CaptionStyle {
+  GraphicStyle look = [] {
+    GraphicStyle s;
+    s.font_size = 48.0;
+    s.bold = false;
+    s.background = GraphicBackground{.color = "#000000", .opacity = 0.75, .padding = 10.0};
+    return s;
+  }();
+  /// Where the block of text sits, as fractions of the frame: its centre
+  /// across, and its *foot* down, so two lines grow upwards from where one
+  /// line was, as subtitles do.
+  double x = 0.5;
+  double y = 0.9;
+  /// How wide a line may run before it wraps, as a fraction of the frame.
+  double width = 0.8;
+
+  friend bool operator==(const CaptionStyle&, const CaptionStyle&) = default;
 };
 
 /// Responsive design, position: which edges of a layer keep their distance
@@ -867,6 +892,10 @@ struct Clip {
   /// Disabled clips keep their place on the timeline but are not rendered.
   bool disabled = false;
 
+  /// On a caption track, what the caption says; lines are broken with "\n".
+  /// A caption has no media, so this is all of it besides its timing.
+  std::string caption;
+
   /// For a clip of a multi-camera source sequence: which camera it shows,
   /// counted from zero, and whether it shows one at all.
   ///
@@ -983,7 +1012,10 @@ struct Track {
   bool muted = false;   ///< audio: silent
   bool solo = false;    ///< audio: see `is_track_audible`
   bool locked = false;  ///< clips cannot be selected, moved, or trimmed
-  bool hidden = false;  ///< video: excluded from the render (the "eye")
+  bool hidden = false;  ///< video and captions: excluded from the render (the "eye")
+
+  /// On a caption track, how its captions look; Premiere's track style.
+  CaptionStyle caption_style;
 
   /// Whether a keyboard edit lands here.
   ///

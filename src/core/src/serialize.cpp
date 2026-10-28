@@ -20,6 +20,7 @@ using nlohmann::json;
 NLOHMANN_JSON_SERIALIZE_ENUM(TrackKind, {
                                             {TrackKind::Video, "video"},
                                             {TrackKind::Audio, "audio"},
+                                            {TrackKind::Caption, "caption"},
                                         })
 
 // Read first, so an unrecognised name in a file written by something newer
@@ -448,6 +449,7 @@ json write(const Clip& c) {
   // Only when it has one, so a project from before roles existed writes exactly
   // the JSON it always did.
   if (c.role != AudioRole::None) j["role"] = c.role;
+  if (!c.caption.empty()) j["caption"] = c.caption;
   // Only on a clip that shows another camera than the first, or none.
   if (c.camera != 0) j["camera"] = c.camera;
   if (c.multicam_off) j["multicam_off"] = true;
@@ -486,6 +488,10 @@ json write(const Track& t) {
          {"targeted", t.targeted},
          {"sync_locked", t.sync_locked}};
   if (!t.label.empty()) j["label"] = t.label;
+  if (t.kind == TrackKind::Caption) {
+    const CaptionStyle& c = t.caption_style;
+    j["caption_style"] = {{"look", write(c.look)}, {"x", c.x}, {"y", c.y}, {"width", c.width}};
+  }
   put_if_set(j, "height", t.height);
   // Only when there is any, so a project whose faders were set and left reads
   // exactly as it always did.
@@ -971,6 +977,7 @@ Clip read_clip(const json& j) {
   c.disabled = read_or(j, "disabled", false);
   c.label_color = read_or(j, "label_color", std::string{});
   c.hold = read_optional<double>(j, "hold");
+  c.caption = read_or(j, "caption", std::string{});
   c.camera = std::max(0, read_or(j, "camera", 0));
   c.multicam_off = read_or(j, "multicam_off", false);
 
@@ -1023,6 +1030,14 @@ Track read_track(const json& j) {
   t.id = read_or(j, "id", std::string{});
   t.kind = read_or(j, "kind", TrackKind::Video);
   t.label = read_or(j, "label", std::string{});
+  if (const auto caption = j.find("caption_style"); caption != j.end() && caption->is_object()) {
+    if (const auto look = caption->find("look"); look != caption->end()) {
+      t.caption_style.look = read_graphic_style(*look);
+    }
+    t.caption_style.x = read_or(*caption, "x", t.caption_style.x);
+    t.caption_style.y = read_or(*caption, "y", t.caption_style.y);
+    t.caption_style.width = read_or(*caption, "width", t.caption_style.width);
+  }
   // Unity and centred in every file written before there was a track mixer,
   // which is what those files meant.
   t.gain = read_or(j, "gain", 1.0);

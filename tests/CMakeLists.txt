@@ -11,6 +11,7 @@ add_executable(cutline_core_tests
   core/animate_test.cpp
   core/arrange_test.cpp
   core/attributes_test.cpp
+  core/captions_test.cpp
   core/edit_test.cpp
   core/graphic_test.cpp
   core/interpret_test.cpp

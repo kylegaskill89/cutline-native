@@ -1,5 +1,6 @@
 #include "cutline/render/plan.hpp"
 
+#include "cutline/core/captions.hpp"
 #include "cutline/core/query.hpp"
 
 #include <algorithm>
@@ -95,6 +96,19 @@ std::vector<PlannedLayer> plan_frame(
     layer.source_time =
         std::min(std::max(seg.source_in, wanted), seg.source_out - kEndGuard);
 
+    layers.push_back(layer);
+  }
+
+  // The caption showing, last and so over every picture, on the whole frame:
+  // where it sits within the frame is its style's business.
+  if (const core::Clip* caption = core::caption_at(project.sequence(), t); caption != nullptr) {
+    PlannedLayer layer;
+    layer.clip = caption;
+    layer.content = LayerContent::Caption;
+    const double w = project.sequence().canvas_w;
+    const double h = project.sequence().canvas_h;
+    layer.box = core::LayerBox{.center_x = w / 2.0, .center_y = h / 2.0, .width = w, .height = h};
+    layer.track_index = static_cast<int>(video_tracks.size());
     layers.push_back(layer);
   }
 

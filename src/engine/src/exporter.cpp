@@ -1,5 +1,6 @@
 #include "cutline/engine/exporter.hpp"
 
+#include "cutline/core/captions.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/engine/audio_mixer.hpp"
 #include "cutline/engine/frame_renderer.hpp"
@@ -13,7 +14,9 @@
 #include <cmath>
 #include <condition_variable>
 #include <deque>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -269,6 +272,7 @@ std::expected<ExportResult, std::string> export_project(
 
   auto renderer = FrameRenderer::create(device, width, height);
   if (!renderer) return std::unexpected(renderer.error());
+  (*renderer)->set_draw_captions(settings.captions == CaptionExport::BurnIn);
 
   // What the file is written in, which is the sequence's unless the export
   // says otherwise.
@@ -484,6 +488,20 @@ std::expected<ExportResult, std::string> export_project(
   }
 
   if (auto ok = (*writer)->finish(); !ok) return std::unexpected(ok.error());
+
+  // Premiere's Create Sidecar File: the captions beside the picture, under
+  // the same name.
+  if (settings.captions == CaptionExport::Sidecar) {
+    if (const auto srt = core::sidecar_srt(project.sequence(), settings.start,
+                                           settings.start + static_cast<double>(total) / fps);
+        srt.has_value()) {
+      std::filesystem::path beside(settings.path);
+      beside.replace_extension(".srt");
+      std::ofstream out(beside, std::ios::binary);
+      out << *srt;
+      if (!out) return std::unexpected("could not write the captions beside the file");
+    }
+  }
 
   const auto ended = std::chrono::steady_clock::now();
   result.audio_frames = (*writer)->audio_frame_count();

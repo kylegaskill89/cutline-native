@@ -26,6 +26,17 @@
 
 namespace cutline::engine {
 
+/// What becomes of the captions on export: Premiere's Export Options under
+/// Captions.
+enum class CaptionExport {
+  /// Left out of the picture, and no file beside it.
+  None,
+  /// Drawn into the picture, as the Program Monitor shows them.
+  BurnIn,
+  /// Written beside the file as SubRip, the same name with ".srt".
+  Sidecar,
+};
+
 struct ExportSettings {
   std::string path;
 
@@ -91,6 +102,10 @@ struct ExportSettings {
   /// colour or profile, and it is rendered as usual. Off only for tests that
   /// compare the two.
   bool smart_render = true;
+
+  /// The topmost visible caption track's captions: none, in the picture, or
+  /// beside it. See `CaptionExport`.
+  CaptionExport captions = CaptionExport::None;
 
   int audio_sample_rate = 48000;
   /// One channel mixes the project down to mono. The downmix happens in the

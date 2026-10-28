@@ -1,5 +1,6 @@
 #include "cutline/engine/frame_renderer.hpp"
 
+#include "cutline/core/captions.hpp"
 #include "cutline/core/graphic.hpp"
 #include "cutline/core/layout.hpp"
 #include "cutline/core/interpret.hpp"
@@ -696,6 +697,10 @@ struct FrameRenderer::Impl {
   /// Whether to read from proxies. Off unless somebody asks, so that export —
   /// which never asks — cannot write the small copy by forgetting something.
   bool use_proxies = false;
+  bool draw_captions = true;
+  /// The graphics captions are drawn as, made for each frame and kept until
+  /// the next, since the layers drawn from them point into them.
+  std::deque<core::Media> caption_media;
 
   /// A renderer of its own per nested sequence, keyed by sequence id.
   ///
@@ -1571,6 +1576,7 @@ gpu::SceneTexture FrameRenderer::Impl::nested_picture(const core::Project& proje
     if (!made.has_value()) return {};
     (*made)->impl_->depth = depth + 1;
     (*made)->set_use_proxies(use_proxies);
+    (*made)->set_draw_captions(false);
     found = nested.emplace(key, std::move(*made)).first;
   }
   FrameRenderer& renderer = *found->second;
@@ -1669,6 +1675,7 @@ gpu::SceneTexture FrameRenderer::Impl::synthesis_picture(const core::Project& pr
     if (!made.has_value()) return {};
     (*made)->impl_->depth = depth + 1;
     (*made)->set_use_proxies(use_proxies);
+    (*made)->set_draw_captions(false);
     found = mattes.emplace(key, std::move(*made)).first;
   }
   FrameRenderer& renderer = *found->second;
@@ -1706,6 +1713,7 @@ gpu::SceneTexture FrameRenderer::Impl::matte_picture(const core::Project& projec
     if (!made.has_value()) return {};
     (*made)->impl_->depth = depth + 1;
     (*made)->set_use_proxies(use_proxies);
+    (*made)->set_draw_captions(false);
     found = mattes.emplace(key, std::move(*made)).first;
   }
   FrameRenderer& renderer = *found->second;
@@ -2028,6 +2036,7 @@ void FrameRenderer::release_sources() {
 }
 
 void FrameRenderer::set_use_proxies(bool use_proxies) { impl_->use_proxies = use_proxies; }
+void FrameRenderer::set_draw_captions(bool draw) { impl_->draw_captions = draw; }
 bool FrameRenderer::use_proxies() const noexcept { return impl_->use_proxies; }
 
 std::expected<std::unique_ptr<FrameRenderer>, std::string> FrameRenderer::create(
@@ -2058,6 +2067,7 @@ std::expected<gpu::Image, std::string> FrameRenderer::read_back(gpu::WorkingColo
 std::expected<void, std::string> FrameRenderer::render(const core::Project& project, double t) {
   Impl& d = *impl_;
   d.missing.clear();
+  d.caption_media.clear();
   d.playing_backwards = d.last_time >= 0.0 && t < d.last_time - kFrameEpsilon;
   d.last_time = t;
 
@@ -2175,10 +2185,27 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
         break;
       }
 
+      case render::LayerContent::Caption:
       case render::LayerContent::Graphic: {
 #if CUTLINE_HAVE_TEXT
-        if (source.media == nullptr || source.clip == nullptr) continue;
-        const gpu::SceneTexture picture = d.graphic_picture(project, *source.clip, *source.media, t);
+        if (source.clip == nullptr) continue;
+        const core::Media* graphic = source.media;
+        if (source.content == render::LayerContent::Caption) {
+          // Drawn as a graphic of one text layer in its track's style, made
+          // here for this frame.
+          const core::Track* track = core::track_of_clip(project, source.clip->id);
+          if (!d.draw_captions || track == nullptr || source.clip->caption.empty()) continue;
+          core::Media made;
+          made.id = "caption:" + source.clip->id;
+          made.is_graphic = true;
+          made.graphic = core::caption_graphic(track->caption_style, source.clip->caption,
+                                               project.sequence().canvas_w,
+                                               project.sequence().canvas_h);
+          d.caption_media.push_back(std::move(made));
+          graphic = &d.caption_media.back();
+        }
+        if (graphic == nullptr) continue;
+        const gpu::SceneTexture picture = d.graphic_picture(project, *source.clip, *graphic, t);
         // Nothing drawable -- no layers, or none that could be drawn -- is
         // skipped rather than drawn as a blank frame.
         if (picture.empty()) continue;

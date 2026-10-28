@@ -9,6 +9,7 @@
 
 #include "cutline/core/graphic.hpp"
 #include "cutline/core/interpret.hpp"
+#include "cutline/core/captions.hpp"
 #include "cutline/core/nesting.hpp"
 #include "cutline/core/sequences.hpp"
 #include "cutline/core/model.hpp"
@@ -393,6 +394,39 @@ TEST_F(TitleRendererTest, ATitleDrawsItsText) {
   // And it is text rather than a filled rectangle: glyphs leave most of their
   // own box empty, which is what tells a drawn title from a placeholder.
   EXPECT_LT(drawn, kWidth * kHeight * 3 / 4) << "that looks like a solid block";
+}
+
+TEST_F(TitleRendererTest, ACaptionIsDrawnAtItsFootOverEverything) {
+  Project p = canvas_project();
+  p.media = {matte("blue", "#0000ff")};
+  p.sequence().tracks = {video_track("v1", {clip("c", "blue", 0.0, 5.0)})};
+  std::string track;
+  p = core::add_caption_track(std::move(p), &track);
+  p = core::add_caption(std::move(p), track, 0.5, "Hi");
+  core::CaptionStyle style;
+  style.look.font_size = 16.0;
+  style.look.background.reset();
+  style.y = 0.95;
+  p = core::set_caption_style(std::move(p), track, style);
+
+  // White over blue, near the foot, and nowhere near the top.
+  const auto whiter = [](const gpu::Image& image, int from_row, int to_row) {
+    int count = 0;
+    for (int y = from_row; y < to_row; ++y) {
+      for (int x = 0; x < kWidth; ++x) {
+        const Rgba px = pixel_at(image, x, y);
+        if (px.r > 128 && px.g > 128) ++count;
+      }
+    }
+    return count;
+  };
+  const gpu::Image shown = render(p, 1.0);
+  EXPECT_GT(whiter(shown, kHeight / 2, kHeight), 0) << "the caption drew nothing";
+  EXPECT_EQ(whiter(shown, 0, kHeight / 4), 0) << "the caption stands on its foot";
+  EXPECT_EQ(whiter(render(p, 4.0), 0, kHeight), 0) << "after its end there is none";
+
+  renderer_->set_draw_captions(false);
+  EXPECT_EQ(whiter(render(p, 1.0), 0, kHeight), 0) << "switched off, it is not drawn";
 }
 
 TEST_F(TitleRendererTest, ATitleIsTransparentAroundItsGlyphs) {
