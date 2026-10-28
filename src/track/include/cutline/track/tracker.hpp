@@ -17,6 +17,7 @@
 /// nothing to set up: a pure function of two pictures, which is what lets it be
 /// tested with pictures made in the test.
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -96,6 +97,51 @@ struct Similarity {
 [[nodiscard]] std::optional<Similarity> fit_motion(std::span<const Point> from,
                                                    std::span<const Point> to, Motion motion,
                                                    Point origin);
+
+/// A perspective: the projective map a flat scene seen from a moving camera
+/// goes through. Row by row, with the last entry 1.
+struct Homography {
+  std::array<double, 9> m{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+
+  [[nodiscard]] Point apply(Point p) const noexcept;
+  [[nodiscard]] Homography inverse() const noexcept;
+  /// This after `other`: (a * b)(p) is a(b(p)).
+  [[nodiscard]] Homography operator*(const Homography& other) const noexcept;
+  [[nodiscard]] static Homography of(const Similarity& s) noexcept;
+};
+
+/// The perspective that takes `from` to `to` best, among the pairs that agree
+/// with each other, or nothing when too few do.
+[[nodiscard]] std::optional<Homography> fit_homography(std::span<const Point> from,
+                                                       std::span<const Point> to);
+
+/// A corner followed from frame to frame, known by the number it was given
+/// when it was first found.
+struct TrackPoint {
+  std::uint32_t id = 0;
+  float x = 0.0f;
+  float y = 0.0f;
+
+  friend bool operator==(const TrackPoint&, const TrackPoint&) = default;
+};
+
+/// Corners followed through a run of frames, as a stabiliser's analysis wants
+/// them: each kept for as long as it can be followed, and new ones found to
+/// replace those lost, away from those still held.
+class FeatureTracker {
+ public:
+  explicit FeatureTracker(int most = 200, double spacing = 12.0);
+
+  /// The corners on the next frame.
+  [[nodiscard]] std::vector<TrackPoint> next(const Image& image);
+
+ private:
+  int most_;
+  double spacing_;
+  std::optional<Pyramid> previous_;
+  std::vector<TrackPoint> points_;
+  std::uint32_t next_id_ = 0;
+};
 
 /// One step of tracking a region: its corners found in `from`, followed into
 /// `to`, and the motion fitted to them about `origin`. Nothing when the

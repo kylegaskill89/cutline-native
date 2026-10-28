@@ -55,6 +55,9 @@ TEST(EffectCatalog, EveryEntryIsAnEffectThePlannerKnows) {
   // lists, somebody adds, and nothing happens because the planner has no branch
   // for that type.
   for (const EffectSpec& spec : effect_catalog()) {
+    // Warp Stabilizer draws nothing until its clip has been analysed, which
+    // takes a project and a picture; the engine's stabiliser test draws it.
+    if (spec.type == "warpstabilizer") continue;
     EXPECT_FALSE(plan_effect_passes(with_effect_at_maximum(spec), 0.0).empty())
         << spec.type << " planned no passes at its maximum, so the planner does not "
                         "recognise that type";

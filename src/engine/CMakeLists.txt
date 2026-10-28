@@ -1,8 +1,10 @@
 add_library(cutline_engine
   src/audio_mixer.cpp
+  src/clip_pictures.cpp
   src/exporter.cpp
   src/frame_renderer.cpp
   src/mask_tracker.cpp
+  src/stabilizer_analysis.cpp
   src/player.cpp)
 add_library(cutline::engine ALIAS cutline_engine)
 

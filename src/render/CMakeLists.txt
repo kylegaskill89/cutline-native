@@ -5,6 +5,7 @@ add_library(cutline_render
   src/lumetri.cpp
   src/transform_effect.cpp
   src/ultra_key.cpp
+  src/warp_stabilizer.cpp
   src/mix.cpp
   src/plan.cpp
   src/preview.cpp
@@ -15,4 +16,4 @@ target_include_directories(cutline_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc
 
 # Deliberately no GPU dependency: a frame plan is a pure function of the model,
 # and keeping it that way is what lets it be tested without a device.
-target_link_libraries(cutline_render PUBLIC cutline::core cutline::options)
+target_link_libraries(cutline_render PUBLIC cutline::core cutline::track cutline::options)

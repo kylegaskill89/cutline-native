@@ -2,6 +2,7 @@
 
 #include "cutline/core/query.hpp"
 #include "cutline/core/serialize.hpp"
+#include "cutline/render/warp_stabilizer.hpp"
 
 #include <algorithm>
 #include <array>
@@ -23,7 +24,7 @@ constexpr double kSameMoment = 1e-4;
 /// What makes a piece red rather than yellow.
 constexpr std::array kSpatialEffects{"blur",     "directionalblur", "radialblur", "sharpen",
                                      "noise",    "distort",         "dropshadow", "chromakey",
-                                     "trackmatte"};
+                                     "trackmatte", "ultrakey",      "transform", "warpstabilizer"};
 
 /// More layers than this over one moment is red as well.
 constexpr std::size_t kLightLayers = 3;
@@ -137,6 +138,13 @@ constexpr std::size_t kLightLayers = 3;
       for (const core::Clip& clip : track.clips) {
         if (clip.disabled || core::clip_end(clip) <= from || clip.start >= to) continue;
         core::Clip placed = clip;
+        // A Warp Stabilizer draws the clip as it is until it has been
+        // analysed, so which analysis it has is part of what the piece shows.
+        for (core::ClipEffect& effect : placed.effects) {
+          if (effect.type != "warpstabilizer") continue;
+          const std::string analysis = render::analysis_key(project, clip, effect);
+          effect.files["analysis"] = render::has_analysis(analysis) ? analysis : std::string{};
+        }
         placed.start -= from;
         placed.group_id.reset();
         placed.label_color.clear();

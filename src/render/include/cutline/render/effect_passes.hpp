@@ -117,6 +117,8 @@ enum class EffectPassKind {
   /// The layer resampled through Premiere's Transform effect, averaged over a
   /// shutter when it has one. See `transform_effect.hpp`.
   Transform,
+  /// The layer drawn through Warp Stabilizer's mesh. See `warp_stabilizer.hpp`.
+  WarpStabilizer,
 };
 
 /// How many floats a pass carries.
@@ -309,8 +311,12 @@ struct EffectPass {
 ///
 /// `frame_duration` is how long one of the sequence's frames lasts, which a
 /// shutter is a share of; nought leaves Transform without motion blur.
+///
+/// `project` is what the clip is in, which Warp Stabilizer needs to name the
+/// analysis it draws on; without it, that effect draws nothing.
 [[nodiscard]] std::vector<EffectPass> plan_effect_passes(const core::Clip& clip,
                                                          double local_t,
-                                                         double frame_duration = 0.0);
+                                                         double frame_duration = 0.0,
+                                                         const core::Project* project = nullptr);
 
 }  // namespace cutline::render

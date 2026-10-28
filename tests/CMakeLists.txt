@@ -64,6 +64,7 @@ add_executable(cutline_core_tests
   render/plan_test.cpp
   render/preview_test.cpp
   render/scopes_test.cpp
+  track/stabilize_test.cpp
   track/tracker_test.cpp
   ui/animator_test.cpp
   ui/browser_test.cpp
@@ -166,11 +167,13 @@ if(CUTLINE_WITH_GPU)
       engine/exporter_test.cpp
       engine/frame_renderer_test.cpp
       engine/mask_tracker_test.cpp
+      engine/stabilizer_test.cpp
       engine/player_test.cpp)
     target_link_libraries(cutline_engine_tests PRIVATE
       cutline::core
       cutline::engine
       cutline::media
+      cutline::render
       GTest::gtest
       GTest::gtest_main)
     cutline_gpu_shaders(cutline_engine_tests)

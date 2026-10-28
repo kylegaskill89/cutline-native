@@ -116,6 +116,8 @@ enum class PassKind {
   UltraKeyOutput,
   /// Premiere's Transform effect, from the pass's data.
   Transform,
+  /// Warp Stabilizer's mesh, from the pass's data.
+  WarpStabilizer,
 };
 
 /// How many floats a pass carries. Eight, shared by every kind, because only

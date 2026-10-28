@@ -251,6 +251,12 @@ class MonitorView : public Widget {
   /// What is shown under the picture when there is none.
   void set_placeholder(std::string text) { placeholder_ = std::move(text); }
 
+  /// A band of text across the middle of the picture, as Premiere puts Warp
+  /// Stabilizer's "Analyzing in background" over the frame it is working on.
+  /// Empty for none.
+  void set_banner(std::string text);
+  [[nodiscard]] const std::string& banner() const noexcept { return banner_; }
+
   /// Whether something dragged from elsewhere would land here.
   ///
   /// Drawn as an outline round the picture while it is true. The monitor has no
@@ -488,6 +494,7 @@ class MonitorView : public Widget {
   int canvas_w_ = 0;
   int canvas_h_ = 0;
   std::string placeholder_ = "No preview";
+  std::string banner_;
 
   double zoom_ = kMonitorFit;
   double pan_x_ = 0.0;

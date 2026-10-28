@@ -1992,7 +1992,8 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
                          : to_gpu_passes(render::plan_effect_passes(
                                *source.clip, t - source.clip->start,
                                project.sequence().fps > 0.0 ? 1.0 / project.sequence().fps
-                                                            : 0.0)));
+                                                            : 0.0,
+                               &project)));
     layer.passes = stacks.back();
 
     // A Track Matte Key reads another track's picture, which is drawn here and

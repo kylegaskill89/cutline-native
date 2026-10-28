@@ -1,5 +1,7 @@
 #include "cutline/track/tracker.hpp"
 
+#include "linear.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -365,6 +367,177 @@ std::optional<Similarity> track_region(const Pyramid& from, const Pyramid& to,
     b.push_back(*followed[i]);
   }
   return fit_motion(a, b, motion, origin);
+}
+
+// ------------------------------------------------------------ perspective --
+
+Point Homography::apply(Point p) const noexcept {
+  const double w = m[6] * p.x + m[7] * p.y + m[8];
+  const double d = std::abs(w) < 1e-12 ? 1e-12 : w;
+  return {(m[0] * p.x + m[1] * p.y + m[2]) / d, (m[3] * p.x + m[4] * p.y + m[5]) / d};
+}
+
+Homography Homography::inverse() const noexcept {
+  const auto& a = m;
+  const double c00 = a[4] * a[8] - a[5] * a[7];
+  const double c01 = a[2] * a[7] - a[1] * a[8];
+  const double c02 = a[1] * a[5] - a[2] * a[4];
+  const double c10 = a[5] * a[6] - a[3] * a[8];
+  const double c11 = a[0] * a[8] - a[2] * a[6];
+  const double c12 = a[2] * a[3] - a[0] * a[5];
+  const double c20 = a[3] * a[7] - a[4] * a[6];
+  const double c21 = a[1] * a[6] - a[0] * a[7];
+  const double c22 = a[0] * a[4] - a[1] * a[3];
+  const double det = a[0] * c00 + a[1] * c10 + a[2] * c20;
+  if (std::abs(det) < 1e-18) return {};
+  Homography out;
+  out.m = {c00 / det, c01 / det, c02 / det, c10 / det, c11 / det, c12 / det,
+           c20 / det, c21 / det, c22 / det};
+  if (std::abs(out.m[8]) > 1e-18) {
+    const double k = out.m[8];
+    for (double& v : out.m) v /= k;
+  }
+  return out;
+}
+
+Homography Homography::operator*(const Homography& other) const noexcept {
+  Homography out;
+  for (int r = 0; r < 3; ++r) {
+    for (int c = 0; c < 3; ++c) {
+      double sum = 0.0;
+      for (int k = 0; k < 3; ++k) sum += m[r * 3 + k] * other.m[k * 3 + c];
+      out.m[r * 3 + c] = sum;
+    }
+  }
+  if (std::abs(out.m[8]) > 1e-18) {
+    const double k = out.m[8];
+    for (double& v : out.m) v /= k;
+  }
+  return out;
+}
+
+Homography Homography::of(const Similarity& s) noexcept {
+  const double c = s.scale * std::cos(s.rotation);
+  const double n = s.scale * std::sin(s.rotation);
+  // origin + offset + R (p - origin), written out.
+  Homography out;
+  out.m = {c, -n, s.origin.x + s.dx - c * s.origin.x + n * s.origin.y,
+           n, c,  s.origin.y + s.dy - n * s.origin.x - c * s.origin.y,
+           0.0, 0.0, 1.0};
+  return out;
+}
+
+namespace {
+
+/// The direct linear fit of a perspective to the pairs named by `use`, with
+/// both sets moved and scaled to a unit spread first so the arithmetic stays
+/// well conditioned.
+[[nodiscard]] std::optional<Homography> direct_fit(std::span<const Point> from,
+                                                   std::span<const Point> to,
+                                                   std::span<const std::size_t> use) {
+  const auto normaliser = [&](std::span<const Point> points) {
+    Point c{};
+    for (const std::size_t i : use) {
+      c.x += points[i].x;
+      c.y += points[i].y;
+    }
+    c = {c.x / use.size(), c.y / use.size()};
+    double spread = 0.0;
+    for (const std::size_t i : use) spread += std::hypot(points[i].x - c.x, points[i].y - c.y);
+    spread /= use.size();
+    const double k = spread > 1e-12 ? std::sqrt(2.0) / spread : 1.0;
+    Homography t;
+    t.m = {k, 0.0, -k * c.x, 0.0, k, -k * c.y, 0.0, 0.0, 1.0};
+    return t;
+  };
+  const Homography tf = normaliser(from);
+  const Homography tt = normaliser(to);
+
+  std::vector<double> a(64, 0.0);
+  std::vector<double> b(8, 0.0);
+  for (const std::size_t i : use) {
+    const Point p = tf.apply(from[i]);
+    const Point q = tt.apply(to[i]);
+    const double rows[2][9] = {{p.x, p.y, 1.0, 0.0, 0.0, 0.0, -p.x * q.x, -p.y * q.x, q.x},
+                               {0.0, 0.0, 0.0, p.x, p.y, 1.0, -p.x * q.y, -p.y * q.y, q.y}};
+    for (const auto& row : rows) {
+      for (int r = 0; r < 8; ++r) {
+        for (int c = 0; c < 8; ++c) a[r * 8 + c] += row[r] * row[c];
+        b[r] += row[r] * row[8];
+      }
+    }
+  }
+  if (!detail::solve(a, b, 8)) return std::nullopt;
+  Homography h;
+  h.m = {b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], 1.0};
+  return tt.inverse() * h * tf;
+}
+
+}  // namespace
+
+std::optional<Homography> fit_homography(std::span<const Point> from, std::span<const Point> to) {
+  const std::size_t n = std::min(from.size(), to.size());
+  if (n < 8) return std::nullopt;
+  std::mt19937 random(54321);
+  std::uniform_int_distribution<std::size_t> pick(0, n - 1);
+  std::vector<std::size_t> best;
+  for (int attempt = 0; attempt < 300; ++attempt) {
+    std::vector<std::size_t> chosen;
+    while (chosen.size() < 4) {
+      const std::size_t i = pick(random);
+      if (std::ranges::find(chosen, i) == chosen.end()) chosen.push_back(i);
+    }
+    const std::optional<Homography> guess = direct_fit(from, to, chosen);
+    if (!guess.has_value()) continue;
+    std::vector<std::size_t> agree;
+    for (std::size_t i = 0; i < n; ++i) {
+      const Point p = guess->apply(from[i]);
+      if (std::hypot(p.x - to[i].x, p.y - to[i].y) <= 2.0) agree.push_back(i);
+    }
+    if (agree.size() > best.size()) best = std::move(agree);
+    if (best.size() == n) break;
+  }
+  if (best.size() < 8) return std::nullopt;
+  return direct_fit(from, to, best);
+}
+
+// --------------------------------------------------------- feature tracks --
+
+FeatureTracker::FeatureTracker(int most, double spacing) : most_(most), spacing_(spacing) {}
+
+std::vector<TrackPoint> FeatureTracker::next(const Image& image) {
+  Pyramid now(image);
+  std::vector<TrackPoint> kept;
+  if (previous_.has_value() && !points_.empty()) {
+    std::vector<Point> was;
+    was.reserve(points_.size());
+    for (const TrackPoint& p : points_) was.push_back({p.x, p.y});
+    const std::vector<std::optional<Point>> followed = track_points(*previous_, now, was);
+    for (std::size_t i = 0; i < points_.size(); ++i) {
+      if (!followed[i].has_value()) continue;
+      kept.push_back(TrackPoint{.id = points_[i].id,
+                                .x = static_cast<float>(followed[i]->x),
+                                .y = static_cast<float>(followed[i]->y)});
+    }
+  }
+  // Topped up when a quarter has been lost, with corners away from those
+  // still held, so the picture stays covered as things leave it.
+  if (static_cast<int>(kept.size()) < most_ * 3 / 4) {
+    for (const Point& corner : find_features(image, {}, most_ * 2, spacing_)) {
+      if (static_cast<int>(kept.size()) >= most_) break;
+      const bool clear = std::ranges::none_of(kept, [&](const TrackPoint& p) {
+        return std::hypot(p.x - corner.x, p.y - corner.y) < spacing_;
+      });
+      if (clear) {
+        kept.push_back(TrackPoint{.id = next_id_++,
+                                  .x = static_cast<float>(corner.x),
+                                  .y = static_cast<float>(corner.y)});
+      }
+    }
+  }
+  previous_ = std::move(now);
+  points_ = kept;
+  return kept;
 }
 
 }  // namespace cutline::track

@@ -1074,6 +1074,20 @@ void build_effect_controls(App& app, const std::string& clip_id) {
       continue;
     }
 
+    // Warp Stabilizer's Analyze and Cancel, and what the analysis has got to,
+    // at the top of the effect where Premiere puts them.
+    if (row.type == "warpstabilizer") {
+      auto& analyse = app.inspector->emplace<Box>(Axis::Horizontal);
+      analyse.emplace<Button>("Analyze").set_on_click([&app, clip_id, index = row.index] {
+        analyse_stabilizer_again(app, clip_id, index);
+      });
+      auto& cancel = analyse.emplace<Button>("Cancel");
+      cancel.set_on_click([&app] { cancel_stabilizer_analysis(app); });
+      cancel.set_enabled(analysing_stabilizer(app));
+      analyse.emplace<Spacer>();
+      app.inspector->emplace<Label>(stabilizer_status(app, clip_id, row.index)).set_small(true);
+    }
+
     // The colours sit after the controls outside any section and before the
     // first, which is where Ultra Key's Key Color is in Premiere; an effect
     // with no sections has them last.

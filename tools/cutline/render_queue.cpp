@@ -359,7 +359,12 @@ void settle_export(App& app) {
   // And mask tracking, which stops at the end of the frame it is on.
   app.mask_track_cancel = true;
   if (app.mask_track_worker.joinable()) app.mask_track_worker.join();
+  // And Warp Stabilizer's analysis, which stops at the end of the frame.
+  app.stabilize_cancel = true;
+  if (app.stabilize_worker.joinable()) app.stabilize_worker.join();
 }
+
+App::~App() { settle_export(*this); }
 
 bool confirm_abandon_queue(App& app) {
   const std::size_t left = unfinished_jobs(app);

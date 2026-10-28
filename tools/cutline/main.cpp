@@ -275,6 +275,7 @@ void refresh_busy(App& app) {
   // five things, and a number that comes down is the difference between waiting
   // and wondering.
   std::string says = left == 0 ? std::string{} : std::format("Reading media ({})", left);
+  if (analysing_stabilizer(app)) says = "Analyzing for Warp Stabilizer";
   if (tracking_mask(app)) says = "Tracking mask";
   // Rendering previews comes before reading, which it outlasts.
   if (rendering_previews(app)) {
@@ -324,6 +325,8 @@ void refresh_timeline(App& app) {
   request_media(app);
   refresh_busy(app);
   refresh_render_bar(app);
+  refresh_stabilizer_analysis(app);
+  show_stabilizer_banner(app);
   app.timeline->set_model(cutline::editor::timeline_model(
       app.session.project(), app.session.selection(), app.timeline_media));
   app.timeline->set_playhead(app.session.playhead());
@@ -2036,6 +2039,10 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
 
     case kMaskTracked:
       collect_tracked_mask(*app, wparam == 1);
+      return 0;
+
+    case kStabilizerAnalysed:
+      collect_stabilizer_analysis(*app, wparam == 1);
       return 0;
 
     case kPreviewReady:

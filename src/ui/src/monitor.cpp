@@ -275,6 +275,12 @@ std::optional<std::pair<double, double>> MonitorView::to_picture(double x, doubl
   return std::pair{(x - area.x) / area.width, (y - area.y) / area.height};
 }
 
+void MonitorView::set_banner(std::string text) {
+  if (banner_ == text) return;
+  banner_ = std::move(text);
+  if (WidgetHost* owner = host(); owner != nullptr) owner->request_paint();
+}
+
 void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
   const Rect area = picture();
   if (area.empty()) return;
@@ -326,6 +332,16 @@ void MonitorView::paint_content(Painter& painter, const Theme& theme) const {
     }
   }
   outline_if_dropping();
+  // Premiere's band: dark across the frame's middle, with the text white on
+  // it, so it reads over any picture and is plainly not part of one.
+  if (!banner_.empty() && has_picture()) {
+    const double tall = std::min(area.height * 0.2, theme.metrics.font_size * 3.0);
+    const Rect band{area.x, area.y + (area.height - tall) / 2.0, area.width, tall};
+    painter.fill(band, 0.0, Fill::solid(Color{0.05f, 0.18f, 0.42f, 0.82f}));
+    SurfaceStyle ink = style;
+    ink.text = Color{1.0f, 1.0f, 1.0f, 1.0f};
+    painter.text(text_run(band, banner_, ink, theme.metrics.font_size, TextAlign::Center, true));
+  }
   painter.pop_clip();
 
   painter.push_clip(bounds(), 0.0);

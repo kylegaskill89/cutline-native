@@ -107,6 +107,7 @@
 #define PASS_SOFTEN    26
 #define PASS_ULTRAOUT  27
 #define PASS_TRANSFORM 28
+#define PASS_WARP      29
 
 // Laid out so no member straddles a 16-byte boundary, because these arrive as
 // root constants and HLSL packs a cbuffer in float4 rows.
@@ -1566,6 +1567,28 @@ float4 transformPass(float2 uv) {
     return float4(rgb, sum.a * pd(2.0));
 }
 
+/// Warp Stabilizer: each output point drawn from where the mesh says, read
+/// from the cell it falls in. Outside what Stabilize, Crop leaves showing, and
+/// wherever the source is off the frame, nothing.
+float4 warpPass(float2 uv) {
+    const int columns = (int)pd(0.0);
+    const int rows = (int)pd(1.0);
+    const float visible = pd(2.0);
+    const float2 f = layerUv(uv);
+    if (any(abs(f - 0.5) > 0.5 * visible)) return float4(0.0, 0.0, 0.0, 0.0);
+    const float2 g = saturate(f) * float2(columns, rows);
+    const int2 cell = min(int2(g), int2(columns - 1, rows - 1));
+    const float2 t = g - float2(cell);
+    const float base = 4.0 + 2.0 * (float)(cell.y * (columns + 1) + cell.x);
+    const float below = 2.0 * (float)(columns + 1);
+    const float2 a = float2(pd(base), pd(base + 1.0));
+    const float2 b = float2(pd(base + 2.0), pd(base + 3.0));
+    const float2 c = float2(pd(base + below), pd(base + below + 1.0));
+    const float2 d = float2(pd(base + below + 2.0), pd(base + below + 3.0));
+    const float2 source = lerp(lerp(a, b, t.x), lerp(c, d, t.x), t.y);
+    return frameAt(source);
+}
+
 float4 PSEffect(VSOutput input) : SV_Target {
     const float4 before = texture0.Sample(linearSampler, input.uv);
 
@@ -1608,6 +1631,8 @@ float4 PSEffect(VSOutput input) : SV_Target {
         after = ultraKeyOutput(input.uv, before);
     } else if (params.passKind == PASS_TRANSFORM) {
         after = transformPass(input.uv);
+    } else if (params.passKind == PASS_WARP) {
+        after = warpPass(input.uv);
     } else if (params.passKind == PASS_SHARPEN) {
         after = float4(sharpenPass(input.uv), texture0.Sample(linearSampler, input.uv).a);
     } else if (params.passKind == PASS_FLIP) {

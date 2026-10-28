@@ -5,6 +5,7 @@
 #include "cutline/render/lumetri.hpp"
 #include "cutline/render/transform_effect.hpp"
 #include "cutline/render/ultra_key.hpp"
+#include "cutline/render/warp_stabilizer.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -299,7 +300,8 @@ std::array<float, 3> pass_balance(const EffectPass& pass) noexcept {
 // ------------------------------------------------------------------- plan --
 
 std::vector<EffectPass> plan_effect_passes(const core::Clip& clip, double local_t,
-                                           double frame_duration) {
+                                           double frame_duration,
+                                           const core::Project* project) {
   std::vector<EffectPass> passes;
 
   const std::vector<core::ClipEffect> resolved = core::resolved_effects(clip, local_t);
@@ -487,6 +489,9 @@ std::vector<EffectPass> plan_effect_passes(const core::Clip& clip, double local_
 
     } else if (effect.type == "ultrakey") {
       plan_ultra_key(effect, passes);
+
+    } else if (effect.type == "warpstabilizer") {
+      if (project != nullptr) plan_warp_stabilizer(*project, clip, effect, local_t, passes);
 
     } else if (effect.type == "transform") {
       // With its keyframes, not resolved: a shutter needs the transform at

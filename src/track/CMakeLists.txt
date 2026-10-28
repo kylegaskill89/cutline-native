@@ -1,4 +1,5 @@
 add_library(cutline_track
+  src/stabilize.cpp
   src/tracker.cpp)
 add_library(cutline::track ALIAS cutline_track)
 

@@ -160,6 +160,57 @@ constexpr std::array kTransform{
     Param{.key = "sampling", .name = "Sampling", .minimum = 0.0, .maximum = 1.0,
           .fallback = 0.0, .suffix = "", .choices = kTransformSampling}};
 
+// Warp Stabilizer, with Premiere's sections, names, ranges and defaults.
+// Auto-scale's own reading is worked out from the analysis rather than set,
+// so it is shown beside the Analyze button rather than here.
+constexpr std::array<std::string_view, 2> kStabilizeResults{"Smooth Motion", "No Motion"};
+constexpr std::array<std::string_view, 4> kStabilizeMethods{
+    "Position", "Position, Scale, Rotation", "Perspective", "Subspace Warp"};
+constexpr std::array<std::string_view, 4> kStabilizeFraming{
+    "Stabilize Only", "Stabilize, Crop", "Stabilize, Crop, Auto-scale",
+    "Stabilize, Synthesize Edges"};
+constexpr std::array<std::string_view, 2> kRollingShutter{"Automatic Reduction",
+                                                          "Enhanced Reduction"};
+
+constexpr std::array kWarpStabilizer{
+    Param{.key = "result", .name = "Result", .minimum = 0.0, .maximum = 1.0, .fallback = 0.0,
+          .suffix = "", .group = "Stabilization", .choices = kStabilizeResults},
+    Param{.key = "smoothness", .name = "Smoothness", .minimum = 0.0, .maximum = 1000.0,
+          .fallback = 50.0, .suffix = "%", .group = "Stabilization"},
+    Param{.key = "method", .name = "Method", .minimum = 0.0, .maximum = 3.0, .fallback = 3.0,
+          .suffix = "", .group = "Stabilization", .choices = kStabilizeMethods},
+    Param{.key = "preserve_scale", .name = "Preserve Scale", .minimum = 0.0, .maximum = 1.0,
+          .fallback = 0.0, .suffix = "", .toggle = true, .group = "Stabilization"},
+    Param{.key = "framing", .name = "Framing", .minimum = 0.0, .maximum = 3.0, .fallback = 2.0,
+          .suffix = "", .group = "Borders", .choices = kStabilizeFraming},
+    Param{.key = "maximum_scale", .name = "Maximum Scale", .minimum = 100.0, .maximum = 1000.0,
+          .fallback = 150.0, .suffix = "%", .group = "Borders"},
+    Param{.key = "safe_margin", .name = "Action-Safe Margin", .minimum = 0.0, .maximum = 45.0,
+          .fallback = 0.0, .suffix = "%", .group = "Borders"},
+    Param{.key = "additional_scale", .name = "Additional Scale", .minimum = 1.0,
+          .maximum = 1000.0, .fallback = 100.0, .suffix = "%", .group = "Borders"},
+    Param{.key = "detailed", .name = "Detailed Analysis", .minimum = 0.0, .maximum = 1.0,
+          .fallback = 0.0, .suffix = "", .toggle = true, .group = "Advanced"},
+    Param{.key = "rolling_shutter", .name = "Rolling Shutter Ripple", .minimum = 0.0,
+          .maximum = 1.0, .fallback = 0.0, .suffix = "", .group = "Advanced",
+          .choices = kRollingShutter},
+    Param{.key = "crop_smooth", .name = "Crop Less <-> Smooth More", .minimum = 0.0,
+          .maximum = 100.0, .fallback = 50.0, .suffix = "%", .group = "Advanced"},
+    Param{.key = "synthesis_range", .name = "Synthesis Input Range (seconds)", .minimum = 0.0,
+          .maximum = 10.0, .fallback = 3.0, .suffix = "", .group = "Advanced"},
+    Param{.key = "synthesis_feather", .name = "Synthesis Edge Feather", .minimum = 0.0,
+          .maximum = 100.0, .fallback = 60.0, .suffix = "", .group = "Advanced"},
+    Param{.key = "synthesis_left", .name = "Synthesis Edge Cropping Left", .minimum = 0.0,
+          .maximum = 100.0, .fallback = 0.0, .suffix = "", .group = "Advanced"},
+    Param{.key = "synthesis_top", .name = "Synthesis Edge Cropping Top", .minimum = 0.0,
+          .maximum = 100.0, .fallback = 0.0, .suffix = "", .group = "Advanced"},
+    Param{.key = "synthesis_right", .name = "Synthesis Edge Cropping Right", .minimum = 0.0,
+          .maximum = 100.0, .fallback = 0.0, .suffix = "", .group = "Advanced"},
+    Param{.key = "synthesis_bottom", .name = "Synthesis Edge Cropping Bottom", .minimum = 0.0,
+          .maximum = 100.0, .fallback = 0.0, .suffix = "", .group = "Advanced"},
+    Param{.key = "hide_banner", .name = "Hide Warning Banner", .minimum = 0.0, .maximum = 1.0,
+          .fallback = 0.0, .suffix = "", .toggle = true, .group = "Advanced"}};
+
 // ---------------------------------------------------------------- grading --
 //
 // Everything from here down arrived after effects became passes, and between
@@ -441,6 +492,8 @@ constexpr std::array kCatalog{
                .params = kTrackMatte},
     EffectSpec{.type = "transform", .name = "Transform",
                .category = EffectCategory::Transform, .params = kTransform},
+    EffectSpec{.type = "warpstabilizer", .name = "Warp Stabilizer",
+               .category = EffectCategory::Transform, .params = kWarpStabilizer},
     EffectSpec{.type = "crop", .name = "Crop", .category = EffectCategory::Transform,
                .params = kCrop},
     EffectSpec{.type = "flip", .name = "Flip", .category = EffectCategory::Transform,

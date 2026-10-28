@@ -311,6 +311,10 @@ constexpr UINT kPreviewRendered = WM_APP + 5;
 /// Posted by the mask tracking thread as it goes, and once more when it stops.
 constexpr UINT kMaskTracked = WM_APP + 6;
 
+/// Posted by Warp Stabilizer's analysis as it goes, and once more when it
+/// stops.
+constexpr UINT kStabilizerAnalysed = WM_APP + 7;
+
 /// Which settings window: the person's, or the cut's.
 enum class SettingsKind {
   /// Premiere's Preferences. Belongs to the person, saved in `settings.json`.
@@ -399,6 +403,14 @@ struct Shell {
 enum class LumetriPick { None, WhiteBalance, Key };
 
 struct App {
+  App() = default;
+  App(const App&) = delete;
+  App& operator=(const App&) = delete;
+  /// Stops and waits for every thread of its own, so none outlives what it
+  /// works on, however the app comes to an end; `--check` ends without the
+  /// main loop's goodbye.
+  ~App();
+
   /// The editor's window, and any panels dragged out of it.
   Shell main;
   std::vector<std::unique_ptr<Shell>> floats;
@@ -1140,6 +1152,20 @@ struct App {
   /// The Tracking window, while it is the popup showing, and its bar.
   cutline::ui::Dialog* mask_track_dialog = nullptr;
   cutline::ui::ProgressBar* mask_track_bar = nullptr;
+  /// Warp Stabilizer's analysis, one clip at a time on a thread of its own.
+  std::thread stabilize_worker;
+  std::atomic<bool> stabilize_running{false};
+  std::atomic<bool> stabilize_cancel{false};
+  std::atomic<int> stabilize_done{0};
+  std::atomic<int> stabilize_total{0};
+  /// Which step it is on: following corners, or working out the warp.
+  std::atomic<int> stabilize_step{1};
+  std::string stabilize_key;
+  std::mutex stabilize_lock;
+  std::string stabilize_error;
+  /// Analyses that failed or were cancelled, not started again until
+  /// Analyze is pressed.
+  std::set<std::string> stabilize_held;
   /// Whether the queue moves on to the next job by itself. Export starts it;
   /// Queue only adds to it, as Premiere's Queue button does.
   bool queue_running = false;
@@ -1660,6 +1686,19 @@ void track_mask(App& app, const std::string& clip_id, std::size_t effect, bool b
 [[nodiscard]] bool tracking_mask(const App& app);
 /// Tracking has got further, or finished when not `progress_only`.
 void collect_tracked_mask(App& app, bool progress_only = false);
+/// Starts analysing the next Warp Stabilizer in the open sequence that has no
+/// analysis, unless one is being analysed already.
+void refresh_stabilizer_analysis(App& app);
+[[nodiscard]] bool analysing_stabilizer(const App& app);
+void collect_stabilizer_analysis(App& app, bool progress_only = false);
+/// Premiere's Analyze and Cancel.
+void analyse_stabilizer_again(App& app, const std::string& clip_id, std::size_t effect);
+void cancel_stabilizer_analysis(App& app);
+/// What the effect's own row says: how far analysis has got, or Auto-scale.
+[[nodiscard]] std::string stabilizer_status(App& app, const std::string& clip_id,
+                                            std::size_t effect);
+/// The Program Monitor's banner, for a Warp Stabilizer still being worked on.
+void show_stabilizer_banner(App& app);
 [[nodiscard]] std::optional<std::filesystem::path> choose_lut_to_open(HWND owner);
 /// Measures graphic layers as the renderer will draw them, where there is a
 /// text library to do it with: what the panel pins by and the monitor puts

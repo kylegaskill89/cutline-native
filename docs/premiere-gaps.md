@@ -438,7 +438,8 @@ already given, which is why that function takes one beyond resolving keyframes.
 
 Still absent, roughly in the order their absence would be noticed: ~~**Lumetri
 Color**~~ (done, §13), ~~**Drop Shadow**~~, ~~**Track Matte Key**~~ (done,
-§12), ~~**Ultra Key**~~ (done, Phase 4 item 7), **Warp Stabilizer**, and
+§12), ~~**Ultra Key**~~ (done, Phase 4 item 7), ~~**Warp Stabilizer**~~ (done
+but for Synthesize Edges, Phase 4 item 10), and
 ~~**Transform**~~ (done, Phase 4 item 8).
 
 Of those, Drop Shadow and Track Matte Key want something the pass chain does not
@@ -2690,8 +2691,26 @@ one.
    keyframes, with a stopwatch and keyframe navigator; dragging an animated
    path keys it at the playhead, and a point added or removed goes into or
    out of every keyframe. Tracking a path's scale writes its Mask Path.
-10. **Warp Stabilizer** (large). Analyse on the tracker from 9, smooth the
-    path, and warp or crop to it, with Premiere's result and method controls.
+10. ~~**Warp Stabilizer**~~ — **done, except Synthesize Edges**. Applying
+    it starts the analysis in the background, one clip at a time, with
+    Premiere's "Analyzing in background (step 1 of 2)" and "Stabilizing (step
+    2 of 2)" banded across the Program Monitor, Analyze and Cancel at the top
+    of the effect, and Auto-scale's reading beside them. Every control of
+    Premiere's is there under Stabilization, Borders and Advanced. The
+    analysis follows corners through every frame of the clip drawn alone
+    (the tracker from 9), and is kept in a file named for what was analysed,
+    the source, the part of it and the speed, so changing a setting never
+    analyses again, trimming does, and nothing is written into the project.
+    Stabilising works out the camera's path as far as the Method follows it,
+    smooths it (or holds it, for No Motion), and warps each frame to it;
+    Subspace Warp also smooths each corner's own path and bends a 16 by 9
+    mesh so they land on it, which steadies a scene with depth that one
+    transform cannot. Every method draws through the same mesh, with a
+    rolling shutter's lean (its readout found from the footage, coarsely for
+    Automatic Reduction and finely for Enhanced) and the framing's crop or
+    zoom folded in. **Stabilize, Synthesize Edges** draws as Stabilize Only
+    for now: it fills the borders from frames up to seconds away, and the
+    renderer draws one moment of a clip per frame.
 11. **Multicam** (large). Multi-camera source sequences synchronised by
     audio, timecode or marks, the multi-camera monitor view, and switching
     angles live into cuts. The largest and the most self-contained, so last.
