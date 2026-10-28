@@ -88,6 +88,11 @@ jobs:
         run: |
           $baseline = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
           git -C "$env:VCPKG_INSTALLATION_ROOT" fetch --quiet origin $baseline
+          # Checked out as well, and the tool rebuilt to match: vcpkg reads its
+          # version database from the checkout, so a runner whose vcpkg is older
+          # than the baseline has no entry for the ports it names.
+          git -C "$env:VCPKG_INSTALLATION_ROOT" checkout --quiet $baseline
+          & "$env:VCPKG_INSTALLATION_ROOT\bootstrap-vcpkg.bat" -disableMetrics
 
       - name: Install NSIS
         run: choco install nsis --no-progress -y
