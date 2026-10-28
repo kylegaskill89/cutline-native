@@ -121,6 +121,22 @@ TEST(Rasterise, ABackgroundBoxReachesPastTheTextByItsPadding) {
   EXPECT_EQ(alpha_at(*raster, 0, 0), 0);
 }
 
+TEST(Rasterise, AParagraphsBackgroundFitsItsWordsNotItsBox) {
+  // Three short words in a box six hundred wide: a caption's box. The
+  // background is round the words, centred, and not across the whole width.
+  GraphicLayer layer = title("Hi");
+  layer.box_width = 600.0;
+  layer.style.background =
+      core::GraphicBackground{.color = "#000000", .opacity = 1.0, .padding = 4.0};
+  const auto raster = rasterise(layer);
+  ASSERT_TRUE(raster.has_value()) << raster.error();
+  const core::LayerExtent extent = measure(layer);
+  const int middle = raster->height / 2;
+  EXPECT_EQ(alpha_at(*raster, static_cast<int>(extent.left) + 4, middle), 0)
+      << "the box reaches the far left of the paragraph";
+  EXPECT_EQ(alpha_at(*raster, raster->width / 2, middle), 255) << "nothing round the words";
+}
+
 TEST(Rasterise, ABackgroundsOpacityIsItsAlpha) {
   GraphicLayer layer = title();
   layer.style.background =

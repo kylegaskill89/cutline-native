@@ -437,9 +437,18 @@ std::expected<Raster, std::string> rasterise(const GraphicLayer& layer, std::siz
         paint.setAntiAlias(true);
         paint.setColor4f(faded(parse(style.background->color, SkColor4f{0, 0, 0, 1}),
                                style.background->opacity));
+        // Round the words rather than the whole paragraph box, as Premiere's
+        // background sits: a caption wrapped at four-fifths of the frame and
+        // saying three words has a box the size of the three words.
+        double widest = 0.0;
+        for (const Line& line : layout.lines) widest = std::max(widest, line.width);
+        const double fitted = std::min(content_w, widest);
+        double from = left;
+        if (style.align == core::TextAlign::Center) from += (content_w - fitted) / 2.0;
+        else if (style.align == core::TextAlign::Right) from += content_w - fitted;
         const SkRect box = SkRect::MakeXYWH(
-            static_cast<SkScalar>(left - pad), static_cast<SkScalar>(top - pad),
-            static_cast<SkScalar>(content_w + pad * 2.0), static_cast<SkScalar>(content_h + pad * 2.0));
+            static_cast<SkScalar>(from - pad), static_cast<SkScalar>(top - pad),
+            static_cast<SkScalar>(fitted + pad * 2.0), static_cast<SkScalar>(content_h + pad * 2.0));
         const auto radius = static_cast<SkScalar>(std::max(0.0, style.background->corner_radius));
         canvas->drawRRect(SkRRect::MakeRectXY(box, radius, radius), paint);
       }
