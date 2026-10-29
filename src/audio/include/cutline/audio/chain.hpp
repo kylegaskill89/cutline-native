@@ -37,6 +37,11 @@ struct AudioEffectDef {
   std::string_view id;
   std::string_view name;
   std::span<const AudioEffectParamDef> params;
+  /// Hands its sound back later than it took it in, and so needs to be fed
+  /// ahead of time to stay in sync: a clip's stack can be, since the clip's
+  /// source can be read early, but a track's or the master's cannot, and these
+  /// are not offered there.
+  bool lookahead = false;
 };
 
 /// Every audio effect, in the order the UI should offer them.
@@ -70,11 +75,12 @@ struct AudioEffectDef {
 /// dialogue usually needs".
 ///
 /// These are this catalogue's nearest equivalents rather than Adobe's exact
-/// chains, which are built from effects that are not here: Premiere's dialogue
-/// preset reaches for DeHum, DeEss and Reduce Noise, and none of those exists
-/// in a registry of ten filters, a compressor, a delay and a reverb. What is
-/// here is what each role is actually asked for — the rumble off the voice, a
-/// little presence, and a compressor to hold it steady.
+/// chains. The repair effects are here — DeNoise, DeHummer, DeEsser, DeReverb
+/// — but they are left out of the presets and offered under Essential Sound's
+/// Repair instead, as Premiere offers them: what a recording needs repairing
+/// is a fact about that recording, not about dialogue. What each preset gives
+/// is what its role is always asked for — the rumble off the voice, a little
+/// presence, and a compressor to hold it steady.
 ///
 /// Starting points, deliberately mild. A preset that made a big change would be
 /// one nobody dared press.
@@ -103,9 +109,18 @@ class EffectChain {
   /// that makes it neutral is animated, in which case it is kept, because a
   /// stage dropped at build time can never come back and a gain sweeping up
   /// from nothing starts at nothing.
+  ///
+  /// `allow_lookahead` is false for a stack that cannot be fed early, a
+  /// track's or the master's, which leaves out the effects that need it
+  /// rather than putting their sound out of step with the picture.
   [[nodiscard]] static EffectChain build(std::span<const core::AudioClipEffect> effects,
                                          double sample_rate, int channels,
-                                         double local_t = 0.0);
+                                         double local_t = 0.0, bool allow_lookahead = true);
+
+  /// How many frames later than it went in a sample comes out: the total of
+  /// the stages that work a frame at a time. Whoever runs the chain feeds it
+  /// this far ahead.
+  [[nodiscard]] std::size_t latency() const noexcept;
 
   /// Re-reads every animated parameter at `local_t` and retunes the stages,
   /// keeping their state.

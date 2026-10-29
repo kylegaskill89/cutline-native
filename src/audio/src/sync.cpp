@@ -1,5 +1,7 @@
 #include "cutline/audio/sync.hpp"
 
+#include "fft.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -12,33 +14,7 @@ namespace {
 
 using Complex = std::complex<double>;
 
-/// In place, radix 2; `values.size()` must be a power of two.
-void fft(std::vector<Complex>& values, bool inverse) {
-  const std::size_t n = values.size();
-  for (std::size_t i = 1, j = 0; i < n; ++i) {
-    std::size_t bit = n >> 1;
-    for (; (j & bit) != 0; bit >>= 1) j ^= bit;
-    j ^= bit;
-    if (i < j) std::swap(values[i], values[j]);
-  }
-  for (std::size_t length = 2; length <= n; length <<= 1) {
-    const double angle = 2.0 * std::numbers::pi / static_cast<double>(length) * (inverse ? 1 : -1);
-    const Complex step(std::cos(angle), std::sin(angle));
-    for (std::size_t i = 0; i < n; i += length) {
-      Complex w(1.0, 0.0);
-      for (std::size_t k = 0; k < length / 2; ++k) {
-        const Complex u = values[i + k];
-        const Complex v = values[i + k + length / 2] * w;
-        values[i + k] = u + v;
-        values[i + k + length / 2] = u - v;
-        w *= step;
-      }
-    }
-  }
-  if (inverse) {
-    for (Complex& v : values) v /= static_cast<double>(n);
-  }
-}
+using detail::fft;
 
 }  // namespace
 

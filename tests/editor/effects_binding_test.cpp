@@ -1320,6 +1320,69 @@ TEST(RolePreset, ThePictureHalfOfAPairTakesNeither) {
       << "a role is about sound";
 }
 
+// ----------------------------------------------------------------- repair --
+
+TEST(EssentialRepair, TickingABoxPutsItsEffectOnTheClipAtTheSlidersStrength) {
+  EssentialRepair repair;
+  repair.reduce_noise = 5.0;
+  repair.dehum = 5.0;
+  repair.hum_frequency = 50.0;
+  const Project p = set_essential_repair(one_audio_clip(), "a", repair);
+  const auto& effects = audio_clip_of(p).audio_effects;
+  ASSERT_EQ(effects.size(), 2u);
+  // What is under the voice before what is in it.
+  EXPECT_EQ(effects[0].type, "dehummer");
+  EXPECT_DOUBLE_EQ(effects[0].params.at("reduction"), 30.0);
+  EXPECT_DOUBLE_EQ(effects[0].params.at("freq"), 50.0);
+  EXPECT_EQ(effects[1].type, "denoise");
+  EXPECT_DOUBLE_EQ(effects[1].params.at("amount"), 50.0);
+}
+
+TEST(EssentialRepair, WhatItSetIsWhatItReadsBack) {
+  EssentialRepair repair;
+  repair.reduce_rumble = 3.0;
+  repair.dehum = 7.0;
+  repair.deess = 4.0;
+  repair.reduce_reverb = 2.0;
+  const Project p = set_essential_repair(one_audio_clip(), "a", repair);
+  EXPECT_EQ(essential_repair_of(p, "a"), repair);
+}
+
+TEST(EssentialRepair, ItGoesAheadOfWhatShapesTheVoiceAndLeavesThatAlone) {
+  Project p = apply_role_preset(one_audio_clip(), "a", core::AudioRole::Dialogue);
+  const std::vector<core::AudioClipEffect> preset = audio_clip_of(p).audio_effects;
+  EssentialRepair repair;
+  repair.reduce_noise = 4.0;
+  p = set_essential_repair(std::move(p), "a", repair);
+  const auto& effects = audio_clip_of(p).audio_effects;
+  ASSERT_EQ(effects.size(), preset.size() + 1);
+  EXPECT_EQ(effects.front().type, "denoise");
+  EXPECT_TRUE(std::equal(preset.begin(), preset.end(), effects.begin() + 1));
+}
+
+TEST(EssentialRepair, ClearingABoxTakesItsEffectOffAndMovingASliderSetsItInPlace) {
+  EssentialRepair repair;
+  repair.reduce_noise = 4.0;
+  repair.deess = 4.0;
+  Project p = set_essential_repair(one_audio_clip(), "a", repair);
+  repair.reduce_noise.reset();
+  repair.deess = 8.0;
+  p = set_essential_repair(std::move(p), "a", repair);
+  const auto& effects = audio_clip_of(p).audio_effects;
+  ASSERT_EQ(effects.size(), 1u);
+  EXPECT_EQ(effects[0].type, "deesser");
+  EXPECT_DOUBLE_EQ(effects[0].params.at("reduction"), 19.2);
+  // And the same again changes nothing, so it is no edit at all.
+  EXPECT_EQ(set_essential_repair(p, "a", repair), p);
+}
+
+TEST(EssentialRepair, IsForSoundOnly) {
+  const Project before = one_clip();
+  EssentialRepair repair;
+  repair.reduce_noise = 5.0;
+  EXPECT_EQ(set_essential_repair(before, "c1", repair), before);
+}
+
 // --------------------------------------------------------------- ultra key --
 
 TEST(UltraKeySetting, ChoosingAPresetWritesMatteGeneration) {

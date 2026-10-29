@@ -212,7 +212,18 @@ TEST(AudioRegistry, TheTimeBasedEffectsArePresentToo) {
   // application and made sends a route to nowhere.
   EXPECT_NE(audio_effect_def("delay"), nullptr);
   EXPECT_NE(audio_effect_def("reverb"), nullptr);
-  EXPECT_EQ(audio_effect_defs().size(), 10u);
+  EXPECT_EQ(audio_effect_defs().size(), 15u);
+}
+
+TEST(AudioRegistry, PremieresRepairEffectsArePresent) {
+  // Essential Sound's Repair puts these on a clip, so each has to be one.
+  for (const char* id : {"denoise", "dereverb", "dehummer", "deesser", "derumble"}) {
+    EXPECT_NE(audio_effect_def(id), nullptr) << id;
+  }
+  // And only the two that work a frame at a time need feeding ahead.
+  EXPECT_TRUE(audio_effect_def("denoise")->lookahead);
+  EXPECT_TRUE(audio_effect_def("dereverb")->lookahead);
+  EXPECT_FALSE(audio_effect_def("dehummer")->lookahead);
 }
 
 TEST(AudioRegistry, AnUnknownEffectIsNotAnError) {

@@ -6,6 +6,7 @@ add_executable(cutline_core_tests
   audio/limiter_test.cpp
   audio/loudness_test.cpp
   audio/meter_test.cpp
+  audio/repair_test.cpp
   audio/stretch_test.cpp
   audio/sync_test.cpp
   core/animate_test.cpp

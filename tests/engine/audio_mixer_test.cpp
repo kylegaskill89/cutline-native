@@ -1795,5 +1795,73 @@ TEST(Sends, APostFaderSendFollowsTheFaderAndAPreFaderOneDoesNot) {
   EXPECT_NEAR(pre_down, pre_up, 0.5) << "a pre-fader send is tapped before the fader";
 }
 
+
+// ---------------------------------------------------------------- repair --
+
+/// The tone clip with a DeReverb so slight it changes next to nothing, which
+/// is what lets its output be compared sample for sample with the plain mix:
+/// whatever differs is where the sound landed, not what was done to it.
+[[nodiscard]] Project lightly_repaired() {
+  Project p = one_clip_project();
+  p.sequence().tracks[0].clips[0].audio_effects = {
+      core::AudioClipEffect{.type = "dereverb", .params = {{"amount", 1.0}}}};
+  return p;
+}
+
+[[nodiscard]] double largest_difference(const std::vector<float>& a, const std::vector<float>& b) {
+  double most = 0.0;
+  for (std::size_t i = 0; i < std::min(a.size(), b.size()); ++i) {
+    most = std::max(most, static_cast<double>(std::abs(a[i] - b[i])));
+  }
+  return most;
+}
+
+TEST(RepairInTheMix, ARepairedClipIsHeardWhereItIsAndNotAFrameLate) {
+  auto plain = mixer_for(one_clip_project());
+  auto repaired = mixer_for(lightly_repaired());
+  ASSERT_NE(plain, nullptr);
+  ASSERT_NE(repaired, nullptr);
+  const auto a = mix_span(*plain, 1.0, 0.5);
+  const auto b = mix_span(*repaired, 1.0, 0.5);
+  // Late by the frame's 43 ms, a 440 Hz tone would be most of a cycle out and
+  // differ by nearly its whole height.
+  EXPECT_LT(largest_difference(a, b), 0.05);
+}
+
+TEST(RepairInTheMix, ItStartsOnTheClipsFirstFrameRatherThanAfterAFramesSilence) {
+  auto repaired = mixer_for(lightly_repaired());
+  ASSERT_NE(repaired, nullptr);
+  const auto first = mix_span(*repaired, 0.0, 0.04);
+  std::vector<float> settled(first.begin() + kRate / 100 * kChannels, first.end());
+  EXPECT_GT(rms_of(settled), expected_rms(kToneAmplitude) * 0.8);
+}
+
+TEST(RepairInTheMix, ASeekLandsInStepToo) {
+  auto plain = mixer_for(one_clip_project());
+  auto repaired = mixer_for(lightly_repaired());
+  ASSERT_NE(plain, nullptr);
+  ASSERT_NE(repaired, nullptr);
+  (void)mix_span(*repaired, 0.5, 0.2);
+  repaired->reset();
+  const auto a = mix_span(*plain, 3.0, 0.3);
+  const auto b = mix_span(*repaired, 3.0, 0.3);
+  // From a little in: the first frame after a seek is the stack warming up
+  // on the frames it was primed with, as it is at the clip's own start.
+  const std::vector<float> a_in(a.begin() + kRate / 20 * kChannels, a.end());
+  const std::vector<float> b_in(b.begin() + kRate / 20 * kChannels, b.end());
+  EXPECT_LT(largest_difference(a_in, b_in), 0.05);
+}
+
+TEST(RepairInTheMix, ATrackStackLeavesOutTheRepairThatWouldMakeItLate) {
+  Project p = one_clip_project();
+  p.sequence().tracks[0].audio_effects = {
+      core::AudioClipEffect{.type = "denoise", .params = {{"amount", 100.0}}}};
+  auto plain = mixer_for(one_clip_project());
+  auto tracked = mixer_for(p);
+  ASSERT_NE(plain, nullptr);
+  ASSERT_NE(tracked, nullptr);
+  EXPECT_LT(largest_difference(mix_span(*plain, 1.0, 0.3), mix_span(*tracked, 1.0, 0.3)), 1e-6);
+}
+
 }  // namespace
 }  // namespace cutline::engine

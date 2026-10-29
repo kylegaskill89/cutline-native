@@ -195,6 +195,47 @@ void open_essential_sound(App& app, std::span<const std::string> clips) {
 
   auto& preset = panel->emplace<Checkbox>("Apply the preset for this role", true);
 
+  // Repair, which Premiere offers for dialogue and nothing else: five boxes,
+  // each with its strength from 0 to 10, read from what the first clip has.
+  const cutline::editor::EssentialRepair had =
+      cutline::editor::essential_repair_of(app.session.project(), clips.front());
+  auto& repair = panel->emplace<Box>(Axis::Vertical);
+  repair.emplace<Label>("Repair").set_bold(true);
+  struct RepairRow {
+    Checkbox* box = nullptr;
+    cutline::ui::Slider* slider = nullptr;
+  };
+  // A form of its own, so the five sliders start and end in one column
+  // whatever their names' widths; with the box and the slider in one row each
+  // they had begun wherever the name happened to end.
+  auto& rows = repair.emplace<cutline::ui::Form>();
+  const auto repair_row = [&rows](const char* label, std::optional<double> value) -> RepairRow {
+    auto& row = rows.row(label);
+    auto& box = row.emplace<Checkbox>("", value.has_value());
+    // Premiere's sliders start at the middle when a box is first ticked.
+    auto& slider = row.emplace<cutline::ui::Slider>(
+        cutline::ui::ValueRange{.minimum = 0.0, .maximum = 10.0, .step = 0.1},
+        value.value_or(5.0));
+    slider.set_default_value(5.0);
+    return {&box, &slider};
+  };
+  const RepairRow noise = repair_row("Reduce Noise", had.reduce_noise);
+  const RepairRow rumble = repair_row("Reduce Rumble", had.reduce_rumble);
+  const RepairRow hum = repair_row("DeHum", had.dehum);
+  // Under DeHum, which mains the hum is from, as Premiere puts it.
+  auto& hum_frequency = rows.row("").emplace<Dropdown>(std::vector<std::string>{"50 Hz", "60 Hz"},
+                                                       had.hum_frequency < 55.0 ? 0u : 1u);
+  const RepairRow ess = repair_row("DeEss", had.deess);
+  const RepairRow reverb = repair_row("Reduce Reverb", had.reduce_reverb);
+  const auto dialogue_index = static_cast<std::size_t>(
+      std::ranges::find(cutline::core::kAudioRoles, cutline::core::AudioRole::Dialogue) -
+      cutline::core::kAudioRoles.begin());
+  repair.set_visible(selected_role == dialogue_index);
+  group.set_on_change([&app, section = &repair, dialogue_index](std::size_t index) {
+    section->set_visible(index == dialogue_index);
+    if (app.main.host != nullptr) app.main.host->request_layout();
+  });
+
   panel->emplace<Label>("Ducking").set_bold(true);
   const auto number = [&panel](const char* label, cutline::ui::ValueRange range, double value,
                                const char* unit) -> cutline::ui::NumericField& {
@@ -249,12 +290,23 @@ void open_essential_sound(App& app, std::span<const std::string> clips) {
     mark_dirty(app);
   });
 
+  const auto read = [](const RepairRow& row) {
+    return row.box->checked() ? std::optional<double>(row.slider->value()) : std::nullopt;
+  };
   dialog->set_accept(
-      "OK", [&app, ids, chosen = &group, preset = &preset]() -> std::optional<std::string> {
+      "OK", [&app, ids, chosen = &group, preset = &preset, read, noise, rumble, hum, ess, reverb,
+             mains = &hum_frequency]() -> std::optional<std::string> {
     const std::size_t index = chosen->selected();
     const bool with_preset = preset->checked();
     if (index >= cutline::core::kAudioRoles.size()) return std::nullopt;
     const cutline::core::AudioRole role = cutline::core::kAudioRoles[index];
+    const cutline::editor::EssentialRepair repair{.reduce_noise = read(noise),
+                                                  .reduce_rumble = read(rumble),
+                                                  .dehum = read(hum),
+                                                  .hum_frequency =
+                                                      mains->selected() == 0 ? 50.0 : 60.0,
+                                                  .deess = read(ess),
+                                                  .reduce_reverb = read(reverb)};
 
     // One project, edited once per clip, applied once — so naming six takes is
     // one press of undo rather than six.
@@ -262,6 +314,9 @@ void open_essential_sound(App& app, std::span<const std::string> clips) {
     for (const std::string& id : ids) {
       next = with_preset ? cutline::editor::apply_role_preset(std::move(next), id, role)
                          : cutline::core::set_clip_role(std::move(next), id, role);
+      if (role == cutline::core::AudioRole::Dialogue) {
+        next = cutline::editor::set_essential_repair(std::move(next), id, repair);
+      }
     }
     app.session.apply(std::move(next));
     refresh_all(app);
@@ -304,24 +359,28 @@ void open_strip_effects(App& app, const std::string& track_id) {
 
   auto& add = dialog->add_button("Add Effect...", {});
   add.set_on_click([&app, track_id, master, control = &add] {
+    // Not the ones that hand their sound back late: a clip's stack is fed
+    // ahead of time to make up for it, and a track's cannot be.
+    std::vector<const cutline::audio::AudioEffectDef*> offered;
     std::vector<std::string> names;
     for (const cutline::audio::AudioEffectDef& def : cutline::audio::audio_effect_defs()) {
+      if (def.lookahead) continue;
+      offered.push_back(&def);
       names.emplace_back(def.name);
     }
     auto list = std::make_unique<MenuList>(std::move(names));
-    list->set_on_choose([&app, track_id, master](std::size_t index) {
-      const std::span<const cutline::audio::AudioEffectDef> defs =
-          cutline::audio::audio_effect_defs();
-      if (index >= defs.size()) return;
+    list->set_on_choose([&app, track_id, master, offered](std::size_t choice) {
+      if (choice >= offered.size()) return;
+      const cutline::audio::AudioEffectDef& def = *offered[choice];
       // Every parameter written out at its default, for the reason the clip
       // stack does it: the panel reads what is stored, and an effect added
       // with an empty map would show its controls at the registry's values
       // while the file said nothing.
       std::map<std::string, double> params;
-      for (const cutline::audio::AudioEffectParamDef& param : defs[index].params) {
+      for (const cutline::audio::AudioEffectParamDef& param : def.params) {
         params.emplace(std::string(param.key), param.fallback);
       }
-      const std::string type{defs[index].id};
+      const std::string type{def.id};
       app.session.apply(master ? cutline::core::add_master_audio_effect(app.session.project(),
                                                                        type, std::move(params))
                                : cutline::core::add_track_audio_effect(

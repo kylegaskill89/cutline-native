@@ -965,6 +965,18 @@ template <typename T>
           app.session.select_one(audio_clip);
           open_channel_dialog(app, app.session.selected_group());
           measure_dialog("audio channels");
+          // As dialogue, with every Repair box ticked, which is its fullest.
+          app.session.apply(cutline::core::set_clip_role(app.session.project(), audio_clip,
+                                                         cutline::core::AudioRole::Dialogue));
+          app.session.apply(cutline::editor::set_essential_repair(
+              app.session.project(), audio_clip,
+              cutline::editor::EssentialRepair{.reduce_noise = 5.0,
+                                               .reduce_rumble = 5.0,
+                                               .dehum = 5.0,
+                                               .deess = 5.0,
+                                               .reduce_reverb = 5.0}));
+          open_essential_sound(app, app.session.selected_group());
+          measure_dialog("essential sound");
         }
 
         open_loudness_dialog(app);

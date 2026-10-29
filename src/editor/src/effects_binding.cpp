@@ -604,6 +604,87 @@ core::Project apply_role_preset(core::Project project, std::string_view clip_id,
   return project;
 }
 
+// ----------------------------------------------------------------- repair --
+
+namespace {
+
+/// One of Repair's boxes: the effect it is, the parameter its slider moves,
+/// and how far that parameter goes at the slider's 10.
+struct RepairBox {
+  std::string_view type;
+  std::string_view key;
+  double at_ten;
+  std::optional<double> EssentialRepair::*value;
+};
+
+/// In the order a new one goes into the stack: what is under the voice
+/// first, then the room, then the voice's own harshness.
+constexpr std::array kRepairBoxes{
+    RepairBox{"derumble", "amount", 100.0, &EssentialRepair::reduce_rumble},
+    RepairBox{"dehummer", "reduction", 60.0, &EssentialRepair::dehum},
+    RepairBox{"denoise", "amount", 100.0, &EssentialRepair::reduce_noise},
+    RepairBox{"dereverb", "amount", 100.0, &EssentialRepair::reduce_reverb},
+    RepairBox{"deesser", "reduction", 24.0, &EssentialRepair::deess},
+};
+
+}  // namespace
+
+EssentialRepair essential_repair_of(const core::Project& project, std::string_view clip_id) {
+  EssentialRepair out;
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr) return out;
+  for (const RepairBox& box : kRepairBoxes) {
+    const auto found = std::ranges::find_if(clip->audio_effects, [&](const core::AudioClipEffect& e) {
+      return e.type == box.type && e.enabled;
+    });
+    if (found == clip->audio_effects.end()) continue;
+    // In tenths, as the slider moves, so a value set reads back as itself.
+    const double slider = audio::audio_effect_param(*found, box.key) / box.at_ten * 10.0;
+    out.*box.value = std::clamp(std::round(slider * 10.0) / 10.0, 0.0, 10.0);
+    if (box.type == "dehummer") out.hum_frequency = audio::audio_effect_param(*found, "freq");
+  }
+  return out;
+}
+
+core::Project set_essential_repair(core::Project project, std::string_view clip_id,
+                                   const EssentialRepair& repair) {
+  const core::Clip* clip = core::find_clip(project, clip_id);
+  if (clip == nullptr || clip->kind != core::TrackKind::Audio) return project;
+
+  std::vector<core::AudioClipEffect> added;
+  std::vector<core::AudioClipEffect> stack = clip->audio_effects;
+  for (const RepairBox& box : kRepairBoxes) {
+    const std::optional<double> wanted = repair.*box.value;
+    const auto is_box = [&](const core::AudioClipEffect& e) { return e.type == box.type; };
+    if (!wanted.has_value()) {
+      std::erase_if(stack, is_box);
+      continue;
+    }
+    const double value = std::clamp(*wanted, 0.0, 10.0) / 10.0 * box.at_ten;
+    auto found = std::ranges::find_if(stack, is_box);
+    if (found == stack.end()) {
+      // Every parameter written out, for the reason the role preset does it.
+      core::AudioClipEffect effect;
+      effect.type = std::string(box.type);
+      if (const audio::AudioEffectDef* def = audio::audio_effect_def(box.type); def != nullptr) {
+        for (const audio::AudioEffectParamDef& param : def->params) {
+          effect.params.emplace(std::string(param.key), param.fallback);
+        }
+      }
+      added.push_back(std::move(effect));
+      found = std::prev(added.end());
+    }
+    found->enabled = true;
+    found->keyframes.erase(std::string(box.key));
+    found->params[std::string(box.key)] = value;
+    if (box.type == "dehummer") found->params["freq"] = repair.hum_frequency;
+  }
+  added.insert(added.end(), stack.begin(), stack.end());
+  if (added == clip->audio_effects) return project;
+  project = core::clear_audio_effects(std::move(project), clip_id);
+  return core::append_audio_effects(std::move(project), clip_id, added);
+}
+
 // ------------------------------------------------------------- copy/paste --
 
 EffectClipboard copy_one_effect(const core::Project& project, std::string_view clip_id,

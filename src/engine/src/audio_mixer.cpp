@@ -301,6 +301,9 @@ struct Voice {
   /// Where its audio is made, when it is a nest or retimed. Owned by the mixer.
   RenderedSource* rendered = nullptr;
   audio::EffectChain chain;
+  /// The mix frame its stack carries on from, so a block that does not is
+  /// known to need the stack started again. -1 before it has been heard.
+  std::int64_t next_frame = -1;
 };
 
 /// Whether a clip needs its audio rendered ahead of time rather than read
@@ -688,6 +691,8 @@ struct AudioMixer::Impl {
 
   /// Scratch, reused across calls so mixing does not allocate per block.
   std::vector<float> voice_block;
+  /// The frames a stack with repair in it is given before its first block.
+  std::vector<float> voice_prime;
   /// One block's worth per track, summed as the voices go by. A track can hold
   /// several clips at once, so a track's level is not any one voice's — it is
   /// what they come to together, which is only known once they have all been
@@ -883,7 +888,7 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
   if (!project.sequence().master_effects.empty()) {
     impl->master_chain =
         audio::EffectChain::build(project.sequence().master_effects, static_cast<double>(settings.sample_rate),
-                                  settings.channels, 0.0);
+                                  settings.channels, 0.0, false);
   }
   const audio::LimiterSettings limiting;
   impl->limiter = std::make_unique<audio::Limiter>(
@@ -937,7 +942,7 @@ std::expected<std::unique_ptr<AudioMixer>, std::string> AudioMixer::create(
     if (!track.audio_effects.empty()) {
       impl->track_chains[lane] =
           audio::EffectChain::build(track.audio_effects, static_cast<double>(settings.sample_rate),
-                                    settings.channels, 0.0);
+                                    settings.channels, 0.0, false);
     }
 
     // The fader and panner, read from the project rather than from the plan.
@@ -1109,68 +1114,92 @@ std::expected<void, std::string> AudioMixer::mix(double t, std::span<float> out)
     if (first >= last) continue;
 
     const std::size_t span = last - first;
-    impl_->voice_block.assign(span * channels, 0.0f);
 
-    for (std::size_t i = 0; i < span; ++i) {
-      const double now =
-          static_cast<double>(base + static_cast<std::int64_t>(first + i)) / rate;
+    // The clip's sound from `at_index` on, with its gain and pan, as the
+    // effects receive it. Silence outside the clip: a stack fed ahead of time
+    // reaches past the clip's end, and what is past it is not the clip's.
+    const auto fill = [&](std::span<float> block, std::int64_t at_index, std::size_t count) {
+      for (std::size_t i = 0; i < count; ++i) {
+        const double now = static_cast<double>(at_index + static_cast<std::int64_t>(i)) / rate;
+        if (now < voice.planned.start || now >= voice.planned.end) continue;
 
-      const std::span<float> frame = std::span(impl_->voice_block).subspan(i * channels, channels);
-      if (pieces != nullptr) {
-        // Made in timeline time already, so the read position is how far into
-        // the clip this is -- and across the last moments of a piece, a fade
-        // into the next.
-        const double offset = now - voice.planned.start;
-        const int k = voice.rendered->piece_at(offset);
-        const auto here = pieces->find(k);
-        const double left = (k + 1) * kPieceSeconds - offset;
-        const auto next = k + 1 < voice.rendered->count && left < kPieceCrossfade
-                              ? pieces->find(k + 1)
-                              : pieces->end();
-        if (here != pieces->end()) {
-          sample_into(here->second->audio, (offset - here->second->from) * rate, channels,
-                      voice.planned.channel_map, frame);
-        }
-        if (next != pieces->end()) {
-          impl_->join_next.assign(channels, 0.0f);
-          sample_into(next->second->audio, (offset - next->second->from) * rate, channels,
-                      voice.planned.channel_map, impl_->join_next);
-          const auto towards =
-              here != pieces->end()
-                  ? static_cast<float>(std::clamp(1.0 - left / kPieceCrossfade, 0.0, 1.0))
-                  : 1.0f;
-          for (std::size_t c = 0; c < channels; ++c) {
-            frame[c] = frame[c] * (1.0f - towards) + impl_->join_next[c] * towards;
+        const std::span<float> frame = block.subspan(i * channels, channels);
+        if (pieces != nullptr) {
+          // Made in timeline time already, so the read position is how far into
+          // the clip this is -- and across the last moments of a piece, a fade
+          // into the next.
+          const double offset = now - voice.planned.start;
+          const int k = voice.rendered->piece_at(offset);
+          const auto here = pieces->find(k);
+          const double left = (k + 1) * kPieceSeconds - offset;
+          const auto next = k + 1 < voice.rendered->count && left < kPieceCrossfade
+                                ? pieces->find(k + 1)
+                                : pieces->end();
+          if (here != pieces->end()) {
+            sample_into(here->second->audio, (offset - here->second->from) * rate, channels,
+                        voice.planned.channel_map, frame);
           }
+          if (next != pieces->end()) {
+            impl_->join_next.assign(channels, 0.0f);
+            sample_into(next->second->audio, (offset - next->second->from) * rate, channels,
+                        voice.planned.channel_map, impl_->join_next);
+            const auto towards =
+                here != pieces->end()
+                    ? static_cast<float>(std::clamp(1.0 - left / kPieceCrossfade, 0.0, 1.0))
+                    : 1.0f;
+            for (std::size_t c = 0; c < channels; ++c) {
+              frame[c] = frame[c] * (1.0f - towards) + impl_->join_next[c] * towards;
+            }
+          }
+        } else {
+          // Read from the shared source at the source time the plan asks for.
+          const double position =
+              (render::audio_source_time_at(voice.planned, now) - audio->start_time) * rate;
+          sample_into(*audio, position, channels, voice.planned.channel_map, frame);
         }
-      } else {
-        // Read from the shared source at the source time the plan asks for.
-        const double position =
-            (render::audio_source_time_at(voice.planned, now) - audio->start_time) * rate;
-        sample_into(*audio, position, channels, voice.planned.channel_map, frame);
+
+        // Gain and fades before the effects, matching the reference's chain.
+        // The clip's own, and only the clip's: the track's fader is applied to
+        // the lane below, after the lane's stack, which is where Premiere has it
+        // and the only place a pre-fader send can be tapped from.
+        const auto gain = static_cast<float>(render::clip_gain_at(voice.planned, now));
+        for (std::size_t c = 0; c < channels; ++c) frame[c] *= gain;
+
+        // The panner, on the two sides of a stereo bus and nothing else. A bus
+        // with one channel has no sides to balance, and one with more than two
+        // has sides this control does not name — turning only the first two of a
+        // 5.1 mix would be worse than leaving it alone.
+        if (channels == 2) {
+          const render::StereoGain pan = render::clip_pan_at(voice.planned, now);
+          frame[0] *= static_cast<float>(pan.left);
+          frame[1] *= static_cast<float>(pan.right);
+        }
       }
 
-      // Gain and fades before the effects, matching the reference's chain.
-      // The clip's own, and only the clip's: the track's fader is applied to
-      // the lane below, after the lane's stack, which is where Premiere has it
-      // and the only place a pre-fader send can be tapped from.
-      const auto gain = static_cast<float>(render::clip_gain_at(voice.planned, now));
-      for (std::size_t c = 0; c < channels; ++c) impl_->voice_block[i * channels + c] *= gain;
+    };
 
-      // The panner, on the two sides of a stereo bus and nothing else. A bus
-      // with one channel has no sides to balance, and one with more than two
-      // has sides this control does not name — turning only the first two of a
-      // 5.1 mix would be worse than leaving it alone.
-      if (channels == 2) {
-        const render::StereoGain pan = render::clip_pan_at(voice.planned, now);
-        impl_->voice_block[i * channels] *= static_cast<float>(pan.left);
-        impl_->voice_block[i * channels + 1] *= static_cast<float>(pan.right);
-      }
+    // A stack with repair in it hands each sample back `lead` frames late, so
+    // it is fed that far ahead and what comes out lines up with the picture.
+    // Fed from cold, it would hand back silence for its first `lead` frames,
+    // so wherever the clip is not carrying on from where it last was -- its
+    // first block, a seek, a stretch it was not heard -- the stack is started
+    // afresh and given those frames first.
+    const std::size_t lead = voice.chain.latency();
+    const std::int64_t from_index = base + static_cast<std::int64_t>(first);
+    if (lead > 0 && voice.next_frame != from_index) {
+      voice.chain.reset();
+      impl_->voice_prime.assign(lead * channels, 0.0f);
+      fill(impl_->voice_prime, from_index, lead);
+      run_chain_over(voice.chain, impl_->voice_prime, from_index, rate, channels,
+                     voice.planned.clip_start);
     }
+    impl_->voice_block.assign(span * channels, 0.0f);
+    fill(impl_->voice_block, from_index + static_cast<std::int64_t>(lead), span);
+    voice.next_frame = base + static_cast<std::int64_t>(last);
 
     // Clip-local, because a clip's effect keyframes are.
-    run_chain_over(voice.chain, impl_->voice_block, base + static_cast<std::int64_t>(first), rate,
-                   channels, voice.planned.clip_start);
+    run_chain_over(voice.chain, impl_->voice_block, from_index + static_cast<std::int64_t>(lead),
+                   rate, channels, voice.planned.clip_start);
 
     // Into the lane's own block rather than straight into the mix. A plain sum:
     // `normalize=0`, so clips add rather than being scaled down by how many of
@@ -1378,7 +1407,10 @@ std::size_t AudioMixer::latency_frames() const noexcept {
 }
 
 void AudioMixer::reset() {
-  for (Voice& voice : impl_->voices) voice.chain.reset();
+  for (Voice& voice : impl_->voices) {
+    voice.chain.reset();
+    voice.next_frame = -1;
+  }
   // The track stacks as well, for exactly the reason the voices' are: a filter
   // carries a memory of what came before, and after a seek what came before is
   // not what is about to be played.

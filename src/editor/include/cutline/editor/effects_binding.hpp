@@ -24,6 +24,7 @@
 #include "cutline/ui/controls.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -274,6 +275,36 @@ struct EffectChoice {
 /// catalogue's nearest equivalents rather than Adobe's exact chains.
 [[nodiscard]] core::Project apply_role_preset(core::Project project, std::string_view clip_id,
                                               core::AudioRole role);
+
+/// Essential Sound's Repair, for a clip of dialogue: each of Premiere's five
+/// boxes, with its slider from 0 to 10, or nothing while the box is clear.
+///
+/// Each is an effect on the clip, which is how Premiere does it too: Reduce
+/// Noise is DeNoise, Reduce Rumble is a steep high-pass, DeHum is DeHummer,
+/// DeEss is DeEsser and Reduce Reverb is DeReverb, so what the slider set can
+/// be opened and refined in Effect Controls.
+struct EssentialRepair {
+  std::optional<double> reduce_noise;
+  std::optional<double> reduce_rumble;
+  std::optional<double> dehum;
+  /// Which mains: 50 Hz or 60 Hz.
+  double hum_frequency = 60.0;
+  std::optional<double> deess;
+  std::optional<double> reduce_reverb;
+
+  friend bool operator==(const EssentialRepair&, const EssentialRepair&) = default;
+};
+
+/// What a clip's stack says its repair is, read back from its effects.
+[[nodiscard]] EssentialRepair essential_repair_of(const core::Project& project,
+                                                  std::string_view clip_id);
+
+/// Puts a clip's repair effects where `repair` says: a box newly ticked adds
+/// its effect ahead of the rest of the stack, since repair belongs before
+/// anything that shapes the voice; one already there is set in place; one
+/// cleared is taken off. Nothing else in the stack is touched.
+[[nodiscard]] core::Project set_essential_repair(core::Project project, std::string_view clip_id,
+                                                 const EssentialRepair& repair);
 
 /// The same four operations the visual stack has, on the audio one.
 ///

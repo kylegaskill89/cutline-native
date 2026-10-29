@@ -3,6 +3,7 @@
 #include "cutline/audio/biquad.hpp"
 #include "cutline/audio/compressor.hpp"
 #include "cutline/audio/delay.hpp"
+#include "cutline/audio/repair.hpp"
 #include "cutline/audio/reverb.hpp"
 #include "cutline/core/keyframe.hpp"
 
@@ -48,6 +49,24 @@ constexpr std::array kReverbParams{
     AudioEffectParamDef{"damping", "Damping", 0.0, 100.0, 1.0, 50.0, "%"},
     AudioEffectParamDef{"mix", "Mix", 0.0, 100.0, 1.0, 25.0, "%"}};
 
+constexpr std::array kDenoiseParams{
+    AudioEffectParamDef{"amount", "Amount", 0.0, 100.0, 1.0, 40.0, "%"},
+    AudioEffectParamDef{"gain", "Gain", -12.0, 12.0, 0.5, 0.0, "dB"}};
+constexpr std::array kDereverbParams{
+    AudioEffectParamDef{"amount", "Amount", 0.0, 100.0, 1.0, 40.0, "%"},
+    AudioEffectParamDef{"gain", "Gain", -12.0, 12.0, 0.5, 0.0, "dB"}};
+constexpr std::array kDehumParams{
+    AudioEffectParamDef{"freq", "Frequency", 40.0, 70.0, 10.0, 60.0, "Hz"},
+    AudioEffectParamDef{"harmonics", "Harmonics", 1.0, 10.0, 1.0, 4.0, ""},
+    AudioEffectParamDef{"reduction", "Reduction", 0.0, 60.0, 1.0, 30.0, "dB"},
+    AudioEffectParamDef{"q", "Q", 5.0, 100.0, 1.0, 30.0, ""}};
+constexpr std::array kDeessParams{
+    AudioEffectParamDef{"threshold", "Threshold", -60.0, 0.0, 1.0, -30.0, "dB"},
+    AudioEffectParamDef{"freq", "Frequency", 2000.0, 12000.0, 100.0, 6000.0, "Hz"},
+    AudioEffectParamDef{"reduction", "Max Reduction", 0.0, 24.0, 0.5, 12.0, "dB"}};
+constexpr std::array kRumbleParams{
+    AudioEffectParamDef{"amount", "Amount", 0.0, 100.0, 1.0, 50.0, "%"}};
+
 constexpr std::array kDefs{
     AudioEffectDef{"highpass", "High-Pass", kHighPassParams},
     AudioEffectDef{"lowpass", "Low-Pass", kLowPassParams},
@@ -59,6 +78,13 @@ constexpr std::array kDefs{
     AudioEffectDef{"gain", "Gain", kGainParams},
     AudioEffectDef{"delay", "Delay", kDelayParams},
     AudioEffectDef{"reverb", "Reverb", kReverbParams},
+    // Premiere's repair effects, which Essential Sound's Repair section puts
+    // on a clip of dialogue.
+    AudioEffectDef{"denoise", "DeNoise", kDenoiseParams, true},
+    AudioEffectDef{"dereverb", "DeReverb", kDereverbParams, true},
+    AudioEffectDef{"dehummer", "DeHummer", kDehumParams},
+    AudioEffectDef{"deesser", "DeEsser", kDeessParams},
+    AudioEffectDef{"derumble", "Reduce Rumble", kRumbleParams},
 };
 
 /// FFmpeg's `bass` and `treble` corner frequencies, which the reference did not
@@ -163,9 +189,40 @@ struct Stage {
   std::optional<Compressor> compressor;
   std::optional<Delay> delay;
   std::optional<Reverb> reverb;
+  std::optional<Denoiser> denoiser;
+  std::optional<Dereverberator> dereverberator;
+  std::optional<Dehummer> dehummer;
+  std::optional<Deesser> deesser;
+  std::optional<RumbleFilter> rumble;
   float gain = 1.0f;
 
+  [[nodiscard]] std::size_t latency() const noexcept {
+    if (denoiser) return denoiser->latency();
+    if (dereverberator) return dereverberator->latency();
+    return 0;
+  }
+
   void process(std::span<float> interleaved, std::size_t channels) noexcept {
+    if (denoiser) {
+      denoiser->process(interleaved);
+      return;
+    }
+    if (dereverberator) {
+      dereverberator->process(interleaved);
+      return;
+    }
+    if (dehummer) {
+      dehummer->process(interleaved);
+      return;
+    }
+    if (deesser) {
+      deesser->process(interleaved);
+      return;
+    }
+    if (rumble) {
+      rumble->process(interleaved);
+      return;
+    }
     if (compressor) {
       compressor->process(interleaved);
       return;
@@ -196,8 +253,40 @@ struct Stage {
     if (compressor) compressor->reset();
     if (delay) delay->reset();
     if (reverb) reverb->reset();
+    if (denoiser) denoiser->reset();
+    if (dereverberator) dereverberator->reset();
+    if (dehummer) dehummer->reset();
+    if (deesser) deesser->reset();
+    if (rumble) rumble->reset();
   }
 };
+
+/// The repair effects' controls, as the DSP reads them: percentages as
+/// fractions, and counts as counts.
+[[nodiscard]] DenoiseSettings denoise_shape(const core::AudioClipEffect& effect, double local_t) {
+  return DenoiseSettings{.amount = audio_effect_param(effect, "amount", local_t) / 100.0,
+                         .gain_db = audio_effect_param(effect, "gain", local_t)};
+}
+
+[[nodiscard]] DereverbSettings dereverb_shape(const core::AudioClipEffect& effect,
+                                              double local_t) {
+  return DereverbSettings{.amount = audio_effect_param(effect, "amount", local_t) / 100.0,
+                          .gain_db = audio_effect_param(effect, "gain", local_t)};
+}
+
+[[nodiscard]] DehumSettings dehum_shape(const core::AudioClipEffect& effect, double local_t) {
+  return DehumSettings{
+      .frequency = audio_effect_param(effect, "freq", local_t),
+      .harmonics = static_cast<int>(std::lround(audio_effect_param(effect, "harmonics", local_t))),
+      .reduction_db = audio_effect_param(effect, "reduction", local_t),
+      .q = audio_effect_param(effect, "q", local_t)};
+}
+
+[[nodiscard]] DeessSettings deess_shape(const core::AudioClipEffect& effect, double local_t) {
+  return DeessSettings{.threshold_db = audio_effect_param(effect, "threshold", local_t),
+                       .frequency = audio_effect_param(effect, "freq", local_t),
+                       .reduction_db = audio_effect_param(effect, "reduction", local_t)};
+}
 
 /// The two delay-line effects read their controls as percentages, because that
 /// is what a mix and a feedback are to anybody setting them. The DSP wants
@@ -277,6 +366,14 @@ struct Stage {
   if (effect.type == "delay" || effect.type == "reverb") {
     return decided_by("mix", [](double mix) { return mix <= 0.0; });
   }
+  // A repair at nothing is nothing, and the two spectral ones would still
+  // cost a frame's delay and a transform per hop to do it.
+  if (effect.type == "denoise" || effect.type == "dereverb" || effect.type == "derumble") {
+    return decided_by("amount", [](double amount) { return amount <= 0.0; });
+  }
+  if (effect.type == "dehummer" || effect.type == "deesser") {
+    return decided_by("reduction", [](double db) { return db <= 0.0; });
+  }
   return true;  // a filter is never neutral enough to be worth dropping
 }
 
@@ -295,7 +392,8 @@ EffectChain::EffectChain(EffectChain&&) noexcept = default;
 EffectChain& EffectChain::operator=(EffectChain&&) noexcept = default;
 
 EffectChain EffectChain::build(std::span<const core::AudioClipEffect> effects,
-                               double sample_rate, int channels, double local_t) {
+                               double sample_rate, int channels, double local_t,
+                               bool allow_lookahead) {
   EffectChain chain;
   chain.impl_->channels = static_cast<std::size_t>(std::max(channels, 1));
   chain.impl_->sample_rate = sample_rate;
@@ -303,7 +401,9 @@ EffectChain EffectChain::build(std::span<const core::AudioClipEffect> effects,
 
   for (const core::AudioClipEffect& effect : effects) {
     if (!effect.enabled) continue;
-    if (audio_effect_def(effect.type) == nullptr) continue;
+    const AudioEffectDef* def = audio_effect_def(effect.type);
+    if (def == nullptr) continue;
+    if (def->lookahead && !allow_lookahead) continue;
     if (!contributes(effect, local_t)) continue;
 
     Stage stage;
@@ -320,6 +420,17 @@ EffectChain EffectChain::build(std::span<const core::AudioClipEffect> effects,
       stage.reverb.emplace(reverb_shape(effect, local_t), sample_rate, channels);
     } else if (effect.type == "gain") {
       stage.gain = static_cast<float>(db_to_linear(audio_effect_param(effect, "gain", local_t)));
+    } else if (effect.type == "denoise") {
+      stage.denoiser.emplace(denoise_shape(effect, local_t), sample_rate, channels);
+    } else if (effect.type == "dereverb") {
+      stage.dereverberator.emplace(dereverb_shape(effect, local_t), sample_rate, channels);
+    } else if (effect.type == "dehummer") {
+      stage.dehummer.emplace(dehum_shape(effect, local_t), sample_rate, channels);
+    } else if (effect.type == "deesser") {
+      stage.deesser.emplace(deess_shape(effect, local_t), sample_rate, channels);
+    } else if (effect.type == "derumble") {
+      stage.rumble.emplace(audio_effect_param(effect, "amount", local_t) / 100.0, sample_rate,
+                           channels);
     } else {
       continue;  // known to the registry but not to the builder
     }
@@ -348,6 +459,16 @@ void EffectChain::retune(double local_t) noexcept {
       stage.delay->retune(delay_shape(stage.source, local_t), sample_rate);
     } else if (stage.reverb) {
       stage.reverb->retune(reverb_shape(stage.source, local_t), sample_rate);
+    } else if (stage.denoiser) {
+      stage.denoiser->retune(denoise_shape(stage.source, local_t));
+    } else if (stage.dereverberator) {
+      stage.dereverberator->retune(dereverb_shape(stage.source, local_t));
+    } else if (stage.dehummer) {
+      stage.dehummer->retune(dehum_shape(stage.source, local_t));
+    } else if (stage.deesser) {
+      stage.deesser->retune(deess_shape(stage.source, local_t));
+    } else if (stage.rumble) {
+      stage.rumble->retune(audio_effect_param(stage.source, "amount", local_t) / 100.0);
     } else {
       stage.gain =
           static_cast<float>(db_to_linear(audio_effect_param(stage.source, "gain", local_t)));
@@ -370,5 +491,11 @@ void EffectChain::reset() noexcept {
 bool EffectChain::empty() const noexcept { return impl_->stages.empty(); }
 
 std::size_t EffectChain::stage_count() const noexcept { return impl_->stages.size(); }
+
+std::size_t EffectChain::latency() const noexcept {
+  std::size_t total = 0;
+  for (const Stage& stage : impl_->stages) total += stage.latency();
+  return total;
+}
 
 }  // namespace cutline::audio
