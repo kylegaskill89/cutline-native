@@ -2380,7 +2380,7 @@ Sorted by what each one needs, because that is the decision it turns on.
 |---|---|---|---|
 | ~~Captions~~ | a caption track; the Text panel to write, retime and split them; caption styles; Subtitle and CEA-608/708 formats; import and export of SRT; burned into the picture or written beside it on export; single-word captions for short-form (26.3) | **done** for Subtitle captions — see below | — |
 | ~~Scene Edit Detection~~ | on a clip: find the cuts in footage that was edited before it arrived, and cut there, make subclips in a bin, or put a clip marker at each | **done**, with Premiere's subclips, which it needed — see below | — |
-| Audio repair | Essential Sound's Repair: Reduce Noise, Reduce Rumble, DeHum, DeEss, Reduce Reverb; and DeNoise, DeHummer and DeEsser as effects | Reduce Rumble's high-pass only; the others are missing, which `audio::role_preset` already says | medium |
+| ~~Audio repair~~ | Essential Sound's Repair: Reduce Noise, Reduce Rumble, DeHum, DeEss, Reduce Reverb; and DeNoise, DeHummer and DeEsser as effects | **done** — see below | — |
 | Auto Reframe | a sequence re-cut for another shape (vertical, square), the crop following what matters in each shot, keyframed on Motion | none; the tracker that mask tracking and Warp Stabilizer share can follow a region, but choosing *what* matters in a shot is Premiere's model's job | medium, with a heuristic for the subject |
 | Remix | a music clip lengthened or shortened to a target by cutting at beats and phrases so the seams cannot be heard | none; the stretch and loudness code is here, beat and phrase finding is not | medium |
 | Morph Cut | a transition that hides a jump cut in an interview by morphing between the two frames | none; needs dense motion between frames and face-aware warping | large |
@@ -2428,6 +2428,27 @@ subclip is a Project panel entry of its own with its span's duration and
 picture, saved with the project, relinked with its source, and a subclip of a
 subclip belongs to the same footage. Not done: Premiere's subclips share the
 master's clip markers, where these take a copy of the ones inside the span.
+
+**Audio repair, Phase 5 item 3 — done.** Five effects, each in the clip
+effect list and in Essential Sound's Repair, which appears under Dialogue as
+Premiere's does: a box and a 0 to 10 slider each for Reduce Noise (DeNoise),
+Reduce Rumble, DeHum (DeHummer, with 50 or 60 Hz), DeEss (DeEsser) and Reduce
+Reverb (DeReverb). A newly ticked box adds its effect ahead of the rest of the
+stack; one cleared takes it off; nothing else in the stack is touched.
+DeNoise learns the noise as it plays, from the quietest each frequency gets,
+and takes it down where the voice is not above it, with the gain softened
+across frequency and through time so it does not flicker. DeReverb predicts
+each frequency's tail from what it held 50 ms earlier and reduces what is no
+louder. DeHummer is a narrow cut at the mains and each harmonic; DeEsser turns
+a high shelf down while the band above its frequency is too loud; Reduce
+Rumble is a fourth-order high-pass from 40 to 120 Hz. DeNoise and DeReverb
+work on 40 ms frames and so hand their sound back a frame late: a clip's
+stack is fed that far ahead and primed at its first frame and after a seek,
+so the repaired sound stays on the picture, and the two are not offered on a
+track's or the master's stack, which cannot be fed ahead. On a recording made
+for it, vowels over pink hiss and 60 Hz hum, Repair took the gaps between
+words from −32 dB to below −60 dB. These are the classical effects Premiere's
+names stand for; Enhance Speech, which is a model, waits with §14.2.
 
 ### 14.2 Needs a model
 
