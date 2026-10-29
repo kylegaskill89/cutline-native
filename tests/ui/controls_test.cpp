@@ -1813,6 +1813,14 @@ TEST(Dropdown, AnOutOfRangeSelectionIsRefusedRatherThanRead) {
   EXPECT_EQ(test.box->value(), "H.264");
 }
 
+TEST(Dropdown, NewOptionsAskForALayoutSinceTheyCanNeedAnotherWidth) {
+  Chosen test;
+  test.host->update_layout(flat_context());
+  ASSERT_FALSE(test.host->needs_layout());
+  test.box->set_options({"H.264", "HEVC", "A codec with a much longer name than either"});
+  EXPECT_TRUE(test.host->needs_layout());
+}
+
 TEST(Dropdown, PressingItOpensAListOnThePopupLayer) {
   Chosen test;
   EXPECT_FALSE(test.host->popup_open());

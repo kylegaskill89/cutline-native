@@ -1753,8 +1753,13 @@ Dropdown::~Dropdown() {
 }
 
 void Dropdown::set_options(std::vector<std::string> options) {
+  if (options == options_) return;
   options_ = std::move(options);
   if (selected_ >= options_.size()) selected_ = 0;
+  // It is as wide as its widest option, so new ones can need a new width;
+  // without this a longer name is drawn past the edge until something else
+  // happens to lay the panel out.
+  invalidate_layout();
 }
 
 void Dropdown::set_selected(std::size_t index) noexcept {
