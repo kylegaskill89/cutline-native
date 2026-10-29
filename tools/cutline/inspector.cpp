@@ -1732,7 +1732,8 @@ void build_transition_controls(App& app, const std::string& clip_id) {
     // Said out loud rather than left to be discovered. A dissolve overlaps the
     // two clips, and a clip trimmed to the last frame of its footage has
     // nothing to lend — the slider would move and the picture would not.
-    if (row.handles_exhausted && kind != cutline::core::TransitionKind::DipBlack) {
+    if (row.handles_exhausted && kind != cutline::core::TransitionKind::DipBlack &&
+        kind != cutline::core::TransitionKind::MorphCut) {
       name += " (no handles)";
     }
     names.push_back(std::move(name));
@@ -1774,6 +1775,11 @@ void build_transition_controls(App& app, const std::string& clip_id) {
   });
 
   if (!row.present || row.longest <= 0.0) return;
+
+  // Morph Cut's analysis, which runs by itself and is only reported here.
+  if (row.kind == cutline::core::TransitionKind::MorphCut) {
+    app.inspector->emplace<Label>(morph_status(app, clip_id)).set_small(true);
+  }
 
   app.inspector->emplace<Label>("Duration").set_small(true);
   auto& length = app.inspector->emplace<Slider>(

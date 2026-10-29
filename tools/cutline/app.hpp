@@ -328,6 +328,8 @@ constexpr UINT kScenesDetected = WM_APP + 9;
 constexpr UINT kRemixHeard = WM_APP + 10;
 /// Auto Reframe's analysis has got further (wparam 1) or stopped (0).
 constexpr UINT kReframeAnalysed = WM_APP + 11;
+/// Morph Cut's analysis has got further (wparam 1) or stopped (0).
+constexpr UINT kMorphAnalysed = WM_APP + 12;
 
 /// A remix asked for: of which clip, how long, and Premiere's two settings,
 /// with the song it is of, so one that is no longer that song is let go.
@@ -1250,6 +1252,17 @@ struct App {
   std::mutex reframe_lock;
   std::string reframe_error;
   std::set<std::string> reframe_held;
+  /// Morph Cut's analysis, one cut at a time on a thread of its own; and the
+  /// cuts whose analysis failed, which are not tried again until they change.
+  std::thread morph_worker;
+  std::atomic<bool> morph_running{false};
+  std::atomic<bool> morph_cancel{false};
+  std::atomic<int> morph_done{0};
+  std::atomic<int> morph_total{0};
+  std::string morph_key;
+  std::mutex morph_lock;
+  std::string morph_error;
+  std::set<std::string> morph_held;
   /// Warp Stabilizer's analysis, one clip at a time on a thread of its own.
   std::thread stabilize_worker;
   std::atomic<bool> stabilize_running{false};
@@ -1847,6 +1860,18 @@ void cancel_reframe_analysis(App& app);
 [[nodiscard]] std::string reframe_status(App& app, const std::string& clip_id);
 /// Stops it and waits, for closing.
 void stop_reframe_analysis(App& app);
+/// Starts analysing the next Morph Cut in the open sequence that has no
+/// analysis, unless one is being analysed already.
+void refresh_morph_analysis(App& app);
+[[nodiscard]] bool analysing_morph(const App& app);
+/// It has got further, or finished when not `progress_only`.
+void collect_morph_analysis(App& app, bool progress_only = false);
+/// What the analysis of the Morph Cut at a clip's out-edge has got to.
+[[nodiscard]] std::string morph_status(App& app, const std::string& clip_id);
+/// The Program Monitor's banner over a Morph Cut not yet analysed, or empty.
+[[nodiscard]] std::string morph_banner(App& app);
+/// Stops it and waits, for closing.
+void stop_morph_analysis(App& app);
 /// Premiere's Make Subclip, from the Source Monitor's marks, a Project panel
 /// entry's, or the part of the footage a selected timeline clip uses.
 void open_make_subclip_dialog(App& app);

@@ -2151,13 +2151,16 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
     layer.anti_flicker = static_cast<float>(std::clamp(source.anti_flicker, 0.0, 1.0));
     layer.blend = to_gpu_blend(source.blend);
 
-    stacks.push_back(source.clip == nullptr
-                         ? std::vector<gpu::EffectPass>{}
-                         : to_gpu_passes(render::plan_effect_passes(
-                               *source.clip, t - source.clip->start,
-                               project.sequence().fps > 0.0 ? 1.0 / project.sequence().fps
-                                                            : 0.0,
-                               &project)));
+    std::vector<render::EffectPass> passes =
+        source.clip == nullptr
+            ? std::vector<render::EffectPass>{}
+            : render::plan_effect_passes(
+                  *source.clip, t - source.clip->start,
+                  project.sequence().fps > 0.0 ? 1.0 / project.sequence().fps : 0.0, &project);
+    // A Morph Cut bends the picture as it arrives, before anything the clip
+    // does to it: the motion was found in the clip's own frames.
+    if (source.morph.has_value()) passes.insert(passes.begin(), *source.morph);
+    stacks.push_back(to_gpu_passes(passes));
     layer.passes = stacks.back();
 
     // A Track Matte Key reads another track's picture, which is drawn here and

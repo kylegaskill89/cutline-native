@@ -80,6 +80,7 @@ NLOHMANN_JSON_SERIALIZE_ENUM(BlendMode, {
 NLOHMANN_JSON_SERIALIZE_ENUM(TransitionKind, {
                                                  {TransitionKind::Dissolve, "dissolve"},
                                                  {TransitionKind::DipBlack, "dip-black"},
+                                                 {TransitionKind::MorphCut, "morph-cut"},
                                                  {TransitionKind::Push, "push"},
                                                  {TransitionKind::Slide, "slide"},
                                                  {TransitionKind::ConstantPower,

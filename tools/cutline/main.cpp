@@ -279,6 +279,7 @@ void refresh_busy(App& app) {
   if (detecting_scenes(app)) says = "Detecting scene edits";
   if (remixing(app)) says = "Analyzing music for Remix";
   if (analysing_reframe(app)) says = "Analyzing for Auto Reframe";
+  if (analysing_morph(app)) says = "Analyzing for Morph Cut";
   if (tracking_mask(app)) says = "Tracking mask";
   // Rendering previews comes before reading, which it outlasts.
   if (rendering_previews(app)) {
@@ -331,6 +332,7 @@ void refresh_timeline(App& app) {
   refresh_stabilizer_analysis(app);
   show_stabilizer_banner(app);
   refresh_reframe_analysis(app);
+  refresh_morph_analysis(app);
   app.timeline->set_model(cutline::editor::timeline_model(
       app.session.project(), app.session.selection(), app.timeline_media));
   app.timeline->set_playhead(app.session.playhead());
@@ -2096,6 +2098,10 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
 
     case kReframeAnalysed:
       collect_reframe_analysis(*app, wparam == 1);
+      return 0;
+
+    case kMorphAnalysed:
+      collect_morph_analysis(*app, wparam == 1);
       return 0;
 
     case kPreviewReady:

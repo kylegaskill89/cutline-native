@@ -15,7 +15,10 @@
 #include "cutline/core/layout.hpp"
 #include "cutline/core/model.hpp"
 #include "cutline/core/segments.hpp"
+#include "cutline/render/effect_passes.hpp"
 
+#include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -67,6 +70,10 @@ struct PlannedLayer {
   /// Which video track this came from, counting from the bottom. Useful for
   /// diagnostics and for the UI; the draw order is already the vector's order.
   int track_index = 0;
+
+  /// The bending a Morph Cut gives this side of it, run before the clip's own
+  /// effects. See `morph_cut.hpp`.
+  std::optional<EffectPass> morph;
 };
 
 /// The layers active at timeline time `t`, in the order they should be drawn:
@@ -79,6 +86,11 @@ struct PlannedLayer {
 [[nodiscard]] std::vector<PlannedLayer> plan_frame(
     const core::Project& project, double t,
     const std::function<double(std::string_view media_id)>& media_duration_of);
+
+/// Each media's source length as the planner borrows handles against it:
+/// infinite for stills and generated media, which never run out.
+[[nodiscard]] std::function<double(std::string_view media_id)> media_durations(
+    const core::Project& project);
 
 /// As `plan_frame`, using the project's own media list for durations. This is
 /// what callers normally want; the callback form exists for tests and for

@@ -65,6 +65,7 @@ std::string_view transition_name(core::TransitionKind kind) noexcept {
   switch (kind) {
     case core::TransitionKind::Dissolve: return "Cross Dissolve";
     case core::TransitionKind::DipBlack: return "Dip to Black";
+    case core::TransitionKind::MorphCut: return "Morph Cut";
     case core::TransitionKind::Push: return "Push";
     case core::TransitionKind::Slide: return "Slide";
     case core::TransitionKind::ConstantPower: return "Constant Power";
@@ -77,16 +78,16 @@ std::string_view transition_name(core::TransitionKind kind) noexcept {
 std::span<const core::TransitionKind> transition_kinds() noexcept {
   static constexpr std::array kKinds{
       core::TransitionKind::Dissolve,      core::TransitionKind::DipBlack,
-      core::TransitionKind::Push,          core::TransitionKind::Slide,
-      core::TransitionKind::ConstantPower, core::TransitionKind::ConstantGain,
-      core::TransitionKind::ExponentialFade};
+      core::TransitionKind::MorphCut,      core::TransitionKind::Push,
+      core::TransitionKind::Slide,         core::TransitionKind::ConstantPower,
+      core::TransitionKind::ConstantGain,  core::TransitionKind::ExponentialFade};
   return kKinds;
 }
 
 std::span<const core::TransitionKind> transition_kinds_for(core::TrackKind kind) noexcept {
   // Premiere's order in each folder, with its default first.
   const std::span<const core::TransitionKind> all = transition_kinds();
-  return kind == core::TrackKind::Audio ? all.subspan(4) : all.first(4);
+  return kind == core::TrackKind::Audio ? all.subspan(5) : all.first(5);
 }
 
 core::TransitionKind default_transition_kind(core::TrackKind kind) noexcept {
@@ -100,6 +101,7 @@ std::string_view transition_id(core::TransitionKind kind) noexcept {
   switch (kind) {
     case core::TransitionKind::Dissolve: return "dissolve";
     case core::TransitionKind::DipBlack: return "dip-black";
+    case core::TransitionKind::MorphCut: return "morph-cut";
     case core::TransitionKind::Push: return "push";
     case core::TransitionKind::Slide: return "slide";
     case core::TransitionKind::ConstantPower: return "constant-power";
@@ -130,7 +132,11 @@ double longest_transition(const core::Project& project, std::string_view clip_id
   // Dip to black is sequential rather than overlapping, so it borrows nothing
   // and the clips' own lengths are the only limit. It is the transition that
   // always works, and the reason a join with no handles is not a dead end.
-  if (kind == core::TransitionKind::DipBlack) return by_length;
+  // Morph Cut holds whichever edge frame runs out, as Premiere does, so it
+  // needs no handles either.
+  if (kind == core::TransitionKind::DipBlack || kind == core::TransitionKind::MorphCut) {
+    return by_length;
+  }
 
   // A crossfade has no frame to hold where one side runs out, so both clips
   // must lend the whole half. A picture can hold its last frame, so there the

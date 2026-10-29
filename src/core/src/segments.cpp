@@ -68,6 +68,31 @@ std::vector<VideoSeg> resolve_video_segments(
       continue;
     }
 
+    if (transition.kind == TransitionKind::MorphCut) {
+      // Centred whatever the handles: each side borrows what it has and holds
+      // its edge frame for the rest.
+      const double a_ext = std::min(half, source_handles(a, media_duration_of(a.media_id)).tail);
+      const double b_ext = std::min(half, source_handles(b, media_duration_of(b.media_id)).head);
+      seg_a.end += half;
+      if (a.reverse) {
+        seg_a.source_in -= a_ext * clip_speed(a);
+      } else {
+        seg_a.source_out += a_ext * clip_speed(a);
+      }
+      seg_b.start -= half;
+      if (b.reverse) {
+        seg_b.source_out += b_ext * clip_speed(b);
+      } else {
+        seg_b.source_in -= b_ext * clip_speed(b);
+      }
+      seg_b.x_in = std::max(seg_b.x_in, 2.0 * half);
+      const MorphSide side{.out = &a, .in = &b, .start = seg_b.start, .end = seg_a.end};
+      seg_a.morph = side;
+      seg_b.morph = side;
+      seg_b.morph->incoming = true;
+      continue;
+    }
+
     // Everything else needs a real overlap: borrow up to `half` of the handle
     // available on each side.
     const double a_ext = std::min(half, source_handles(a, media_duration_of(a.media_id)).tail);

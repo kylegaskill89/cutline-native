@@ -83,6 +83,7 @@ using core::TransitionKind;
 TEST(Transitions, EveryKindIsNamedAsPremiereNamesIt) {
   EXPECT_EQ(transition_name(TransitionKind::Dissolve), "Cross Dissolve");
   EXPECT_EQ(transition_name(TransitionKind::DipBlack), "Dip to Black");
+  EXPECT_EQ(transition_name(TransitionKind::MorphCut), "Morph Cut");
   EXPECT_EQ(transition_name(TransitionKind::Push), "Push");
   EXPECT_EQ(transition_name(TransitionKind::Slide), "Slide");
 }
@@ -132,13 +133,15 @@ TEST(Transitions, AnOverlappingKindIsBoundedByTheHandlesToo) {
   EXPECT_DOUBLE_EQ(longest_transition(tight, "a", TransitionKind::Dissolve), 1.0);
 }
 
-TEST(Transitions, WithNoHandlesOnlyDipToBlackIsPossible) {
+TEST(Transitions, WithNoHandlesOnlyDipToBlackAndMorphCutArePossible) {
   // The whole reason this layer exists. A dissolve here resolves to nothing at
-  // all, and the resolver skips it in silence.
+  // all, and the resolver skips it in silence. Morph Cut holds the edge frames
+  // instead, as Premiere does, so the clips are its only limit.
   const Project project = without_handles();
   EXPECT_DOUBLE_EQ(longest_transition(project, "a", TransitionKind::Dissolve), 0.0);
   EXPECT_DOUBLE_EQ(longest_transition(project, "a", TransitionKind::Push), 0.0);
   EXPECT_GT(longest_transition(project, "a", TransitionKind::DipBlack), 0.0);
+  EXPECT_DOUBLE_EQ(longest_transition(project, "a", TransitionKind::MorphCut), 10.0);
 
   const TransitionRow row = clip_transition(project, "a");
   EXPECT_TRUE(row.joins);
@@ -258,7 +261,9 @@ TEST(Transitions, WhatTheLayerRefusesIsWhatTheResolverWouldHaveSkipped) {
 TEST(AudioTransitions, EachTrackOffersItsOwnKindsWithPremieresDefaultFirst) {
   const auto video = transition_kinds_for(TrackKind::Video);
   const auto audio = transition_kinds_for(TrackKind::Audio);
-  ASSERT_EQ(video.size(), 4u);
+  ASSERT_EQ(video.size(), 5u);
+  for (const TransitionKind kind : video) EXPECT_FALSE(core::is_audio_transition(kind));
+  EXPECT_EQ(transition_from_id("morph-cut"), TransitionKind::MorphCut);
   ASSERT_EQ(audio.size(), 3u);
   EXPECT_EQ(audio[0], TransitionKind::ConstantPower);
   EXPECT_EQ(default_transition_kind(TrackKind::Audio), TransitionKind::ConstantPower);

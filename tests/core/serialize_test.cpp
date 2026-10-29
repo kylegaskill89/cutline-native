@@ -545,6 +545,21 @@ TEST(Serialize, WritesEnumsAsStableNames) {
   EXPECT_NE(text.find("\"video\""), std::string::npos);
 }
 
+TEST(Serialize, AMorphCutIsWrittenByNameAndReadBack) {
+  Project p = empty_project(1, 0);
+  Clip c;
+  c.id = "c1";
+  c.transition_out = Transition{.kind = TransitionKind::MorphCut, .duration = 0.5};
+  p.sequence().tracks[0].clips = {c};
+
+  const std::string text = to_json(p);
+  EXPECT_NE(text.find("\"morph-cut\""), std::string::npos);
+  const auto loaded = from_json(text);
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_EQ(loaded->project.sequence().tracks[0].clips[0].transition_out->kind,
+            TransitionKind::MorphCut);
+}
+
 // ----------------------------------------------------------------- history --
 
 TEST(History, UndoAndRedoWalkTheStack) {

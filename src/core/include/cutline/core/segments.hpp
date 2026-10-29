@@ -43,6 +43,18 @@ struct SlideWindow {
   friend bool operator==(const SlideWindow&, const SlideWindow&) = default;
 };
 
+/// One side of a Morph Cut: the two clips it joins, the window it morphs
+/// across, and which of the two this segment draws.
+struct MorphSide {
+  const Clip* out = nullptr;
+  const Clip* in = nullptr;
+  double start = 0.0;
+  double end = 0.0;
+  bool incoming = false;
+
+  friend bool operator==(const MorphSide&, const MorphSide&) = default;
+};
+
 /// A clip resolved for rendering.
 ///
 /// `clip` points into the track that produced the segment and does not outlive
@@ -65,6 +77,9 @@ struct VideoSeg {
   std::optional<TransitionKind> slide_kind;
   std::optional<SlideRole> slide_role;
   std::optional<SlideWindow> slide_win;
+
+  /// Set only for a Morph Cut.
+  std::optional<MorphSide> morph;
 };
 
 /// The x-offset, as a fraction of canvas width, added to a segment's position
@@ -74,6 +89,11 @@ struct VideoSeg {
 
 /// Resolves one video track's clips into draw segments, expanding transitions
 /// into overlaps.
+///
+/// A Morph Cut always overlaps by its whole length, centred on the cut: where
+/// a side has less handle than half of it, that side's segment runs on past
+/// its source and the planner's clamp holds the last frame there, as Premiere
+/// holds it.
 ///
 /// `media_duration_of` returns a clip's source length, and should return
 /// infinity for stills and generated media, which have unlimited handles.

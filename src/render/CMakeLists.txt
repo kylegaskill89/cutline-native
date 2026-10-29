@@ -4,6 +4,7 @@ add_library(cutline_render
   src/effect_passes.cpp
   src/effects.cpp
   src/lumetri.cpp
+  src/morph_cut.cpp
   src/transform_effect.cpp
   src/ultra_key.cpp
   src/warp_stabilizer.cpp

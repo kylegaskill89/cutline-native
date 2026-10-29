@@ -2383,7 +2383,7 @@ Sorted by what each one needs, because that is the decision it turns on.
 | ~~Audio repair~~ | Essential Sound's Repair: Reduce Noise, Reduce Rumble, DeHum, DeEss, Reduce Reverb; and DeNoise, DeHummer and DeEsser as effects | **done** — see below | — |
 | ~~Auto Reframe~~ | a sequence re-cut for another shape (vertical, square), the crop following what matters in each shot, keyframed on Motion | **done**, with a heuristic in place of Premiere's model — see below | — |
 | ~~Remix~~ | a music clip lengthened or shortened to a target by cutting at beats and phrases so the seams cannot be heard | **done** — see below | — |
-| Morph Cut | a transition that hides a jump cut in an interview by morphing between the two frames | none; needs dense motion between frames and face-aware warping | large |
+| ~~Morph Cut~~ | a transition that hides a jump cut in an interview by morphing between the two frames | **done**, with a smooth motion field in place of Premiere's face tracking — see below | — |
 | Shape Dissolve, Magnify and the Film Impact transitions (26.2, 26.3) | new effects and transitions | none of these | small each |
 
 **Captions, Phase 5 item 1 — done** for Premiere's Subtitle format. A caption
@@ -2509,6 +2509,41 @@ knows a face from a red sign: on first-person game footage the hands and the
 gun move against the world and draw the window towards them where the
 crosshair in the middle is what matters, and Slower Motion or an offset is the
 answer there.
+
+**Morph Cut, Phase 5 item 6 — done**, without a face tracker. It is a video
+transition, in the Effects panel's Video Transitions and the transition's own
+Kind list, between Dip to Black and Push. On a cut it is centred, as long as
+the default video transition; where a side has no handle left it holds that
+side's edge frame, as Premiere does, so unlike a dissolve it works on a cut
+with no handles at all. Putting it on starts the looking in the background:
+both sides are drawn alone at every frame of the transition and the motion
+from the outgoing picture to the incoming one is found everywhere, coarse to
+fine, a small window solved around each pixel and the places with no detail
+filled from the detail around them, so a head moves as one and the wall behind
+it stays still. The field is kept beside Warp Stabilizer's analyses, named for
+both sides' sources and parts and the transition's length, so trimming either
+side or changing the length analyses it again and the project records nothing.
+While it runs the Program Monitor says Analyzing in background over the
+transition, the transition's row in Effect Controls says how far it has got,
+and the transition draws as a dissolve. Then each side is bent partway towards
+the other through Warp Stabilizer's mesh before its own effects and the two
+are dissolved, in step: halfway through, both show the head halfway between
+where it was and where it ends up. On a webcam take of the owner cut from five
+seconds to seven, the dissolve's middle frame shows two pairs of glasses and
+the Morph Cut's one face. Not Premiere's: there is no face tracker, so a head
+turning, a hand crossing the face or a moving background tears or ghosts where
+Premiere's might hold; and, as with Warp Stabilizer and Auto Reframe, an
+export does not wait for an analysis still running — the transition exports
+as a dissolve until it is done.
+
+Building it found a fault older than it: the renderer kept one decoder per
+file, so a dissolve between two parts of the same take — the commonest
+dissolve there is — fetched the incoming frame by giving up the outgoing one,
+and both layers drew the incoming frame. Every such dissolve was a cut. Each
+use of a file within one frame now has a decoder of its own, and when the
+transition ends the decoder that was following the picture still showing
+becomes the first, so playback carries on without a seek and the prefetching
+follows it.
 
 ### 14.2 Needs a model
 

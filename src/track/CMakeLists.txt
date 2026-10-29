@@ -1,4 +1,5 @@
 add_library(cutline_track
+  src/morph.cpp
   src/reframe.cpp
   src/scenes.cpp
   src/stabilize.cpp

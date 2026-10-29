@@ -130,6 +130,60 @@ TEST(ResolveSegments, DissolveBorrowsHandlesFromBothSides) {
   EXPECT_FALSE(segs[1].to_black);
 }
 
+// ------------------------------------------------------------ morph cut --
+
+TEST(ResolveSegments, AMorphCutDissolvesAcrossItsWholeLengthCentredOnTheCut) {
+  const Track t = abutting_pair(TransitionKind::MorphCut, 2.0);
+  const std::vector<VideoSeg> segs = resolve_video_segments(t, media_duration);
+
+  ASSERT_EQ(segs.size(), 2u);
+  EXPECT_DOUBLE_EQ(segs[0].end, 6.0);
+  EXPECT_DOUBLE_EQ(segs[0].source_out, 11.0);
+  EXPECT_DOUBLE_EQ(segs[1].start, 4.0);
+  EXPECT_DOUBLE_EQ(segs[1].source_in, 2.0);
+  EXPECT_DOUBLE_EQ(segs[1].x_in, 2.0);
+
+  // Both sides know the join and which of it they are.
+  ASSERT_TRUE(segs[0].morph.has_value());
+  ASSERT_TRUE(segs[1].morph.has_value());
+  EXPECT_FALSE(segs[0].morph->incoming);
+  EXPECT_TRUE(segs[1].morph->incoming);
+  EXPECT_EQ(segs[0].morph->out, &t.clips[0]);
+  EXPECT_EQ(segs[1].morph->in, &t.clips[1]);
+  EXPECT_DOUBLE_EQ(segs[1].morph->start, 4.0);
+  EXPECT_DOUBLE_EQ(segs[1].morph->end, 6.0);
+}
+
+TEST(ResolveSegments, AMorphCutWithoutHandlesStillOverlapsAndHoldsTheEdgeFrames) {
+  // Premiere holds the last frame it has where a side runs out; the segment
+  // runs on and its source range stops at the footage.
+  Clip a = clip_a();
+  a.source_out = kMediaDuration;
+  a.source_in = kMediaDuration - 5.0;
+  a.transition_out = Transition{.kind = TransitionKind::MorphCut, .duration = 2.0};
+  Clip b = clip_b();
+  b.source_in = 0.0;
+  b.source_out = 5.0;
+  const Track t = track_with(std::move(a), std::move(b));
+  const std::vector<VideoSeg> segs = resolve_video_segments(t, media_duration);
+
+  ASSERT_EQ(segs.size(), 2u);
+  EXPECT_DOUBLE_EQ(segs[0].end, 6.0);
+  EXPECT_DOUBLE_EQ(segs[0].source_out, kMediaDuration);
+  EXPECT_DOUBLE_EQ(segs[1].start, 4.0);
+  EXPECT_DOUBLE_EQ(segs[1].source_in, 0.0);
+  EXPECT_DOUBLE_EQ(segs[1].x_in, 2.0);
+}
+
+TEST(ResolveSegments, OtherTransitionsAreNotMorphs) {
+  for (const TransitionKind kind : {TransitionKind::Dissolve, TransitionKind::Push,
+                                    TransitionKind::DipBlack}) {
+    for (const VideoSeg& seg : resolve_video_segments(abutting_pair(kind, 2.0), media_duration)) {
+      EXPECT_FALSE(seg.morph.has_value());
+    }
+  }
+}
+
 // A clip trimmed to the very edge of its media has nothing to borrow, so the
 // transition degrades to a hard cut rather than producing a bogus overlap.
 TEST(ResolveSegments, DissolveWithoutHandlesIsSkipped) {

@@ -369,6 +369,7 @@ void settle_export(App& app) {
   cancel_scene_detection(app);
   stop_remix(app);
   stop_reframe_analysis(app);
+  stop_morph_analysis(app);
 }
 
 App::~App() { settle_export(*this); }

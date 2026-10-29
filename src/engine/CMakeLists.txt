@@ -4,6 +4,7 @@ add_library(cutline_engine
   src/exporter.cpp
   src/frame_renderer.cpp
   src/mask_tracker.cpp
+  src/morph_analysis.cpp
   src/multicam_sync.cpp
   src/music_analysis.cpp
   src/reframe_analysis.cpp

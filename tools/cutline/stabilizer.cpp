@@ -216,6 +216,8 @@ void show_stabilizer_banner(App& app) {
       }
     }
   }
+  // A Morph Cut not yet analysed says the same thing over its transition.
+  if (banner.empty()) banner = morph_banner(app);
   app.monitor->set_banner(std::move(banner));
 }
 

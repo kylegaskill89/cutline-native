@@ -3,6 +3,7 @@
 #include "cutline/core/captions.hpp"
 #include "cutline/core/query.hpp"
 #include "cutline/render/auto_reframe.hpp"
+#include "cutline/render/morph_cut.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -89,6 +90,7 @@ std::vector<PlannedLayer> plan_frame(
     // frame the layer goes; see `auto_reframe.hpp`.
     apply_auto_reframe(project, clip, media, t, layer.box);
     layer.alpha = core::segment_alpha(seg, t);
+    layer.morph = plan_morph_cut(project, seg, t);
     layer.blend = clip.blend;
     layer.anti_flicker = std::clamp(clip.transform.anti_flicker, 0.0, 1.0);
 
@@ -120,21 +122,22 @@ std::vector<PlannedLayer> plan_frame(
 }
 
 std::vector<PlannedLayer> plan_frame(const core::Project& project, double t) {
-  return plan_frame(
-      project, t,
-      [&project](std::string_view media_id) {
-        for (const Media& media : project.media) {
-          if (media.id != media_id) continue;
-          // Stills and generated media have no source to run out of, so their
-          // handles are unlimited and a transition can borrow as much as it
-          // likes.
-          if (core::is_still_like(media)) return std::numeric_limits<double>::infinity();
-          // A nest included: its length is what the sequence inside it runs to,
-          // which `duration` already mirrors.
-          return media.duration;
-        }
-        return 0.0;
-      });
+  return plan_frame(project, t, media_durations(project));
+}
+
+std::function<double(std::string_view)> media_durations(const core::Project& project) {
+  return [&project](std::string_view media_id) {
+    for (const Media& media : project.media) {
+      if (media.id != media_id) continue;
+      // Stills and generated media have no source to run out of, so their
+      // handles are unlimited and a transition can borrow as much as it likes.
+      if (core::is_still_like(media)) return std::numeric_limits<double>::infinity();
+      // A nest included: its length is what the sequence inside it runs to,
+      // which `duration` already mirrors.
+      return media.duration;
+    }
+    return 0.0;
+  };
 }
 
 }  // namespace cutline::render

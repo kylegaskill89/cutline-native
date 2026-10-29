@@ -67,12 +67,14 @@ add_executable(cutline_core_tests
   render/effect_passes_test.cpp
   render/effects_test.cpp
   render/lumetri_test.cpp
+  render/morph_cut_test.cpp
   render/transform_effect_test.cpp
   render/ultra_key_test.cpp
   render/mix_test.cpp
   render/plan_test.cpp
   render/preview_test.cpp
   render/scopes_test.cpp
+  track/morph_test.cpp
   track/reframe_test.cpp
   track/scenes_test.cpp
   track/stabilize_test.cpp
@@ -178,6 +180,7 @@ if(CUTLINE_WITH_GPU)
       engine/exporter_test.cpp
       engine/frame_renderer_test.cpp
       engine/mask_tracker_test.cpp
+      engine/morph_analysis_test.cpp
       engine/multicam_sync_test.cpp
       engine/music_analysis_test.cpp
       engine/reframe_analysis_test.cpp

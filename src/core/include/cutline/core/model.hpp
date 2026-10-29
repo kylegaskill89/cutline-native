@@ -47,12 +47,16 @@ enum class BlendMode {
   Difference,
 };
 
-/// The first four are pictures and the last three sound, Premiere's Audio
+/// The first five are pictures and the last three sound, Premiere's Audio
 /// Transitions: a crossfade between two clips on an audio track, each with its
 /// own curve.
 enum class TransitionKind {
   Dissolve,
   DipBlack,
+  /// Premiere's Morph Cut: a dissolve in which both pictures are drawn partway
+  /// towards each other, so a jump cut in an interview moves rather than
+  /// jumps. See `render/morph_cut.hpp`.
+  MorphCut,
   Push,
   Slide,
   ConstantPower,
