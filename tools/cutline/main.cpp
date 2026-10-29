@@ -277,6 +277,7 @@ void refresh_busy(App& app) {
   std::string says = left == 0 ? std::string{} : std::format("Reading media ({})", left);
   if (analysing_stabilizer(app)) says = "Analyzing for Warp Stabilizer";
   if (detecting_scenes(app)) says = "Detecting scene edits";
+  if (remixing(app)) says = "Analyzing music for Remix";
   if (tracking_mask(app)) says = "Tracking mask";
   // Rendering previews comes before reading, which it outlasts.
   if (rendering_previews(app)) {
@@ -1539,6 +1540,7 @@ constexpr int kCursorSize = 32;
 
     case Cursor::Razor:
     case Cursor::RateStretch:
+    case Cursor::Remix:
     case Cursor::Slip:
     case Cursor::Slide:
     case Cursor::Ripple:
@@ -1555,6 +1557,7 @@ constexpr int kCursorSize = 32;
 
   const Icon icon = cursor == Cursor::Razor         ? Icon::Razor
                     : cursor == Cursor::RateStretch ? Icon::RateStretch
+                    : cursor == Cursor::Remix       ? Icon::Remix
                     : cursor == Cursor::Slip        ? Icon::Slip
                     : cursor == Cursor::Slide       ? Icon::Slide
                     : cursor == Cursor::Ripple      ? Icon::Ripple
@@ -2083,6 +2086,10 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
       } else {
         collect_scene_detection(*app, wparam == 1);
       }
+      return 0;
+
+    case kRemixHeard:
+      collect_remix(*app);
       return 0;
 
     case kPreviewReady:

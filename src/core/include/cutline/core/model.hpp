@@ -836,6 +836,43 @@ enum class AudioRole {
 };
 
 /// A placement of a media on a track over a span of timeline time.
+/// One stretch of a remixed song, in seconds of the source.
+struct RemixSpan {
+  double source_in = 0.0;
+  double source_out = 0.0;
+
+  friend bool operator==(const RemixSpan&, const RemixSpan&) = default;
+};
+
+/// Premiere's Remix: a song rearranged to last another length, by playing
+/// stretches of it in a new order with a join between each.
+///
+/// Kept on the clip, as Premiere keeps it, rather than made into a clip per
+/// stretch: the remix is one thing somebody asked for — this song, this long —
+/// and asking again for another length has to start from the song and not
+/// from the pieces of the last answer.
+///
+/// While a clip has one, its `source_in` and `source_out` are measured along
+/// the remix rather than along the file: zero is where the remix starts and
+/// the remix's length is where it ends. So a trim, a split, a slip or a speed
+/// change does to a remixed clip exactly what it does to any other, and only
+/// what reads the sound — and draws it — has to know the stretches are there.
+struct Remix {
+  /// The length asked for, which the remix is as near to as the song allows.
+  double target = 0.0;
+  /// Premiere's Segments and Variations, 0 to 100. See `audio::RemixRequest`.
+  int segments = 50;
+  int variations = 50;
+  /// The part of the source the remix was made from, which is what the clip
+  /// was before it, and what it goes back to when the remix is taken off.
+  double source_in = 0.0;
+  double source_out = 0.0;
+  /// What plays, in order. Each join is crossfaded by the mixer.
+  std::vector<RemixSpan> spans;
+
+  friend bool operator==(const Remix&, const Remix&) = default;
+};
+
 struct Clip {
   std::string id;
   std::string media_id;
@@ -870,6 +907,9 @@ struct Clip {
   /// So `{0, 0}` is "the lapel, in both ears", `{1, 1}` is the shotgun, and
   /// `{1, 0}` swaps a pair that was wired backwards.
   std::vector<int> channel_map;
+
+  /// When the clip is a remix of its song. See `Remix`; audio clips only.
+  std::optional<Remix> remix;
 
   /// What this clip is, in the mix. See `AudioRole`.
   ///

@@ -11,6 +11,7 @@ std::string_view to_string(Cursor cursor) noexcept {
     case Cursor::Move: return "move";
     case Cursor::Razor: return "razor";
     case Cursor::RateStretch: return "rate";
+    case Cursor::Remix: return "remix";
     case Cursor::Slip: return "slip";
     case Cursor::Slide: return "slide";
     case Cursor::Ripple: return "ripple";

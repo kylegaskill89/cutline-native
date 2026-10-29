@@ -1863,5 +1863,98 @@ TEST(RepairInTheMix, ATrackStackLeavesOutTheRepairThatWouldMakeItLate) {
   EXPECT_LT(largest_difference(mix_span(*plain, 1.0, 0.3), mix_span(*tracked, 1.0, 0.3)), 1e-6);
 }
 
+// ----------------------------------------------------------------- remix --
+
+/// Ten seconds of a 440 Hz tone for the first five and 880 Hz for the rest, so
+/// which stretch of a remix is playing can be told by ear — by its crossings.
+[[nodiscard]] const std::string& two_tone_path() {
+  static const std::string path = [] {
+    std::string out = scratch_path("cutline_mixer_two_tone");
+    media::VideoEncodeSettings video;
+    video.width = 64;
+    video.height = 64;
+    video.fps = 10;
+    video.preference = media::EncoderPreference::Software;
+    media::AudioEncodeSettings audio;
+    audio.enabled = true;
+    audio.sample_rate = kRate;
+    audio.channels = kChannels;
+    auto writer = media::MediaWriter::create(out, video, audio);
+    if (!writer) return out;
+    const std::vector<std::uint8_t> frame(64 * 64 * 4, 128);
+    for (int second = 0; second < 10; ++second) {
+      const double freq = second < 5 ? 440.0 : 880.0;
+      std::vector<float> samples(static_cast<std::size_t>(kRate) * kChannels);
+      for (std::size_t i = 0; i < static_cast<std::size_t>(kRate); ++i) {
+        const auto value = static_cast<float>(
+            std::sin(2.0 * std::numbers::pi * freq * static_cast<double>(i) / kRate) *
+            kToneAmplitude);
+        samples[i * kChannels] = value;
+        samples[i * kChannels + 1] = value;
+      }
+      for (int f = 0; f < 10; ++f) {
+        if (!writer.value()->write_frame(frame)) return out;
+      }
+      if (!writer.value()->write_audio(samples)) return out;
+    }
+    (void)writer.value()->finish();
+    return out;
+  }();
+  return path;
+}
+
+/// The two-tone file on A1 from 1 s, remixed to its first two seconds and then
+/// the two from 7 s: low, then high, four seconds in all.
+[[nodiscard]] Project remixed() {
+  Project p;
+  Media m = tone_media();
+  m.path = two_tone_path();
+  p.media = {m};
+  Clip c = audio_clip("c", "m", 1.0, 4.0);
+  c.source_in = 0.0;
+  c.source_out = 4.0;
+  c.remix = core::Remix{.target = 4.0, .source_out = 10.0, .spans = {{0.0, 2.0}, {7.0, 9.0}}};
+  p.sequence().tracks = {audio_track("a1", {c})};
+  return p;
+}
+
+/// How many times the left channel crosses zero, upwards, per second.
+[[nodiscard]] double pitch_of(const std::vector<float>& samples) {
+  int crossings = 0;
+  for (std::size_t i = kChannels; i < samples.size(); i += kChannels) {
+    if (samples[i - kChannels] < 0.0f && samples[i] >= 0.0f) ++crossings;
+  }
+  return crossings / (static_cast<double>(samples.size() / kChannels) / kRate);
+}
+
+TEST(RemixInTheMix, PlaysEachStretchInTurnAndNothingAfterTheRemixEnds) {
+  auto mixer = mixer_for(remixed());
+  ASSERT_NE(mixer, nullptr);
+  EXPECT_NEAR(pitch_of(mix_span(*mixer, 1.5, 0.5)), 440.0, 10.0);
+  EXPECT_NEAR(pitch_of(mix_span(*mixer, 3.5, 0.5)), 880.0, 10.0);
+  // Reset, as a seek is: otherwise the limiter's look-ahead hands the last few
+  // milliseconds mixed to the next block wherever it is.
+  mixer->reset();
+  EXPECT_LT(rms_of(mix_span(*mixer, 5.2, 0.3)), 1e-4);
+}
+
+TEST(RemixInTheMix, CrossesTheJoinWithoutAClickOrAGap) {
+  auto mixer = mixer_for(remixed());
+  ASSERT_NE(mixer, nullptr);
+  const auto around = mix_span(*mixer, 2.9, 0.2);
+  // A click is a step far steeper than an 880 Hz tone at this level ever
+  // takes from one sample to the next; a gap is the level falling away.
+  const double steepest = 2.0 * std::numbers::pi * 880.0 * kToneAmplitude / kRate;
+  for (std::size_t i = kChannels; i < around.size(); i += kChannels) {
+    EXPECT_LT(std::abs(around[i] - around[i - kChannels]), steepest * 1.6) << i / kChannels;
+  }
+  for (std::size_t at = 0; at + kRate / 100 * kChannels <= around.size();
+       at += kRate / 100 * kChannels) {
+    const std::vector<float> window(around.begin() + static_cast<std::ptrdiff_t>(at),
+                                    around.begin() + static_cast<std::ptrdiff_t>(at + kRate / 100 * kChannels));
+    EXPECT_GT(rms_of(window), expected_rms(kToneAmplitude) * 0.6) << at;
+  }
+}
+
 }  // namespace
 }  // namespace cutline::engine

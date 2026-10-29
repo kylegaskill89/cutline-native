@@ -59,6 +59,29 @@ SourceBounds source_bounds(const Project& p, std::string_view media_id) noexcept
   return source_bounds(*media);
 }
 
+SourceBounds clip_source_bounds(const Project& p, const Clip& c) noexcept {
+  if (c.remix.has_value()) return {.lo = 0.0, .hi = remix_length(*c.remix)};
+  return source_bounds(p, c.media_id);
+}
+
+double remix_length(const Remix& remix) noexcept {
+  double length = 0.0;
+  for (const RemixSpan& span : remix.spans) length += span.source_out - span.source_in;
+  return length;
+}
+
+double remix_source_time(const Remix& remix, double t) noexcept {
+  if (remix.spans.empty()) return t;
+  double from = 0.0;
+  for (const RemixSpan& span : remix.spans) {
+    const double length = span.source_out - span.source_in;
+    if (t < from + length) return span.source_in + std::max(0.0, t - from);
+    from += length;
+  }
+  // At or past the end: the end of the last stretch, as a clip's out point is.
+  return remix.spans.back().source_out;
+}
+
 Handles source_handles(const Clip& c, SourceBounds bounds) noexcept {
   const double speed = clip_speed(c);
   const double before_in = (c.source_in - bounds.lo) / speed;
@@ -70,6 +93,7 @@ Handles source_handles(const Clip& c, SourceBounds bounds) noexcept {
 Handles source_handles(const Project& p, const Clip& c) noexcept {
   const auto media = std::ranges::find(p.media, c.media_id, &Media::id);
   if (media == p.media.end()) return {};
+  if (c.remix.has_value()) return source_handles(c, clip_source_bounds(p, c));
   // A still has no source to run out of, so it can lend whatever is asked for.
   // Reporting zero would refuse a dissolve onto a title.
   return source_handles(c, source_bounds(*media));
@@ -114,7 +138,8 @@ double source_time_at(const Clip& c, double t) noexcept {
   // asks of a clip, so it is the one place a hold can be honoured completely.
   if (c.hold.has_value()) return *c.hold;
   const double local = source_offset_at(c, t - c.start);
-  return c.reverse ? c.source_out - local : c.source_in + local;
+  const double along = c.reverse ? c.source_out - local : c.source_in + local;
+  return c.remix.has_value() ? remix_source_time(*c.remix, along) : along;
 }
 
 SourceRange clip_sub_source(const Clip& c, double a, double b) noexcept {

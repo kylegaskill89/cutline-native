@@ -8,6 +8,7 @@ add_library(cutline_audio
   src/repair.cpp
   src/reverb.cpp
   src/meter.cpp
+  src/music.cpp
   src/stretch.cpp
   src/sync.cpp)
 add_library(cutline::audio ALIAS cutline_audio)

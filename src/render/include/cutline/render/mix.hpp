@@ -76,6 +76,11 @@ struct PlannedAudioClip {
   double source_in = 0.0;
   double source_out = 0.0;
 
+  /// The remix's stretches, in file seconds, when the clip is one; then
+  /// `source_in` and `source_out` above are along the remix, in file seconds
+  /// too, and the mixer makes the sound from the stretches. See `core::Remix`.
+  std::vector<core::RemixSpan> remix;
+
   /// Playback rate and direction. A clip at speed 2 consumes two seconds of
   /// source per timeline second.
   double speed = 1.0;

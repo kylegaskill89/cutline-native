@@ -77,6 +77,17 @@ namespace {
   return found;
 }
 
+/// A remix's stretches as the timeline carries them; none for a clip that is
+/// not one.
+[[nodiscard]] std::vector<ui::TimelineBlock::RemixStretch> remix_stretches(const core::Clip& clip) {
+  std::vector<ui::TimelineBlock::RemixStretch> out;
+  if (!clip.remix.has_value()) return out;
+  for (const core::RemixSpan& span : clip.remix->spans) {
+    out.push_back({.source_in = span.source_in, .source_out = span.source_out});
+  }
+  return out;
+}
+
 /// Every moment a clip is animated at, from every property and every effect,
 /// deduplicated and in order.
 ///
@@ -263,6 +274,7 @@ ui::TimelineModel timeline_model(const core::Project& project,
           .source_in = clip.source_in,
           .speed = core::clip_speed(clip),
           .reverse = clip.reverse,
+          .remix = remix_stretches(clip),
       });
     }
     model.tracks.push_back(std::move(row));
@@ -435,6 +447,10 @@ core::Project apply_timeline_edit(core::Project project, std::string_view clip_i
     case ui::DragMode::GainPointRemove:
       return core::remove_gain_keyframe_at(std::move(project), clip_id, edit.gain_from.t);
 
+    // A remix needs the song listened to, which is no edit's business here:
+    // the application hears it and makes the remix, and the gesture alone
+    // changes nothing.
+    case ui::DragMode::RemixEnd:
     case ui::DragMode::None:
     case ui::DragMode::Scrub:
       break;

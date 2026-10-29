@@ -2382,7 +2382,7 @@ Sorted by what each one needs, because that is the decision it turns on.
 | ~~Scene Edit Detection~~ | on a clip: find the cuts in footage that was edited before it arrived, and cut there, make subclips in a bin, or put a clip marker at each | **done**, with Premiere's subclips, which it needed — see below | — |
 | ~~Audio repair~~ | Essential Sound's Repair: Reduce Noise, Reduce Rumble, DeHum, DeEss, Reduce Reverb; and DeNoise, DeHummer and DeEsser as effects | **done** — see below | — |
 | Auto Reframe | a sequence re-cut for another shape (vertical, square), the crop following what matters in each shot, keyframed on Motion | none; the tracker that mask tracking and Warp Stabilizer share can follow a region, but choosing *what* matters in a shot is Premiere's model's job | medium, with a heuristic for the subject |
-| Remix | a music clip lengthened or shortened to a target by cutting at beats and phrases so the seams cannot be heard | none; the stretch and loudness code is here, beat and phrase finding is not | medium |
+| ~~Remix~~ | a music clip lengthened or shortened to a target by cutting at beats and phrases so the seams cannot be heard | **done** — see below | — |
 | Morph Cut | a transition that hides a jump cut in an interview by morphing between the two frames | none; needs dense motion between frames and face-aware warping | large |
 | Shape Dissolve, Magnify and the Film Impact transitions (26.2, 26.3) | new effects and transitions | none of these | small each |
 
@@ -2449,6 +2449,31 @@ track's or the master's stack, which cannot be fed ahead. On a recording made
 for it, vowels over pink hiss and 60 Hz hum, Repair took the gaps between
 words from −32 dB to below −60 dB. These are the classical effects Premiere's
 names stand for; Enhance Speech, which is a model, waits with §14.2.
+
+**Remix, Phase 5 item 4 — done.** A song made another length by rearranging
+it, from Premiere's two places: the Remix tool, beside Rate Stretch, which
+pulls a sound clip's end to the length wanted and stops at the next clip on
+the track; and Essential Sound's Duration under Music — Duration ticked,
+Method Remix, a Target Duration, and Segments and Variations under Customize,
+with the Remix Duration the song allowed shown beside the target. Unticking
+Duration takes the remix off and gives the song back. The song is listened to
+once, on a thread of its own, and kept: the tempo from how regularly its
+onsets recur, the beats by Ellis's dynamic programme, each beat's moment from
+the attack nearest it, the bar line from where the harmony changes and the
+bass is struck, and each beat's harmony and colour. A search through the bars
+then finds the arrangement nearest the target, cutting only from one bar line
+into another whose surroundings match, a little dearer when the cut breaks the
+four-bar phrase, keeping the song's beginning and ending; Segments sets what a
+cut costs and how many bars must play between two, Variations whether bars are
+alike by their colour or their harmony. The remix is kept on the clip, as
+Premiere keeps it, with the clip's in and out measured along it, so a trim, a
+split, a slip or a speed change works on a remixed clip as on any other; the
+mixer plays its stretches with a 30 ms equal-power join placed 20 ms before
+both downbeats, and the timeline draws the waveform as it plays and a zigzag
+at each remix point. On a song made for the tests, every join is between bars
+in the same place in the same section's progression; on real soundtracks of
+62 to 192 seconds, listening takes half a second and every target came within
+a second and a half.
 
 ### 14.2 Needs a model
 

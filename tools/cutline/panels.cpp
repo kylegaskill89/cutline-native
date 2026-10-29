@@ -1004,6 +1004,20 @@ void open_track_menu(App& app, std::size_t track, double x, double y) {
     const auto id = cutline::editor::block_clip_id(app->timeline->model(), edit.block);
     if (!id.has_value()) return;
 
+    // The Remix tool: the length the end was pulled to, which the song is
+    // rearranged to last. Its settings are the ones the clip was last remixed
+    // with, as Premiere keeps them, or the middle of each.
+    if (edit.mode == cutline::ui::DragMode::RemixEnd) {
+      const cutline::core::Clip* clip = cutline::core::find_clip(app->session.project(), *id);
+      if (clip != nullptr) {
+        const int segments = clip->remix.has_value() ? clip->remix->segments : 50;
+        const int variations = clip->remix.has_value() ? clip->remix->variations : 50;
+        remix_clip(*app, *id, edit.result.end - clip->start, segments, variations);
+      }
+      refresh_timeline(*app);
+      return;
+    }
+
     // The selection goes with it, so a move carries every clip that is
     // highlighted rather than only the one under the pointer. `selected_group`
     // rather than the raw selection, so linked partners travel too.

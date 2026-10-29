@@ -118,6 +118,11 @@ std::vector<PlannedAudioClip> plan_audio(const core::Project& project) {
       entry.conform = media != nullptr ? core::conform_speed(*media) : 1.0;
       entry.source_in = clip.source_in * entry.conform;
       entry.source_out = clip.source_out * entry.conform;
+      if (clip.remix.has_value()) {
+        for (const core::RemixSpan& span : clip.remix->spans) {
+          entry.remix.push_back({span.source_in * entry.conform, span.source_out * entry.conform});
+        }
+      }
       entry.speed = core::clip_speed(clip);
       entry.reverse = clip.reverse;
       entry.track_index = index;

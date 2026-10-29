@@ -14,6 +14,7 @@
 #include "cutline/core/effects.hpp"
 #include "cutline/core/model.hpp"
 #include "cutline/core/multicam.hpp"
+#include "cutline/audio/music.hpp"
 #include "cutline/core/scene_edits.hpp"
 #include "cutline/core/subclips.hpp"
 #include "cutline/core/pool.hpp"
@@ -323,6 +324,18 @@ constexpr UINT kMulticamSynced = WM_APP + 8;
 /// Scene Edit Detection has looked further (wparam 1), finished (0), or has
 /// just started and wants its progress window (2).
 constexpr UINT kScenesDetected = WM_APP + 9;
+/// Remix has listened to a song and can make the remix that was waiting.
+constexpr UINT kRemixHeard = WM_APP + 10;
+
+/// A remix asked for: of which clip, how long, and Premiere's two settings,
+/// with the song it is of, so one that is no longer that song is let go.
+struct PendingRemix {
+  std::string clip_id;
+  std::string key;
+  double target = 0.0;
+  int segments = 50;
+  int variations = 50;
+};
 
 /// What Scene Edit Detection found: for each clip, the times within it where
 /// a new shot begins.
@@ -1214,6 +1227,15 @@ struct App {
   std::optional<std::expected<SceneCuts, std::string>> scene_result;
   cutline::ui::Dialog* scene_dialog = nullptr;
   cutline::ui::ProgressBar* scene_bar = nullptr;
+  /// Remix: every song listened to so far, by the part of which file it was,
+  /// and the one being listened to on a thread of its own, with the remix
+  /// that is waiting for it.
+  std::map<std::string, std::shared_ptr<const cutline::audio::MusicAnalysis>> remix_heard;
+  std::thread remix_worker;
+  std::atomic<bool> remix_running{false};
+  std::mutex remix_lock;
+  std::optional<std::expected<cutline::audio::MusicAnalysis, std::string>> remix_result;
+  std::optional<PendingRemix> remix_pending;
   /// Warp Stabilizer's analysis, one clip at a time on a thread of its own.
   std::thread stabilize_worker;
   std::atomic<bool> stabilize_running{false};
@@ -1424,6 +1446,9 @@ constexpr std::array kTools{
     ToolEntry{cutline::ui::Tool::Razor, IconButton::Icon::Razor, "tool.razor", "Razor"},
     ToolEntry{cutline::ui::Tool::RateStretch, IconButton::Icon::RateStretch, "tool.rate_stretch",
               "Rate Stretch"},
+    // Beside the rate stretch, as in Premiere's group: the other way of making
+    // a clip another length.
+    ToolEntry{cutline::ui::Tool::Remix, IconButton::Icon::Remix, "tool.remix", "Remix"},
     ToolEntry{cutline::ui::Tool::Slip, IconButton::Icon::Slip, "tool.slip", "Slip"},
     ToolEntry{cutline::ui::Tool::Slide, IconButton::Icon::Slide, "tool.slide", "Slide"},
     // Premiere's tools for the picture: the Type tool on T, and the two shapes
@@ -1782,6 +1807,17 @@ void show_scene_detection(App& app);
 void collect_scene_detection(App& app, bool progress_only = false);
 /// Stops it and waits, for closing.
 void cancel_scene_detection(App& app);
+/// Premiere's Remix: the clip's song rearranged to last `target` seconds, with
+/// Segments and Variations from 0 to 100. Made at once when the song has been
+/// listened to before, and when it has not, once it has.
+void remix_clip(App& app, const std::string& clip_id, double target, int segments,
+                int variations);
+/// The song has been listened to; the remix waiting for it is made unless
+/// `apply_pending` is false.
+void collect_remix(App& app, bool apply_pending = true);
+[[nodiscard]] bool remixing(const App& app);
+/// Waits for the listening, for closing.
+void stop_remix(App& app);
 /// Premiere's Make Subclip, from the Source Monitor's marks, a Project panel
 /// entry's, or the part of the footage a selected timeline clip uses.
 void open_make_subclip_dialog(App& app);

@@ -38,6 +38,7 @@ enum class Cursor {
   // the thing under the pointer is the thing that was pressed.
   Razor,
   RateStretch,
+  Remix,
   Slip,
   Slide,
   Ripple,

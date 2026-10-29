@@ -2499,6 +2499,21 @@ void draw_icon(Painter& painter, IconButton::Icon icon, const Rect& area, const 
       }
       break;
 
+    case Icon::Remix: {
+      // The two ends of a clip and the remix point between them, drawn as the
+      // timeline draws one: what the tool leaves behind is what says what it
+      // does.
+      line(cx - reach, cy - reach * 0.8, cx - reach, cy + reach * 0.8);
+      line(cx + reach, cy - reach * 0.8, cx + reach, cy + reach * 0.8);
+      const double tooth = reach * 0.4;
+      for (int i = 0; i < 4; ++i) {
+        const double y0 = cy - reach * 0.8 + i * tooth;
+        const double side = i % 2 == 0 ? 1.0 : -1.0;
+        line(cx - side * reach * 0.3, y0, cx + side * reach * 0.3, y0 + tooth);
+      }
+      break;
+    }
+
     case Icon::Slip:
       // A bare double-headed arrow: the source moving, with nothing around it
       // to say the clip does too. Two earlier attempts put it inside a box to

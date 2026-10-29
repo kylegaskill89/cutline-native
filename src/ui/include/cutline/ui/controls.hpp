@@ -956,6 +956,9 @@ class IconButton : public Button {
     Pointer,
     Razor,
     RateStretch,
+    /// Premiere's Remix: a span with a zigzag through it, the mark its remix
+    /// points are drawn with on a clip.
+    Remix,
     Slip,
     Slide,
     /// An edge with everything behind it following: one bar, and arrows leaving

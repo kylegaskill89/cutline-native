@@ -491,7 +491,7 @@ struct EdgeRoom {
       const Clip& c = *sorted[i];
       if (!members.contains(c.id)) continue;
 
-      const SourceBounds bounds = source_bounds(p, c.media_id);
+      const SourceBounds bounds = clip_source_bounds(p, c);
       const double speed = clip_speed(c);
       const double duration = clip_duration(c);
       const Clip* previous = i > 0 ? sorted[i - 1] : nullptr;
@@ -1114,7 +1114,7 @@ Project slip_clip(Project p, std::string_view clip_id, double delta_source) {
       if (!members.contains(c.id)) continue;
       const auto m = std::ranges::find(p.media, c.media_id, &Media::id);
       if (m == p.media.end() || is_still_like(*m)) continue;
-      const SourceBounds bounds = source_bounds(*m);
+      const SourceBounds bounds = clip_source_bounds(p, c);
       lo = std::max(lo, bounds.lo - c.source_in);   // source_in stays within the source
       hi = std::min(hi, bounds.hi - c.source_out);  // and so does source_out
     }
@@ -1163,12 +1163,12 @@ Project slide_clip(Project p, std::string_view clip_id, double delta_time) {
   double lo = -c.start;  // the clip cannot slide before zero
   double hi = kInfinity;
   if (has_previous) {
-    const SourceBounds bounds = source_bounds(p, previous->media_id);
+    const SourceBounds bounds = clip_source_bounds(p, *previous);
     hi = std::min(hi, (bounds.hi - previous->source_out) / clip_speed(*previous));
     lo = std::max(lo, kMinClip - clip_duration(*previous));
   }
   if (has_next) {
-    lo = std::max(lo, -(next->source_in - source_bounds(p, next->media_id).lo) /
+    lo = std::max(lo, -(next->source_in - clip_source_bounds(p, *next).lo) /
                           clip_speed(*next));
     hi = std::min(hi, clip_duration(*next) - kMinClip);
   }

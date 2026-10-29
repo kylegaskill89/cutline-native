@@ -3073,6 +3073,75 @@ TEST(RateStretch, ReportsWhichEdgeWasPulled) {
   EXPECT_NEAR(last->result.start, 4.0, 0.02);
 }
 
+// ----------------------------------------------------------------- remix --
+
+/// The sample timeline with the dialogue cut to 0 to 4 and a sound at 6.
+[[nodiscard]] TimelineModel with_room_for_remix() {
+  TimelineModel model = sample_model();
+  model.tracks[2].blocks = {TimelineBlock{.start = 0.0, .end = 4.0, .label = "song"},
+                            TimelineBlock{.start = 6.0, .end = 7.0, .label = "bang"}};
+  return model;
+}
+
+TEST(Remix, TakesHoldOfASoundClipAnywhereAndOfAPictureNowhere) {
+  Fixture fixture;
+  fixture.view->set_model(with_room_for_remix());
+  fixture.view->set_tool(Tool::Remix);
+  const Rect sound = fixture.view->block_rect(2, 0);
+  const Rect picture = fixture.view->block_rect(1, 0);
+  EXPECT_EQ(fixture.view->zone_at(sound.x + 20.0, sound.y + 5.0), DragMode::RemixEnd);
+  EXPECT_EQ(fixture.view->zone_at(sound.right() - 20.0, sound.y + 5.0), DragMode::RemixEnd);
+  EXPECT_EQ(fixture.view->zone_at(picture.x + 20.0, picture.y + 5.0), DragMode::None);
+  EXPECT_EQ(fixture.view->cursor_at(sound.x + 20.0, sound.y + 5.0), Cursor::Remix);
+  EXPECT_EQ(to_string(Tool::Remix), "remix");
+}
+
+TEST(Remix, PullsTheEndToALengthAndStopsAtTheNextClip) {
+  Fixture fixture;
+  fixture.view->set_model(with_room_for_remix());
+  fixture.view->set_snapping(false);
+  fixture.view->set_tool(Tool::Remix);
+  std::optional<TimelineEdit> last;
+  fixture.view->set_on_edit([&](const TimelineEdit& edit) { last = edit; });
+
+  const Rect box = fixture.view->block_rect(2, 0);
+  fixture.host->mouse_down(press(box.x + 50.0, box.y + 5.0));
+  fixture.host->mouse_move(press(box.x + 150.0, box.y + 5.0));
+  EXPECT_NEAR(fixture.view->model().tracks[2].blocks[0].end, 5.0, 0.04);
+  fixture.host->mouse_move(press(box.x + 900.0, box.y + 5.0));
+  fixture.host->mouse_up(press(box.x + 900.0, box.y + 5.0));
+
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->mode, DragMode::RemixEnd);
+  EXPECT_DOUBLE_EQ(last->result.start, 0.0);
+  EXPECT_DOUBLE_EQ(last->result.end, 6.0) << "no further than the clip after it";
+}
+
+TEST(Remix, ABlocksEnvelopeFollowsTheRemixIntoEachStretch) {
+  TimelineBlock block{.start = 0.0, .end = 4.0};
+  block.remix = {{.source_in = 0.0, .source_out = 2.0}, {.source_in = 10.0, .source_out = 12.0}};
+  EXPECT_DOUBLE_EQ(source_time_of(block, 1.0), 1.0);
+  EXPECT_DOUBLE_EQ(source_time_of(block, 3.0), 11.0);
+  block.source_in = 1.0;
+  EXPECT_DOUBLE_EQ(source_time_of(block, 1.5), 10.5);
+}
+
+TEST(Remix, DrawsAZigzagWhereOneStretchGivesWayToTheNext) {
+  const auto lines_drawn = [](bool remixed) {
+    Fixture fixture;
+    TimelineModel model = with_room_for_remix();
+    if (remixed) {
+      model.tracks[2].blocks[0].remix = {{.source_in = 0.0, .source_out = 2.0},
+                                         {.source_in = 10.0, .source_out = 12.0}};
+    }
+    fixture.view->set_model(model);
+    RecordingPainter painter;
+    fixture.view->paint(painter, default_theme());
+    return painter.count(DrawCall::Kind::Line);
+  };
+  EXPECT_GT(lines_drawn(true), lines_drawn(false) + 5);
+}
+
 // ------------------------------------------------------------------ slip --
 
 TEST(Slip, LeavesTheClipExactlyWhereItIs) {

@@ -6,6 +6,9 @@
 
 #include "app.hpp"
 
+#include "cutline/core/remix.hpp"
+#include "cutline/core/time.hpp"
+
 namespace cutline::tool {
 
 /// Measure the programme, then move the master fader to a delivery target.
@@ -231,8 +234,55 @@ void open_essential_sound(App& app, std::span<const std::string> clips) {
       std::ranges::find(cutline::core::kAudioRoles, cutline::core::AudioRole::Dialogue) -
       cutline::core::kAudioRoles.begin());
   repair.set_visible(selected_role == dialogue_index);
-  group.set_on_change([&app, section = &repair, dialogue_index](std::size_t index) {
+
+  // Duration, which Premiere offers for music: Remix, to a target length, with
+  // its two settings, Premiere's Customize. Read from the first clip, as Repair is;
+  // a clip not yet remixed offers its own length to start from.
+  const cutline::core::Clip* first_clip =
+      cutline::core::find_clip(app.session.project(), clips.front());
+  const std::optional<cutline::core::Remix> had_remix =
+      first_clip != nullptr ? first_clip->remix : std::nullopt;
+  const double fps = app.session.project().sequence().fps;
+  const bool drop_frame = app.session.project().sequence().drop_frame;
+  auto& duration = panel->emplace<Box>(Axis::Vertical);
+  duration.emplace<Label>("Duration").set_bold(true);
+  auto& duration_rows = duration.emplace<cutline::ui::Form>();
+  auto& remix_on = duration_rows.row("Duration").emplace<Checkbox>("", had_remix.has_value());
+  duration_rows.row("Method").emplace<Dropdown>(std::vector<std::string>{"Remix"}, 0u);
+  auto& target = duration_rows.row("Target Duration")
+                     .emplace<cutline::ui::TextField>(cutline::core::seconds_to_timecode(
+                         had_remix.has_value()   ? had_remix->target
+                         : first_clip != nullptr ? cutline::core::clip_duration(*first_clip)
+                                                 : 0.0,
+                         fps, drop_frame));
+  target.set_columns(11);
+  // What the song allowed, beside what was asked: a remix lands within a beat
+  // or so of its target, and the difference is worth seeing.
+  if (had_remix.has_value() && first_clip != nullptr) {
+    duration_rows.row("Remix Duration")
+        .emplace<Label>(cutline::core::seconds_to_timecode(
+            cutline::core::remix_length(*had_remix) / cutline::core::clip_speed(*first_clip), fps,
+            drop_frame))
+        .set_small(true);
+  }
+  const auto setting = [&duration_rows](const char* label, int value) -> cutline::ui::Slider& {
+    auto& slider = duration_rows.row(label).emplace<cutline::ui::Slider>(
+        cutline::ui::ValueRange{.minimum = 0.0, .maximum = 100.0, .step = 1.0},
+        static_cast<double>(value));
+    slider.set_default_value(50.0);
+    return slider;
+  };
+  auto& segments = setting("Segments", had_remix.has_value() ? had_remix->segments : 50);
+  auto& variations = setting("Variations", had_remix.has_value() ? had_remix->variations : 50);
+  const auto music_index = static_cast<std::size_t>(
+      std::ranges::find(cutline::core::kAudioRoles, cutline::core::AudioRole::Music) -
+      cutline::core::kAudioRoles.begin());
+  duration.set_visible(selected_role == music_index);
+
+  group.set_on_change([&app, section = &repair, dialogue_index, music = &duration,
+                       music_index](std::size_t index) {
     section->set_visible(index == dialogue_index);
+    music->set_visible(index == music_index);
     if (app.main.host != nullptr) app.main.host->request_layout();
   });
 
@@ -295,11 +345,21 @@ void open_essential_sound(App& app, std::span<const std::string> clips) {
   };
   dialog->set_accept(
       "OK", [&app, ids, chosen = &group, preset = &preset, read, noise, rumble, hum, ess, reverb,
-             mains = &hum_frequency]() -> std::optional<std::string> {
+             mains = &hum_frequency, remix_on = &remix_on, target = &target, fps, drop_frame,
+             segments = &segments, variations = &variations]() -> std::optional<std::string> {
     const std::size_t index = chosen->selected();
     const bool with_preset = preset->checked();
     if (index >= cutline::core::kAudioRoles.size()) return std::nullopt;
     const cutline::core::AudioRole role = cutline::core::kAudioRoles[index];
+    const bool music = role == cutline::core::AudioRole::Music;
+    std::optional<double> wanted;
+    if (music && remix_on->checked()) {
+      wanted = cutline::core::timecode_to_seconds(target->text(), fps, drop_frame);
+      // Said, and the box stays, as a speed that does not parse is.
+      if (!wanted.has_value() || *wanted <= 0.0) {
+        return "Target Duration has to be a length, such as 00:00:30:00.";
+      }
+    }
     const cutline::editor::EssentialRepair repair{.reduce_noise = read(noise),
                                                   .reduce_rumble = read(rumble),
                                                   .dehum = read(hum),
@@ -317,8 +377,18 @@ void open_essential_sound(App& app, std::span<const std::string> clips) {
       if (role == cutline::core::AudioRole::Dialogue) {
         next = cutline::editor::set_essential_repair(std::move(next), id, repair);
       }
+      // Duration unticked takes a remix off, as Premiere's does.
+      if (music && !wanted.has_value()) next = cutline::core::clear_remix(std::move(next), id);
     }
     app.session.apply(std::move(next));
+    // And the remixes after, one edit each: a song not heard before is
+    // listened to first, and its remix made once it has been.
+    if (wanted.has_value()) {
+      for (const std::string& id : ids) {
+        remix_clip(app, id, *wanted, static_cast<int>(std::lround(segments->value())),
+                   static_cast<int>(std::lround(variations->value())));
+      }
+    }
     refresh_all(app);
     invalidate_preview(app);
     stop_playback(app);

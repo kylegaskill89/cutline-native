@@ -273,6 +273,17 @@ struct TimelineBlock {
   double speed = 1.0;
   bool reverse = false;
 
+  /// A remix's stretches, in source seconds, when the clip is one; then
+  /// `source_in` is along the remix, as `core::Remix` has it. What makes the
+  /// envelope drawn the song as it plays, and where the remix points are.
+  struct RemixStretch {
+    double source_in = 0.0;
+    double source_out = 0.0;
+
+    friend bool operator==(const RemixStretch&, const RemixStretch&) = default;
+  };
+  std::vector<RemixStretch> remix;
+
   [[nodiscard]] double duration() const noexcept { return end - start; }
 
   friend bool operator==(const TimelineBlock&, const TimelineBlock&) = default;
@@ -282,7 +293,8 @@ struct TimelineBlock {
 ///
 /// The same mapping the core does for a clip, over the three numbers the
 /// timeline carries rather than over a project. Reverse runs from the far end,
-/// so a reversed clip's first pixel is its source's last.
+/// so a reversed clip's first pixel is its source's last; a remix is followed
+/// into whichever of its stretches is playing.
 [[nodiscard]] double source_time_of(const TimelineBlock& block, double local_t) noexcept;
 
 /// The switches in a track's header, as the project holds them.
@@ -491,6 +503,10 @@ enum class Tool {
   Roll,
   /// An edge changes the clip's speed instead of its source.
   RateStretch,
+  /// Premiere's Remix tool: a sound clip's end is pulled to a length, and the
+  /// song is rearranged to last it. Only the end, since a remix keeps the
+  /// song's beginning, and only sound.
+  Remix,
   /// The body moves the source without moving the clip.
   Slip,
   /// The body moves the clip, taking the length out of its neighbours.
@@ -521,6 +537,10 @@ enum class DragMode {
   /// the clip can be dragged longer than the footage it came from.
   RateStart,
   RateEnd,
+  /// Pulling a sound clip's end to the length its song should be remixed to.
+  /// The view shows the length asked for; the remix that answers it is the
+  /// caller's, and lands within a beat or so of it.
+  RemixEnd,
   /// Trimming an edge with everything downstream following it, so the sequence
   /// grows or shrinks by what was trimmed and nothing goes out of sync.
   ///

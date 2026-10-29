@@ -450,6 +450,16 @@ json write(const Clip& c) {
          {"transform", write(c.transform)}};
   put_if_set(j, "group_id", c.group_id);
   put_if_set(j, "hold", c.hold);
+  if (c.remix.has_value()) {
+    json spans = json::array();
+    for (const RemixSpan& span : c.remix->spans) spans.push_back({span.source_in, span.source_out});
+    j["remix"] = json{{"target", c.remix->target},
+                      {"segments", c.remix->segments},
+                      {"variations", c.remix->variations},
+                      {"source_in", c.remix->source_in},
+                      {"source_out", c.remix->source_out},
+                      {"spans", std::move(spans)}};
+  }
   put_unless_empty(j, "gain_keyframes", write(c.gain_keyframes));
   put_unless_empty(j, "channel_map", json(c.channel_map));
   // Only when it has one, so a project from before roles existed writes exactly
@@ -989,6 +999,23 @@ Clip read_clip(const json& j) {
   c.disabled = read_or(j, "disabled", false);
   c.label_color = read_or(j, "label_color", std::string{});
   c.hold = read_optional<double>(j, "hold");
+  if (const auto remix = j.find("remix"); remix != j.end() && remix->is_object()) {
+    Remix r{.target = read_or(*remix, "target", 0.0),
+            .segments = read_or(*remix, "segments", 50),
+            .variations = read_or(*remix, "variations", 50),
+            .source_in = read_or(*remix, "source_in", 0.0),
+            .source_out = read_or(*remix, "source_out", 0.0)};
+    if (const auto spans = remix->find("spans"); spans != remix->end() && spans->is_array()) {
+      for (const json& span : *spans) {
+        if (span.is_array() && span.size() == 2 && span[0].is_number() && span[1].is_number()) {
+          r.spans.push_back({span[0].get<double>(), span[1].get<double>()});
+        }
+      }
+    }
+    // A remix with nothing in it would make the clip silent and unexplained;
+    // it is dropped, and the clip is whatever its trims say of the file.
+    if (!r.spans.empty()) c.remix = std::move(r);
+  }
   c.caption = read_or(j, "caption", std::string{});
   c.camera = std::max(0, read_or(j, "camera", 0));
   c.multicam_off = read_or(j, "multicam_off", false);

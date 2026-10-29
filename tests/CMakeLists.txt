@@ -6,6 +6,7 @@ add_executable(cutline_core_tests
   audio/limiter_test.cpp
   audio/loudness_test.cpp
   audio/meter_test.cpp
+  audio/music_test.cpp
   audio/repair_test.cpp
   audio/stretch_test.cpp
   audio/sync_test.cpp
@@ -24,6 +25,7 @@ add_executable(cutline_core_tests
   core/pool_test.cpp
   core/properties_test.cpp
   core/query_test.cpp
+  core/remix_test.cpp
   core/roles_test.cpp
   core/routing_test.cpp
   core/segments_test.cpp
@@ -174,6 +176,7 @@ if(CUTLINE_WITH_GPU)
       engine/frame_renderer_test.cpp
       engine/mask_tracker_test.cpp
       engine/multicam_sync_test.cpp
+      engine/music_analysis_test.cpp
       engine/scene_detection_test.cpp
       engine/stabilizer_test.cpp
       engine/player_test.cpp)

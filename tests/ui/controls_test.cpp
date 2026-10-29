@@ -2320,7 +2320,7 @@ TEST(IconButton, DrawsItsMarkWithoutAFont) {
        {IconButton::Icon::ArrowUp, IconButton::Icon::ArrowDown, IconButton::Icon::Cross,
         IconButton::Icon::Plus, IconButton::Icon::Stopwatch, IconButton::Icon::Diamond,
         IconButton::Icon::Pointer, IconButton::Icon::Razor, IconButton::Icon::RateStretch,
-        IconButton::Icon::Slip, IconButton::Icon::Slide}) {
+        IconButton::Icon::Remix, IconButton::Icon::Slip, IconButton::Icon::Slide}) {
     IconButton button(icon);
     button.arrange(Rect{0.0, 0.0, 24.0, 24.0}, flat_context());
 
@@ -2352,10 +2352,11 @@ TEST(IconButton, NoTwoIconsAreDrawnAlike) {
     return marks;
   };
 
-  constexpr std::array kIcons{IconButton::Icon::Pointer,   IconButton::Icon::Razor,
-                              IconButton::Icon::RateStretch, IconButton::Icon::Slip,
-                              IconButton::Icon::Slide,       IconButton::Icon::Reset,
-                              IconButton::Icon::Stopwatch,   IconButton::Icon::Diamond};
+  constexpr std::array kIcons{IconButton::Icon::Pointer,     IconButton::Icon::Razor,
+                              IconButton::Icon::RateStretch, IconButton::Icon::Remix,
+                              IconButton::Icon::Slip,        IconButton::Icon::Slide,
+                              IconButton::Icon::Reset,       IconButton::Icon::Stopwatch,
+                              IconButton::Icon::Diamond};
   for (std::size_t i = 0; i < kIcons.size(); ++i) {
     for (std::size_t j = i + 1; j < kIcons.size(); ++j) {
       EXPECT_NE(shape(kIcons[i]), shape(kIcons[j]))

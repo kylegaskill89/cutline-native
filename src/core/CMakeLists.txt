@@ -23,6 +23,7 @@
   src/routing.cpp
   src/segments.cpp
   src/serialize.cpp
+  src/remix.cpp
   src/subclips.cpp
   src/time.cpp)
 add_library(cutline::core ALIAS cutline_core)

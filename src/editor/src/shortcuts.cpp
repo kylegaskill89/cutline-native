@@ -124,6 +124,8 @@ constexpr std::array kActions{
     Action{"tool.roll", "Rolling Edit Tool", "Tools", Scope::Bare},
     Action{"tool.razor", "Razor Tool", "Tools", Scope::Bare},
     Action{"tool.rate_stretch", "Rate Stretch Tool", "Tools", Scope::Bare},
+    // No key, as in Premiere.
+    Action{"tool.remix", "Remix Tool", "Tools", Scope::Bare},
     Action{"tool.slip", "Slip Tool", "Tools", Scope::Bare},
     Action{"tool.slide", "Slide Tool", "Tools", Scope::Bare},
     Action{"tool.type", "Type Tool", "Tools", Scope::Bare},

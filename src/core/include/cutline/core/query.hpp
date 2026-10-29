@@ -84,6 +84,17 @@ struct SourceBounds {
 /// Unbounded when the media is not in the project.
 [[nodiscard]] SourceBounds source_bounds(const Project& p, std::string_view media_id) noexcept;
 
+/// What a clip's `source_in` and `source_out` may reach: its source's bounds,
+/// or for a remix, the remix, from nothing to its length.
+[[nodiscard]] SourceBounds clip_source_bounds(const Project& p, const Clip& c) noexcept;
+
+/// How long a remix plays, which is its stretches end to end.
+[[nodiscard]] double remix_length(const Remix& remix) noexcept;
+
+/// The source time `t` seconds into a remix: inside whichever stretch is
+/// playing then.
+[[nodiscard]] double remix_source_time(const Remix& remix, double t) noexcept;
+
 /// Handles measured against bounds rather than a whole source.
 [[nodiscard]] Handles source_handles(const Clip& c, SourceBounds bounds) noexcept;
 
@@ -92,7 +103,7 @@ struct SourceBounds {
 [[nodiscard]] Handles source_handles(const Project& p, const Clip& c) noexcept;
 
 /// The source-media time playing at timeline time `t`, which must lie within
-/// the clip. Accounts for speed and reverse.
+/// the clip. Accounts for speed and reverse, and for a remix.
 [[nodiscard]] double source_time_at(const Clip& c, double t) noexcept;
 
 /// The clip's playback rate at clip-local time `local_t`.

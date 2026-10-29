@@ -25,6 +25,8 @@
 #include <thread>
 #include <condition_variable>
 #include <cmath>
+#include <numbers>
+#include <span>
 #include <cstdint>
 #include <map>
 #include <mutex>
@@ -328,7 +330,84 @@ constexpr double kEagerAhead = 2.0;
 
 [[nodiscard]] bool needs_retiming(const render::PlannedAudioClip& planned) noexcept {
   return planned.reverse || std::abs(planned.speed - 1.0) > 1e-6 ||
-         std::abs(planned.conform - 1.0) > 1e-6;
+         std::abs(planned.conform - 1.0) > 1e-6 || !planned.remix.empty();
+}
+
+/// How long each join in a remix is crossfaded over. Short, because both sides
+/// of a join are a few hundredths of a second before a downbeat, in the gap
+/// before the attack: long enough not to click, and over before either beat
+/// is struck.
+constexpr double kRemixCrossfade = 0.03;
+
+/// A remix's sound from `from` to `to` seconds along it, made from the
+/// stretches of the file it plays, each faded in and out over the join with
+/// the next — equal power, since the two sides are different bars and not the
+/// same sound.
+[[nodiscard]] std::optional<media::AudioBuffer> assemble_remix(
+    const std::string& path, int stream, std::span<const core::RemixSpan> spans, double from,
+    double to, int sample_rate, int channels) {
+  media::AudioBuffer out;
+  out.sample_rate = sample_rate;
+  out.channels = channels;
+  out.start_time = from;
+  const auto rate = static_cast<double>(sample_rate);
+  const auto lanes = static_cast<std::size_t>(channels);
+  const auto frames = static_cast<std::size_t>(std::max(0.0, std::round((to - from) * rate)));
+  out.samples.assign(frames * lanes, 0.0f);
+  if (frames == 0) return out;
+
+  const double half = kRemixCrossfade / 2.0;
+  double at = 0.0;
+  for (std::size_t k = 0; k < spans.size(); ++k) {
+    const core::RemixSpan& span = spans[k];
+    const double length = span.source_out - span.source_in;
+    const bool first = k == 0;
+    const bool last = k + 1 == spans.size();
+    // Along the remix, the stretch is heard a little either side of its own
+    // length, over the joins, except at the remix's two ends.
+    const double lo = first ? at : at - half;
+    const double hi = last ? at + length : at + length + half;
+    const double a = std::max(lo, from);
+    const double b = std::min(hi, to);
+    if (b > a) {
+      const double read_from = std::max(0.0, span.source_in + (a - at) - kDecodeMargin);
+      const double read_to = span.source_in + (b - at) + kDecodeMargin;
+      auto decoded = media::decode_audio(path, stream,
+                                         {.sample_rate = sample_rate,
+                                          .channels = channels,
+                                          .start = read_from,
+                                          .duration = read_to - read_from});
+      if (!decoded) return std::nullopt;
+      const std::size_t have = decoded->frame_count();
+      const auto first_frame = static_cast<std::size_t>(std::max(0.0, std::ceil((a - from) * rate)));
+      const auto end_frame = std::min(frames, static_cast<std::size_t>(std::ceil((b - from) * rate)));
+      for (std::size_t i = first_frame; i < end_frame; ++i) {
+        const double t = from + static_cast<double>(i) / rate;
+        double gain = 1.0;
+        if (!first && t < at + half) {
+          gain *= std::sin(std::clamp((t - (at - half)) / kRemixCrossfade, 0.0, 1.0) *
+                           std::numbers::pi / 2.0);
+        }
+        if (!last && t > at + length - half) {
+          gain *= std::cos(std::clamp((t - (at + length - half)) / kRemixCrossfade, 0.0, 1.0) *
+                           std::numbers::pi / 2.0);
+        }
+        const double position = (span.source_in + (t - at) - decoded->start_time) * rate;
+        if (position < 0.0) continue;
+        const auto index = static_cast<std::size_t>(position);
+        if (index >= have) continue;
+        const std::size_t next = std::min(index + 1, have - 1);
+        const auto fraction = static_cast<float>(position - static_cast<double>(index));
+        for (std::size_t c = 0; c < lanes; ++c) {
+          const float x = decoded->samples[index * lanes + c];
+          const float y = decoded->samples[next * lanes + c];
+          out.samples[i * lanes + c] += static_cast<float>(gain) * (x + (y - x) * fraction);
+        }
+      }
+    }
+    at += length;
+  }
+  return out;
 }
 
 /// Renders a retimed clip's audio into timeline time.
@@ -419,6 +498,12 @@ constexpr double kEagerAhead = 2.0;
     // and a piece must not depend on which one was made before it.
     source.inner->reset();
     if (!source.inner->mix(file_from, raw.samples)) return std::nullopt;
+  } else if (!planned.remix.empty()) {
+    // A remix's own seconds rather than the file's: made from its stretches.
+    auto made = assemble_remix(source.path, source.stream, planned.remix, file_from, file_to,
+                               source.sample_rate, source.channels);
+    if (!made) return std::nullopt;
+    raw = std::move(*made);
   } else {
     const double start = std::max(0.0, file_from - kDecodeMargin);
     auto decoded = media::decode_audio(source.path, source.stream,

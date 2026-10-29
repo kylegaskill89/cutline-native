@@ -8,6 +8,7 @@
 #include "app.hpp"
 
 #include "cutline/core/captions.hpp"
+#include "cutline/core/remix.hpp"
 
 namespace cutline::tool {
 
@@ -977,6 +978,18 @@ template <typename T>
                                                .reduce_reverb = 5.0}));
           open_essential_sound(app, app.session.selected_group());
           measure_dialog("essential sound");
+          // As music, remixed, so Duration shows every row it has.
+          app.session.apply(cutline::core::set_clip_role(app.session.project(), audio_clip,
+                                                         cutline::core::AudioRole::Music));
+          const cutline::core::Clip* music = cutline::core::find_clip(app.session.project(), audio_clip);
+          const double half = cutline::core::clip_duration(*music) / 2.0;
+          app.session.apply(cutline::core::apply_remix(
+              app.session.project(), audio_clip,
+              cutline::core::Remix{.target = half,
+                                   .spans = {{music->source_in, music->source_in + half / 2.0},
+                                             {music->source_out - half / 2.0, music->source_out}}}));
+          open_essential_sound(app, app.session.selected_group());
+          measure_dialog("essential sound, music");
         }
 
         open_loudness_dialog(app);
@@ -1150,6 +1163,7 @@ template <typename T>
   // block following the pointer around.
   for (const cutline::ui::IconButton::Icon icon :
        {cutline::ui::IconButton::Icon::Razor, cutline::ui::IconButton::Icon::RateStretch,
+        cutline::ui::IconButton::Icon::Remix,
         cutline::ui::IconButton::Icon::Slip, cutline::ui::IconButton::Icon::Slide,
         cutline::ui::IconButton::Icon::Ripple, cutline::ui::IconButton::Icon::Roll}) {
     const sk_sp<SkSurface> art = draw_cursor_art(icon);

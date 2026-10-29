@@ -117,6 +117,7 @@ std::string_view to_string(Tool tool) noexcept {
     case Tool::Ripple: return "ripple";
     case Tool::Roll: return "roll";
     case Tool::RateStretch: return "rate";
+    case Tool::Remix: return "remix";
     case Tool::Slip: return "slip";
     case Tool::Slide: return "slide";
     case Tool::Type: return "type";
@@ -143,7 +144,7 @@ bool pulls_start(DragMode mode) noexcept {
 }
 
 bool pulls_end(DragMode mode) noexcept {
-  return mode == DragMode::TrimEnd || mode == DragMode::RateEnd ||
+  return mode == DragMode::TrimEnd || mode == DragMode::RateEnd || mode == DragMode::RemixEnd ||
          mode == DragMode::RippleEnd || mode == DragMode::RollEnd;
 }
 
@@ -197,12 +198,36 @@ const FilmFrame* Filmstrip::nearest(double t) const noexcept {
   return best;
 }
 
+namespace {
+
+/// Where `along` seconds of a remix are in its song.
+[[nodiscard]] double remix_time(const std::vector<TimelineBlock::RemixStretch>& remix,
+                                double along) noexcept {
+  double from = 0.0;
+  for (const TimelineBlock::RemixStretch& stretch : remix) {
+    const double length = stretch.source_out - stretch.source_in;
+    if (along < from + length) return stretch.source_in + std::max(0.0, along - from);
+    from += length;
+  }
+  return remix.empty() ? along : remix.back().source_out;
+}
+
+/// How far into a block, in seconds, a point `along` its remix is drawn.
+[[nodiscard]] double remix_local(const TimelineBlock& block, double along) noexcept {
+  if (!(block.speed > 0.0)) return 0.0;
+  if (!block.reverse) return (along - block.source_in) / block.speed;
+  return (block.source_in + block.duration() * block.speed - along) / block.speed;
+}
+
+}  // namespace
+
 double source_time_of(const TimelineBlock& block, double local_t) noexcept {
   const double travelled = local_t * block.speed;
-  if (!block.reverse) return block.source_in + travelled;
   // Reverse runs from the far end back, so the source span has to be known
   // before the first pixel can be placed.
-  return block.source_in + block.duration() * block.speed - travelled;
+  const double along = block.reverse ? block.source_in + block.duration() * block.speed - travelled
+                                     : block.source_in + travelled;
+  return block.remix.empty() ? along : remix_time(block.remix, along);
 }
 
 double gain_to_band(double gain, double maximum) noexcept {
@@ -1084,6 +1109,11 @@ DragMode TimelineView::zone_at(double x, double y, Modifiers modifiers) const {
     case Tool::RateStretch:
       return x < box.x + box.width * 0.5 ? DragMode::RateStart : DragMode::RateEnd;
 
+    // Anywhere on a sound clip, since only its end means anything to a remix;
+    // a picture has no song to rearrange, so the tool does nothing to one.
+    case Tool::Remix:
+      return model_.tracks[hit->track].audio ? DragMode::RemixEnd : DragMode::None;
+
     case Tool::Ripple:
       return x < box.x + box.width * 0.5 ? DragMode::RippleStart : DragMode::RippleEnd;
 
@@ -1484,6 +1514,28 @@ void TimelineView::paint_content(Painter& painter, const Theme& theme) const {
           painter.line(corner, box.bottom() - 1.0, tip, box.y + 1.0, style.text, 1.0);
         }
         painter.fill(grip.inset(1.0), 2.0, Fill::solid(style.text));
+        painter.pop_clip();
+      }
+
+      // A remix's joins, as Premiere draws its remix points: a zigzag down the
+      // clip where one stretch of the song gives way to another, so what was
+      // rearranged can be seen and is not mistaken for a cut.
+      if (clip.remix.size() > 1) {
+        painter.push_clip(box, style.corner_radius);
+        double along = 0.0;
+        for (std::size_t k = 0; k + 1 < clip.remix.size(); ++k) {
+          along += clip.remix[k].source_out - clip.remix[k].source_in;
+          const double x = box.x + remix_local(clip, along) * scale_.pixels_per_second;
+          if (x < box.x || x > box.right()) continue;
+          constexpr double kTooth = 3.0;
+          bool left = true;
+          for (double y = box.y + 1.0; y < box.bottom() - 1.0; y += kTooth) {
+            const double next_y = std::min(box.bottom() - 1.0, y + kTooth);
+            painter.line(x + (left ? -2.0 : 2.0), y, x + (left ? 2.0 : -2.0), next_y,
+                         style.text, 1.0);
+            left = !left;
+          }
+        }
         painter.pop_clip();
       }
 
@@ -2374,6 +2426,24 @@ void TimelineView::drag_to(double x, double y) {
       break;
     }
 
+    // Like a rate stretch, the source is no limit: a song can be remixed far
+    // longer than it is. The next clip on the track is, because a remix never
+    // runs over anything, so the pull stops where it would.
+    case DragMode::RemixEnd: {
+      double end = origin_.end + moved;
+      if (const auto snapped = snap_to(end)) end = *snapped;
+      double wall = std::numeric_limits<double>::infinity();
+      const std::vector<TimelineBlock>& lane = model_.tracks[drag_->track].blocks;
+      for (std::size_t k = 0; k < lane.size(); ++k) {
+        if (k != drag_->block && lane[k].start >= origin_.start + 1e-9) {
+          wall = std::min(wall, lane[k].start);
+        }
+      }
+      next.end = std::clamp(core::snap_to_frame(end, model_.fps), origin_.start + frame,
+                            std::max(origin_.start + frame, wall));
+      break;
+    }
+
     case DragMode::Slide:
       // Three edges at once, so this writes them itself rather than going
       // through the single-block path below.
@@ -2464,6 +2534,7 @@ Cursor TimelineView::cursor_at(double x, double y) const {
 
     case DragMode::RateStart:
     case DragMode::RateEnd: return Cursor::RateStretch;
+    case DragMode::RemixEnd: return Cursor::Remix;
     case DragMode::Slip: return Cursor::Slip;
     case DragMode::Slide: return Cursor::Slide;
     case DragMode::Razor: return Cursor::Razor;
