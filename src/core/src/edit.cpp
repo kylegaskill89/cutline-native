@@ -61,11 +61,7 @@ void sort_all_tracks(Project& p) {
 
 /// The media's usable source length for trimming. Still-like media have no
 /// source limit, so their edges extend freely.
-[[nodiscard]] double trim_limit_duration(const Project& p, std::string_view media_id) noexcept {
-  const auto it = std::ranges::find(p.media, media_id, &Media::id);
-  if (it == p.media.end()) return kInfinity;
-  return is_still_like(*it) ? kInfinity : it->duration;
-}
+
 
 /// Shifts keyframe times so they stay anchored to the same timeline moment
 /// after a clip's start moves.
@@ -126,16 +122,23 @@ Project add_media(Project p, Media media) {
 }
 
 double placed_length(const Media& media, std::optional<PlacementRange> range) noexcept {
-  if (range.has_value() && !is_still_like(media)) {
-    return std::max(0.0, std::min(media.duration, range->out) - std::max(0.0, range->in));
+  if (is_still_like(media)) return media.duration;
+  const SourceBounds bounds = source_bounds(media);
+  if (range.has_value()) {
+    return std::max(0.0, std::min(bounds.hi, range->out) - std::max(bounds.lo, range->in));
   }
-  return media.duration;
+  return bounds.hi - bounds.lo;
 }
 
 std::optional<PlacementRange> source_range(const Media& media) noexcept {
-  if (!media.in_point.has_value() && !media.out_point.has_value()) return std::nullopt;
-  return PlacementRange{media.in_point.value_or(0.0),
-                        media.out_point.value_or(media.duration)};
+  const SourceBounds bounds = source_bounds(media);
+  // A restricted subclip is its span even unmarked, since nothing outside it
+  // can be placed.
+  const bool restricted = !is_still_like(media) && (bounds.lo > 0.0 || bounds.hi < media.duration);
+  if (!media.in_point.has_value() && !media.out_point.has_value() && !restricted) {
+    return std::nullopt;
+  }
+  return PlacementRange{media.in_point.value_or(bounds.lo), media.out_point.value_or(bounds.hi)};
 }
 
 std::optional<PlacementRange> source_range(const Project& p,
@@ -196,14 +199,15 @@ EditPoints edit_points(const Project& p, std::string_view media_id, double playh
   // Three marks: the unmarked end of the source is the one the span decides.
   // From the source in when there is one, so "start here and run for exactly
   // this long" is what marking an in and a destination span means.
-  const double source_in = media.in_point.value_or(0.0);
+  const SourceBounds bounds = source_bounds(media);
+  const double source_in = media.in_point.value_or(bounds.lo);
   if (media.out_point.has_value()) {
     // Marked at the out instead: the *in* is what the span decides, so the
     // source runs back from the mark. Same rule as back-timing, one level down.
     const double source_out = *media.out_point;
-    points.source = PlacementRange{std::max(0.0, source_out - span), source_out};
+    points.source = PlacementRange{std::max(bounds.lo, source_out - span), source_out};
   } else {
-    points.source = PlacementRange{source_in, std::min(media.duration, source_in + span)};
+    points.source = PlacementRange{source_in, std::min(bounds.hi, source_in + span)};
   }
   return points;
 }
@@ -299,8 +303,10 @@ Project place_media(Project p, std::string_view media_id, double start,
 
   // Still-like media have no inherent time, so they ignore any source range.
   const bool honour_range = range.has_value() && !is_still_like(media);
-  const double source_in = honour_range ? std::max(0.0, range->in) : 0.0;
-  const double source_out = honour_range ? std::min(media.duration, range->out) : media.duration;
+  const SourceBounds bounds =
+      is_still_like(media) ? SourceBounds{0.0, media.duration} : source_bounds(media);
+  const double source_in = honour_range ? std::max(bounds.lo, range->in) : bounds.lo;
+  const double source_out = honour_range ? std::min(bounds.hi, range->out) : bounds.hi;
 
   const PlacementLanes lanes = reserve_lanes(p, media, targets);
 
@@ -485,7 +491,7 @@ struct EdgeRoom {
       const Clip& c = *sorted[i];
       if (!members.contains(c.id)) continue;
 
-      const double media_duration = trim_limit_duration(p, c.media_id);
+      const SourceBounds bounds = source_bounds(p, c.media_id);
       const double speed = clip_speed(c);
       const double duration = clip_duration(c);
       const Clip* previous = i > 0 ? sorted[i - 1] : nullptr;
@@ -498,15 +504,15 @@ struct EdgeRoom {
         double member_lo = std::max(-c.start, neighbours && previous != nullptr
                                                   ? clip_end(*previous) - c.start
                                                   : -kInfinity);
-        member_lo = std::max(member_lo, c.reverse ? -(media_duration - c.source_out) / speed
-                                                  : -c.source_in / speed);
+        member_lo = std::max(member_lo, c.reverse ? -(bounds.hi - c.source_out) / speed
+                                                  : -(c.source_in - bounds.lo) / speed);
         room.lo = std::max(room.lo, member_lo);
         room.hi = std::min(room.hi, duration - kMinClip);
       } else {
         double member_hi =
             neighbours && next != nullptr ? next->start - clip_end(c) : kInfinity;
-        member_hi = std::min(member_hi, c.reverse ? c.source_in / speed
-                                                  : (media_duration - c.source_out) / speed);
+        member_hi = std::min(member_hi, c.reverse ? (c.source_in - bounds.lo) / speed
+                                                  : (bounds.hi - c.source_out) / speed);
         room.lo = std::max(room.lo, kMinClip - duration);
         room.hi = std::min(room.hi, member_hi);
       }
@@ -909,8 +915,10 @@ Project fit_media(Project p, std::string_view media_id, const EditPoints& points
   if (media_it == p.media.end()) return p;
 
   const double span = points.destination;
-  const PlacementRange marked =
-      points.source.value_or(PlacementRange{0.0, media_it->duration});
+  const SourceBounds bounds = source_bounds(*media_it);
+  const PlacementRange marked = points.source.value_or(
+      is_still_like(*media_it) ? PlacementRange{0.0, media_it->duration}
+                               : PlacementRange{bounds.lo, bounds.hi});
 
   switch (choice) {
     case FitChoice::ChangeSpeed:
@@ -920,12 +928,14 @@ Project fit_media(Project p, std::string_view media_id, const EditPoints& points
       // The out is kept and the in moves forward to meet it, so what survives
       // is the end of the marked part. Clamped at the start of the file: a span
       // longer than the source cannot be filled by trimming, only by slowing.
-      const PlacementRange kept{std::max(0.0, marked.out - span), marked.out};
+      const PlacementRange kept{std::max(std::max(0.0, bounds.lo), marked.out - span),
+                                marked.out};
       return overwrite_media_at(std::move(p), media_id, points.at, track_id, kept);
     }
 
     case FitChoice::TrimTail: {
-      const PlacementRange kept{marked.in, std::min(media_it->duration, marked.in + span)};
+      const PlacementRange kept{marked.in, std::min(std::min(media_it->duration, bounds.hi),
+                                                    marked.in + span)};
       return overwrite_media_at(std::move(p), media_id, points.at, track_id, kept);
     }
 
@@ -1104,8 +1114,9 @@ Project slip_clip(Project p, std::string_view clip_id, double delta_source) {
       if (!members.contains(c.id)) continue;
       const auto m = std::ranges::find(p.media, c.media_id, &Media::id);
       if (m == p.media.end() || is_still_like(*m)) continue;
-      lo = std::max(lo, -c.source_in);                 // source_in stays >= 0
-      hi = std::min(hi, m->duration - c.source_out);   // source_out stays within the media
+      const SourceBounds bounds = source_bounds(*m);
+      lo = std::max(lo, bounds.lo - c.source_in);   // source_in stays within the source
+      hi = std::min(hi, bounds.hi - c.source_out);  // and so does source_out
     }
   }
   if (!std::isfinite(lo)) lo = 0.0;
@@ -1152,14 +1163,13 @@ Project slide_clip(Project p, std::string_view clip_id, double delta_time) {
   double lo = -c.start;  // the clip cannot slide before zero
   double hi = kInfinity;
   if (has_previous) {
-    const auto m = std::ranges::find(p.media, previous->media_id, &Media::id);
-    const double media_duration =
-        m != p.media.end() && !is_still_like(*m) ? m->duration : kInfinity;
-    hi = std::min(hi, (media_duration - previous->source_out) / clip_speed(*previous));
+    const SourceBounds bounds = source_bounds(p, previous->media_id);
+    hi = std::min(hi, (bounds.hi - previous->source_out) / clip_speed(*previous));
     lo = std::max(lo, kMinClip - clip_duration(*previous));
   }
   if (has_next) {
-    lo = std::max(lo, -next->source_in / clip_speed(*next));
+    lo = std::max(lo, -(next->source_in - source_bounds(p, next->media_id).lo) /
+                          clip_speed(*next));
     hi = std::min(hi, clip_duration(*next) - kMinClip);
   }
   if (lo > hi) return p;

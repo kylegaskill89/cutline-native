@@ -28,6 +28,7 @@ add_executable(cutline_core_tests
   core/segments_test.cpp
   core/sequences_test.cpp
   core/serialize_test.cpp
+  core/subclips_test.cpp
   core/time_test.cpp
   editor/autosave_test.cpp
   editor/browser_binding_test.cpp
@@ -67,6 +68,7 @@ add_executable(cutline_core_tests
   render/plan_test.cpp
   render/preview_test.cpp
   render/scopes_test.cpp
+  track/scenes_test.cpp
   track/stabilize_test.cpp
   track/tracker_test.cpp
   ui/animator_test.cpp
@@ -171,6 +173,7 @@ if(CUTLINE_WITH_GPU)
       engine/frame_renderer_test.cpp
       engine/mask_tracker_test.cpp
       engine/multicam_sync_test.cpp
+      engine/scene_detection_test.cpp
       engine/stabilizer_test.cpp
       engine/player_test.cpp)
     target_link_libraries(cutline_engine_tests PRIVATE

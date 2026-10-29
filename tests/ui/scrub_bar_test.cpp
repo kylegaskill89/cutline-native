@@ -111,6 +111,22 @@ TEST(ScrubBar, APositionOffTheEndIsClampedRatherThanExtrapolated) {
   EXPECT_DOUBLE_EQ(fixture.bar->time_at(5000.0), 10.0);
 }
 
+TEST(ScrubBar, ASpanRunsFromItsStartToItsEndAcrossTheWholeStrip) {
+  // A restricted subclip: four seconds of a source, from two seconds in,
+  // still measured in the source's own time.
+  Fixture fixture;
+  fixture.bar->set_span(2.0, 6.0);
+  const Rect area = fixture.bar->track_area();
+  EXPECT_DOUBLE_EQ(fixture.bar->time_at(area.x), 2.0);
+  EXPECT_DOUBLE_EQ(fixture.bar->time_at(area.right()), 6.0);
+  EXPECT_DOUBLE_EQ(fixture.bar->x_of(4.0), area.x + area.width / 2.0);
+  fixture.bar->set_playhead(0.5);
+  EXPECT_DOUBLE_EQ(fixture.bar->playhead(), 2.0);
+  // A mark at one end only reaches to the other end of the span.
+  fixture.bar->set_marks(4.0, std::nullopt);
+  EXPECT_DOUBLE_EQ(fixture.bar->marked_area().right(), fixture.bar->x_of(6.0));
+}
+
 TEST(ScrubBar, TheStripSitsInsideThePadding) {
   const Fixture fixture;
   const Rect area = fixture.bar->track_area();

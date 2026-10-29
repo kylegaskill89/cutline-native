@@ -48,6 +48,7 @@ constexpr std::array kActions{
     Action{"clip.link", "Link", "Clip", Scope::Fallback, Command::LinkClips},
     Action{"clip.unlink", "Unlink", "Clip", Scope::Fallback, Command::UnlinkClips},
     Action{"clip.nest", "Nest...", "Clip", Scope::Fallback, Command::Nest},
+    Action{"clip.make_subclip", "Make Subclip...", "Clip", Scope::Always},
 
     // -- Sequence
     Action{"sequence.add_edit", "Add Edit", "Sequence", Scope::Always, Command::Split},
@@ -224,6 +225,7 @@ constexpr std::array kPremiereKeys{
     Default{"markers.mark_in", bare(Key::I)},
     Default{"markers.mark_out", bare(Key::O)},
     Default{"markers.clear_in_out", ctrl_shift(Key::X)},
+    Default{"clip.make_subclip", ctrl(Key::U)},
     Default{"markers.add", bare(Key::M)},
     Default{"markers.next", shift(Key::M)},
     Default{"markers.previous", ctrl_shift(Key::M)},

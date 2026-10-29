@@ -412,6 +412,12 @@ json write(const Media& m) {
   if (!m.proxy_path.empty()) j["proxy_path"] = m.proxy_path;
   if (!m.bin.empty()) j["bin"] = m.bin;
   if (!m.label_color.empty()) j["label_color"] = m.label_color;
+  if (m.subclip.has_value()) {
+    j["subclip"] = json{{"master", m.subclip->master},
+                        {"start", m.subclip->start},
+                        {"end", m.subclip->end},
+                        {"restrict_trims", m.subclip->restrict_trims}};
+  }
   return j;
 }
 
@@ -953,6 +959,12 @@ Media read_media(const json& j) {
   m.proxy_path = read_or(j, "proxy_path", std::string{});
   m.bin = read_or(j, "bin", std::string{});
   m.label_color = read_or(j, "label_color", std::string{});
+  if (const auto sub = j.find("subclip"); sub != j.end() && sub->is_object()) {
+    m.subclip = Subclip{.master = read_or(*sub, "master", std::string{}),
+                        .start = read_or(*sub, "start", 0.0),
+                        .end = read_or(*sub, "end", 0.0),
+                        .restrict_trims = read_or(*sub, "restrict_trims", false)};
+  }
   return m;
 }
 

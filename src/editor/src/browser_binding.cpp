@@ -60,8 +60,11 @@ std::string media_detail(const core::Media& media, double fps, bool drop_frame) 
     case ui::MediaKind::Audio:
     case ui::MediaKind::Video: break;
   }
-  if (media.duration <= 0.0) return {};
-  return core::seconds_to_timecode(media.duration, fps, drop_frame);
+  // A subclip is as long as its span, as Premiere lists it.
+  const double length =
+      media.subclip.has_value() ? media.subclip->end - media.subclip->start : media.duration;
+  if (length <= 0.0) return {};
+  return core::seconds_to_timecode(length, fps, drop_frame);
 }
 
 int media_uses(const core::Project& project, std::string_view media_id) noexcept {
@@ -137,6 +140,10 @@ void order(std::vector<ui::MediaItem>& rows, const BrowserOptions& options) {
   item.name = media.name.empty() ? media.path : media.name;
   item.kind = media_kind(media);
   item.duration = media.duration;
+  if (media.subclip.has_value()) {
+    item.start = media.subclip->start;
+    item.duration = media.subclip->end - media.subclip->start;
+  }
   item.detail = media_detail(media, project.sequence().fps, project.sequence().drop_frame);
   item.uses = media_uses(project, media.id);
   item.label_color = media.label_color;

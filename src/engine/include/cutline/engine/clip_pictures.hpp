@@ -30,6 +30,8 @@ class ClipPictures {
 
   /// The picture at clip-local `t`, in grey.
   [[nodiscard]] std::expected<track::Image, std::string> at(double t);
+  /// The same picture in colour, as 8-bit RGBA.
+  [[nodiscard]] std::expected<std::vector<std::uint8_t>, std::string> colour_at(double t);
 
   [[nodiscard]] int width() const noexcept { return width_; }
   [[nodiscard]] int height() const noexcept { return height_; }

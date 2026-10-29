@@ -19,9 +19,11 @@
   src/query.cpp
   src/ripple.cpp
   src/roles.cpp
+  src/scene_edits.cpp
   src/routing.cpp
   src/segments.cpp
   src/serialize.cpp
+  src/subclips.cpp
   src/time.cpp)
 add_library(cutline::core ALIAS cutline_core)
 

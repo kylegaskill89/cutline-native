@@ -14,6 +14,8 @@
 #include "cutline/core/effects.hpp"
 #include "cutline/core/model.hpp"
 #include "cutline/core/multicam.hpp"
+#include "cutline/core/scene_edits.hpp"
+#include "cutline/core/subclips.hpp"
 #include "cutline/core/pool.hpp"
 #include "cutline/audio/chain.hpp"
 #include "cutline/audio/loudness.hpp"
@@ -318,6 +320,13 @@ constexpr UINT kStabilizerAnalysed = WM_APP + 7;
 /// A multi-camera source sequence's sound has been read further, or
 /// synchronised (wparam 0) and the sequence can be made.
 constexpr UINT kMulticamSynced = WM_APP + 8;
+/// Scene Edit Detection has looked further (wparam 1), finished (0), or has
+/// just started and wants its progress window (2).
+constexpr UINT kScenesDetected = WM_APP + 9;
+
+/// What Scene Edit Detection found: for each clip, the times within it where
+/// a new shot begins.
+using SceneCuts = std::vector<std::pair<std::string, std::vector<double>>>;
 
 /// Which settings window: the person's, or the cut's.
 enum class SettingsKind {
@@ -1191,6 +1200,20 @@ struct App {
   std::optional<std::expected<std::vector<double>, std::string>> multicam_sync_result;
   cutline::ui::Dialog* multicam_sync_dialog = nullptr;
   cutline::ui::ProgressBar* multicam_sync_bar = nullptr;
+  /// Scene Edit Detection, looking at the selected clips on a thread of its
+  /// own: which clip it is on, how far through it, and what it found.
+  std::thread scene_worker;
+  std::atomic<bool> scene_running{false};
+  std::atomic<bool> scene_cancel{false};
+  std::atomic<int> scene_done{0};
+  std::atomic<int> scene_total{0};
+  std::atomic<int> scene_clip{0};
+  std::atomic<int> scene_clips{0};
+  cutline::core::SceneEditOptions scene_options;
+  std::mutex scene_lock;
+  std::optional<std::expected<SceneCuts, std::string>> scene_result;
+  cutline::ui::Dialog* scene_dialog = nullptr;
+  cutline::ui::ProgressBar* scene_bar = nullptr;
   /// Warp Stabilizer's analysis, one clip at a time on a thread of its own.
   std::thread stabilize_worker;
   std::atomic<bool> stabilize_running{false};
@@ -1627,6 +1650,9 @@ void refresh_source(App& app);
 void refresh_source_list(App& app);
 void show_source(App& app, const std::string& media_id);
 [[nodiscard]] const cutline::core::Media* source_media_of(const App& app);
+/// The part of a source the Source Monitor reaches, in its own time: all of
+/// it, or a restricted subclip's span.
+[[nodiscard]] std::pair<double, double> source_reach(const cutline::core::Media& media);
 void step_source(App& app, double frames);
 void mark_source(App& app, bool out_point);
 /// Clip markers on the source in hand: M, and the jumps to the next and the
@@ -1745,6 +1771,23 @@ void collect_tracked_mask(App& app, bool progress_only = false);
 /// analysis, unless one is being analysed already.
 void refresh_stabilizer_analysis(App& app);
 [[nodiscard]] bool analysing_stabilizer(const App& app);
+/// Premiere's Scene Edit Detection, for the clips selected in the timeline.
+void open_scene_edit_dialog(App& app);
+/// Whether any selected clip has pictures to look for cuts in.
+[[nodiscard]] bool can_detect_scenes(const App& app);
+[[nodiscard]] bool detecting_scenes(const App& app);
+/// Its progress window, with Cancel, while it looks.
+void show_scene_detection(App& app);
+/// It has looked further, or finished and its edit can be made.
+void collect_scene_detection(App& app, bool progress_only = false);
+/// Stops it and waits, for closing.
+void cancel_scene_detection(App& app);
+/// Premiere's Make Subclip, from the Source Monitor's marks, a Project panel
+/// entry's, or the part of the footage a selected timeline clip uses.
+void open_make_subclip_dialog(App& app);
+[[nodiscard]] bool can_make_subclip_now(const App& app);
+/// Premiere's Edit Subclip, for a subclip in the Project panel.
+void open_edit_subclip_dialog(App& app, const std::string& media_id);
 void collect_stabilizer_analysis(App& app, bool progress_only = false);
 /// Premiere's Analyze and Cancel.
 void analyse_stabilizer_again(App& app, const std::string& clip_id, std::size_t effect);

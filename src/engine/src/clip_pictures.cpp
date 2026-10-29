@@ -66,12 +66,18 @@ std::expected<std::unique_ptr<ClipPictures>, std::string> ClipPictures::create(
 }
 
 std::expected<track::Image, std::string> ClipPictures::at(double t) {
+  auto colour = colour_at(t);
+  if (!colour.has_value()) return std::unexpected(colour.error());
+  return track::grey_of_rgba(*colour, width_, height_);
+}
+
+std::expected<std::vector<std::uint8_t>, std::string> ClipPictures::colour_at(double t) {
   if (auto drawn = renderer_->render(alone_, start_ + t); !drawn.has_value()) {
     return std::unexpected(drawn.error());
   }
   auto image = renderer_->read_back();
   if (!image.has_value()) return std::unexpected(image.error());
-  return track::grey_of_rgba(image->pixels, image->width, image->height);
+  return std::move(image->pixels);
 }
 
 }  // namespace cutline::engine

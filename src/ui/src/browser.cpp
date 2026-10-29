@@ -448,7 +448,8 @@ void MediaBrowser::paint_tiles(Painter& painter, const Theme& theme) const {
       // scrub: running the pointer along a picture walks the source, which is
       // the whole reason to look at a pool as pictures.
       const bool scrubbing = hover_.has_value() && *hover_ == i;
-      const double at = scrubbing ? hover_fraction_ * item.duration : item.duration * 0.5;
+      const double at =
+          item.start + (scrubbing ? hover_fraction_ * item.duration : item.duration * 0.5);
       frame = item.filmstrip->nearest(at);
     }
     if (frame != nullptr && !frame->rgba.empty()) {

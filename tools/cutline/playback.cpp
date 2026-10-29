@@ -166,6 +166,14 @@ void poll_preview([[maybe_unused]] App& app) {
 #endif
 }
 
+/// The part of a source the Source Monitor reaches: all of it, or a subclip's
+/// span when its trims are restricted, as Premiere shows such a subclip.
+[[nodiscard]] std::pair<double, double> source_reach(const cutline::core::Media& media) {
+  if (cutline::core::is_still_like(media)) return {0.0, std::max(0.0, media.duration)};
+  const cutline::core::SourceBounds bounds = cutline::core::source_bounds(media);
+  return {bounds.lo, std::max(bounds.lo, bounds.hi)};
+}
+
 /// The source monitor's sequence: one video track holding one clip, the whole
 /// of the media, at the media's own shape and rate.
 ///
@@ -202,12 +210,15 @@ void poll_preview([[maybe_unused]] App& app) {
   clip.id = "c1";
   clip.media_id = media.id;
   clip.kind = cutline::core::TrackKind::Video;
-  clip.source_in = 0.0;
   // The whole of it, marks and all. The marks say what will be *placed*; the
   // monitor still shows the entire source, because a mark you cannot see past
-  // is one you cannot move.
-  clip.source_out = std::max(media.duration, 1.0 / project.sequence().fps);
-  clip.start = 0.0;
+  // is one you cannot move. A restricted subclip is the exception, being the
+  // part nothing outside can be reached from; it starts where it starts in
+  // the source, so the sequence's time is still the source's.
+  const auto [from, to] = source_reach(media);
+  clip.source_in = from;
+  clip.source_out = std::max(to, from + 1.0 / project.sequence().fps);
+  clip.start = from;
   track.clips.push_back(std::move(clip));
 
   project.sequence().tracks.push_back(std::move(track));
@@ -245,8 +256,8 @@ void step_source(App& app, double frames) {
   const std::optional<double> rate = cutline::core::playback_fps(*media);
   const double fps = rate.value_or(0.0) > 0.0 ? *rate : 30.0;
   const double at = app.source_playhead + frames / fps;
-  app.source_playhead =
-      std::clamp(cutline::core::snap_to_frame(at, fps), 0.0, std::max(0.0, media->duration));
+  const auto [from, to] = source_reach(*media);
+  app.source_playhead = std::clamp(cutline::core::snap_to_frame(at, fps), from, to);
   refresh_source(app);
 }
 
@@ -394,7 +405,11 @@ void advance_source_playback([[maybe_unused]] App& app) {
 /// leave the same state behind: the list in the order last looked at, and the
 /// playhead back at the start when the source itself changed.
 void show_source(App& app, const std::string& media_id) {
-  if (media_id != app.session.source_media()) app.source_playhead = 0.0;
+  if (media_id != app.session.source_media()) {
+    const auto& media = app.session.project().media;
+    const auto it = std::ranges::find(media, media_id, &cutline::core::Media::id);
+    app.source_playhead = it == media.end() ? 0.0 : source_reach(*it).first;
+  }
   app.session.set_source_media(media_id);
 
   // Newest first, and only ever *added* to the front — something already in the
@@ -471,7 +486,9 @@ void refresh_source([[maybe_unused]] App& app) {
 
   refresh_source_list(app);
   if (app.source_scrub != nullptr) {
-    app.source_scrub->set_duration(media->duration);
+    const auto [from, to] = source_reach(*media);
+    app.source_playhead = std::clamp(app.source_playhead, from, to);
+    app.source_scrub->set_span(from, to);
     app.source_scrub->set_marks(media->in_point, media->out_point);
     std::vector<cutline::ui::ScrubBar::Marker> ticks;
     for (const cutline::core::Marker& marker : media->markers) {
@@ -517,7 +534,8 @@ void refresh_source([[maybe_unused]] App& app) {
   const cutline::core::Project& project = *app.source_snapshot;
   app.source_monitor->set_canvas_size(project.sequence().canvas_w, project.sequence().canvas_h);
 
-  const double at = std::clamp(app.source_playhead, 0.0, std::max(0.0, media->duration));
+  const auto [from, to] = source_reach(*media);
+  const double at = std::clamp(app.source_playhead, from, to);
   if (app.shares_device()) {
     // A shuttle renders ahead in its own direction, as the program monitor's does.
     engine->want(app.source_snapshot, at,
@@ -547,7 +565,8 @@ void poll_source([[maybe_unused]] App& app) {
   const cutline::core::Media* media = source_media_of(app);
   if (media == nullptr || !media->has_video) return;
 
-  const double at = std::clamp(app.source_playhead, 0.0, std::max(0.0, media->duration));
+  const auto [from, to] = source_reach(*media);
+  const double at = std::clamp(app.source_playhead, from, to);
   auto taken = app.source_preview->take(at);
   if (!taken.has_value()) {
     app.source_failed = true;
@@ -1113,10 +1132,11 @@ void advance_source_shuttle(App& app) {
   const double fps = rate.value_or(0.0) > 0.0 ? *rate : 30.0;
   // Stopping on the last frame rather than on the end itself, which is the
   // moment after it and has no picture.
-  const double last = std::max(0.0, media->duration - 1.0 / fps);
+  const auto [first, end] = source_reach(*media);
+  const double last = std::max(first, end - 1.0 / fps);
   app.source_shuttle_at += elapsed * app.source_shuttle;
-  const bool past_the_end = app.source_shuttle_at <= 0.0 || app.source_shuttle_at >= last;
-  app.source_shuttle_at = std::clamp(app.source_shuttle_at, 0.0, last);
+  const bool past_the_end = app.source_shuttle_at <= first || app.source_shuttle_at >= last;
+  app.source_shuttle_at = std::clamp(app.source_shuttle_at, first, last);
 
   // Once per frame of the source, so the loop is not rendering pictures
   // nobody sees between them.

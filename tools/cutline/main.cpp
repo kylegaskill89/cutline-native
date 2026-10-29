@@ -276,6 +276,7 @@ void refresh_busy(App& app) {
   // and wondering.
   std::string says = left == 0 ? std::string{} : std::format("Reading media ({})", left);
   if (analysing_stabilizer(app)) says = "Analyzing for Warp Stabilizer";
+  if (detecting_scenes(app)) says = "Detecting scene edits";
   if (tracking_mask(app)) says = "Tracking mask";
   // Rendering previews comes before reading, which it outlasts.
   if (rendering_previews(app)) {
@@ -663,10 +664,10 @@ void run_action(App& app, Shell& shell, std::string_view id) {
       } else if (id == "playback.step_forward_five") {
         step_source(app, 5.0);
       } else if (id == "playback.go_to_start") {
-        app.source_playhead = 0.0;
+        app.source_playhead = source_reach(*media).first;
         refresh_source(app);
       } else if (id == "playback.go_to_end") {
-        app.source_playhead = std::max(0.0, media->duration);
+        app.source_playhead = source_reach(*media).second;
         refresh_source(app);
       } else if (id == "playback.play") {
         // A shuttle is playback of a sort, so the space bar stops it too.
@@ -743,6 +744,8 @@ void run_action(App& app, Shell& shell, std::string_view id) {
     open_export_dialog(app);
   } else if (id == "edit.keyboard_shortcuts") {
     open_keyboard_dialog(app);
+  } else if (id == "clip.make_subclip") {
+    open_make_subclip_dialog(app);
   } else if (id == "sequence.render_in_to_out") {
     render_in_to_out(app);
   } else if (id == "sequence.trim_edit") {
@@ -2071,6 +2074,14 @@ LRESULT handle_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam) 
         show_multicam_sync(*app);
       } else {
         collect_multicam_sync(*app, wparam == 1);
+      }
+      return 0;
+
+    case kScenesDetected:
+      if (wparam == 2) {
+        show_scene_detection(*app);
+      } else {
+        collect_scene_detection(*app, wparam == 1);
       }
       return 0;
 

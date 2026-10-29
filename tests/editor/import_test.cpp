@@ -10,6 +10,7 @@
 #include "cutline/core/id.hpp"
 #include "cutline/core/properties.hpp"
 #include "cutline/core/query.hpp"
+#include "cutline/core/subclips.hpp"
 
 #include <gtest/gtest.h>
 
@@ -245,6 +246,20 @@ TEST(Relink, TheNameIsTheProjectsAndIsKept) {
 
   project = relink_media(std::move(project), id, a_video("E:/moved/wide.mp4"));
   EXPECT_EQ(project.media[0].name, "Wide shot, take 3");
+}
+
+TEST(Relink, ASourcesSubclipsGoWithIt) {
+  // One file: a subclip left pointing at the old place would be offline
+  // while the footage it is part of was found.
+  std::string id;
+  std::string sub;
+  Project project = import_media(Project{}, a_video(), &id);
+  project = core::make_subclip(std::move(project), id, "Shot", 1.0, 2.0, true, {}, &sub);
+  project = relink_media(std::move(project), id, a_video("E:/moved/wide.mp4"));
+  for (const core::Media& media : project.media) EXPECT_EQ(media.path, "E:/moved/wide.mp4");
+  // And from the other end.
+  project = relink_media(std::move(project), sub, a_video("F:/again/wide.mp4"));
+  for (const core::Media& media : project.media) EXPECT_EQ(media.path, "F:/again/wide.mp4");
 }
 
 TEST(Relink, MarksOnTheSourceSurviveIt) {

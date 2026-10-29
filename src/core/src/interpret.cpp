@@ -93,6 +93,10 @@ Project interpret_media(Project p, std::string_view media_id,
   // The marks belong to the asset and are in the same seconds its clips are.
   if (media->in_point.has_value()) *media->in_point *= scale;
   if (media->out_point.has_value()) *media->out_point *= scale;
+  if (media->subclip.has_value()) {
+    media->subclip->start *= scale;
+    media->subclip->end *= scale;
+  }
 
   // Clips keep their frames. Scaling the ranges is what makes that true: a
   // clip on frames 100 to 200 is still on frames 100 to 200, at a rate that

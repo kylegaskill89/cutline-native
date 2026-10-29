@@ -34,6 +34,12 @@ class ScrubBar : public Widget {
   void set_duration(double seconds) noexcept;
   [[nodiscard]] double duration() const noexcept { return duration_; }
 
+  /// Time running from `start` to `end` rather than from zero: a subclip whose
+  /// trims are restricted, which shows only its own span but keeps its
+  /// source's times, so its marks and markers are where they are on the source.
+  void set_span(double start, double end) noexcept;
+  [[nodiscard]] double start() const noexcept { return start_; }
+
   /// Where the playhead is, clamped into the duration.
   void set_playhead(double seconds) noexcept;
   [[nodiscard]] double playhead() const noexcept { return playhead_; }
@@ -78,7 +84,7 @@ class ScrubBar : public Widget {
   /// clamped, so nothing is ever drawn off the end.
   [[nodiscard]] double x_of(double seconds) const;
 
-  /// The time under a window x, clamped into `[0, duration]`.
+  /// The time under a window x, clamped into `[start, start + duration]`.
   [[nodiscard]] double time_at(double x) const;
 
   /// The marked span as a rectangle, empty when nothing is marked or when the
@@ -106,6 +112,7 @@ class ScrubBar : public Widget {
   /// Reports the time under `x`, if there is anything to report it to.
   void scrub_to(double x);
 
+  double start_ = 0.0;
   double duration_ = 0.0;
   double playhead_ = 0.0;
   std::optional<double> in_;

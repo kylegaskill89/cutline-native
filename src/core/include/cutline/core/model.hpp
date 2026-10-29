@@ -421,6 +421,29 @@ struct Marker {
   friend bool operator==(const Marker&, const Marker&) = default;
 };
 
+// ----------------------------------------------------------------- subclip --
+
+/// What makes a project entry a subclip: Premiere's span of another source,
+/// filed and named as a thing of its own.
+///
+/// A subclip is otherwise a copy of the entry it was made from — the same file,
+/// rate, colour and so on — so every reader that resolves a clip's media finds
+/// what it needs without knowing subclips exist. Times are in the source's own
+/// time, as a clip's `source_in` is, so a clip cut from a subclip and one cut
+/// from the whole source agree about which frame is which.
+struct Subclip {
+  /// The entry it was made from, when that is still in the project.
+  std::string master;
+  double start = 0.0;
+  double end = 0.0;
+  /// Premiere's Restrict Trims To Subclip Boundaries: nothing outside the span
+  /// can be reached, in the Source Monitor or by trimming a clip cut from it.
+  /// Without it the span is only where the subclip's marks start.
+  bool restrict_trims = false;
+
+  friend bool operator==(const Subclip&, const Subclip&) = default;
+};
+
 struct Media {
   std::string id;
   std::string path;  ///< absolute; empty for generated media
@@ -546,6 +569,9 @@ struct Media {
   /// reading through to the media — relabelling a source should not repaint a
   /// cut somebody has already coloured by hand.
   std::string label_color;
+
+  /// Set when this entry is a subclip of another; see `Subclip`.
+  std::optional<Subclip> subclip;
 
   /// The bin this entry is filed in, or empty for the top level.
   ///

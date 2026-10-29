@@ -26,15 +26,18 @@ constexpr double kPlayheadWidth = 2.0;
 
 ScrubBar::ScrubBar() { set_clips_children(true); }
 
-void ScrubBar::set_duration(double seconds) noexcept {
-  duration_ = std::max(0.0, seconds);
+void ScrubBar::set_duration(double seconds) noexcept { set_span(0.0, seconds); }
+
+void ScrubBar::set_span(double start, double end) noexcept {
+  start_ = start;
+  duration_ = std::max(0.0, end - start);
   // The playhead comes with it. Opening a shorter source with the playhead
   // near the end of a longer one would otherwise leave it off the right edge.
-  playhead_ = std::clamp(playhead_, 0.0, duration_);
+  playhead_ = std::clamp(playhead_, start_, start_ + duration_);
 }
 
 void ScrubBar::set_playhead(double seconds) noexcept {
-  playhead_ = std::clamp(seconds, 0.0, duration_);
+  playhead_ = std::clamp(seconds, start_, start_ + duration_);
 }
 
 void ScrubBar::set_marks(std::optional<double> in, std::optional<double> out) noexcept {
@@ -69,7 +72,7 @@ double ScrubBar::x_of(double seconds) const {
   const Rect area = track_area();
   if (area.empty()) return bounds().x;
   if (duration_ <= 0.0) return area.x;
-  const double fraction = std::clamp(seconds / duration_, 0.0, 1.0);
+  const double fraction = std::clamp((seconds - start_) / duration_, 0.0, 1.0);
   return area.x + area.width * fraction;
 }
 
@@ -77,15 +80,16 @@ double ScrubBar::time_at(double x) const {
   const Rect area = track_area();
   if (area.empty() || area.width <= 0.0 || duration_ <= 0.0) return 0.0;
   const double fraction = std::clamp((x - area.x) / area.width, 0.0, 1.0);
-  return fraction * duration_;
+  return start_ + fraction * duration_;
 }
 
 Rect ScrubBar::marked_area() const {
   if (!in_.has_value() && !out_.has_value()) return {};
   if (duration_ <= 0.0) return {};
 
-  const double from = std::clamp(in_.value_or(0.0), 0.0, duration_);
-  const double to = std::clamp(out_.value_or(duration_), 0.0, duration_);
+  const double end = start_ + duration_;
+  const double from = std::clamp(in_.value_or(start_), start_, end);
+  const double to = std::clamp(out_.value_or(end), start_, end);
   if (to <= from) return {};
 
   const Rect area = track_area();

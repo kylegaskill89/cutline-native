@@ -946,6 +946,9 @@ template <typename T>
         if (!clip_id.empty()) app.session.select_one(clip_id);
         open_speed_dialog(app, app.session.selected_group());
         measure_dialog("speed and duration");
+        // The longest line of any of them is in this one.
+        open_scene_edit_dialog(app);
+        measure_dialog("scene edit detection");
 
         // Something copied and something selected, which is the state Paste
         // Attributes greys itself out of existence without.
@@ -1006,6 +1009,26 @@ template <typename T>
           }
           open_fit_dialog(app);
           measure_dialog("fit clip");
+
+          // Made from the marks just set, then edited: the second is only
+          // offered on a subclip, so making one is what reaches it.
+          app.session.set_source_media(source);
+          const auto footage = std::ranges::find_if(
+              app.session.project().media,
+              [](const cutline::core::Media& m) { return cutline::core::can_make_subclip(m); });
+          if (footage != app.session.project().media.end()) {
+            app.session.set_source_media(footage->id);
+            open_make_subclip_dialog(app);
+            measure_dialog("make subclip");
+            std::string made;
+            app.session.apply(cutline::core::make_subclip(app.session.project(), footage->id,
+                                                          "Subclip", 0.0, 1.0, true, {}, &made));
+            open_edit_subclip_dialog(app, made);
+            measure_dialog("edit subclip");
+          } else {
+            std::println("{}: no footage the subclip boxes could be opened on", theme.id);
+            ++failures;
+          }
         }
       }
 

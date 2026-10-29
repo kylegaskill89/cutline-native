@@ -70,6 +70,23 @@ struct Handles {
 /// physical handle feeds the head and which the tail.
 [[nodiscard]] Handles source_handles(const Clip& c, double media_duration) noexcept;
 
+/// The part of a source a clip may reach, in source time.
+///
+/// The whole of it, ordinarily; a subclip that restricts trims keeps clips to
+/// its own span. Still-like media are unbounded both ways, since there is no
+/// source to run out of. What every trim, slip, slide and handle is measured
+/// against, so a restricted subclip is restricted everywhere at once.
+struct SourceBounds {
+  double lo = 0.0;
+  double hi = 0.0;
+};
+[[nodiscard]] SourceBounds source_bounds(const Media& m) noexcept;
+/// Unbounded when the media is not in the project.
+[[nodiscard]] SourceBounds source_bounds(const Project& p, std::string_view media_id) noexcept;
+
+/// Handles measured against bounds rather than a whole source.
+[[nodiscard]] Handles source_handles(const Clip& c, SourceBounds bounds) noexcept;
+
 /// The same, looking the media up in the project. Still-like media have no
 /// source to run out of, so their handles are unbounded.
 [[nodiscard]] Handles source_handles(const Project& p, const Clip& c) noexcept;

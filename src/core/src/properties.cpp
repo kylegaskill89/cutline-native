@@ -501,7 +501,8 @@ Project set_source_in_point(Project p, std::string_view media_id, std::optional<
   }
   // Clamped to the source, which the sequence marks have no equivalent of: a
   // sequence grows to hold whatever is put in it, a file is the length it is.
-  const double at = std::clamp(*time, 0.0, media->duration);
+  const SourceBounds bounds = source_bounds(*media);
+  const double at = std::clamp(*time, std::max(0.0, bounds.lo), std::min(media->duration, bounds.hi));
   media->in_point = at;
   if (media->out_point.has_value() && *media->out_point <= at) media->out_point.reset();
   return p;
@@ -514,7 +515,8 @@ Project set_source_out_point(Project p, std::string_view media_id, std::optional
     media->out_point.reset();
     return p;
   }
-  const double at = std::clamp(*time, 0.0, media->duration);
+  const SourceBounds bounds = source_bounds(*media);
+  const double at = std::clamp(*time, std::max(0.0, bounds.lo), std::min(media->duration, bounds.hi));
   media->out_point = at;
   if (media->in_point.has_value() && *media->in_point >= at) media->in_point.reset();
   return p;

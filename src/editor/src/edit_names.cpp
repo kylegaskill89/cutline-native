@@ -30,6 +30,7 @@ template <typename T>
   if (media.is_color) return "New Colour Matte";
   if (media.is_adjustment) return "New Adjustment Layer";
   if (!media.sequence_id.empty()) return "Nest";
+  if (media.subclip.has_value()) return "Make Subclip";
   return "Import";
 }
 
@@ -49,6 +50,7 @@ template <typename T>
     if (media->name != old.name) return "Rename";
     if (media->path != old.path) return "Link Media";
     if (media->bin != old.bin) return "Move to Bin";
+    if (media->subclip != old.subclip) return "Edit Subclip";
     if (media->assumed_fps != old.assumed_fps || media->colour_override != old.colour_override) {
       return "Interpret Footage";
     }

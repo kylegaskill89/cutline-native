@@ -98,6 +98,9 @@ struct MediaItem {
   /// Carried as a number as well so the list can be ordered by it without
   /// parsing back what was written for a human.
   double duration = 0.0;
+  /// Where in its source the entry starts, in seconds: a subclip's start, so
+  /// scrubbing its picture walks its own span. Zero for everything else.
+  double start = 0.0;
 
   /// The file is gone from disk. The entry stays in the pool regardless,
   /// because removing it would take every clip that used it out of the

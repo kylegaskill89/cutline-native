@@ -91,8 +91,10 @@ void request_pool_pictures([[maybe_unused]] App& app) {
     if (media.path.empty() || media.duration <= 0.0) continue;
     // Spread across the whole source, however long it is. A ten-minute capture
     // and a ten-second one both cost twelve frames.
-    app.filmstrips.request(media.id, media.path, 0.0, media.duration,
-                           media.duration / kPoolTileFrames);
+    // A subclip across its own span, which is what its tile scrubs.
+    const double from = media.subclip.has_value() ? media.subclip->start : 0.0;
+    const double to = media.subclip.has_value() ? media.subclip->end : media.duration;
+    app.filmstrips.request(media.id, media.path, from, to, (to - from) / kPoolTileFrames);
   }
 #endif
 }
@@ -468,6 +470,16 @@ void open_pool_menu(App& app, double x, double y) {
       // Premiere's, for the clips of every camera selected together.
       rows.push_back(action_entry("Create Multi-Camera Source Sequence...",
                                   [&app] { open_multicam_dialog(app); }));
+      const auto entry = std::ranges::find(app.session.project().media, chosen->id,
+                                           &cutline::core::Media::id);
+      const bool footage = entry != app.session.project().media.end() &&
+                           cutline::core::can_make_subclip(*entry);
+      rows.push_back(action_entry("Make Subclip...", [&app] { open_make_subclip_dialog(app); },
+                                  shortcut_of(&app, "clip.make_subclip"), footage));
+      if (footage && entry->subclip.has_value()) {
+        rows.push_back(action_entry("Edit Subclip...",
+                                    [&app, id = chosen->id] { open_edit_subclip_dialog(app, id); }));
+      }
     }
     rows.push_back(MenuEntry::divider());
     rows.push_back(action_entry("Rename...", [&app] { rename_pool_entry(app); }));

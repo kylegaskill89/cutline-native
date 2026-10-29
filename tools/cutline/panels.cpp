@@ -503,6 +503,12 @@ void open_speed_dialog(App& app, std::span<const std::string> clips);
   rows.push_back(command_entry(app, "Link", Command::LinkClips));
   rows.push_back(command_entry(app, "Unlink", Command::UnlinkClips));
   rows.push_back(command_entry(app, "Nest...", Command::Nest));
+  rows.push_back(action_entry("Make Subclip...", [&app] { open_make_subclip_dialog(app); },
+                              shortcut_of(&app, "clip.make_subclip"),
+                              can_make_subclip_now(app)));
+  // Premiere's, for footage that was cut together before it arrived.
+  rows.push_back(action_entry("Scene Edit Detection...", [&app] { open_scene_edit_dialog(app); },
+                              {}, can_detect_scenes(app)));
   // Premiere's Multi-Camera, for clips of a multi-camera source sequence.
   {
     std::vector<MenuEntry> cameras = multicam_entries(app, selected);

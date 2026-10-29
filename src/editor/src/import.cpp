@@ -148,19 +148,29 @@ core::Project relink_media(core::Project project, std::string_view media_id,
   const auto found = std::ranges::find(project.media, media_id, &core::Media::id);
   if (found == project.media.end() || source.path.empty()) return project;
 
-  found->path = source.path;
-  // Everything the probe found, because a relink is only usually the same file
-  // in a new place. What is not taken is the name: it is a property of the
-  // project rather than of the file, and somebody who renamed the entry has
-  // already said what they want it called.
-  found->duration = placement_duration(source, still_length);
-  found->has_video = source.has_video;
-  found->audio_stream_count = source.audio_stream_count;
-  found->is_image = source.is_image;
-  found->is_animated = source.is_animated;
-  found->width = source.width;
-  found->height = source.height;
-  found->fps = source.fps;
+  // A source and its subclips are one file, so relinking any of them relinks
+  // them all, as Premiere's subclips follow their master clip.
+  const std::string family = found->subclip.has_value() && !found->subclip->master.empty()
+                                 ? found->subclip->master
+                                 : found->id;
+  for (core::Media& media : project.media) {
+    const bool related = media.id == family || media.id == media_id ||
+                         (media.subclip.has_value() && media.subclip->master == family);
+    if (!related) continue;
+    media.path = source.path;
+    // Everything the probe found, because a relink is only usually the same
+    // file in a new place. What is not taken is the name: it is a property of
+    // the project rather than of the file, and somebody who renamed the entry
+    // has already said what they want it called.
+    media.duration = placement_duration(source, still_length);
+    media.has_video = source.has_video;
+    media.audio_stream_count = source.audio_stream_count;
+    media.is_image = source.is_image;
+    media.is_animated = source.is_animated;
+    media.width = source.width;
+    media.height = source.height;
+    media.fps = source.fps;
+  }
   return project;
 }
 

@@ -40,16 +40,39 @@ Handles source_handles(const Clip& c, double media_duration) noexcept {
   return {.head = before_in, .tail = after_out};
 }
 
+SourceBounds source_bounds(const Media& m) noexcept {
+  constexpr double unbounded = std::numeric_limits<double>::infinity();
+  if (is_still_like(m)) return {.lo = -unbounded, .hi = unbounded};
+  if (m.subclip.has_value() && m.subclip->restrict_trims) {
+    const double lo = std::clamp(m.subclip->start, 0.0, m.duration);
+    return {.lo = lo, .hi = std::clamp(m.subclip->end, lo, m.duration)};
+  }
+  return {.lo = 0.0, .hi = m.duration};
+}
+
+SourceBounds source_bounds(const Project& p, std::string_view media_id) noexcept {
+  const auto media = std::ranges::find(p.media, media_id, &Media::id);
+  if (media == p.media.end()) {
+    constexpr double unbounded = std::numeric_limits<double>::infinity();
+    return {.lo = -unbounded, .hi = unbounded};
+  }
+  return source_bounds(*media);
+}
+
+Handles source_handles(const Clip& c, SourceBounds bounds) noexcept {
+  const double speed = clip_speed(c);
+  const double before_in = (c.source_in - bounds.lo) / speed;
+  const double after_out = (bounds.hi - c.source_out) / speed;
+  if (c.reverse) return {.head = after_out, .tail = before_in};
+  return {.head = before_in, .tail = after_out};
+}
+
 Handles source_handles(const Project& p, const Clip& c) noexcept {
   const auto media = std::ranges::find(p.media, c.media_id, &Media::id);
   if (media == p.media.end()) return {};
   // A still has no source to run out of, so it can lend whatever is asked for.
   // Reporting zero would refuse a dissolve onto a title.
-  if (is_still_like(*media)) {
-    constexpr double unbounded = std::numeric_limits<double>::infinity();
-    return Handles{.head = unbounded, .tail = unbounded};
-  }
-  return source_handles(c, media->duration);
+  return source_handles(c, source_bounds(*media));
 }
 
 bool is_time_remapped(const Clip& c) noexcept {
