@@ -2589,7 +2589,7 @@ dependent, and for the owner to confirm:
 
 The new effects and transitions of 26.2 and 26.3 fit around these.
 
-**Confirmed by the owner on 2026-10-28**, in that order. §14.2 is to be
+**Confirmed by the owner on 2026-10-28**, in that order, and shipped whole in 0.8.0. §14.2 is to be
 considered later. If it is done, the installer ships without any model, and
 a model is downloaded from inside the application by somebody who chooses to
 have it.
