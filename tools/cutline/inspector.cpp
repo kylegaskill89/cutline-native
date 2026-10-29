@@ -1088,6 +1088,19 @@ void build_effect_controls(App& app, const std::string& clip_id) {
       app.inspector->emplace<Label>(stabilizer_status(app, clip_id, row.index)).set_small(true);
     }
 
+    // Auto Reframe's the same, since it looks at the clip the same way.
+    if (row.type == "autoreframe") {
+      auto& analyse = app.inspector->emplace<Box>(Axis::Horizontal);
+      analyse.emplace<Button>("Analyze").set_on_click([&app, clip_id] {
+        analyse_reframe_again(app, clip_id);
+      });
+      auto& cancel = analyse.emplace<Button>("Cancel");
+      cancel.set_on_click([&app] { cancel_reframe_analysis(app); });
+      cancel.set_enabled(analysing_reframe(app));
+      analyse.emplace<Spacer>();
+      app.inspector->emplace<Label>(reframe_status(app, clip_id)).set_small(true);
+    }
+
     // The colours sit after the controls outside any section and before the
     // first, which is where Ultra Key's Key Color is in Premiere; an effect
     // with no sections has them last.

@@ -6,6 +6,7 @@ add_library(cutline_engine
   src/mask_tracker.cpp
   src/multicam_sync.cpp
   src/music_analysis.cpp
+  src/reframe_analysis.cpp
   src/scene_detection.cpp
   src/stabilizer_analysis.cpp
   src/player.cpp)

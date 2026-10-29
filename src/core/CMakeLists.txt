@@ -23,6 +23,7 @@
   src/routing.cpp
   src/segments.cpp
   src/serialize.cpp
+  src/auto_reframe.cpp
   src/remix.cpp
   src/subclips.cpp
   src/time.cpp)

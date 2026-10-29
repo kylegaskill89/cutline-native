@@ -326,6 +326,8 @@ constexpr UINT kMulticamSynced = WM_APP + 8;
 constexpr UINT kScenesDetected = WM_APP + 9;
 /// Remix has listened to a song and can make the remix that was waiting.
 constexpr UINT kRemixHeard = WM_APP + 10;
+/// Auto Reframe's analysis has got further (wparam 1) or stopped (0).
+constexpr UINT kReframeAnalysed = WM_APP + 11;
 
 /// A remix asked for: of which clip, how long, and Premiere's two settings,
 /// with the song it is of, so one that is no longer that song is let go.
@@ -1236,6 +1238,18 @@ struct App {
   std::mutex remix_lock;
   std::optional<std::expected<cutline::audio::MusicAnalysis, std::string>> remix_result;
   std::optional<PendingRemix> remix_pending;
+  /// Auto Reframe's analysis, one clip at a time on a thread of its own, as
+  /// Warp Stabilizer's is; and the analyses that failed or were stopped, which
+  /// wait for Analyze rather than starting again by themselves.
+  std::thread reframe_worker;
+  std::atomic<bool> reframe_running{false};
+  std::atomic<bool> reframe_cancel{false};
+  std::atomic<int> reframe_done{0};
+  std::atomic<int> reframe_total{0};
+  std::string reframe_key;
+  std::mutex reframe_lock;
+  std::string reframe_error;
+  std::set<std::string> reframe_held;
   /// Warp Stabilizer's analysis, one clip at a time on a thread of its own.
   std::thread stabilize_worker;
   std::atomic<bool> stabilize_running{false};
@@ -1818,6 +1832,21 @@ void collect_remix(App& app, bool apply_pending = true);
 [[nodiscard]] bool remixing(const App& app);
 /// Waits for the listening, for closing.
 void stop_remix(App& app);
+/// Premiere's Auto Reframe Sequence, for the open sequence.
+void open_auto_reframe_dialog(App& app);
+/// Starts analysing the next Auto Reframe in the open sequence that has no
+/// analysis, unless one is being analysed already.
+void refresh_reframe_analysis(App& app);
+[[nodiscard]] bool analysing_reframe(const App& app);
+/// It has got further, or finished when not `progress_only`.
+void collect_reframe_analysis(App& app, bool progress_only = false);
+/// Effect Controls' Analyze and Cancel for a clip's Auto Reframe, and what its
+/// analysis has got to.
+void analyse_reframe_again(App& app, const std::string& clip_id);
+void cancel_reframe_analysis(App& app);
+[[nodiscard]] std::string reframe_status(App& app, const std::string& clip_id);
+/// Stops it and waits, for closing.
+void stop_reframe_analysis(App& app);
 /// Premiere's Make Subclip, from the Source Monitor's marks, a Project panel
 /// entry's, or the part of the footage a selected timeline clip uses.
 void open_make_subclip_dialog(App& app);

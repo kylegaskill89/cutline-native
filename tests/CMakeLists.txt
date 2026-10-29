@@ -24,6 +24,7 @@ add_executable(cutline_core_tests
   core/nesting_test.cpp
   core/pool_test.cpp
   core/properties_test.cpp
+  core/auto_reframe_test.cpp
   core/query_test.cpp
   core/remix_test.cpp
   core/roles_test.cpp
@@ -61,6 +62,7 @@ add_executable(cutline_core_tests
   editor/trim_test.cpp
   editor/updates_test.cpp
   editor/workspace_test.cpp
+  render/auto_reframe_test.cpp
   render/effect_catalog_test.cpp
   render/effect_passes_test.cpp
   render/effects_test.cpp
@@ -71,6 +73,7 @@ add_executable(cutline_core_tests
   render/plan_test.cpp
   render/preview_test.cpp
   render/scopes_test.cpp
+  track/reframe_test.cpp
   track/scenes_test.cpp
   track/stabilize_test.cpp
   track/tracker_test.cpp
@@ -177,6 +180,7 @@ if(CUTLINE_WITH_GPU)
       engine/mask_tracker_test.cpp
       engine/multicam_sync_test.cpp
       engine/music_analysis_test.cpp
+      engine/reframe_analysis_test.cpp
       engine/scene_detection_test.cpp
       engine/stabilizer_test.cpp
       engine/player_test.cpp)

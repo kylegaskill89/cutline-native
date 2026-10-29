@@ -144,6 +144,8 @@ namespace cutline::tool {
   rows.push_back(command_entry(app, "Apply Default Transitions to Selection",
                                Command::ApplyDefaultTransitions));
   rows.push_back(MenuEntry::divider());
+  rows.push_back(action_entry("Auto Reframe Sequence...", [&app] { open_auto_reframe_dialog(app); }));
+  rows.push_back(MenuEntry::divider());
   rows.push_back(switch_entry("Snap in Timeline", app.snapping, [&app] { toggle_snapping(app); },
                               shortcut_of(&app, "sequence.snap")));
   rows.push_back(MenuEntry::divider());

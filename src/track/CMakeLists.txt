@@ -1,4 +1,5 @@
 add_library(cutline_track
+  src/reframe.cpp
   src/scenes.cpp
   src/stabilize.cpp
   src/tracker.cpp)

@@ -211,6 +211,24 @@ constexpr std::array kWarpStabilizer{
     Param{.key = "hide_banner", .name = "Hide Warning Banner", .minimum = 0.0, .maximum = 1.0,
           .fallback = 0.0, .suffix = "", .toggle = true, .group = "Advanced"}};
 
+// Auto Reframe, with Premiere's controls: the Motion Tracking it was made with,
+// and the three adjustments to what the looking found. The offset is in the
+// sequence's pixels.
+constexpr std::array<std::string_view, 3> kReframeMotion{"Slower Motion", "Default",
+                                                         "Faster Motion"};
+
+constexpr std::array kAutoReframe{
+    Param{.key = "motion_preset", .name = "Motion Preset", .minimum = 0.0, .maximum = 2.0,
+          .fallback = 1.0, .suffix = "", .choices = kReframeMotion},
+    Param{.key = "offset_x", .name = "Reframe Offset", .minimum = -8000.0, .maximum = 8000.0,
+          .fallback = 0.0, .suffix = "", .pairs_next = true},
+    Param{.key = "offset_y", .name = "Reframe Offset Y", .minimum = -8000.0, .maximum = 8000.0,
+          .fallback = 0.0, .suffix = ""},
+    Param{.key = "rotation", .name = "Reframe Rotation", .minimum = -360.0, .maximum = 360.0,
+          .fallback = 0.0, .suffix = "°"},
+    Param{.key = "scale", .name = "Reframe Scale", .minimum = 10.0, .maximum = 1000.0,
+          .fallback = 100.0, .suffix = "%"}};
+
 // ---------------------------------------------------------------- grading --
 //
 // Everything from here down arrived after effects became passes, and between
@@ -494,6 +512,8 @@ constexpr std::array kCatalog{
                .category = EffectCategory::Transform, .params = kTransform},
     EffectSpec{.type = "warpstabilizer", .name = "Warp Stabilizer",
                .category = EffectCategory::Transform, .params = kWarpStabilizer},
+    EffectSpec{.type = "autoreframe", .name = "Auto Reframe",
+               .category = EffectCategory::Transform, .params = kAutoReframe},
     EffectSpec{.type = "crop", .name = "Crop", .category = EffectCategory::Transform,
                .params = kCrop},
     EffectSpec{.type = "flip", .name = "Flip", .category = EffectCategory::Transform,

@@ -950,6 +950,8 @@ template <typename T>
         // The longest line of any of them is in this one.
         open_scene_edit_dialog(app);
         measure_dialog("scene edit detection");
+        open_auto_reframe_dialog(app);
+        measure_dialog("auto reframe sequence");
 
         // Something copied and something selected, which is the state Paste
         // Attributes greys itself out of existence without.

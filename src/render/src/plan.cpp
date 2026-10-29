@@ -2,6 +2,7 @@
 
 #include "cutline/core/captions.hpp"
 #include "cutline/core/query.hpp"
+#include "cutline/render/auto_reframe.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -84,6 +85,9 @@ std::vector<PlannedLayer> plan_frame(
     layer.track_index = entry.track_index;
     layer.box =
         core::segment_box(seg, media, project.sequence().canvas_w, project.sequence().canvas_h, t);
+    // After Motion, because what it does is decide where on the sequence's
+    // frame the layer goes; see `auto_reframe.hpp`.
+    apply_auto_reframe(project, clip, media, t, layer.box);
     layer.alpha = core::segment_alpha(seg, t);
     layer.blend = clip.blend;
     layer.anti_flicker = std::clamp(clip.transform.anti_flicker, 0.0, 1.0);

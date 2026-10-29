@@ -1,4 +1,5 @@
 add_library(cutline_render
+  src/auto_reframe.cpp
   src/effect_catalog.cpp
   src/effect_passes.cpp
   src/effects.cpp

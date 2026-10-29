@@ -2381,7 +2381,7 @@ Sorted by what each one needs, because that is the decision it turns on.
 | ~~Captions~~ | a caption track; the Text panel to write, retime and split them; caption styles; Subtitle and CEA-608/708 formats; import and export of SRT; burned into the picture or written beside it on export; single-word captions for short-form (26.3) | **done** for Subtitle captions — see below | — |
 | ~~Scene Edit Detection~~ | on a clip: find the cuts in footage that was edited before it arrived, and cut there, make subclips in a bin, or put a clip marker at each | **done**, with Premiere's subclips, which it needed — see below | — |
 | ~~Audio repair~~ | Essential Sound's Repair: Reduce Noise, Reduce Rumble, DeHum, DeEss, Reduce Reverb; and DeNoise, DeHummer and DeEsser as effects | **done** — see below | — |
-| Auto Reframe | a sequence re-cut for another shape (vertical, square), the crop following what matters in each shot, keyframed on Motion | none; the tracker that mask tracking and Warp Stabilizer share can follow a region, but choosing *what* matters in a shot is Premiere's model's job | medium, with a heuristic for the subject |
+| ~~Auto Reframe~~ | a sequence re-cut for another shape (vertical, square), the crop following what matters in each shot, keyframed on Motion | **done**, with a heuristic in place of Premiere's model — see below | — |
 | ~~Remix~~ | a music clip lengthened or shortened to a target by cutting at beats and phrases so the seams cannot be heard | **done** — see below | — |
 | Morph Cut | a transition that hides a jump cut in an interview by morphing between the two frames | none; needs dense motion between frames and face-aware warping | large |
 | Shape Dissolve, Magnify and the Film Impact transitions (26.2, 26.3) | new effects and transitions | none of these | small each |
@@ -2474,6 +2474,41 @@ at each remix point. On a song made for the tests, every join is between bars
 in the same place in the same section's progression; on real soundtracks of
 62 to 192 seconds, listening takes half a second and every target came within
 a second and a half.
+
+**Auto Reframe, Phase 5 item 5 — done**, with what draws the eye standing in
+for Premiere's model. Sequence > Auto Reframe Sequence asks Premiere's
+questions — a name, the Target Aspect Ratio (Square 1:1, Vertical 4:5,
+Vertical 9:16, Horizontal 16:9 or Custom), Motion Tracking (Slower Motion,
+Default, Faster Motion) and Clip Nesting — and makes a copy of the open
+sequence in the new shape, keeping the shorter side, opened, with the Auto
+Reframe effect on every clip of footage or a still; titles, graphics, mattes,
+adjustment layers and sound are left as they were, and Nest clips reframes one
+nest that keeps the shape it was cut in. The effect is also in the Effects
+panel under Transform, with Premiere's Motion Preset, Reframe Offset, Reframe
+Rotation and Reframe Scale, and Analyze and Cancel at its head as Warp
+Stabilizer has. It scales the clip to fill the new frame and slides it so the
+window sits over the subject, never past the picture's edge; it is applied
+where Motion places the layer, after Motion, since filling another shape is a
+matter of placement and not something a pass inside the layer's own frame can
+do. The looking runs in the background as soon as the effect is there, ten
+frames a second, and is kept beside Warp Stabilizer's analyses, named for the
+source, its part and the window's shape, so the project records nothing and
+undo has nothing to undo; Motion Tracking only re-smooths it. Each frame is
+weighed for colour that stands out from the frame's average, skin, movement
+against the camera's own (the frame's shift is found first, so a pan is not a
+subject), detail, and a pull towards the middle, less what the frame has
+everywhere; anything that hardly changes while the rest of the frame does — a
+HUD, a scoreboard, a watermark — is left out. The window goes over the most of
+that, centred on its weighted middle, and the path is smoothed per shot, never
+across a cut found by the scene detector: Slower Motion holds still through a
+shot while the subject stays inside the window, Faster Motion keeps up. Not
+Premiere's: sequences here have no bin, so the copy is not filed in an Auto
+Reframed Sequences bin; and the path is not keyframes on the clip but the
+analysis plus Reframe Offset, which can be keyframed. Without a model nothing
+knows a face from a red sign: on first-person game footage the hands and the
+gun move against the world and draw the window towards them where the
+crosshair in the middle is what matters, and Slower Motion or an offset is the
+answer there.
 
 ### 14.2 Needs a model
 

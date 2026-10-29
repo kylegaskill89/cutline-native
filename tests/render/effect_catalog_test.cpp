@@ -58,6 +58,9 @@ TEST(EffectCatalog, EveryEntryIsAnEffectThePlannerKnows) {
     // Warp Stabilizer draws nothing until its clip has been analysed, which
     // takes a project and a picture; the engine's stabiliser test draws it.
     if (spec.type == "warpstabilizer") continue;
+    // Auto Reframe is no pass at all: it places the layer, and the plan's
+    // tests of it are in auto_reframe_test.cpp.
+    if (spec.type == "autoreframe") continue;
     EXPECT_FALSE(plan_effect_passes(with_effect_at_maximum(spec), 0.0).empty())
         << spec.type << " planned no passes at its maximum, so the planner does not "
                         "recognise that type";

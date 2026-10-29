@@ -368,6 +368,7 @@ void settle_export(App& app) {
   if (app.multicam_sync_worker.joinable()) app.multicam_sync_worker.join();
   cancel_scene_detection(app);
   stop_remix(app);
+  stop_reframe_analysis(app);
 }
 
 App::~App() { settle_export(*this); }
