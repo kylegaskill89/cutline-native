@@ -28,6 +28,7 @@
 #include <deque>
 #include <format>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <thread>
 #include <map>
@@ -857,8 +858,26 @@ struct FrameRenderer::Impl {
   [[nodiscard]] std::expected<std::unique_ptr<media::VideoDecoder>, std::string> open_decoder(
       const std::string& path, int keeping, int decoding_device);
 
+  /// The frame of `media` covering `time`. `lane` says which of several of
+  /// the same file's pictures this is when one frame shows more than one —
+  /// the two sides of a dissolve within one take — since each needs a decoder
+  /// of its own: one decoder asked for two moments gives up the first frame
+  /// to fetch the second, and both layers draw whichever came last.
   [[nodiscard]] const AVFrame* frame_at(const core::Media& media, double time,
-                                        const media::VideoDecoder** from = nullptr);
+                                        const media::VideoDecoder** from = nullptr,
+                                        int lane = 0);
+
+  /// Where the `lane`th use of a media is kept. The first is under the media's
+  /// own id, which is what the prefetching reads.
+  [[nodiscard]] static std::string lane_key(const std::string& media_id, int lane) {
+    return lane == 0 ? media_id : std::format("{}\x1f{}", media_id, lane);
+  }
+
+  /// When a file shown twice is shown once again — a dissolve within one take
+  /// finished — the decoder that was following the picture still showing
+  /// becomes the first, so it carries on from where it is and the prefetching
+  /// follows it, rather than the other seeking across to it.
+  void settle_lanes(std::span<const render::PlannedLayer> planned);
 
   /// Decodes ahead of need on a thread of its own.
   ///
@@ -1723,8 +1742,31 @@ gpu::SceneTexture FrameRenderer::Impl::matte_picture(const core::Project& projec
   return picture.has_value() ? *picture : gpu::SceneTexture{};
 }
 
+void FrameRenderer::Impl::settle_lanes(std::span<const render::PlannedLayer> planned) {
+  std::map<std::string, std::vector<const render::PlannedLayer*>> uses;
+  for (const render::PlannedLayer& layer : planned) {
+    if (layer.content != render::LayerContent::Video || layer.media == nullptr) continue;
+    uses[layer.media->id].push_back(&layer);
+  }
+  for (const auto& [id, layers] : uses) {
+    if (layers.size() != 1) continue;
+    const auto first = sources.find(id);
+    const auto second = sources.find(lane_key(id, 1));
+    if (first == sources.end() || second == sources.end()) continue;
+    const double wanted = layers.front()->source_time * core::conform_speed(*layers.front()->media);
+    const auto distance = [&](const Source& source) {
+      return source.last_request < 0.0 ? std::numeric_limits<double>::infinity()
+                                       : std::abs(source.last_request - wanted);
+    };
+    if (distance(second->second) >= distance(first->second)) continue;
+    // Nothing either reader is doing may be left pointing at the wrong one.
+    drain_readers();
+    std::swap(first->second, second->second);
+  }
+}
+
 const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double time,
-                                            const media::VideoDecoder** from) {
+                                            const media::VideoDecoder** from, int lane) {
   const std::string& wanted = core::source_path(media, use_proxies);
 
   // Into the file's own time. Everything above this line — the plan, the
@@ -1737,7 +1779,8 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
   // four seconds of file, which is what makes every frame a real one.
   time *= core::conform_speed(media);
 
-  auto found = sources.find(media.id);
+  const std::string key = lane_key(media.id, lane);
+  auto found = sources.find(key);
   // Open on a different file from the one this source now means. Proxies being
   // switched on or off is the case, and a relink is the other; sources are kept
   // by media id, which is right until the file behind that id changes.
@@ -1787,7 +1830,7 @@ const AVFrame* FrameRenderer::Impl::frame_at(const core::Media& media, double ti
       const double rate = source.decoder->stream().fps;
       source.slack = std::max(kFrameEpsilon, 0.5 / (rate > 0.0 ? rate : 1.0 / kAssumedFrameGap));
     }
-    found = sources.emplace(media.id, std::move(source)).first;
+    found = sources.emplace(key, std::move(source)).first;
   }
 
   Source& source = found->second;
@@ -2092,6 +2135,11 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
   std::vector<std::vector<gpu::EffectPass>> stacks;
   stacks.reserve(planned.size());
 
+  // How many times each file has been drawn so far this frame, which is the
+  // decoder each next use of it reads from.
+  d.settle_lanes(planned);
+  std::map<std::string, int> lanes;
+
   for (const render::PlannedLayer& source : planned) {
     Layer layer;
     layer.quad = {static_cast<float>(source.box.center_x),
@@ -2239,7 +2287,8 @@ std::expected<void, std::string> FrameRenderer::render(const core::Project& proj
         }
 
         const media::VideoDecoder* from = nullptr;
-        const AVFrame* frame = d.frame_at(*source.media, source.source_time, &from);
+        const AVFrame* frame =
+            d.frame_at(*source.media, source.source_time, &from, lanes[source.media->id]++);
         gpu::FrameView view;
         if (!describe(frame, from, view)) {
           d.missing.push_back(source.media->id);

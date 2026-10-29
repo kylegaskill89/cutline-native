@@ -1427,6 +1427,31 @@ TEST_F(CoarseTimestampTest, BackwardsShowsTheSameFrameAsForwards) {
   }
 }
 
+TEST_F(CoarseTimestampTest, ADissolveWithinOneTakeShowsBothMomentsOfIt) {
+  // The jump cut a Morph Cut or a dissolve is for: one file, cut into twice.
+  // One decoder per file gave up the outgoing side's frame to fetch the
+  // incoming side's, so both layers drew the incoming one and the dissolve
+  // was a cut.
+  Project p = with_source();
+  Clip a = clip("a", "v", 0.0, 6.0 / kFps);
+  a.transition_out = core::Transition{.kind = core::TransitionKind::Dissolve, .duration = 4.0 / kFps};
+  Clip b = clip("b", "v", 6.0 / kFps, 6.0 / kFps);
+  b.source_in = 14.0 / kFps;
+  b.source_out = 20.0 / kFps;
+  p.sequence().tracks = {video_track("v1", {a, b})};
+
+  const int outgoing = pixel_at(render(with_source(), 6.0 / kFps), kWidth / 2, kHeight / 2).r;
+  const int incoming = pixel_at(render(with_source(), 14.0 / kFps), kWidth / 2, kHeight / 2).r;
+  ASSERT_GT(incoming - outgoing, 40);
+  const int middle = pixel_at(render(p, 6.0 / kFps), kWidth / 2, kHeight / 2).r;
+  EXPECT_GT(middle, outgoing + (incoming - outgoing) / 4);
+  EXPECT_LT(middle, incoming - (incoming - outgoing) / 4);
+
+  // And after it, the one still showing plays on from where it was.
+  const int after = pixel_at(render(p, 9.0 / kFps), kWidth / 2, kHeight / 2).r;
+  EXPECT_EQ(after, pixel_at(render(with_source(), 17.0 / kFps), kWidth / 2, kHeight / 2).r);
+}
+
 
 // --------------------------------------------------------------- ten bits --
 
