@@ -2379,7 +2379,7 @@ Sorted by what each one needs, because that is the decision it turns on.
 | | Premiere | Here | Size |
 |---|---|---|---|
 | ~~Captions~~ | a caption track; the Text panel to write, retime and split them; caption styles; Subtitle and CEA-608/708 formats; import and export of SRT; burned into the picture or written beside it on export; single-word captions for short-form (26.3) | **done** for Subtitle captions — see below | — |
-| Scene Edit Detection | on a clip: find the cuts in footage that was edited before it arrived, and cut there, make subclips in a bin, or put a clip marker at each | none, and clip markers now exist for it to write | small |
+| ~~Scene Edit Detection~~ | on a clip: find the cuts in footage that was edited before it arrived, and cut there, make subclips in a bin, or put a clip marker at each | **done**, with Premiere's subclips, which it needed — see below | — |
 | Audio repair | Essential Sound's Repair: Reduce Noise, Reduce Rumble, DeHum, DeEss, Reduce Reverb; and DeNoise, DeHummer and DeEsser as effects | Reduce Rumble's high-pass only; the others are missing, which `audio::role_preset` already says | medium |
 | Auto Reframe | a sequence re-cut for another shape (vertical, square), the crop following what matters in each shot, keyframed on Motion | none; the tracker that mask tracking and Warp Stabilizer share can follow a region, but choosing *what* matters in a shot is Premiere's model's job | medium, with a heuristic for the subject |
 | Remix | a music clip lengthened or shortened to a target by cutting at beats and phrases so the seams cannot be heard | none; the stretch and loudness code is here, beat and phrase finding is not | medium |
@@ -2403,6 +2403,31 @@ to the exported span. Not done: CEA-608 and 708, which embed captions in the
 video stream for broadcast delivery; a style for one caption apart from its
 track's; and 26.3's single-word captions, which are a way of making captions
 from a transcript and wait with §14.2.
+
+**Scene Edit Detection, Phase 5 item 2 — done.** On the Clip menu and the
+timeline's right-click, for the selected video clips. Premiere's three boxes:
+cut at each detected cut point (the linked sound too), subclips from each in a
+new bin beside the source, and clip markers at each on the source. Analyze
+looks at every frame of each clip as it plays, on a thread of its own behind a
+window with Cancel, and what it finds is applied as one undo step, "Scene Edit
+Detection". A cut is a frame whose colour differs from the one before far more
+than its neighbours differ from theirs, so a whip pan or handheld shot is one
+shot and a cut between two dim shots is still found; a flash of a frame or two
+is told from a cut by comparing across it. On footage cut together here at 4,
+8 and 11 seconds it found those three frames and nothing else.
+
+**Subclips — done**, since the second box needs them and Cutline had none.
+Make Subclip (Ctrl+U, the Clip menu, the Project panel) takes the Source
+Monitor's marks, a Project panel entry's, or the part of the footage a
+selected timeline clip plays, with Premiere's Restrict Trims To Subclip
+Boundaries. A restricted subclip shows only its span in the Source Monitor and
+cannot be trimmed, slipped, slid, marked or given transition handles past it;
+an unrestricted one is its span marked on the whole footage. Edit Subclip
+changes the span and Hard Boundaries or converts it to a master clip. A
+subclip is a Project panel entry of its own with its span's duration and
+picture, saved with the project, relinked with its source, and a subclip of a
+subclip belongs to the same footage. Not done: Premiere's subclips share the
+master's clip markers, where these take a copy of the ones inside the span.
 
 ### 14.2 Needs a model
 
